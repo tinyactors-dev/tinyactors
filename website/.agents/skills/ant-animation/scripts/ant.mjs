@@ -68,8 +68,8 @@ function restAhead(a, leg, tau) {
 export function makeAnt(init) {
   const a = {
     x: 0, y: 0, heading: 0, v: 0, w: 0, scale: 0.21,
-    target: { v: 0, w: 0, tuck: 0, greet: 0, idle: 0, alpha: 1 },
-    phase: 0, rate: 0, sway: 0, headYaw: 0, gasterYaw: 0, tuck: 0, greet: 0, idle: 0, alpha: 1,
+    target: { v: 0, w: 0, tuck: 0, greet: 0, idle: 0, eat: 0, alpha: 1 },
+    phase: 0, rate: 0, sway: 0, headYaw: 0, gasterYaw: 0, tuck: 0, greet: 0, idle: 0, eat: 0, alpha: 1,
     flick: 0, odometer: 0, trail: [], time: 0, seed: 0,
     ...init,
   };
@@ -106,7 +106,8 @@ export function advance(a, dt) {
   if (a.tuck > 0.05) a.rate = 0; // folding up: feet stay where they are
   a.phase += a.rate * dt;
   a.gait = clamp(want / 2.5, 0, 1);
-  a.sway = 1.2 * a.gait * Math.sin(2 * Math.PI * a.phase);
+  // Eating rocks the body a little as the head works.
+  a.sway = 1.2 * a.gait * Math.sin(2 * Math.PI * a.phase) + a.eat * 1.4 * Math.sin(2 * Math.PI * 1.8 * a.time);
 
   // the feet
   a.legs = {};
@@ -149,6 +150,7 @@ export function advance(a, dt) {
   if (prevTuck > 0.05 && a.tuck <= 0.05) for (const id in LEGS) a.feet[id].at = toWorld(a, LEGS[id].foot); // unfolded: feet back under the body
   a.flick = approach(a.flick, 0, 2.5, dt);
   a.greet = approach(a.greet, a.target.greet, 4, dt);
+  a.eat = approach(a.eat, a.target.eat, 5, dt);
   a.idle = approach(a.idle, a.target.idle, 2, dt);
   a.alpha = approach(a.alpha, a.target.alpha, 3, dt);
 
@@ -170,13 +172,20 @@ export function advance(a, dt) {
   const tap = a.greet * (16 + 9 * Math.sin(2 * Math.PI * 4.5 * t));
   const tapR = a.greet * (16 + 9 * Math.sin(2 * Math.PI * 4.5 * t + 1.9));
   const flick = a.flick * 22 * Math.sin(2 * Math.PI * 3 * t);
+  // Eating: the antennae drum forward on the food, the head nods and dips
+  // to it, the mandibles chew.
+  const drum = a.eat * (14 + 7 * Math.sin(2 * Math.PI * 2.4 * t));
+  const drumR = a.eat * (14 + 7 * Math.sin(2 * Math.PI * 2.4 * t + 2.2));
+  const nod = Math.sin(2 * Math.PI * 1.8 * t);
   a.pose = {
     legs: a.legs, tuck: a.tuck,
-    headYaw: a.headYaw + a.sway * 0.6,
+    headYaw: a.headYaw + a.sway * 0.6 + a.eat * 4 * nod,
+    headDip: a.eat * (0.035 + 0.025 * nod),
     gasterYaw: a.gasterYaw - a.sway * 1.4,
     petioleYaw: a.gasterYaw * 0.4 - a.sway * 0.6,
-    antL: sweep + lean + explore * Math.sin(t * 2.3 + a.seed) + tap + flick,
-    antR: -sweep - lean + explore * Math.sin(t * 1.9 + a.seed + 2) + tapR + flick,
-    mandible: a.greet * (0.5 + 0.5 * Math.sin(2 * Math.PI * 2 * t)) + a.idle * 0.25 * Math.max(0, Math.sin(t * 1.3 + a.seed)),
+    antL: sweep + lean + explore * Math.sin(t * 2.3 + a.seed) + tap + flick + drum,
+    antR: -sweep - lean + explore * Math.sin(t * 1.9 + a.seed + 2) + tapR + flick + drumR,
+    mandible: Math.min(1, a.greet * (0.5 + 0.5 * Math.sin(2 * Math.PI * 2 * t)) + a.idle * 0.25 * Math.max(0, Math.sin(t * 1.3 + a.seed))
+      + a.eat * (0.55 + 0.45 * Math.sin(2 * Math.PI * 3.5 * t))),
   };
 }

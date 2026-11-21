@@ -46,6 +46,7 @@
     </defs>
     <rect width="1280" height="720" fill="url(#grid)"/>
     <rect width="1280" height="720" fill="url(#grid5)"/>
+    <g id="food"></g>
     <g id="trails"></g>
     <g id="ants"></g>
   </svg>
@@ -56,7 +57,9 @@
 </div>
 <script type="module">
   import { rig, pose } from './rig.mjs';
-  import { makeScene, CHAPTERS } from './scene.mjs';
+  // ?scene=eat plays eat.mjs; scene.mjs (the lifecycle study) by default.
+  const sceneName = new URLSearchParams(location.search).get('scene') ?? 'scene';
+  const { makeScene, CHAPTERS, DURATION } = await import(`./${sceneName}.mjs`);
   const NS = 'http://www.w3.org/2000/svg';
   const SCALE = 0.21;
   const text = await (await fetch('ds/assets/ant-resting.svg')).text();
@@ -75,7 +78,12 @@
     const tag = document.createElement('div');
     tag.className = 'tag';
     tags.appendChild(tag);
-    views[id] = { g, r: rig(inner), trail, tag, dots: [] };
+    const r = rig(inner);
+    // A crumb in the mandibles: shown while the ant eats, or carries one.
+    const crumb = document.createElementNS(NS, 'ellipse');
+    Object.entries({ cx: 512, cy: 196, rx: 30, ry: 22, fill: '#B8862E', opacity: 0 }).forEach(([k, v]) => crumb.setAttribute(k, v));
+    r.head.el.appendChild(crumb);
+    views[id] = { g, r, crumb, trail, tag, dots: [] };
   }
   const chapters = document.getElementById('chapters');
   for (const _ of CHAPTERS) chapters.appendChild(document.createElement('span'));
@@ -95,6 +103,7 @@
       v.g.style.display = v.tag.style.display = show ? '' : 'none';
       if (!show) continue;
       pose(v.r, a.pose);
+      v.crumb.setAttribute('opacity', Math.max(a.carry ? 1 : 0, Math.min(1, (a.eat - 0.3) * 2)).toFixed(2));
       v.g.setAttribute('transform', `translate(${a.x.toFixed(2)} ${a.y.toFixed(2)}) rotate(${(a.heading + a.sway).toFixed(3)}) scale(${a.scale}) translate(-512 -530)`);
       v.g.setAttribute('opacity', a.alpha.toFixed(3));
       v.g.style.filter = `saturate(${(1 - 0.85 * a.tuck).toFixed(3)})`;
@@ -119,12 +128,26 @@
       });
     }
   }
-  window.frame = (t) => { scene.advanceTo(t); draw(); };
+  // Food piles, when the scene has them: a seed per bite left.
+  const foodLayer = document.getElementById('food');
+  function drawFood() {
+    foodLayer.replaceChildren();
+    for (const pile of scene.food ?? []) {
+      for (let i = 0; i < Math.ceil(pile.left * 12); i++) {
+        const angle = i * 2.4, r = 6 * Math.sqrt(i), seed = document.createElementNS(NS, 'ellipse');
+        seed.setAttribute('cx', (pile.x + Math.cos(angle) * r).toFixed(1)); seed.setAttribute('cy', (pile.y + Math.sin(angle) * r).toFixed(1));
+        seed.setAttribute('rx', '4.2'); seed.setAttribute('ry', '3'); seed.setAttribute('fill', '#B8862E');
+        seed.setAttribute('transform', `rotate(${(angle * 57.3).toFixed(0)} ${(pile.x + Math.cos(angle) * r).toFixed(1)} ${(pile.y + Math.sin(angle) * r).toFixed(1)})`);
+        foodLayer.appendChild(seed);
+      }
+    }
+  }
+  window.frame = (t) => { scene.advanceTo(t); drawFood(); draw(); };
   await document.fonts.ready;
   window.ready = true;
   if (!location.search.includes('render')) {
     const start = performance.now();
-    const loop = () => { const t = ((performance.now() - start) / 1000) % 31; if (t < scene.time) location.reload(); window.frame(t); requestAnimationFrame(loop); };
+    const loop = () => { const t = ((performance.now() - start) / 1000) % DURATION; if (t < scene.time) location.reload(); window.frame(t); requestAnimationFrame(loop); };
     requestAnimationFrame(loop);
   }
 </script>

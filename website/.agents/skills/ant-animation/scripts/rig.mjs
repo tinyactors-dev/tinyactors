@@ -47,6 +47,7 @@ const rotScale = (a, s, [x, y]) =>
  * Pose the rig.
  *  legs       per leg id, {angle, scale}: the angle the gait solved (SVG degrees) and the reach
  *  headYaw, gasterYaw, petioleYaw  degrees
+ *  headDip    0..~0.06: the head lowered (eating), drawn smaller from above
  *  antL, antR antenna angles (forward positive), mandible 0..1 open, tuck 0..1
  */
 export function pose(r, s) {
@@ -54,7 +55,7 @@ export function pose(r, s) {
     const { angle, scale } = s.legs[id]; // solved by the gait: SVG degrees, reach
     leg.el.setAttribute('transform', rotScale(angle, scale, leg.at));
   }
-  r.head.el.setAttribute('transform', rotScale(s.headYaw, 1 - 0.03 * s.tuck, r.head.at));
+  r.head.el.setAttribute('transform', rotScale(s.headYaw, 1 - 0.03 * s.tuck - (s.headDip ?? 0), r.head.at)); // a dip: the head lowered, so it looks smaller from above
   r.gaster.el.setAttribute('transform', rot(s.gasterYaw, r.gaster.at));
   r.petiole.el.setAttribute('transform', rot(s.petioleYaw, r.petiole.at));
   const fold = -38 * s.tuck; // antennae swept back along the head

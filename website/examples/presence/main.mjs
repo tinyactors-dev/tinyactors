@@ -1,5 +1,6 @@
 // The presence ants on a simulated clock: four tabs from three countries
-// and one unknown join the field, roam for a minute, one greets another,
+// and one unknown join the field and roam, walking to food and eating it a
+// bite at a time, greeting the ants they bump into; one greets another,
 // one hides its tab (its actor hibernates) and comes back, and one leaves.
 // What the world tells the tabs is counted and the story printed, so
 // `mise run test` checks the world (website/presence/world.mjs) and the
@@ -13,6 +14,7 @@ const random = mulberry32(7);
 const clock = new tinyactors.SimulatedClock();
 const counts = {};
 const lines = [];
+let piles = [1, 2, 3, 4, 5];
 const world = createWorld(tinyactors, {
   chart, clock, random,
   emit(to, message) {
@@ -20,6 +22,9 @@ const world = createWorld(tinyactors, {
     if (message.t === 'greeted') lines.push(`  tab of ant ${to} reads: an ant from ${message.country} greets you`);
     if (message.t === 'greet') lines.push(`  ants ${message.a} and ${message.b} touch antennae`);
     if (message.t === 'leave') lines.push(`  ant ${message.h} walked off`);
+    if (message.t === 'eat') lines.push(`  ant ${message.h} eats a bite of pile ${message.food}`);
+    if (message.t === 'food') for (const id of piles.filter((p) => !message.food.some(([f]) => f === p))) lines.push(`  pile ${id} is finished`);
+    if (message.t === 'food') piles = message.food.map(([id]) => id);
   },
 });
 
@@ -36,7 +41,8 @@ console.log(`joined: ${world.stats().ants} ants, handles ${[ee, de, us, xx].join
 
 await run(30);
 const s = world.stats();
-console.log(`after 30 s: ${s.countries} countries have a trail, the food went from 200 to ${s.food}`);
+console.log(`after 30 s: ${s.countries} countries have a trail, the food went from 120 to ${s.food}`);
+for (const line of lines.splice(0)) console.log(line);
 
 console.log(`ant ${ee} is tapped to greet ant ${de}:`);
 world.greet(ee, de);
@@ -57,7 +63,10 @@ for (const line of lines.splice(0)) console.log(line);
 console.log(`left: ${world.stats().ants} ants`);
 
 const trips = counts.trip ?? 0;
-console.log(`messages to the tabs: ${trips} trips, ${counts.join} joins, ${counts.greet} greeting, ${counts.greeted} greeted line, ${counts.sleep} sleep changes, ${counts.leave} leave`);
+await run(120);
+const end = world.stats();
+console.log(`after two more minutes: ${end.ate} bites eaten, ${end.piles} piles left, ${end.greetings} greetings`);
+console.log(`messages to the tabs: ${counts.join} joins, ${counts.greet} greetings, ${counts.greeted} greeted lines, ${counts.eat} bites, ${counts.sleep} sleep changes, ${counts.leave} leave`);
 world.close();
 
 async function hibernated() {

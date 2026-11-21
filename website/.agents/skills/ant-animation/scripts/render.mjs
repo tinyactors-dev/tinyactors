@@ -1,6 +1,7 @@
 // Renders stage.html (the motion study) frame by frame with Playwright.
 //   node render.mjs stills 1,5,9 [outdir]   PNGs at those times (ascending: the scene is simulated forward)
-//   node render.mjs video [fps] [outdir]    ant-motion.mp4, frame-exact, 1920x1080 (needs ffmpeg)
+//   node render.mjs video [fps] [outdir] [scene]   <scene>.mp4 (ant-motion.mp4 for the default), frame-exact, 1920x1080 (needs ffmpeg)
+// A scene is a module beside this one: scene.mjs (the lifecycle study, the default) or eat.mjs.
 // The page is served from this directory; /ds/ is the design system
 // (.agents/skills/tinyactors-design at the repository root), so the ant,
 // the colour tokens and the fonts are read from their one copy.
@@ -24,14 +25,15 @@ const server = http.createServer((req, res) => {
 }).listen(0);
 const port = server.address().port;
 
-const [mode = 'stills', arg, outArg] = process.argv.slice(2);
+const [mode = 'stills', arg, outArg, sceneName = 'scene'] = process.argv.slice(2);
+const { DURATION } = await import(`./${sceneName}.mjs`);
 const out = path.resolve(outArg ?? '.');
 fs.mkdirSync(out, { recursive: true });
 const browser = await chromium.launch();
 const page = await browser.newPage({ viewport: { width: 1280, height: 720 }, deviceScaleFactor: mode === 'video' ? 1.5 : 1 });
 page.on('console', (m) => m.type() === 'error' && console.error('page:', m.text()));
 page.on('pageerror', (e) => console.error('page error:', e.message));
-await page.goto(`http://localhost:${port}/stage.html?render`);
+await page.goto(`http://localhost:${port}/stage.html?render&scene=${sceneName}`);
 await page.waitForFunction(() => window.ready);
 const stage = page.locator('#stage');
 
@@ -41,10 +43,10 @@ if (mode === 'stills') {
     await stage.screenshot({ path: path.join(out, `still-${t}.png`) });
   }
 } else {
-  const fps = Number(arg ?? 60), duration = 31;
+  const fps = Number(arg ?? 60), duration = DURATION;
   const ff = spawn('ffmpeg', ['-y', '-loglevel', 'error', '-f', 'image2pipe', '-framerate', String(fps), '-i', '-',
     '-vf', 'scale=1920:1080:flags=lanczos', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-crf', '18', '-preset', 'slow',
-    '-movflags', '+faststart', path.join(out, 'ant-motion.mp4')], { stdio: ['pipe', 'inherit', 'inherit'] });
+    '-movflags', '+faststart', path.join(out, sceneName === 'scene' ? 'ant-motion.mp4' : `${sceneName}.mp4`)], { stdio: ['pipe', 'inherit', 'inherit'] });
   for (let i = 0; i < fps * duration; i++) {
     await page.evaluate((t) => window.frame(t), i / fps);
     const png = await stage.screenshot({ type: 'png' });

@@ -1,7 +1,8 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!-- A visitor's ant: one per open tab of the website. It decides only when
      something happens to it; the world (urn:world) picks each trip, says
-     when it arrives, and says when a greeting reached its peer. The tab
+     when it arrives (found, when the trip ends at food), and says when it
+     bumped into another ant or came in reach of the one it walks to. The tab
      sends greet (a tap on another ant), hide and show (the tab's
      visibility) and leave (the switch, or the connection gone). A greeting
      is a message from this actor to the other: <send> to its address. -->
@@ -11,6 +12,7 @@
     <data id="country" expr="''"/>
     <data id="target" expr="0"/>
     <data id="peer" expr="''"/>
+    <data id="meal" expr="0"/>
   </datamodel>
 
   <state id="here" initial="awake">
@@ -24,6 +26,28 @@
       <state id="roaming">
         <onentry><send type="urn:world" event="roam"/></onentry>
         <transition event="arrive" target="roaming"/>
+        <transition event="found" target="eating">
+          <assign location="meal" expr="_event.data.food"/>
+        </transition>
+        <transition event="greet" target="approaching">
+          <assign location="target" expr="_event.data.target"/>
+        </transition>
+        <!-- Two roaming ants met: the world picked this one to greet. -->
+        <transition event="bump" target="greeting">
+          <assign location="peer" expr="_event.data.peer"/>
+        </transition>
+        <transition event="greeting" target="greeted"/>
+      </state>
+
+      <!-- At a pile of food: a bite (the world takes it from the pile, or
+           says empty when another ant finished it first). -->
+      <state id="eating">
+        <onentry>
+          <send type="urn:world" event="eat"><param name="food" expr="meal"/></send>
+          <send id="chewed" event="chewed" delay="2500ms"/>
+        </onentry>
+        <onexit><cancel sendid="chewed"/></onexit>
+        <transition event="chewed empty" target="roaming"/>
         <transition event="greet" target="approaching">
           <assign location="target" expr="_event.data.target"/>
         </transition>

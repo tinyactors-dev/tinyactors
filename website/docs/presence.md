@@ -94,7 +94,12 @@ canvas layer: ant.mjs (planted feet), Path2D of the rig
   name:
   - `wandering`, `following` (its country's trail) and `foraging`, chosen
     by what the world says it smells;
-  - `approaching` (a greeting asked for) and `greeting`;
+  - `eating`: a trip that ends at a pile of food arrives as `found`; the
+    ant takes a bite (the world shrinks the pile and removes it after the
+    last), chews 2.5 s, and is full for 30 s;
+  - `approaching` (a greeting asked for) and `greeting`, which a tap
+    starts, or a `bump`: two roaming ants that meet greet without a tap,
+    one picked by the world as the greeter, then neither for 30 s;
   - `greeted`, which tells the tab who greeted it;
   - `asleep`, while the tab is hidden: the server hibernates the actor
     there, and the world keeps its position and draws it dimmed;
@@ -105,8 +110,10 @@ canvas layer: ant.mjs (planted feet), Path2D of the rig
   to them; the world plans trips (two points, two times) and says when an
   ant arrives. It keeps:
   - one pheromone grid per country, deposited along trips, evaporating;
-  - a food field: a few food sources whose scent diffuses, eaten away and
-    replaced;
+  - five piles of food (24 units, 8 a bite) whose scent spreads; a hungry
+    ant within smelling distance walks to the nearest; a finished pile
+    grows again elsewhere 20 s later, and every change goes to the tabs at
+    once (`food`), so a pile vanishes when it is eaten;
   - the positions of every ant, asleep ones included.
 - **A greeting** is a message between actors. A tap asks the visitor's
   actor to greet a handle, and the world plans trips toward the target,

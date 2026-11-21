@@ -2,7 +2,9 @@
 // host, and the world as their I/O processor, urn:world. An ant decides
 // only when something happens to it; the world picks each trip (two points,
 // two times), tells the ant when it arrives, and keeps what the ants leave:
-// a pheromone grid per country, and the food whose scent spreads. Between
+// a pheromone grid per country, and the food whose scent spreads. An ant
+// that smells food walks to it and eats a bite (the pile shrinks, and goes
+// when it is finished); two roaming ants that meet greet. Between
 // decisions nothing runs: every browser draws each ant on its trip.
 //
 // Positions are fractions of the field, 0 to 1 on each axis; each browser
@@ -18,7 +20,8 @@ export const FACE = 0.032;          // how far apart two greeting ants stand
 const HOP = { min: 0.05, max: 0.16 }; // a roaming trip's length
 const GRID = { cols: 48, rows: 30 };
 const DEPOSIT = 0.35, EVAPORATE = 0.96; // per cell crossed; per second
-const FOOD = { sources: 5, amount: 40, spread: 0.12, eat: 0.03, regrow: 20_000 };
+const FOOD = { sources: 5, amount: 24, bite: 8, spread: 0.12, smell: 0.28, full: 30_000, regrow: 20_000 };
+const BUMP = { reach: 0.03, rest: 30_000 }; // two roaming ants this close greet; then neither does for a while
 const MAX_HOP_TOWARD = 0.18;        // an approach is re-planned each leg
 
 /**
@@ -46,8 +49,10 @@ export function createWorld(tinyactors, { chart, clock, random = Math.random, em
   const record = (ant) => [ant.handle, round(ant.x0), round(ant.y0), ant.t0, round(ant.x1), round(ant.y1), ant.t1, ant.face ?? null];
   const round = (x) => Math.round(x * 10000) / 10000;
 
-  // ---- arrivals, kept in order of time; the world's tick hands them out
-  let due = []; // [t, session, event, data]
+  // ---- arrivals, kept in order of time; the world's tick hands them out.
+  // Each trip has a number: an arrival of a trip that a later one replaced
+  // (a greeting stopped the ant) is dropped.
+  let due = []; // [t, session, event, data, trip]
   function trip(ant, x, y, { event = 'arrive', data, face = null, seconds } = {}) {
     const t = now();
     const [px, py] = position(ant, t);
@@ -55,8 +60,9 @@ export function createWorld(tinyactors, { chart, clock, random = Math.random, em
     const distance = Math.hypot(x - px, y - py);
     const ms = Math.round((seconds ?? distance / SPEED) * 1000);
     Object.assign(ant, { x0: px, y0: py, t0: t, x1: x, y1: y, t1: t + ms, face });
+    ant.trip++;
     lay(ant, px, py, x, y);
-    due.push([t + ms, ant.session, event, data]);
+    if (event) due.push([t + ms, ant.session, event, data, ant.trip]);
     emit(null, { t: 'trip', trip: record(ant) });
   }
   const halt = (ant, face = null) => { const [x, y] = position(ant); trip(ant, x, y, { event: null, face, seconds: 0 }); };
@@ -83,16 +89,31 @@ export function createWorld(tinyactors, { chart, clock, random = Math.random, em
     }
   }
 
-  // ---- food: a few sources whose scent spreads; eaten away, and regrown elsewhere
-  function sprout() { food.push({ x: 0.1 + random() * 0.8, y: 0.12 + random() * 0.76, amount: FOOD.amount, gone: 0 }); }
-  for (let i = 0; i < FOOD.sources; i++) sprout();
+  // ---- food: a few piles whose scent spreads; eaten a bite at a time, and
+  // when one is finished another grows elsewhere a while later
+  let nextFood = 1;
+  const sprout = () => ({ id: nextFood++, x: 0.1 + random() * 0.8, y: 0.12 + random() * 0.76, amount: FOOD.amount, gone: 0 });
+  for (let i = 0; i < FOOD.sources; i++) food.push(sprout());
+  const piles = () => food.filter((f) => f.amount > 0).map((f) => [f.id, round(f.x), round(f.y), f.amount / FOOD.amount]);
+  const foodChanged = () => emit(null, { t: 'food', food: piles() });
   const scent = (x, y) => food.reduce((s, f) => s + (f.amount / FOOD.amount) * Math.exp(-((x - f.x) ** 2 + (y - f.y) ** 2) / (2 * FOOD.spread ** 2)), 0);
 
   // ---- what an ant asks for
   function roam(ant) {
     const [x, y] = position(ant);
-    for (const f of food) {
-      if (f.amount > 0 && Math.hypot(f.x - x, f.y - y) < FOOD.eat) { f.amount--; ant.ate++; }
+    // Hungry, and a pile in smelling distance: most times, walk to it.
+    if (now() >= ant.fullUntil) {
+      let near = null, nearest = FOOD.smell;
+      for (const f of food) {
+        const d = Math.hypot(f.x - x, f.y - y);
+        if (f.amount > 0 && d < nearest) { near = f; nearest = d; }
+      }
+      if (near && random() < 0.6) {
+        const stop = Math.max(0, nearest - 0.012); // just short of the pile, facing it
+        const tx = x + ((near.x - x) / (nearest || 1)) * stop, ty = y + ((near.y - y) / (nearest || 1)) * stop;
+        ant.heading = Math.atan2(near.y - y, near.x - x);
+        return trip(ant, tx, ty, { event: 'found', data: { food: near.id }, face: [round(near.x), round(near.y)] });
+      }
     }
     // Eight directions tried; each scored by its own country's trail, the
     // food's scent, a pull from the edges, and chance.
@@ -129,16 +150,54 @@ export function createWorld(tinyactors, { chart, clock, random = Math.random, em
 
   const tell = (ant, event, data) => due.push([now(), ant.session, event, data]);
 
+  function eat(ant, id) {
+    const f = food.find((pile) => pile.id === id);
+    const [x, y] = position(ant);
+    if (!f || f.amount <= 0 || Math.hypot(f.x - x, f.y - y) > 0.04) return tell(ant, 'empty');
+    halt(ant, [round(f.x), round(f.y)]);
+    f.amount = Math.max(0, f.amount - FOOD.bite);
+    if (f.amount === 0) f.gone = now();
+    ant.ate++;
+    ant.fullUntil = now() + FOOD.full;
+    emit(null, { t: 'eat', h: ant.handle, food: f.id });
+    foodChanged();
+  }
+
+  // Two roaming ants that meet greet: one of them sends the other a
+  // greeting, as a tap would have it do.
+  function bumps(t) {
+    const roaming = [...ants.values()].filter((ant) => ant.mode === 'roaming' && !ant.asleep && !ant.leaving && t - ant.bumped > BUMP.rest);
+    for (let i = 0; i < roaming.length; i++) {
+      const a = roaming[i];
+      if (a.mode !== 'roaming') continue;
+      const [ax, ay] = position(a, t);
+      for (let j = i + 1; j < roaming.length; j++) {
+        const b = roaming[j];
+        if (b.mode !== 'roaming') continue;
+        const [bx, by] = position(b, t);
+        if (Math.hypot(ax - bx, ay - by) > BUMP.reach) continue;
+        const [from, to] = random() < 0.5 ? [a, b] : [b, a];
+        a.mode = b.mode = 'busy';
+        a.bumped = b.bumped = t;
+        host.send(from.session, 'bump', { peer: to.address });
+        break;
+      }
+    }
+  }
+
   const world = {
     receive(send) {
       const ant = ants.get(Number(send.session));
       if (!ant) return;
       switch (send.event) {
-        case 'roam': return roam(ant);
-        case 'approach': return approach(ant, Number(send.data.target));
+        case 'roam': ant.mode = 'roaming'; return roam(ant);
+        case 'approach': ant.mode = 'approaching'; return approach(ant, Number(send.data.target));
+        case 'eat': ant.mode = 'eating'; return eat(ant, Number(send.data.food));
         case 'greet': {
           const peer = ants.get(sessionOf(send.data.peer));
+          ant.mode = 'busy';
           if (!peer) return;
+          peer.mode = 'busy';
           const [ax, ay] = position(ant), [px, py] = position(peer);
           halt(ant, [round(px), round(py)]);
           halt(peer, [round(ax), round(ay)]);
@@ -147,11 +206,13 @@ export function createWorld(tinyactors, { chart, clock, random = Math.random, em
           return;
         }
         case 'greeted': {
+          ant.mode = 'busy';
           emit(ant.handle, { t: 'greeted', country: send.data.country || null });
           return;
         }
         case 'sleep': {
           ant.asleep = true;
+          ant.mode = 'asleep';
           halt(ant);
           emit(null, { t: 'sleep', h: ant.handle, asleep: true });
           return;
@@ -194,8 +255,8 @@ export function createWorld(tinyactors, { chart, clock, random = Math.random, em
       const x = 0.1 + random() * 0.8, y = 0.1 + random() * 0.8, t = now();
       const ant = {
         session: Number(actor.id), handle: nextHandle++, tab, country, address: actor.address.toString(),
-        x0: x, y0: y, t0: t, x1: x, y1: y, t1: t, face: null, heading: random() * Math.PI * 2,
-        asleep: false, leaving: false, greetings: 0, ate: 0,
+        x0: x, y0: y, t0: t, x1: x, y1: y, t1: t, face: null, heading: random() * Math.PI * 2, trip: 0,
+        mode: 'starting', asleep: false, leaving: false, greetings: 0, ate: 0, fullUntil: 0, bumped: -Infinity,
       };
       ants.set(ant.session, ant);
       byHandle.set(ant.handle, ant);
@@ -229,7 +290,7 @@ export function createWorld(tinyactors, { chart, clock, random = Math.random, em
     field(country) {
       const grid = trails.get(country);
       const bytes = grid ? Array.from(grid, (v) => Math.round(v * 255)) : null;
-      return { cols: GRID.cols, rows: GRID.rows, trail: bytes, food: food.filter((f) => f.amount > 0).map((f) => [round(f.x), round(f.y), f.amount / FOOD.amount]) };
+      return { cols: GRID.cols, rows: GRID.rows, trail: bytes, food: piles() };
     },
     /**
      * Hands out what is due by now (arrivals, near, lost), hibernates the
@@ -242,10 +303,11 @@ export function createWorld(tinyactors, { chart, clock, random = Math.random, em
         due.sort((a, b) => a[0] - b[0]);
         const ready = [];
         while (due.length && due[0][0] <= t) ready.push(due.shift());
-        const items = ready.filter(([, session, event]) => event && ants.has(session))
+        const items = ready.filter(([, session, event, , number]) => event && ants.has(session) && (number === undefined || number === ants.get(session).trip))
           .map(([, session, event, data]) => (data === undefined ? { target: session, event } : { target: session, event, data }));
         if (items.length) host.sendMany(items);
       }
+      bumps(t);
       await host.idle();
       for (const ant of ants.values()) {
         if (!ant.hibernate) continue;
@@ -257,14 +319,16 @@ export function createWorld(tinyactors, { chart, clock, random = Math.random, em
       if (Math.floor(t / 1000) !== this.second) {
         this.second = Math.floor(t / 1000);
         evaporate();
-        for (const f of food) if (f.amount <= 0 && (f.gone ||= t) && t - f.gone > FOOD.regrow) Object.assign(f, { x: 0.1 + random() * 0.8, y: 0.12 + random() * 0.76, amount: FOOD.amount, gone: 0 });
+        let grown = false;
+        for (let i = 0; i < food.length; i++) if (food[i].amount <= 0 && t - food[i].gone > FOOD.regrow) { food[i] = sprout(); grown = true; }
+        if (grown) foodChanged();
       }
     },
     /** For tests and the server's status: what the world holds. */
     stats() {
       let asleep = 0, ate = 0, greetings = 0;
       for (const ant of ants.values()) { asleep += ant.asleep; ate += ant.ate; greetings += ant.greetings; }
-      return { ants: ants.size, asleep, ate, greetings, countries: trails.size, food: food.reduce((s, f) => s + f.amount, 0) };
+      return { ants: ants.size, asleep, ate, greetings, countries: trails.size, food: food.reduce((s, f) => s + f.amount, 0), piles: piles().length };
     },
     second: -1,
     close() { host.close(); },

@@ -1,6 +1,6 @@
 ---
 name: ant-animation
-description: Animate the design system's rigged ant (ant-resting.svg, logo.svg) on the website. Covers walking with feet planted, turning while walking and in place, idling, greeting, hibernating, waking and leaving. Use before writing or changing any code that moves an ant (the presence ants, the anthill's sprites, a hero animation) and before rendering a motion study or video of one. It holds the rig's conventions, a gait model fitted to measured ant locomotion, the mistakes already made with their fixes, and scripts that pose the rig, plan paths in Node.js and render stills or an MP4.
+description: Animate the design system's rigged ant (ant-resting.svg, logo.svg) on the website. Covers walking with feet planted, turning while walking and in place, idling, greeting, eating, hibernating, waking and leaving. Use before writing or changing any code that moves an ant (the presence ants, the anthill's sprites, a hero animation) and before rendering a motion study or video of one. It holds the rig's conventions, a gait model fitted to measured ant locomotion, the mistakes already made with their fixes, and scripts that pose the rig, plan paths in Node.js and render stills or an MP4.
 ---
 
 # Animating the ant
@@ -19,13 +19,17 @@ way an ant moves, and the measurements that code is fitted to.
   runs the same in the page, in a Worker and in Node.js.
 - **`scripts/scene.mjs`:** the motion study's cue list: two ants and nine
   chapters, in 31 seconds.
+- **`scripts/eat.mjs`:** the eating study: an ant walks to a pile, takes
+  three bites and carries a crumb away, in 16 seconds. It steers after a
+  point as the presence layer does.
 - **`scripts/stage.html`:** draws the scene on the design system's tokens
   and fonts, with pheromone trails and lifecycle tags. Open it served
   (`render.mjs` serves it) to watch the scene loop.
 - **`scripts/render.mjs`:** renders frame by frame with Playwright:
   `node scripts/render.mjs stills 2,6,17.5 <outdir>` or
-  `node scripts/render.mjs video 60 <outdir>` (an MP4 at 1920x1080, which
-  needs ffmpeg; about 3.5 minutes for 31 s at 60 fps).
+  `node scripts/render.mjs video 60 <outdir> [scene]` (an MP4 at 1920x1080,
+  which needs ffmpeg; about 3.5 minutes for 31 s at 60 fps). The scene is
+  `scene` (the default) or `eat`; the stage takes it as `?scene=`.
 - **`scripts/plan.mjs`:** prints the scene's paths, so cues are tuned
   before rendering.
 
@@ -94,6 +98,7 @@ change of mind never jumps.
 | turn while walking | `v`, `w` | the head leads, the gaster lags, the outer legs take longer strides |
 | turn in place | `w`, with `v` 0 | the two sides step against each other |
 | idle | `idle: 1` | the antennae explore, the head looks around, the mandibles twitch |
+| eat | `eat: 1` for about 2.5 s, facing the food | the antennae drum forward on the food (2.4 Hz), the head nods (1.8 Hz) and dips (`headDip`, drawn smaller from above), the mandibles chew (3.5 Hz), the body rocks; the renderer shows a crumb in the mandibles |
 | greet (antennation) | `greet: 1` on both ants, about 150 px apart, face to face | antennae tapping at 4.5 Hz, mandibles at 2 Hz |
 | hibernate | `tuck: 1, alpha: 0.42` | the legs fold along the body and shorten, the antennae fold back, the ant desaturates |
 | wake | `tuck: 0, alpha: 1` | it unfolds, flicks its antennae, and its feet are set back under the body |
@@ -124,6 +129,12 @@ is running, a hidden tab hibernates, a closed tab is done.
   by reloading the page at the end.
 - **Tags near the bottom edge** collide with the chapter bar: put them
   above the ant there.
+- **A scene's `time` must stay a getter.** `Object.assign(scene, { get
+  time() {...} })` copies the getter's value once, and the chapter never
+  moves; define it with `Object.defineProperty`.
+- **An eating ant hides its food** if it stops too close: its centre
+  goes about 90 px from the pile at scale 0.21 (70 units of mandibles
+  ahead of the centre, plus the pile's radius).
 
 ## Open questions for the presence page
 

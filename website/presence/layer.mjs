@@ -25,6 +25,8 @@ export function createLayer({ svgText, flagURL = (cc) => `/vendor/flag-icons/fla
   const reduced = matchMedia('(prefers-reduced-motion: reduce)');
   const ants = new Map(); // handle -> {body, trip, country, asleep, leaving, greetUntil}
   const flags = new Map(); // country -> Image | null
+  const bitten = new Map(); // pile -> until when it shakes
+  const bite = (id) => bitten.set(id, performance.now() + 400);
   let you = 0, offset = 0, field = null, running = false, shown = false, last = 0, width = 0, height = 0, dpr = 1;
   const colors = { ink: INK, pine: PINE, trail: PINE };
 
@@ -90,6 +92,8 @@ export function createLayer({ svgText, flagURL = (cc) => `/vendor/flag-icons/fla
         break;
       }
       case 'leave': { const ant = ants.get(message.h); if (ant) ant.leaving = true; break; }
+      case 'eat': { const ant = ants.get(message.h); if (ant) { ant.eatUntil = performance.now() + 2500; ant.body.target.eat = 1; } bite(message.food); break; }
+      case 'food': if (field) field.food = message.food; else field = { food: message.food }; break;
     }
   }
 
@@ -104,6 +108,7 @@ export function createLayer({ svgText, flagURL = (cc) => `/vendor/flag-icons/fla
     }
     const dx = tx - a.x, dy = ty - a.y, distance = Math.hypot(dx, dy);
     if (ant.greetUntil && performance.now() > ant.greetUntil) { ant.greetUntil = 0; a.target.greet = 0; }
+    if (ant.eatUntil && performance.now() > ant.eatUntil) { ant.eatUntil = 0; a.target.eat = 0; }
     const face = ant.trip[7];
     let wanted = null;
     if (distance > 1.5 && !ant.asleep) wanted = (Math.atan2(dx, -dy) * 180) / Math.PI;
@@ -113,7 +118,7 @@ export function createLayer({ svgText, flagURL = (cc) => `/vendor/flag-icons/fla
     // Walk when roughly facing the point; turn in place when it is behind.
     const speed = ant.leaving ? VMAX : Math.min(VMAX, distance * 1.8);
     a.target.v = ant.asleep || distance < 1.5 ? 0 : speed * Math.max(0, Math.cos((error * Math.PI) / 180));
-    a.target.idle = !ant.asleep && distance < 1.5 && !ant.greetUntil ? 0.6 : 0;
+    a.target.idle = !ant.asleep && distance < 1.5 && !ant.greetUntil && !ant.eatUntil ? 0.6 : 0;
     advance(a, dt);
   }
 
@@ -153,16 +158,25 @@ export function createLayer({ svgText, flagURL = (cc) => `/vendor/flag-icons/fla
         context.beginPath(); context.arc(x, y, 1.6, 0, Math.PI * 2); context.fill();
       }
     }
-    for (const [fx, fy, left] of field.food) {
+    // A pile: its scent, and a seed for each bite left; it shakes as it is
+    // bitten and is gone when the server says it is finished.
+    for (const [id, fx, fy, left] of field.food) {
       const [x, y] = px(fx, fy);
-      const gradient = context.createRadialGradient(x, y, 0, x, y, 70 * left + 10);
+      const shake = Math.max(0, (bitten.get(id) ?? 0) - performance.now()) / 400;
+      const radius = 60 * left + 14;
+      const gradient = context.createRadialGradient(x, y, 0, x, y, radius);
       gradient.addColorStop(0, 'rgba(216, 166, 78, 0.16)');
       gradient.addColorStop(1, 'rgba(216, 166, 78, 0)');
       context.globalAlpha = 1;
       context.fillStyle = gradient;
-      context.beginPath(); context.arc(x, y, 70 * left + 10, 0, Math.PI * 2); context.fill();
-      context.fillStyle = 'rgba(184, 134, 46, 0.55)';
-      for (let i = 0; i < 5; i++) { const a = i * 1.3; context.beginPath(); context.arc(x + Math.cos(a) * 3 * (i % 3), y + Math.sin(a) * 3 * (i % 2), 1.4, 0, Math.PI * 2); context.fill(); }
+      context.beginPath(); context.arc(x, y, radius, 0, Math.PI * 2); context.fill();
+      context.fillStyle = 'rgba(184, 134, 46, 0.6)';
+      const seeds = Math.max(1, Math.ceil(left * 9));
+      for (let i = 0; i < seeds; i++) {
+        const angle = i * 2.4 + id, r = 2.2 * Math.sqrt(i);
+        const jitter = shake * Math.sin(performance.now() / 30 + i);
+        context.beginPath(); context.ellipse(x + Math.cos(angle) * r + jitter, y + Math.sin(angle) * r, 1.6, 1.1, angle, 0, Math.PI * 2); context.fill();
+      }
     }
     context.restore();
   }
@@ -182,6 +196,14 @@ export function createLayer({ svgText, flagURL = (cc) => `/vendor/flag-icons/fla
       context.fillStyle = part.fill === INK ? colors.ink : part.fill === PINE ? colors.pine : part.fill;
       context.fill(part.path);
       if (part.gaster) flag(ant.country, part.path);
+      context.restore();
+    }
+    if (a.eat > 0.3) { // a crumb held in the mandibles
+      context.save();
+      transform(posed.head);
+      context.globalAlpha *= Math.min(1, (a.eat - 0.3) * 2);
+      context.fillStyle = 'rgb(184, 134, 46)';
+      context.beginPath(); context.ellipse(512, 196, 30, 22, 0, 0, Math.PI * 2); context.fill();
       context.restore();
     }
     context.restore();
@@ -206,7 +228,7 @@ export function createLayer({ svgText, flagURL = (cc) => `/vendor/flag-icons/fla
   function joints(pose) {
     const fold = -38 * pose.tuck, m = 9 * pose.mandible;
     const j = {
-      head: { at: rig.pivots.head, angle: pose.headYaw, scale: 1 - 0.03 * pose.tuck },
+      head: { at: rig.pivots.head, angle: pose.headYaw, scale: 1 - 0.03 * pose.tuck - (pose.headDip ?? 0) },
       gaster: { at: rig.pivots.gaster, angle: pose.gasterYaw, scale: 1 },
       petiole: { at: rig.pivots.petiole, angle: pose.petioleYaw, scale: 1 },
       'antenna-left': { at: rig.pivots['antenna-left'], angle: pose.antL + fold, scale: 1 },
