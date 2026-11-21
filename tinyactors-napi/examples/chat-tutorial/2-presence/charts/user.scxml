@@ -9,18 +9,28 @@
   </datamodel>
   <state id="offline">
     <onentry>
-      <send type="chat:client" event="status"><content expr="({ user: name, status: 'offline' })"/></send>
+      <send type="chat:client" event="status">
+        <param name="user" expr="name"/>
+        <param name="status" expr="'offline'"/>
+      </send>
     </onentry>
     <transition event="connect" target="online"/>
   </state>
   <state id="online" initial="active">
     <transition event="disconnect" target="offline"/>
     <transition event="message">
-      <send type="chat:client" event="message"><content expr="({ to: name, from: _event.data.from, text: _event.data.text })"/></send>
+      <send type="chat:client" event="message">
+        <param name="to" expr="name"/>
+        <param name="from" expr="_event.data.from"/>
+        <param name="text" expr="_event.data.text"/>
+      </send>
     </transition>
     <state id="active">
       <onentry>
-        <send type="chat:client" event="status"><content expr="({ user: name, status: 'active' })"/></send>
+        <send type="chat:client" event="status">
+          <param name="user" expr="name"/>
+          <param name="status" expr="'active'"/>
+        </send>
         <send id="idle" event="idle" delay="300s"/>
       </onentry>
       <onexit><cancel sendid="idle"/></onexit>
@@ -32,7 +42,10 @@
     </state>
     <state id="away">
       <onentry>
-        <send type="chat:client" event="status"><content expr="({ user: name, status: 'away' })"/></send>
+        <send type="chat:client" event="status">
+          <param name="user" expr="name"/>
+          <param name="status" expr="'away'"/>
+        </send>
       </onentry>
       <transition event="activity" target="active"/>
     </state>

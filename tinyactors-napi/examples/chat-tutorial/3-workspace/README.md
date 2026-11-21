@@ -16,22 +16,26 @@ const host = new Host(compiled, {
 });
 ```
 
-The workspace sends it the chart, the name and the params. `idlocation`
-stores the send's id, and the workspace remembers who asked under that
-id:
+The workspace sends it the chart, the name and the params, one
+`<param>` each. It adds the name to `rooms` at once. `idlocation` stores
+the send's id, and the workspace remembers who asked under that id:
 
 ```xml
-<transition event="room.create" cond="refusal(rooms, creating, _event.data.name) === null">
+<transition event="room.create" cond="refusal(rooms, _event.data.name) === null">
   <send type="spawn" event="spawn" idlocation="sendid">
-    <content expr="({ chart: 'room', name: 'room.' + _event.data.name, params: { name: _event.data.name } })"/>
+    <param name="chart" expr="'room'"/>
+    <param name="name" expr="'room.' + _event.data.name"/>
+    <param name="params" expr="({ name: _event.data.name })"/>
   </send>
+  <assign location="rooms" expr="rooms.concat([_event.data.name])"/>
   <assign location="creating[sendid]" expr="({ name: _event.data.name, by: _event.origin })"/>
 </transition>
 ```
 
-The `Spawner` answers `spawned` with the same sendid. The workspace then
-adds the room and answers the asker. A second request for one name
-finds the name in `rooms` or in `creating`, so no name is spawned twice.
+The `Spawner` answers `spawned` with the same sendid, and the workspace
+answers the asker. The answer comes as a new event, after any request
+already waiting. A second request for the same name may come first, and
+it finds the name in `rooms`. So no name is spawned twice.
 
 `refusal` is a function of a chart-level `<script>`. The chart's
 expressions call it. It takes the variables it reads as arguments.
@@ -54,12 +58,15 @@ gets `error.communication` with the send's id.
 ```xml
 <transition event="join">
   <send id="join" targetexpr="'tinyactors://chat/@room.' + _event.data.room" event="join">
-    <content expr="({ user: name })"/>
+    <param name="user" expr="name"/>
   </send>
   <raise event="activity"/>
 </transition>
 <transition event="error.communication" cond="_event.sendid === 'join'">
-  <send type="chat:client" event="error"><content expr="({ to: name, reason: 'no such room' })"/></send>
+  <send type="chat:client" event="error">
+    <param name="to" expr="name"/>
+    <param name="reason" expr="'no such room'"/>
+  </send>
 </transition>
 ```
 

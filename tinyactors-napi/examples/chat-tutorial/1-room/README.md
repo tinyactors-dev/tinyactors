@@ -12,7 +12,9 @@ events, and it sends each post out to your program.
   </transition>
   <transition event="post">
     <send type="chat:client" event="message">
-      <content expr="({ to: members, from: _event.data.user, text: _event.data.text })"/>
+      <param name="to" expr="members"/>
+      <param name="from" expr="_event.data.user"/>
+      <param name="text" expr="_event.data.text"/>
     </send>
   </transition>
 </state>
@@ -30,8 +32,9 @@ await host.idle();
 ```
 
 The `<send type="chat:client">` goes to the I/O processor of that type.
-The program gives the host one, an object with `receive(send)`. Here it
-stands in for the users' screens:
+Each `<param>` becomes a field of the event's data: `to`, `from` and
+`text`. The program gives the host the processor, an object with
+`receive(send)`. Here it stands in for the users' screens:
 
 ```js
 class Client {

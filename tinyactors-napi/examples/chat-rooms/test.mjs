@@ -55,6 +55,17 @@ for (const datamodel of ['native', 'quickjs']) {
     chat.close();
   });
 
+  test(`${datamodel}: two creates of one name before the spawn's answer: one room, one refusal`, async () => {
+    const { chat, people: { ada } } = setup(datamodel, ['ada']);
+    chat.received(ada.connection, frame('create', { name: 'general' }));
+    chat.received(ada.connection, frame('create', { name: 'general' }));
+    await chat.host.idle();
+    assert.deepEqual(ada.socket.of('room.created'), [{ room: 'general' }]);
+    assert.deepEqual(ada.socket.of('room.refused'), [{ name: 'general', reason: 'exists' }]);
+    assert.deepEqual(await chat.rooms('acme'), ['general']);
+    chat.close();
+  });
+
   test(`${datamodel}: the actor hibernates: a hibernated workspace and room wake for a send to their names`, async () => {
     const dir = mkdtempSync(join(tmpdir(), 'chat-rooms-test-'));
     try {

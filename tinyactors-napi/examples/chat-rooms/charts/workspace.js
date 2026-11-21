@@ -9,12 +9,13 @@ function validName(name) {
   return typeof name === 'string' && /^[a-z0-9-]{1,64}$/.test(name);
 }
 
-/** Why `event` (a room.create) is refused, or null when it is not. */
-function refusal(owners, rooms, creating, event) {
+/** Why `event` (a room.create) is refused, or null when it is not. `rooms`
+ * holds the rooms that started and those whose spawn is in flight. */
+function refusal(owners, rooms, event) {
   const { user, name } = event.data;
   if (!owners.includes(user)) return 'not an owner';
   if (!validName(name)) return 'invalid name';
-  if (name in rooms || Object.values(creating).some((pending) => pending.name === name)) return 'exists';
+  if (name in rooms) return 'exists';
   return null;
 }
 

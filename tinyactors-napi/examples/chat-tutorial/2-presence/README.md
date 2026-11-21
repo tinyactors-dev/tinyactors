@@ -34,7 +34,8 @@ member's user actor, by name:
 ```xml
 <foreach array="members" item="member">
   <send targetexpr="'tinyactors://chat/@user.' + member" event="message">
-    <content expr="({ from: _event.data.user, text: _event.data.text })"/>
+    <param name="from" expr="_event.data.user"/>
+    <param name="text" expr="_event.data.text"/>
   </send>
 </foreach>
 ```

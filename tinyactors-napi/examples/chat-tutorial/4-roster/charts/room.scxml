@@ -9,12 +9,16 @@
   <state id="open">
     <transition event="join">
       <assign location="members" expr="members.concat([_event.data.user])"/>
-      <send targetexpr="_event.origin" event="joined"><content expr="({ room: name })"/></send>
+      <send targetexpr="_event.origin" event="joined">
+        <param name="room" expr="name"/>
+      </send>
     </transition>
     <transition event="post">
       <foreach array="members" item="member">
         <send targetexpr="'tinyactors://chat/@user.' + member" event="message">
-          <content expr="({ room: name, from: _event.data.user, text: _event.data.text })"/>
+          <param name="room" expr="name"/>
+          <param name="from" expr="_event.data.user"/>
+          <param name="text" expr="_event.data.text"/>
         </send>
       </foreach>
     </transition>

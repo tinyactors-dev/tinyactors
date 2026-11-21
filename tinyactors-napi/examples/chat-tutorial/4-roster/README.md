@@ -9,7 +9,8 @@ Each user state sends its status to the workspace instead of the client:
 
 ```xml
 <send target="tinyactors://chat/@workspace" event="status">
-  <content expr="({ user: name, status: 'away' })"/>
+  <param name="user" expr="name"/>
+  <param name="status" expr="'away'"/>
 </send>
 ```
 
@@ -20,7 +21,9 @@ Each user state sends its status to the workspace instead of the client:
   <assign location="arriving" expr="cameOnline(roster, _event)"/>
   <assign location="roster[_event.data.user]" expr="_event.data.status"/>
   <if cond="arriving">
-    <send targetexpr="_event.origin" event="roster"><content expr="({ roster: roster })"/></send>
+    <send targetexpr="_event.origin" event="roster">
+      <param name="roster" expr="roster"/>
+    </send>
   </if>
   <foreach array="online(roster, _event.data.user)" item="user">
     <send targetexpr="'tinyactors://chat/@user.' + user" event="roster.update">

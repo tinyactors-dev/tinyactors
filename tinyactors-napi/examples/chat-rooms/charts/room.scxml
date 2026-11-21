@@ -27,17 +27,19 @@
   <state id="open">
     <onentry>
       <send type="chat:db" event="room.save">
-        <content expr="{ workspace: workspace, name: name }"/>
+        <param name="workspace" expr="workspace"/>
+        <param name="name" expr="name"/>
       </send>
       <send targetexpr="workspaceAddress(workspace)" event="room.started">
-        <content expr="{ name: name }"/>
+        <param name="name" expr="name"/>
       </send>
     </onentry>
 
     <transition event="join">
       <assign location="members" expr="withEntry(members, sender(_event.origin), _event.data.user)"/>
       <send targetexpr="_event.origin" event="room.joined">
-        <content expr="{ room: name, history: recent(history) }"/>
+        <param name="room" expr="name"/>
+        <param name="history" expr="recent(history)"/>
       </send>
     </transition>
     <transition event="leave">
@@ -49,7 +51,9 @@
         <content expr="stored(workspace, name, members, _event)"/>
       </send>
       <send type="chat:gateway" event="broadcast">
-        <content expr="{ to: Object.keys(members), event: 'room.message', data: message(name, members, _event) }"/>
+        <param name="to" expr="Object.keys(members)"/>
+        <param name="event" expr="'room.message'"/>
+        <param name="data" expr="message(name, members, _event)"/>
       </send>
     </transition>
     <transition event="members.gone">      <!-- the gateway found no socket for them -->
@@ -58,7 +62,7 @@
     <transition event="kick">              <!-- an admin's ask: the reply goes to _event.origin -->
       <assign location="members" expr="withoutUser(members, _event.data.user)"/>
       <send targetexpr="_event.origin" event="kicked">
-        <content expr="{ members: users(members) }"/>
+        <param name="members" expr="users(members)"/>
       </send>
     </transition>
   </state>

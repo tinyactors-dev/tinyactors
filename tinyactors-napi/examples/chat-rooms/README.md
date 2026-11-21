@@ -83,8 +83,17 @@ name after `@` wherever a chart or the application writes it.
 - **`Spawner`**: the workspace makes a room with `<send type="spawn">`
   and matches the answer, `spawned`, by the send's `sendid`
   (`idlocation`). A name has one owner: the workspace is the only actor
-  that spawns its rooms' names, and it keeps the spawns in flight in
-  `creating`, so it never asks twice for a name.
+  that spawns its rooms' names, and it never asks twice for one. The
+  answer comes later, at the back of its queue, so a second `room.create`
+  for the name can come first; since a macrostep is atomic, the
+  workspace puts the name in `rooms` in the macrostep that sends the
+  spawn, and the refusal checks `rooms` alone. `creating` (the spawn's
+  sendid to the name and the connection that asked) says whom to answer;
+  a spawn that fails (`error.communication` with its sendid) takes the
+  name out of `rooms` again.
+- **`<param>`**: a send's payload is one `<param name expr>` per field of
+  `_event.data`; `<content expr>` stays where a helper makes the whole
+  payload (`frame`, `stored`, `roomSpawn`).
 - **`store` and `resident`**: the host hibernates the actors past the
   bound after each turn and wakes one when an event comes for it;
   `FileStore`'s methods return promises, which the host follows.

@@ -33,7 +33,7 @@
 
     <transition event="client.join">
       <send id="join" targetexpr="roomAddress(workspace, _event.data.room)" event="join">
-        <content expr="{ user: user }"/>
+        <param name="user" expr="user"/>
       </send>
     </transition>
     <transition event="room.joined">
@@ -49,12 +49,13 @@
     </transition>
     <transition event="client.post">
       <send targetexpr="roomAddress(workspace, _event.data.room)" event="post">
-        <content expr="{ text: _event.data.text }"/>
+        <param name="text" expr="_event.data.text"/>
       </send>
     </transition>
     <transition event="client.create">
       <send id="create" targetexpr="workspaceAddress(workspace)" event="room.create">
-        <content expr="{ user: user, name: _event.data.name }"/>
+        <param name="user" expr="user"/>
+        <param name="name" expr="_event.data.name"/>
       </send>
     </transition>
     <transition event="error.communication" cond="_event.sendid === 'create'">
@@ -65,7 +66,9 @@
     </transition>
     <transition event="client.dm">
       <send type="chat:inbox" event="dm">
-        <content expr="{ from: user, to: _event.data.to, text: _event.data.text }"/>
+        <param name="from" expr="user"/>
+        <param name="to" expr="_event.data.to"/>
+        <param name="text" expr="_event.data.text"/>
       </send>
     </transition>
     <transition event="dm">                <!-- the inbox found this user online -->
@@ -73,7 +76,7 @@
     </transition>
 
     <transition event="heartbeat.missed" target="closed">
-      <send type="chat:gateway" event="close"><content expr="{ reason: 'timeout' }"/></send>
+      <send type="chat:gateway" event="close"><param name="reason" expr="'timeout'"/></send>
     </transition>
     <transition event="socket.closed" target="closed"/>
   </state>

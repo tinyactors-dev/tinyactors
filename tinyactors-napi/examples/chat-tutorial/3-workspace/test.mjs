@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
+import { compileDir, Host, Spawner } from '@tinyactors/node';
 import { run } from './main.mjs';
 
 // Actors run in no fixed order relative to each other: compare each phase,
@@ -19,5 +20,21 @@ for (const datamodel of ['native', 'quickjs']) {
       'bob sees ada in general: hi',
       'ada sees ada in general: hi',
     ]));
+  });
+}
+
+for (const datamodel of ['native', 'quickjs']) {
+  test(`3-workspace, ${datamodel}: two requests for one name before the Spawner answers make one room`, async () => {
+    const compiled = compileDir(new URL('./charts/', import.meta.url));
+    const host = new Host(compiled, { system: 'chat', ioProcessors: { 'chat:client': { receive() {} }, spawn: new Spawner() }, datamodel });
+    compiled.close();
+    const workspace = host.spawn('workspace', { name: 'workspace' });
+    const answers = await Promise.all([
+      workspace.ask('room.create', { name: 'general' }),
+      workspace.ask('room.create', { name: 'general' }),
+    ]);
+    assert.deepEqual(answers.map(([event]) => event).sort(), ['room.created', 'room.refused']);
+    assert.deepEqual((await workspace.ask('rooms.list'))[1].rooms, ['general']);
+    host.close();
   });
 }
