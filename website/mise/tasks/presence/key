@@ -1,0 +1,20 @@
+#!/usr/bin/env ruby
+#MISE description="Set a new ticket key for presence: a random secret, the site's Worker secret TICKET_KEY and the VM's environment, together"
+#USAGE flag "--vm-only" help="Set the key on the VM only (when the Worker is not deployed yet)"
+# vim:ft=ruby
+
+# The Worker signs tickets with TICKET_KEY and the server checks them
+# (presence/ticket.mjs), so the two must hold the same key. It is kept
+# nowhere else: running this again rotates it, and the tickets of the last
+# minute stop working.
+
+require_relative '../../presence'
+
+Presence.secrets!
+key = SecureRandom.urlsafe_base64(32)
+puts Presence.vm(Presence.key_script(key))
+unless ENV['usage_vm_only'] == 'true'
+  _, status = Open3.capture2('npx', '--yes', Website::WRANGLER, 'secret', 'put', 'TICKET_KEY', stdin_data: key, chdir: Website::ROOT.to_s)
+  Website.fail!('wrangler secret put failed: the VM has the new key, the Worker the old one') unless status.success?
+  puts 'presence: the Worker has the new TICKET_KEY'
+end

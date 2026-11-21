@@ -1,0 +1,19 @@
+#!/usr/bin/env ruby
+#MISE description="Deploy the presence server (website/presence) to the exe VM ta-presence: Node.js 22, its packages, the systemd service, a health check"
+# vim:ft=ruby
+
+# The VM is ta-presence on exe.dev (website/docs/presence.md). The server's
+# files go as one bundle through exe's HTTP API, into a release directory
+# of their own; `current` is switched to it and the service restarted. The
+# five newest releases are kept. Needs the ticket key on the VM first
+# (mise run presence:key).
+
+require_relative '../../presence'
+
+Presence.secrets!
+release = Presence.release_name
+puts "presence: deploying #{release} to #{Presence::VM}"
+out = Presence.vm(Presence.deploy_script(release), timeout: 600)
+puts out
+Website.fail!('the server did not answer its health check') unless out.include?('"ok":true')
+puts "presence: #{Presence::VM} runs #{release}"
