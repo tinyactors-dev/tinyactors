@@ -165,6 +165,15 @@ cd website
 rg -n "title: '|textContent = |'aria-label'|, '[A-Z][a-z]+ '|\`[A-Z][a-z].*\\$\\{" components examples/*/page.mjs
 ```
 
+Before changing any part of a page, read the whole page as it stands
+now, top to bottom: what the reader knows when they reach the part, and
+what they will read next. A fix made to one line against a page you have
+not reread contradicts the rest of it. Before a link or a button points
+somewhere, open the target: it must exist, be finished (not a draft or a
+"to do"), and answer what the link promises at that point of the page.
+A hero's "learn more", for instance, may best lead down the page itself,
+to the section that explains the lede's terms.
+
 Then, for each line:
 
 1. Apply both tests (says something, true where the reader is).

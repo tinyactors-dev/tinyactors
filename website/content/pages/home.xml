@@ -13,7 +13,7 @@
     </install>
     <actions>
       <action to="anthill">See the demo</action>
-      <action to="about">Learn more</action>
+      <action to="home" section="actors">Learn more</action>
     </actions>
   </hero>
 
