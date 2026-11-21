@@ -1,47 +1,47 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <page xmlns="https://www.tinyactors.dev/ns/site" id="guides" path="/guides/">
   <title>Guides · tinyactors</title>
-  <description>How to write charts, connect them to the world and run hosts in production with tinyactors, each with programs that run.</description>
+  <description>Steps for each task with tinyactors, from writing a chart to running millions of actors, each with a program that runs.</description>
   <hero>
-    <headline>Everything a host does, with code that runs.</headline>
-    <lede>Each guide shows one part of tinyactors with programs that run against the published package, and the output they print.</lede>
+    <headline>Steps for each task, with programs that run.</headline>
+    <lede>Each program shown with its output runs in the site's tests against the published package, and must print what the page shows.</lede>
   </hero>
 
   <section id="charts">
     <heading>Write and test charts.</heading>
     <list>
-      <item><term><link to="guide-charts">Writing charts</link></term><text>What a chart can do in ECMAScript: data, events, delayed sends, invoked charts and errors.</text></item>
-      <item><term><link to="guide-testing">Testing your charts</link></term><text>Run charts on a simulated clock and check properties over generated runs.</text></item>
-      <item><term><link to="guide-quickjs">The quickjs sandbox</link></term><text>Run charts you did not write, with limits on time and memory.</text></item>
+      <item><term><link to="guide-charts">Writing charts</link></term><text>A chart's code is JavaScript that reads the actor's variables by name, and your charts compile into one image.</text></item>
+      <item><term><link to="guide-testing">Testing your charts</link></term><text>A payment that retries every 30 seconds runs all its attempts in a test that takes milliseconds.</text></item>
+      <item><term><link to="guide-quickjs">The quickjs sandbox</link></term><text>A chart your users upload runs in a separate engine, where a runaway loop ends in an error.</text></item>
     </list>
   </section>
 
   <section id="world">
-    <heading>Connect actors to the world.</heading>
+    <heading>Connect actors to your code and other hosts.</heading>
     <list>
-      <item><term><link to="guide-io-processors">I/O processors</link></term><text>How a chart's sends reach your code, and how your code answers.</text></item>
-      <item><term><link to="guide-services">Invoked services</link></term><text>Services your application runs for as long as a state invokes them.</text></item>
-      <item><term><link to="guide-other-systems">Other systems</link></term><text>Hosts in other processes and machines, over a transport you choose.</text></item>
-      <item><term><link to="guide-missing-actors">When the actor is not there</link></term><text>What a send to an actor that does not exist does, and three ways to handle it.</text></item>
+      <item><term><link to="guide-io-processors">I/O processors</link></term><text>A chart asks for outside work by sending an event, and an object of yours answers with another.</text></item>
+      <item><term><link to="guide-services">Invoked services</link></term><text>A connection opens when a chart enters a state and closes when it leaves.</text></item>
+      <item><term><link to="guide-other-systems">Other systems</link></term><text>An actor sends to an actor on another machine by its address, over a wire you write.</text></item>
+      <item><term><link to="guide-missing-actors">When the actor is not there</link></term><text>Choose, for each kind of actor, what a send does when its target is not running.</text></item>
     </list>
   </section>
 
   <section id="operate">
     <heading>Run a host in production.</heading>
     <list>
-      <item><term><link to="guide-capacity">Capacity and memory</link></term><text>What an actor costs, how a host grows, and how to size one.</text></item>
-      <item><term><link to="guide-hibernation">Hibernation</link></term><text>Keep millions of actors with few in memory.</text></item>
-      <item><term><link to="guide-migration">Migration</link></term><text>Move running actors to a new version of their chart.</text></item>
-      <item><term><link to="guide-snapshots">Snapshots</link></term><text>The whole host as one blob: actors, timers and clock.</text></item>
-      <item><term><link to="guide-inspection">Inspecting a host</link></term><text>Read an actor's state, its context and the host's statistics.</text></item>
-      <item><term><link to="guide-telemetry">Telemetry</link></term><text>Traces, logs and metrics as OpenTelemetry.</text></item>
+      <item><term><link to="guide-capacity">Capacity and memory</link></term><text>A started actor takes about 530 bytes on Node.js, and a hibernated one about 120.</text></item>
+      <item><term><link to="guide-hibernation">Hibernation</link></term><text>Two million actors ran with at most 1000 in memory and the rest as bytes in a database.</text></item>
+      <item><term><link to="guide-migration">Migration</link></term><text>Running actors move to their chart's next version and keep the state they reached.</text></item>
+      <item><term><link to="guide-snapshots">Snapshots</link></term><text>A host of two million actors copies into a 165 MB snapshot that another process restores.</text></item>
+      <item><term><link to="guide-inspection">Inspecting a host</link></term><text>Ask a running actor which state it is in, and count what each chart has done.</text></item>
+      <item><term><link to="guide-telemetry">Telemetry</link></term><text>Each step an actor takes becomes a span in your OpenTelemetry collector.</text></item>
     </list>
   </section>
 
   <section id="browser">
-    <heading>Run it in the browser.</heading>
+    <heading>Run actors in a browser.</heading>
     <list>
-      <item><term><link to="guide-browser">In the browser</link></term><text>The same API from <code>@tinyactors/wasm</code>, on a page or in a Worker.</text></item>
+      <item><term><link to="guide-browser">In the browser</link></term><text>Change one import, and your charts run in a page or a Worker.</text></item>
     </list>
   </section>
 </page>
