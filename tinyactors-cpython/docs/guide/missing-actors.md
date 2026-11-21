@@ -80,7 +80,9 @@ hands the message to the `chat:inbox` processor:
 ```xml
 <transition event="client.dm">
   <send type="chat:inbox" event="dm">
-    <content expr="{'from': user, 'to': _event.data['to'], 'text': _event.data['text']}"/>
+    <param name="from" expr="user"/>
+    <param name="to" expr="_event.data['to']"/>
+    <param name="text" expr="_event.data['text']"/>
   </send>
 </transition>
 <transition event="dm">                <!-- forwarded by the inbox -->
@@ -123,7 +125,7 @@ error in the state that sent it:
 ```xml
 <transition event="client.join">
   <send id="join" targetexpr="room_address(workspace, _event.data['room'])" event="join">
-    <content expr="{'user': user}"/>
+    <param name="user" expr="user"/>
   </send>
 </transition>
 <transition event="error.communication" cond="_event.sendid == 'join'">
@@ -176,10 +178,13 @@ invoke id.
 The `Spawner` spawns; it does not look names up. A name has one owner:
 the collection actor that decides which actors of a kind exist (a
 workspace for its rooms) is the only one that spawns those names. It is
-one actor, so its requests come one at a time, and it records what it
-asked for (the chat's workspace keeps a `creating` table keyed by the
-spawn's sendid until `spawned` or `error.communication` answers it), so
-it never asks twice for a name.
+one actor, so its requests come one at a time, and each macrostep is
+atomic: the chat's workspace adds a room's name to its `rooms` in the
+transition that sends the spawn, so a second request for the name,
+handled before `spawned` comes back, finds it there and is refused. It
+records its spawns in flight in a `creating` table keyed by the spawn's
+sendid, to answer who asked when `spawned` comes and to take the name out
+of `rooms` again when `error.communication` answers the spawn instead.
 
 Two actors spawning one name is a design error in the application. The
 core's answer to it is defined but is not what the application meant:

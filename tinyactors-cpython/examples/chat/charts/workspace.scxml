@@ -8,34 +8,41 @@
   <datamodel>
     <data id="id"/>
     <data id="owners" expr="[]"/>
-    <data id="rooms" expr="[]"/>          <!-- the names of its rooms -->
+    <data id="rooms" expr="[]"/>          <!-- the names of its rooms, those being spawned included -->
     <data id="creating" expr="{}"/>       <!-- spawn sendid -> {name, origin}: who asked -->
     <data id="sendid"/>
   </datamodel>
   <state id="ready">
-    <transition event="room.create" cond="may_create(owners, rooms, creating, _event)">
+    <!-- A macrostep is atomic: the name joins `rooms` with the spawn, so
+         a second room.create for it, handled before `spawned` comes, is
+         refused as existing. -->
+    <transition event="room.create" cond="may_create(owners, rooms, _event)">
       <send type="spawn" event="spawn" idlocation="sendid">
-        <content expr="room_spawn(id, _event)"/>
+        <param name="chart" expr="'room'"/>
+        <param name="name" expr="room_actor(id, _event.data['name'])"/>
+        <param name="params" expr="{'workspace': id, 'name': _event.data['name']}"/>
       </send>
       <assign location="creating" expr="with_entry(creating, sendid, request(_event))"/>
+      <assign location="rooms" expr="added(rooms, _event.data['name'])"/>
     </transition>
     <transition event="room.create">
       <send targetexpr="_event.origin" event="room.refused">
-        <content expr="refusal(owners, rooms, creating, _event)"/>
+        <content expr="refusal(owners, _event)"/>
       </send>
     </transition>
     <!-- the Spawner's answer: the room exists; tell who asked -->
     <transition event="spawned" cond="_event.sendid in creating">
-      <assign location="rooms" expr="added(rooms, creating[_event.sendid]['name'])"/>
       <send targetexpr="creating[_event.sendid]['origin']" event="room.created">
-        <content expr="{'room': creating[_event.sendid]['name']}"/>
+        <param name="room" expr="creating[_event.sendid]['name']"/>
       </send>
       <assign location="creating" expr="without_entry(creating, _event.sendid)"/>
     </transition>
     <transition event="error.communication" cond="_event.sendid in creating">
       <send targetexpr="creating[_event.sendid]['origin']" event="room.refused">
-        <content expr="{'name': creating[_event.sendid]['name'], 'reason': 'spawn failed'}"/>
+        <param name="name" expr="creating[_event.sendid]['name']"/>
+        <param name="reason" expr="'spawn failed'"/>
       </send>
+      <assign location="rooms" expr="removed(rooms, creating[_event.sendid]['name'])"/>
       <assign location="creating" expr="without_entry(creating, _event.sendid)"/>
     </transition>
     <!-- every room announces itself when it starts, also the ones the
@@ -44,7 +51,7 @@
       <assign location="rooms" expr="added(rooms, _event.data['name'])"/>
     </transition>
     <transition event="rooms">            <!-- an ask: the reply goes to _event.origin -->
-      <send targetexpr="_event.origin" event="rooms"><content expr="{'rooms': sorted(rooms)}"/></send>
+      <send targetexpr="_event.origin" event="rooms"><param name="rooms" expr="sorted(rooms)"/></send>
     </transition>
   </state>
 </scxml>

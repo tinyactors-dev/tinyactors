@@ -33,9 +33,17 @@ values as arguments, so the chart reads as what happens and the helper
 as how. The processors do I/O and nothing else: they decide nothing
 about rooms or members. The binding's `Spawner`, configured under the
 type `spawn`, starts a room when its workspace sends it one. A name has
-one owner: the workspace is the only actor that spawns its rooms' names,
-and it keeps the spawns it asked for in `creating` (keyed by the spawn's
-sendid), so it never asks twice for a name.
+one owner: the workspace is the only actor that spawns its rooms' names.
+A macrostep is atomic, so the workspace adds a room's name to its
+`rooms` in the transition that sends the spawn, and refuses a second
+`room.create` for a name in `rooms` even before `spawned` comes; it keeps
+the spawns it asked for in `creating` (keyed by the spawn's sendid), to
+tell who asked when `spawned` comes, or to take the name out of `rooms`
+again when the spawn fails (`error.communication`).
+
+A chart's payloads are `<param>`s: each `<param name expr>` of a `<send>`
+is a field of the receiver's `_event.data`, and `<content expr>` is left
+for a value a helper makes whole (`frame` in `connection.py`).
 
 The host keeps at most `--resident` actors in memory; the others are
 blobs in an SQLite store (`store=`, `resident=`), woken when an event

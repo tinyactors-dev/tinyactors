@@ -7,16 +7,12 @@ def valid_name(name):
     return isinstance(name, str) and 0 < len(name) <= 64 and all(c in "abcdefghijklmnopqrstuvwxyz0123456789-" for c in name)
 
 
-def pending(creating, name):
-    return any(entry["name"] == name for entry in creating.values())
-
-
-def may_create(owners, rooms, creating, event):
+def may_create(owners, rooms, event):
     name = event.data["name"]
-    return event.data["user"] in owners and valid_name(name) and name not in rooms and not pending(creating, name)
+    return event.data["user"] in owners and valid_name(name) and name not in rooms
 
 
-def refusal(owners, rooms, creating, event):
+def refusal(owners, event):
     name = event.data["name"]
     if event.data["user"] not in owners:
         return {"name": name, "reason": "not an owner"}
@@ -25,10 +21,8 @@ def refusal(owners, rooms, creating, event):
     return {"name": name, "reason": "exists"}
 
 
-def room_spawn(workspace, event):
-    name = event.data["name"]
-    return {"chart": "room", "name": "room." + workspace + "." + name,
-            "params": {"workspace": workspace, "name": name}}
+def room_actor(workspace, name):
+    return "room." + workspace + "." + name
 
 
 def request(event):
@@ -37,6 +31,10 @@ def request(event):
 
 def added(items, item):
     return items if item in items else items + [item]
+
+
+def removed(items, item):
+    return [i for i in items if i != item]
 
 
 def with_entry(table, key, value):

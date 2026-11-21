@@ -83,6 +83,17 @@ class Chat(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(bob_socket.frames[-1], expected)
         self.assertEqual(self.database.history("acme", "general"), [expected[1]])
 
+    async def test_two_creates_of_one_name_in_flight_spawn_one_room(self):
+        # The second room.create comes before the Spawner's `spawned`: the
+        # name joined the workspace's rooms with the spawn, so it is refused.
+        ada, socket = self.connect("ada")
+        ada.send("client.create", {"name": "general"})
+        ada.send("client.create", {"name": "general"})
+        await self.host.idle()
+        self.assertCountEqual(socket.frames, [["room.created", {"room": "general"}],
+                                              ["room.refused", {"name": "general", "reason": "exists"}]])
+        self.assertEqual(self.database.rooms(), [("acme", "general")])
+
     async def test_room_names_need_no_encoding_in_an_address(self):
         ada, socket = self.connect("ada")
         for name in ("room/general", "Général", ""):
