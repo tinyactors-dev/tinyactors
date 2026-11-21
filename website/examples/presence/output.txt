@@ -1,0 +1,11 @@
+joined: 4 ants, handles 1, 2, 3, 4
+after 30 s: 4 countries have a trail, the food went from 200 to 198
+ant 1 is tapped to greet ant 2:
+  ants 1 and 2 touch antennae
+  tab of ant 2 reads: an ant from EE greets you
+tab of ant 3 hidden: 1 asleep, hibernated actors: 1
+tab of ant 3 shown: 0 asleep, hibernated actors: 0, roaming again: true
+a reload finds tab-de's ant again: true
+  ant 4 walked off
+left: 3 ants
+messages to the tabs: 88 trips, 4 joins, 1 greeting, 1 greeted line, 2 sleep changes, 1 leave

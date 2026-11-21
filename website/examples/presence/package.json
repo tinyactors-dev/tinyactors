@@ -1,0 +1,10 @@
+{
+  "name": "tinyactors-website-example-presence",
+  "private": true,
+  "type": "module",
+  "main": "main.mjs",
+  "description": "The presence ants' world (website/presence/world.mjs) and their chart (visitor.scxml) on a simulated clock: four tabs join, roam, follow trails, eat, greet, sleep and leave. test/examples runs it and compares what it prints with output.txt.",
+  "dependencies": {
+    "@tinyactors/node": "0.4.0"
+  }
+}
