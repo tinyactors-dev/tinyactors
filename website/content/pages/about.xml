@@ -1,74 +1,11 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <page xmlns="https://www.tinyactors.dev/ns/site" id="about" path="/about/">
   <title>Why tinyactors exists</title>
-  <description>tinyactors exists so that every system can be modeled as a statechart, in every environment, at a cost small enough to model everything.</description>
+  <description>Why tinyactors exists, in its author's words.</description>
 
   <hero>
     <headline>Model <em>every</em> system as a statechart</headline>
-    <lede>I built tinyactors to use statecharts everywhere I write code: Node.js, Bun, Python, a browser and C.</lede>
+    <lede>To do: Dario is writing this page.</lede>
     <author src="../images/dhamidi.jpg" href="https://github.com/dhamidi">Dario Hamidi</author>
   </hero>
-
-  <section id="statecharts">
-    <heading>Statecharts changed how I build</heading>
-    <p>A statechart puts an actor's logic in one chart and keeps its side effects outside it.</p>
-    <p>It is a formal model, so I can reason about a chart, and so can <link to="home" section="agents">an agent</link>.</p>
-  </section>
-
-  <section id="streams">
-    <heading>Ten years of ideas pointed here</heading>
-    <p>Event sourcing and command sourcing taught me to model a system as a stream of events.</p>
-    <p>Statecharts showed me the step they left out: model the system itself as a reactive system.</p>
-  </section>
-
-  <section id="reactive">
-    <heading>Every system can be reactive</heading>
-    <p>A program written in a functional, logic or imperative style can always be modeled as a reactive system.</p>
-    <p>Most systems built today already are one: they wait for an event, then respond. Picking that as the base abstraction fits the work.</p>
-  </section>
-
-  <section id="gap">
-    <heading>No runtime ran them everywhere</heading>
-    <p>Once I saw this, I wanted statecharts in every program I write.</p>
-    <p>JavaScript had <link href="https://stately.ai/docs/xstate">XState</link>, but nothing ran one chart the same way in every language I use.</p>
-  </section>
-
-  <section id="core">
-    <heading>So I built one core for all</heading>
-    <p>tinyactors runs the W3C's statechart language from one C core, and every language binds that same core.</p>
-    <claims>
-      <claim>
-        <statement>A host is a library</statement>
-        <p>It runs your actors on your own event loop, in Node.js, Bun, Python, a browser or C.</p>
-        <source to="chat" section="room">Tutorial, step 1</source>
-      </claim>
-      <claim>
-        <statement>It passes the W3C's own tests</statement>
-        <p>tinyactors passes all 191 automatic tests of the W3C suite, and every binding runs the same suite.</p>
-        <source to="performance" section="correctness">Correct by the standard</source>
-      </claim>
-    </claims>
-  </section>
-
-  <section id="freedom">
-    <heading>Small enough to model <em>everything</em></heading>
-    <p>An actor costs so little that every user, session, order or device can have a chart of its own.</p>
-    <claims>
-      <claim>
-        <statement>An actor takes about 530 bytes</statement>
-        <p>That is a started actor in Node.js, measured with a million in one process.</p>
-        <source to="performance" section="actors">An actor takes about 530 bytes</source>
-      </claim>
-      <claim>
-        <statement>A sleeping actor keeps about 120 bytes</statement>
-        <p>Idle actors hibernate to your store and wake on their next event.</p>
-        <source to="performance" section="scale">Twice the actors, the same cost</source>
-      </claim>
-    </claims>
-    <p>That is the freedom I wanted: no part of a system too small to get its own chart.</p>
-    <actions>
-      <action to="chat">Build a team chat</action>
-      <action href="https://github.com/tinyactors-dev/tinyactors">Read the source</action>
-    </actions>
-  </section>
 </page>
