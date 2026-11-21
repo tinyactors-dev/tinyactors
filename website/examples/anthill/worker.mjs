@@ -49,8 +49,9 @@ async function start({ population, colony: index, seed, offset, rest, port }) {
   const [tinyactors, { createColony }] = await Promise.all([import('/vendor/tinyactors-wasm/index.mjs'), import('./world.mjs')]);
   const charts = { ant: await text('ant'), queen: await text('queen') };
   colony = await createColony(tinyactors, { charts, population, colony: index, seed, offset, rest });
+  const base = memory?.buffer.byteLength ?? null; // the module and an empty host, before any ant
   await colony.populate((done) => postMessage({ progress: done }));
-  postMessage({ ready: true });
+  postMessage({ ready: true, base });
   run(port);
 }
 
@@ -59,8 +60,8 @@ async function start({ population, colony: index, seed, offset, rest, port }) {
 // slower than real time, and the page says so: no ant's decision is dropped.
 async function run(port) {
   let wallStart = performance.now(), simulated = 0;
-  let window = { wall: performance.now(), simulated: 0, decisions: 0, messages: 0 };
-  let speed = 1, rate = 0, messages = 0;
+  let window = { wall: performance.now(), simulated: 0, decisions: 0, messages: 0, busy: 0 };
+  let speed = 1, rate = 0, messages = 0, busy = 0, perMessage = null;
   let other = null; // the other colony's last frame (none before the first)
   for (;;) {
     for (const message of inbox.splice(0)) {
@@ -71,7 +72,9 @@ async function run(port) {
     const began = performance.now();
     while (simulated < began - wallStart && performance.now() - began < 40) {
       if (simulated > 0) other = await nextFrame();
+      const stepped = performance.now();
       const frame = await colony.step(other);
+      busy += performance.now() - stepped; // the host's and the world's work, the wait for the other colony left out
       port.postMessage(frame, [frame.arrivals.buffer, frame.struck.buffer, frame.eaten.buffer]);
       simulated += FRAME;
     }
@@ -83,10 +86,12 @@ async function run(port) {
       speed = (simulated - window.simulated) / (now - window.wall);
       rate = ((stats.decisions - window.decisions) * 1000) / (now - window.wall);
       messages = ((stats.messages - window.messages) * 1000) / (now - window.wall);
-      window = { wall: now, simulated, decisions: stats.decisions, messages: stats.messages };
+      const handled = stats.messages - window.messages;
+      perMessage = handled > 0 ? ((busy - window.busy) * 1000) / handled : null; // microseconds
+      window = { wall: now, simulated, decisions: stats.decisions, messages: stats.messages, busy };
     }
     const delta = colony.delta();
-    postMessage({ delta, stats: colony.stats(), speed, rate, messages, wall: now, memory: memory?.buffer.byteLength ?? null }, [delta.buffer]);
+    postMessage({ delta, stats: colony.stats(), speed, rate, messages, perMessage, wall: now, memory: memory?.buffer.byteLength ?? null }, [delta.buffer]);
     await new Promise((resolve) => setTimeout(resolve, simulated < performance.now() - wallStart ? 0 : 16));
   }
 }

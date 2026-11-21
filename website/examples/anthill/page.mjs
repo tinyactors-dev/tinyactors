@@ -51,10 +51,12 @@ export async function mount(root) {
     fps: chart({ title: 'Frames drawn a second', format: (v) => `${Math.round(v)} fps` }),
     // The simulated time that passed in each second of real time: 100% keeps
     // up, 50% means a simulated second took two real ones.
-    speed: chart({ title: 'Pace, % of real time', format: (v) => `${Math.round(v * 100)}%`, describe: (v) => `${Math.round(v * 100)} percent of real time` }),
+    speed: chart({ title: 'Keeping up with real time', format: (v) => `${Math.round(v * 100)}%`, describe: (v) => `${Math.round(v * 100)} percent of real time` }),
     memory: chart({ title: 'WebAssembly memory', format: megabytes }),
-    rate: chart({ title: 'Decisions a second', format: (v) => number.format(Math.round(v)) }),
     messages: chart({ title: 'Messages a second', format: (v) => number.format(Math.round(v)) }),
+    // A colony's working time over the messages it handled: the host and
+    // the world together, the wait for the other colony left out.
+    perMessage: chart({ title: 'Time per message', format: (v) => `${v.toFixed(1)} µs`, describe: (v) => `${v.toFixed(1)} microseconds` }),
   };
   root.append(
     el('div', { class: 'anthill__controls' }, el('label', { class: 'anthill__population' }, 'Ants ', slider, count),
@@ -97,7 +99,7 @@ export async function mount(root) {
     // they trade frames over.
     const workers = HILLS.map(() => new Worker(new URL('./worker.mjs', import.meta.url), { type: 'module' }));
     world = {
-      workers, canvas, renderer, population, ready: false, stats: null, speed: 1, rate: 0, messages: 0, sim: 0, wall: 0, memory: null,
+      workers, canvas, renderer, population, ready: false, stats: null, speed: 1, messages: 0, perMessage: null, added: null, sim: 0, wall: 0, memory: null,
       parts: workers.map(() => ({ progress: 0, ready: false, data: null })),
       antSize: Math.max(2.5, 16 * (1000 / population) ** 0.25),
     };
@@ -114,7 +116,7 @@ export async function mount(root) {
           const done = current.parts.reduce((sum, p) => sum + p.progress, 0) / current.parts.length;
           status.textContent = `Hatching ${number.format(population)} ants… ${Math.round(done * 100)}%`;
         }
-        if (data.ready) { part.ready = true; current.ready = current.parts.every((p) => p.ready); }
+        if (data.ready) { part.ready = true; part.base = data.base; current.ready = current.parts.every((p) => p.ready); }
         if (data.error) status.textContent = `The simulation stopped: ${data.error.split('\n')[0]}`;
         if (data.delta) apply(current, part, data);
       };
@@ -259,15 +261,22 @@ export async function mount(root) {
     const memory = parts.every((p) => p.memory) ? parts.reduce((sum, p) => sum + p.memory, 0) : null;
     Object.assign(state, {
       stats, memory, sim: behind.stats.time, wall: behind.wall,
-      speed: Math.min(...parts.map((p) => p.speed)), rate: parts.reduce((sum, p) => sum + p.rate, 0),
+      speed: Math.min(...parts.map((p) => p.speed)),
       messages: parts.reduce((sum, p) => sum + p.messages, 0),
+      // both colonies' time over both colonies' messages
+      perMessage: parts.every((p) => p.perMessage !== null && p.messages > 0)
+        ? parts.reduce((sum, p) => sum + p.perMessage * p.messages, 0) / parts.reduce((sum, p) => sum + p.messages, 0) : null,
+      added: parts.every((p, i) => p.memory && typeof state.parts[i].base === 'number')
+        ? parts.reduce((sum, p, i) => sum + p.memory - state.parts[i].base, 0) : null,
     });
     if (!state.ready) return;
     const ants = stats.colonies.reduce((sum, c) => sum + c.workers + c.brood, 0);
     hills.replaceChildren(...stats.colonies.map((c, i) => el('span', { class: `anthill__hill anthill__hill--${i + 1}` },
       `Hill ${i + 1}: ${number.format(c.workers)} workers (${number.format(c.out)} out), ${number.format(c.brood)} brood, ${number.format(c.stored)} food home`)));
-    const perActor = memory ? ` · ${number.format(Math.round(memory / (ants + 2)))} bytes of WebAssembly memory an actor` : '';
-    status.textContent = `${number.format(ants + 2)} actors (2 queens) · ${number.format(stats.fights)} fights · ${Math.floor(stats.time)} s simulated${perActor}`;
+    // What the ants added to the module's memory, over the ants: the module
+    // and the empty hosts left out, which a small colony would make look large.
+    const perAnt = state.added ? ` · ${number.format(Math.round(state.added / ants))} bytes of WebAssembly memory an ant` : '';
+    status.textContent = `${number.format(ants + 2)} actors (2 queens) · ${number.format(stats.fights)} fights · ${Math.floor(stats.time)} s simulated${perAnt}`;
   }
 
   // Once a second, each cost chart takes its latest value.
@@ -279,8 +288,8 @@ export async function mount(root) {
     costs.fps.push(frames);
     costs.speed.push(state.speed);
     if (state.memory) costs.memory.push(state.memory);
-    costs.rate.push(state.rate);
     costs.messages.push(state.messages);
+    if (state.perMessage !== null) costs.perMessage.push(state.perMessage);
     frames = 0;
   }, 1000);
 

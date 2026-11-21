@@ -5,13 +5,13 @@
 
   <hero>
     <headline>A million actors in this tab.</headline>
-    <lede>Every ant and queen is a statechart, running on tinyactors in your browser. An ant at rest takes memory and waits for its next event.</lede>
+    <lede>Every ant and queen is a statechart running on tinyactors in your browser. An ant uses the CPU only while it handles a message.</lede>
   </hero>
 
   <section id="watch">
-    <heading>Messages set the limit.</heading>
-    <p>An ant runs when an event reaches it, such as arriving at food. Your GPU draws it walking in between.</p>
-    <p>The rest slider sets how long ants stay in the hill between outings. Shorter rests send more messages a second, and the pace chart drops below 100% when the hosts fall behind.</p>
+    <heading>Messages decide how many ants keep up.</heading>
+    <p>The world tells an ant when it reaches food or home, and that message is the ant's next event. While the ant walks, it waits in memory and your GPU draws it.</p>
+    <p>Shorter rests mean more messages a second. The time per message stays level as you add ants, and the real-time chart shows whether your device keeps up.</p>
     <playground src="../../examples/anthill/page.mjs">
       <description>Two anthills on a field. Workers carry food home to their queen, and workers of the two colonies fight where they meet.</description>
     </playground>
@@ -19,7 +19,7 @@
 
   <section id="ant">
     <heading>An ant is a statechart.</heading>
-    <p>An egg becomes a larva, then a worker that forages for 6 to 14 trips. Two fights or a tap end it sooner.</p>
+    <p>An egg becomes a larva and then a worker, which forages until an event ends it. The world sends <code>die</code> when the ant grows old.</p>
     <code src="../../examples/anthill/ant.scxml" language="scxml" file="ant.scxml"/>
   </section>
 
@@ -30,17 +30,18 @@
   </section>
 
   <section id="world">
-    <heading>The world is an I/O processor.</heading>
-    <p>Each ant asks the world where to go next. The world is an object in your JavaScript that picks the destination and tells the ant when it arrives.</p>
+    <heading>Charts send messages to the world.</heading>
+    <p>The ant's chart sends <code>forage</code> to the world and waits for <code>arrive</code> or <code>found</code>. The world is a JavaScript object on this page that picks each destination.</p>
     <code src="../../examples/anthill/world.mjs" lines="194-208" language="javascript" file="world.mjs"/>
+    <p>This page runs each colony as a host in its own Web Worker, so the browser can use two CPU cores.</p>
   </section>
 
-  <section id="workers">
-    <heading>Each colony gets a CPU core.</heading>
-    <p>Each colony is a host in its own Web Worker, so the two colonies run in parallel.</p>
-    <p>Every 50 simulated milliseconds, a colony tells its arrived ants and sends the other colony a message about the shared field.</p>
-    <code src="../../examples/anthill/world.mjs" lines="242-291" language="javascript" file="world.mjs"/>
-    <p>An ant that arrives where an enemy arrived under half a second earlier may fight it.</p>
-    <code src="../../examples/anthill/world.mjs" lines="294-306" language="javascript" file="world.mjs"/>
+  <section id="node">
+    <heading>The same world runs in Node.js.</heading>
+    <p>With a simulated clock and a fixed seed, every run prints the same five minutes of both colonies.</p>
+    <example>
+      <code src="../../examples/anthill/main.mjs" lines="9-22" language="javascript" file="main.mjs"/>
+      <code src="../../examples/anthill/output.txt" language="text" role="output"/>
+    </example>
   </section>
 </page>
