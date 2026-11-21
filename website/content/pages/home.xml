@@ -20,39 +20,40 @@
   <section id="actors">
     <heading>Write each actor's behavior as one chart</heading>
     <p>Each statechart runs as an actor: it keeps its own data and handles one event at a time.</p>
-    <p>Charts are written in the W3C's <link href="https://www.w3.org/TR/scxml/">SCXML</link>, so a chart means the same in every runtime.</p>
+    <p>An Erlang or Akka actor runs any code you give it. A tinyactors actor runs a chart, with every state and transition written down.</p>
     <p>This payment charges a card and retries every 30 seconds until it is paid or has charged three times:</p>
     <code src="../../examples/simulate/payment.scxml" lines="4-15" language="scxml" file="payment.scxml"/>
+  </section>
+
+  <section id="agents">
+    <heading>Hand a chart to a coding agent</heading>
+    <p>Statecharts date from <link href="https://doi.org/10.1016/0167-6423(87)90035-9">1987</link>, but writing every state down by hand was more work than most teams would take on.</p>
+    <p>A coding agent does that work for you. In return it gets an actor's whole behavior in one file instead of a call graph.</p>
+    <p>The chart sends an event for every effect, and your code performs it. A simulated clock runs its timeouts, so the agent tests each change in milliseconds.</p>
   </section>
 
   <section id="process">
     <heading>Run millions of actors in your process</heading>
     <claims>
       <claim>
-        <statement>It runs on your event loop</statement>
-        <p>Your actors run beside the rest of your code, in Node.js, Bun, Python, a browser or C.</p>
+        <statement>It runs inside your program</statement>
+        <p>tinyactors is a library on your own event loop, so your actors deploy with your program.</p>
         <source to="chat" section="room">The chat tutorial's first program</source>
       </claim>
       <claim>
-        <statement>An actor takes about 530 bytes</statement>
-        <p>That is an actor in Node.js, measured with a million of them in one process.</p>
-        <source to="performance" section="actors">Memory per actor, by population</source>
+        <statement>One chart runs in JavaScript, Python and C</statement>
+        <p>Charts are written in the W3C's <link href="https://www.w3.org/TR/scxml/">SCXML</link>. Each language's package wraps the same C core, so a chart behaves the same in all of them.</p>
+        <source to="performance" section="correctness">One test suite for every package</source>
       </claim>
       <claim>
-        <statement>A sleeping actor keeps about 120 bytes</statement>
-        <p>An idle actor waits in your database and wakes on its next event. Each operation costs about the same at four million actors as at two.</p>
-        <source to="performance" section="scale">Each operation at two and four million</source>
+        <statement>Small enough for every part of a system</statement>
+        <p>An actor takes about 530 bytes in Node.js, and one saved to a database while idle keeps about 120.</p>
+        <source to="performance" section="actors">Memory per actor, by population</source>
       </claim>
     </claims>
     <actions>
       <action to="anthill">Watch a million ants</action>
     </actions>
-  </section>
-
-  <section id="agents">
-    <heading>Hand a chart to a coding agent</heading>
-    <p>A chart holds an actor's whole behavior, so an agent reads one file instead of tracing calls across a codebase.</p>
-    <p>The chart sends an event for every effect, and your code performs it. A simulated clock runs its timeouts, so an agent tests each change in milliseconds.</p>
   </section>
 
   <section id="verify">
