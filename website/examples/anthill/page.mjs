@@ -9,7 +9,12 @@ import { createRenderer } from './renderer.mjs';
 import { chart } from './charts.mjs';
 
 const POPULATIONS = [1_000, 10_000, 100_000, 250_000, 500_000, 1_000_000, 2_000_000, 4_000_000];
-const DEFAULT = 2; // 100,000
+const DEFAULT = 5; // 1,000,000
+// How long a worker rests in the hill between outings, on average, in
+// simulated seconds: the longer, the fewer ants out and messages a second.
+const RESTS = [5, 10, 30, 60, 120, 300];
+const REST = 3; // a minute
+const duration = (seconds) => (seconds < 60 ? `${seconds} s` : `${seconds / 60} min`);
 const number = new Intl.NumberFormat('en');
 const megabytes = (bytes) => `${number.format(Math.round(bytes / 1048576))} MB`;
 
@@ -17,6 +22,8 @@ export async function mount(root) {
   const colors = palette(root);
   const slider = el('input', { type: 'range', min: 0, max: POPULATIONS.length - 1, step: 1, value: DEFAULT, 'aria-label': 'Population' });
   const count = el('output', { class: 'anthill__count' });
+  const restSlider = el('input', { type: 'range', min: 0, max: RESTS.length - 1, step: 1, value: REST, 'aria-label': 'Rest between outings' });
+  const restCount = el('output', { class: 'anthill__count' });
   const restart = el('button', { type: 'button', class: 'ta-btn ta-btn--primary' }, 'Restart');
   const tools = el('div', { role: 'radiogroup', class: 'ta-tabs ta-tabs--segmented', 'aria-label': 'Tool' });
   let tool = 'food';
@@ -44,9 +51,11 @@ export async function mount(root) {
     speed: chart({ title: 'Simulation speed', format: (v) => `${v.toFixed(2)}×`, describe: (v) => `${v.toFixed(2)} times real time` }),
     memory: chart({ title: 'WebAssembly memory', format: megabytes }),
     rate: chart({ title: 'Decisions a second', format: (v) => number.format(Math.round(v)) }),
+    messages: chart({ title: 'Messages a second', format: (v) => number.format(Math.round(v)) }),
   };
   root.append(
-    el('div', { class: 'anthill__controls' }, el('label', { class: 'anthill__population' }, 'Ants ', slider, count), restart, tools, zoom),
+    el('div', { class: 'anthill__controls' }, el('label', { class: 'anthill__population' }, 'Ants ', slider, count),
+      el('label', { class: 'anthill__population' }, 'Rest ', restSlider, restCount), restart, tools, zoom),
     stage, hills, status,
     el('div', { class: 'anthill__costs' }, ...Object.values(costs).map((c) => c.element)),
   );
@@ -56,6 +65,11 @@ export async function mount(root) {
   // The population applies when the slider is let go: a new colony of that
   // many ants in new Workers (Restart starts the same population again).
   slider.addEventListener('change', () => { if (world) begin(); });
+  // The rest applies at once, to every rest that starts from now on.
+  const showRest = () => { restCount.textContent = duration(RESTS[restSlider.value]); };
+  restSlider.addEventListener('input', showRest);
+  restSlider.addEventListener('change', () => world?.workers.forEach((worker) => worker.postMessage({ rest: RESTS[restSlider.value] })));
+  showRest();
 
   const sprites = await atlas(await (await fetch('/assets/brand/ant.svg')).text(), colors.colony);
   const paint = overlay.getContext('2d');
@@ -79,7 +93,7 @@ export async function mount(root) {
     // they trade frames over.
     const workers = HILLS.map(() => new Worker(new URL('./worker.mjs', import.meta.url), { type: 'module' }));
     world = {
-      workers, canvas, renderer, population, ready: false, stats: null, speed: 1, rate: 0, sim: 0, wall: 0, memory: null,
+      workers, canvas, renderer, population, ready: false, stats: null, speed: 1, rate: 0, messages: 0, sim: 0, wall: 0, memory: null,
       parts: workers.map(() => ({ progress: 0, ready: false, data: null })),
       antSize: Math.max(2.5, 16 * (1000 / population) ** 0.25),
     };
@@ -102,7 +116,7 @@ export async function mount(root) {
       };
       worker.onerror = (event) => { status.textContent = `The simulation stopped: ${event.message}`; };
       const port = colony === 0 ? channel.port1 : channel.port2;
-      worker.postMessage({ start: true, population: population / 2, colony, seed, offset: colony * (population / 2), port }, [port]);
+      worker.postMessage({ start: true, population: population / 2, colony, seed, offset: colony * (population / 2), rest: RESTS[restSlider.value], port }, [port]);
     });
   }
   restart.addEventListener('click', begin);
@@ -221,11 +235,12 @@ export async function mount(root) {
     Object.assign(state, {
       stats, memory, sim: behind.stats.time, wall: behind.wall,
       speed: Math.min(...parts.map((p) => p.speed)), rate: parts.reduce((sum, p) => sum + p.rate, 0),
+      messages: parts.reduce((sum, p) => sum + p.messages, 0),
     });
     if (!state.ready) return;
     const ants = stats.colonies.reduce((sum, c) => sum + c.workers + c.brood, 0);
     hills.replaceChildren(...stats.colonies.map((c, i) => el('span', { class: `anthill__hill anthill__hill--${i + 1}` },
-      `Hill ${i + 1}: ${number.format(c.workers)} workers, ${number.format(c.brood)} brood, ${number.format(c.stored)} food home`)));
+      `Hill ${i + 1}: ${number.format(c.workers)} workers (${number.format(c.out)} out), ${number.format(c.brood)} brood, ${number.format(c.stored)} food home`)));
     const perActor = memory ? ` · ${number.format(Math.round(memory / (ants + 2)))} bytes of WebAssembly memory an actor` : '';
     status.textContent = `${number.format(ants + 2)} actors (2 queens) · ${number.format(stats.fights)} fights · ${Math.floor(stats.time)} s simulated${perActor}`;
   }
@@ -240,6 +255,7 @@ export async function mount(root) {
     costs.speed.push(state.speed);
     if (state.memory) costs.memory.push(state.memory);
     costs.rate.push(state.rate);
+    costs.messages.push(state.messages);
     frames = 0;
   }, 1000);
 

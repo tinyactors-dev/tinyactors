@@ -5,7 +5,9 @@
 // long it takes, records the trip, and tells the ant when it arrives
 // (arrive, or found when it reached food). It also tells an old ant to die.
 // Between decisions nothing runs: a renderer draws each ant on its trip,
-// from the trip's two points and two times.
+// from the trip's two points and two times. A worker rests in the hill
+// between outings, as long as the page's rest slider says: the longer the
+// rests, the fewer ants are out and the fewer messages a second.
 //
 // The two colonies run side by side, a host each, and share the field:
 // after every frame a colony hands the other a message of what it did
@@ -26,7 +28,7 @@ export const HILL_RADIUS = 26;
 
 const SPEED = 40; // world units per simulated second
 const TRIP = { min: 2, max: 10 }; // simulated seconds a trip takes
-const LIFE = { min: 120, max: 240 }; // a worker's life, simulated seconds
+const LIFE = { min: 6, max: 14 }; // a worker's life, in trips out of the hill
 const MEETING = 0.5; // seconds apart two enemies may arrive at one spot and still meet
 const CELL = 8; // the meeting grid's cell, world units
 const FOOD = { sources: 64, every: 10 }; // at most 64 sources; a new pair every 10 simulated seconds
@@ -40,7 +42,7 @@ const CHUNK = 4096; // ants spawned between runs to idle (a burst would hold a w
  * colonies of a field take the same `seed`, so they place the same food.
  * Its slots are numbered from `offset` in what delta() answers.
  */
-export async function createColony(tinyactors, { charts, population, colony, seed = 1, offset = 0 }) {
+export async function createColony(tinyactors, { charts, population, colony, seed = 1, offset = 0, rest = 60 }) {
   const { compileCharts, Host, SimulatedClock } = tinyactors;
   const CAP = population;
   const random = mulberry32(seed * 2 + colony + 1);
@@ -51,7 +53,7 @@ export async function createColony(tinyactors, { charts, population, colony, see
 
   // ---- the ants' slots: where each one is, and what it is waiting for
   const x0 = new Float32Array(CAP), y0 = new Float32Array(CAP), x1 = new Float32Array(CAP), y1 = new Float32Array(CAP);
-  const t0 = new Float32Array(CAP), t1 = new Float32Array(CAP), deathAt = new Float32Array(CAP);
+  const t0 = new Float32Array(CAP), t1 = new Float32Array(CAP), tripsLeft = new Uint8Array(CAP);
   const stage = new Uint8Array(CAP), outside = new Uint8Array(CAP);
   const carrying = new Uint8Array(CAP), pending = new Uint8Array(CAP), target = new Int16Array(CAP);
   const sessionOf = new Float64Array(CAP); // 0: the slot is free
@@ -66,12 +68,14 @@ export async function createColony(tinyactors, { charts, population, colony, see
   let changes = 0;
   const touch = (slot) => { if (!marked[slot]) { marked[slot] = 1; changed[changes++] = slot; } };
 
-  // ---- arrivals, in buckets of one frame
-  const RING = Math.ceil((TRIP.max * 1000) / FRAME) + 8;
-  const ring = Array.from({ length: RING }, () => []);
+  // ---- arrivals, in buckets of one frame, the earliest the next frame
+  const buckets = new Map(); // frame -> [slot, session, ...]
   const due = (slot, at, kind) => {
     pending[slot] = kind;
-    ring[Math.floor((at * 1000) / FRAME) % RING].push(slot, sessionOf[slot]);
+    const frame = Math.max(Math.floor((at * 1000) / FRAME), clock.now / FRAME + 1);
+    let bucket = buckets.get(frame);
+    if (!bucket) buckets.set(frame, (bucket = []));
+    bucket.push(slot, sessionOf[slot]);
   };
 
   // ---- food: both colonies hold the same sources, and each tells the other what it ate
@@ -98,8 +102,10 @@ export async function createColony(tinyactors, { charts, population, colony, see
   // A meeting turns into a fight one time in two, less often in a crowd:
   // meetings grow faster than the population, and so would the deaths.
   const FIGHT = 0.5 * Math.min(1, Math.sqrt(30_000 / (2 * CAP)));
-  const counts = { workers: 0, brood: 0, harvest: 0, stored: 0, fights: 0, deaths: 0, born: 0 };
-  let decisions = 0;
+  const counts = { workers: 0, brood: 0, out: 0, harvest: 0, stored: 0, fights: 0, deaths: 0, born: 0 };
+  let decisions = 0, messages = 0; // decisions: sends to the world; messages: those and the events sent in
+  let resting = rest; // the mean rest in the hill, simulated seconds
+  const go = (slot, out) => { counts.out += out - outside[slot]; outside[slot] = out; };
 
   // ---- the world: what an ant asks for
   function trip(slot, x, y, kind, seconds) {
@@ -112,13 +118,15 @@ export async function createColony(tinyactors, { charts, population, colony, see
   const travel = (slot, x, y) => Math.min(TRIP.max, Math.max(TRIP.min, Math.hypot(x - x1[slot], y - y1[slot]) / SPEED));
 
   function forage(slot) {
-    if (stage[slot] === BROOD) { // a new worker leaves the hill
+    if (stage[slot] === BROOD) { // a new worker rests before its first trip, so workers leave at different times
       stage[slot] = WORKER; counts.brood--; counts.workers++;
-      deathAt[slot] = now() + LIFE.min + random() * (LIFE.max - LIFE.min);
+      tripsLeft[slot] = LIFE.min + Math.floor(random() * (LIFE.max - LIFE.min + 1));
       placeInHill(slot);
+      trip(slot, x1[slot], y1[slot], ARRIVE, random() * resting);
+      return;
     }
-    if (now() >= deathAt[slot]) { due(slot, now() + FRAME / 1000, DIE); return; }
-    outside[slot] = 1;
+    if (tripsLeft[slot]-- === 0) { due(slot, now() + FRAME / 1000, DIE); return; }
+    go(slot, 1);
     // Most trips head for food the ant can see (within 260 units), the rest wander.
     let best = -1, bestDistance = 260;
     if (random() < 0.8) {
@@ -149,9 +157,9 @@ export async function createColony(tinyactors, { charts, population, colony, see
     trip(slot, x, y, ARRIVE, travel(slot, x, y));
   }
 
-  function rest(slot) {
-    outside[slot] = 0;
-    trip(slot, hill.x, hill.y, ARRIVE, 6 + random() * 14); // a rest in the hill: 6 to 20 seconds
+  function restInHill(slot) {
+    go(slot, 0);
+    trip(slot, hill.x, hill.y, ARRIVE, resting * (0.5 + random())); // half to one and a half times the mean
   }
 
   function placeInHill(slot) {
@@ -177,7 +185,7 @@ export async function createColony(tinyactors, { charts, population, colony, see
     }
     slotOf[session] = slot;
     sessionOf[slot] = session;
-    stage[slot] = BROOD; outside[slot] = 0; carrying[slot] = 0;
+    stage[slot] = BROOD; carrying[slot] = 0;
     placeInHill(slot);
     counts.brood++; counts.born++;
     touch(slot);
@@ -185,7 +193,7 @@ export async function createColony(tinyactors, { charts, population, colony, see
 
   const world = {
     receive(send) {
-      decisions++;
+      decisions++; messages++;
       const session = Number(send.session);
       if (send.event === 'lay') {
         if (session === queen) lay(send.data.eggs);
@@ -195,7 +203,7 @@ export async function createColony(tinyactors, { charts, population, colony, see
       if (slot < 0 || sessionOf[slot] !== session) return;
       if (send.event === 'forage') forage(slot);
       else if (send.event === 'home') home(slot);
-      else if (send.event === 'rest') rest(slot);
+      else if (send.event === 'rest') restInHill(slot);
     },
   };
 
@@ -214,7 +222,7 @@ export async function createColony(tinyactors, { charts, population, colony, see
       if (slot < 0 || sessionOf[slot] !== session) return;
       if (stage[slot] === BROOD) counts.brood--; else counts.workers--;
       counts.deaths++;
-      sessionOf[slot] = 0; slotOf[session] = -1; outside[slot] = 0;
+      sessionOf[slot] = 0; slotOf[session] = -1; go(slot, 0);
       free[freeTop++] = slot;
       touch(slot);
     },
@@ -256,8 +264,8 @@ export async function createColony(tinyactors, { charts, population, colony, see
 
     clock.increment(FRAME);
     const t = now();
-    const bucket = ring[Math.floor(clock.now / FRAME) % RING];
-    ring[Math.floor(clock.now / FRAME) % RING] = [];
+    const bucket = buckets.get(clock.now / FRAME) ?? [];
+    buckets.delete(clock.now / FRAME);
     eaten = new Int32Array(FOOD.sources);
     const arrivals = [], struck = [];
     for (let i = 0; i < bucket.length; i += 2) {
@@ -273,9 +281,10 @@ export async function createColony(tinyactors, { charts, population, colony, see
       if (outside[slot] && kind !== DIE) meet(slot, t, items, arrivals, struck);
     }
     host.sendMany(items);
+    messages += items.length;
     if (clock.now % (FOOD.every * 1000) === 0) sprout();
     if (clock.now % 1000 === 0) {
-      if (counts.harvest > 0) host.send(queen, 'harvest', { food: counts.harvest });
+      if (counts.harvest > 0) { host.send(queen, 'harvest', { food: counts.harvest }); messages++; }
       counts.harvest = 0;
     }
     await host.idle();
@@ -308,7 +317,7 @@ export async function createColony(tinyactors, { charts, population, colony, see
       const [px, py] = position(slot, t);
       if ((px - x) ** 2 + (py - y) ** 2 > radius * radius) continue;
       host.send(sessionOf[slot], 'kill');
-      killed++;
+      killed++; messages++;
     }
     return killed;
   }
@@ -334,17 +343,21 @@ export async function createColony(tinyactors, { charts, population, colony, see
   }
 
   function stats() {
-    const { workers, brood, stored, deaths, born, fights } = counts;
+    const { workers, brood, out, stored, deaths, born, fights } = counts;
     return {
       time: now(),
       decisions,
-      colony: { workers, brood, stored, deaths, born },
+      messages,
+      colony: { workers, brood, out, stored, deaths, born },
       fights,
       food: Array.from({ length: foods }, (_, i) => [foodX[i], foodY[i], foodLeft[i]]),
     };
   }
 
-  return { populate, step, squash, placeFood, delta, stats, close: () => host.close(), capacity: CAP };
+  /** Rests from now on last `seconds` on average. */
+  function setRest(seconds) { resting = seconds; }
+
+  return { populate, step, squash, placeFood, setRest, delta, stats, close: () => host.close(), capacity: CAP };
 }
 
 const clamp = (value, low, high) => Math.min(high, Math.max(low, value));

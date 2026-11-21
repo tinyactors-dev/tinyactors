@@ -5,13 +5,14 @@
 
   <hero>
     <headline>Four million <em>ants</em>.</headline>
-    <lede>Two colonies, and every ant and queen is an actor. Drop food, squash ants, and raise the population to four million, all in this tab.</lede>
+    <lede>Two colonies, and every ant and queen is an actor. A million ants run in this tab by default, and four million when they rest long enough.</lede>
   </hero>
 
   <section id="watch">
     <heading>Watch them.</heading>
     <p>An ant decides only when something happens: it leaves, finds food, comes home, meets an enemy. Between decisions your GPU draws it walking, and tinyactors does no work for it.</p>
-    <p>The charts under the field measure this tab: frames drawn, the simulation's speed, tinyactors's WebAssembly memory and decisions a second. When the ants decide faster than the hosts answer, the simulation runs slower than real time, and the speed chart shows by how much.</p>
+    <p>A resting ant costs memory and no work, so the rest slider sets how many messages the hosts handle a second.</p>
+    <p>The charts under the field measure this tab. When the ants send more messages than the hosts answer, the simulation runs slower than real time, and the speed chart shows by how much.</p>
     <playground src="../../examples/anthill/page.mjs">
       <description>Two anthills on a field. Each colony's workers fetch food for their queen, who lays eggs with it, and workers of the two colonies fight where they meet.</description>
     </playground>
@@ -19,7 +20,7 @@
 
   <section id="ant">
     <heading>An ant is a statechart.</heading>
-    <p>An egg hatches, a larva grows, and a worker forages, carries food home and rests. Two fights kill it, and so does old age or your tap.</p>
+    <p>An egg hatches, a larva grows, and a worker forages, carries food home and rests. Two fights kill it, and so do old age, after 6 to 14 trips, and your tap.</p>
     <code src="../../examples/anthill/ant.scxml" language="scxml" file="ant.scxml"/>
   </section>
 
@@ -32,15 +33,15 @@
   <section id="world">
     <heading>The world is an I/O processor.</heading>
     <p>When an ant asks to forage, the world picks where it goes and when it will arrive. It tells the ant when it gets there.</p>
-    <code src="../../examples/anthill/world.mjs" lines="186-200" language="javascript" file="world.mjs"/>
+    <code src="../../examples/anthill/world.mjs" lines="194-208" language="javascript" file="world.mjs"/>
   </section>
 
   <section id="workers">
     <heading>Two hosts, two cores.</heading>
     <p>Each colony is a host in a Worker of its own, so the colonies decide in parallel.</p>
     <p>A frame moves the clock 50 milliseconds, tells the ants that arrived, and answers a message for the other colony.</p>
-    <code src="../../examples/anthill/world.mjs" lines="234-283" language="javascript" file="world.mjs"/>
+    <code src="../../examples/anthill/world.mjs" lines="242-291" language="javascript" file="world.mjs"/>
     <p>An ant that arrives where an enemy arrived under half a second earlier may fight it.</p>
-    <code src="../../examples/anthill/world.mjs" lines="285-297" language="javascript" file="world.mjs"/>
+    <code src="../../examples/anthill/world.mjs" lines="294-306" language="javascript" file="world.mjs"/>
   </section>
 </page>

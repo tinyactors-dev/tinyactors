@@ -1,5 +1,5 @@
-minute 1: hill 1: 868 workers, 525 brood, 2335 food home, 2031 born, 638 died; hill 2: 880 workers, 511 brood, 2342 food home, 2016 born, 625 died; 1773 fights
-minute 2: hill 1: 708 workers, 586 brood, 3580 food home, 2654 born, 1360 died; hill 2: 694 workers, 594 brood, 3625 food home, 2657 born, 1369 died; 3322 fights
-minute 3: hill 1: 731 workers, 575 brood, 4944 food home, 3336 born, 2030 died; hill 2: 745 workers, 581 brood, 5005 food home, 3347 born, 2021 died; 4634 fights
-minute 4: hill 1: 755 workers, 599 brood, 6387 food home, 4057 born, 2703 died; hill 2: 786 workers, 604 brood, 6472 food home, 4081 born, 2691 died; 6061 fights
-minute 5: hill 1: 836 workers, 481 brood, 7811 food home, 4729 born, 3412 died; hill 2: 874 workers, 468 brood, 7961 food home, 4736 born, 3394 died; 7593 fights
+minute 1: hill 1: 1500 workers, 0 brood, 1093 food home, 1500 born, 0 died; hill 2: 1499 workers, 1 brood, 1106 food home, 1501 born, 1 died; 29 fights
+minute 2: hill 1: 1499 workers, 1 brood, 2322 food home, 1501 born, 1 died; hill 2: 1500 workers, 0 brood, 2345 food home, 1501 born, 1 died; 36 fights
+minute 3: hill 1: 1490 workers, 10 brood, 3537 food home, 1511 born, 11 died; hill 2: 1493 workers, 7 brood, 3568 food home, 1509 born, 9 died; 58 fights
+minute 4: hill 1: 1479 workers, 21 brood, 4748 food home, 1534 born, 34 died; hill 2: 1484 workers, 16 brood, 4753 food home, 1526 born, 26 died; 63 fights
+minute 5: hill 1: 1456 workers, 44 brood, 5947 food home, 1584 born, 84 died; hill 2: 1465 workers, 35 brood, 5984 food home, 1568 born, 68 died; 65 fights
