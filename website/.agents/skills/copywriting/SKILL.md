@@ -78,6 +78,32 @@ system.", "a powerful way to", "seamlessly", "out of the box".
 Fix: replace the adjective with the number or the mechanism behind it.
 If there is none, delete the sentence.
 
+### 5. Three of everything
+
+A list of three qualities sounds complete, so it gets written by reflex:
+"efficient, in process, scalable", "it leaves, finds food, comes home".
+The reader weighs none of the three, and the rhythm gives the reflex away.
+
+- Before: "Two fights kill it, and so do old age, after 6 to 14 trips, and
+  your tap."
+- After: "An egg becomes a larva, then a worker that forages for 6 to 14
+  trips. Two fights or a tap end it sooner."
+
+Fix: keep the one item that carries the point, or two when both matter.
+Give an example ("such as arriving at food") instead of the catalogue.
+
+### 6. What it is not
+
+A sentence that defines something by what it is not ("no server", "costs
+memory and no work", "drawing costs tinyactors nothing", "not a
+framework") makes the reader think of the thing denied first.
+
+- Before: "A resting ant costs memory and no work."
+- After: "An ant at rest takes memory and waits for its next event."
+
+Fix: say what it is or does. Keep a negative only when the reader holds
+the belief it corrects and the sentence names that belief.
+
 ## Facts are checked
 
 A number in copy comes from the repository: a transcluded table, a
@@ -111,7 +137,9 @@ Then, for each line:
    strongest facts.
 4. For a sentence before code or a table: does it say what the block
    shows, or only that a block follows?
-5. Check every number against its source.
+5. Look for lists of three and for sentences that say what something is
+   not (failures 5 and 6).
+6. Check every number against its source.
 
 Fix what you marked, run `mise run test` in `website/`, and look at the
 page in a browser, phone width included.

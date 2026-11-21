@@ -1,45 +1,44 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <page xmlns="https://www.tinyactors.dev/ns/site" id="anthill" path="/anthill/">
-  <title>Four million ants in your browser</title>
-  <description>Two anthills where every ant and queen is a tinyactors actor, up to four million of them, running in your browser on WebAssembly.</description>
+  <title>A million ants in your browser</title>
+  <description>Two anthills in a browser tab, where every ant and queen is a tinyactors actor running on WebAssembly.</description>
 
   <hero>
-    <headline>Four million actors in a <em>browser tab</em>.</headline>
-    <lede>Every ant and queen is a statechart, run by tinyactors in this page's Workers. Raise the colony to four million ants, or shorten their rests until the tab falls behind.</lede>
+    <headline>A million actors in this tab.</headline>
+    <lede>Every ant and queen is a statechart, running on tinyactors in your browser. An ant at rest takes memory and waits for its next event.</lede>
   </hero>
 
   <section id="watch">
-    <heading>Watch them.</heading>
-    <p>An ant decides only when something happens: it leaves, finds food, comes home, meets an enemy. Between decisions your GPU draws it walking, and tinyactors does no work for it.</p>
-    <p>A resting ant costs memory and no work, so the rest slider sets how many messages the hosts handle a second.</p>
-    <p>The charts under the field measure this tab. When the ants send more messages than the hosts answer, the pace chart drops below real time.</p>
+    <heading>Messages set the limit.</heading>
+    <p>An ant runs when an event reaches it, such as arriving at food. Your GPU draws it walking in between.</p>
+    <p>The rest slider sets how long ants stay in the hill between outings. Shorter rests send more messages a second, and the pace chart drops below 100% when the hosts fall behind.</p>
     <playground src="../../examples/anthill/page.mjs">
-      <description>Two anthills on a field. Each colony's workers fetch food for their queen, who lays eggs with it, and workers of the two colonies fight where they meet.</description>
+      <description>Two anthills on a field. Workers carry food home to their queen, and workers of the two colonies fight where they meet.</description>
     </playground>
   </section>
 
   <section id="ant">
     <heading>An ant is a statechart.</heading>
-    <p>An egg hatches, a larva grows, and a worker forages, carries food home and rests. Two fights kill it, and so do old age, after 6 to 14 trips, and your tap.</p>
+    <p>An egg becomes a larva, then a worker that forages for 6 to 14 trips. Two fights or a tap end it sooner.</p>
     <code src="../../examples/anthill/ant.scxml" language="scxml" file="ant.scxml"/>
   </section>
 
   <section id="queen">
     <heading>So is a queen.</heading>
-    <p>Workers bring her food. Once a second she lays an egg for every two pieces.</p>
+    <p>Once a second she lays an egg for every two pieces of food her workers brought home.</p>
     <code src="../../examples/anthill/queen.scxml" language="scxml" file="queen.scxml"/>
   </section>
 
   <section id="world">
     <heading>The world is an I/O processor.</heading>
-    <p>When an ant asks to forage, the world picks where it goes and when it will arrive. It tells the ant when it gets there.</p>
+    <p>Each ant asks the world where to go next. The world is an object in your JavaScript that picks the destination and tells the ant when it arrives.</p>
     <code src="../../examples/anthill/world.mjs" lines="194-208" language="javascript" file="world.mjs"/>
   </section>
 
   <section id="workers">
-    <heading>Two hosts, two cores.</heading>
-    <p>Each colony is a host in a Worker of its own, so the colonies decide in parallel.</p>
-    <p>A frame moves the clock 50 milliseconds, tells the ants that arrived, and answers a message for the other colony.</p>
+    <heading>Each colony gets a CPU core.</heading>
+    <p>Each colony is a host in its own Web Worker, so the two colonies run in parallel.</p>
+    <p>Every 50 simulated milliseconds, a colony tells its arrived ants and sends the other colony a message about the shared field.</p>
     <code src="../../examples/anthill/world.mjs" lines="242-291" language="javascript" file="world.mjs"/>
     <p>An ant that arrives where an enemy arrived under half a second earlier may fight it.</p>
     <code src="../../examples/anthill/world.mjs" lines="294-306" language="javascript" file="world.mjs"/>
