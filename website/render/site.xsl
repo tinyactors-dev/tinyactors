@@ -245,12 +245,19 @@
           </xsl:call-template>
         </nav>
         <div class="presence__controls">
-          <button class="presence__switch" type="button" role="switch" aria-checked="true">
-            <span class="presence__pill" aria-hidden="true"></span>
-            <span>{normalize-space(s:switch)}</span>
-          </button>
-          <button class="presence__greet" type="button">{normalize-space(s:greet)}</button>
-          <p class="presence__count"></p>
+          <!-- One row: the switch, the greeting, and the count as the ant
+               mark and a number (its sentence is its accessible name). -->
+          <div class="presence__row">
+            <button class="presence__switch" type="button" role="switch" aria-checked="true">
+              <span class="presence__pill" aria-hidden="true"></span>
+              <span>{normalize-space(s:switch)}</span>
+            </button>
+            <button class="presence__greet" type="button">{normalize-space(s:greet)}</button>
+            <span class="presence__count" role="img" hidden="">
+              <picture><source srcset="/assets/brand/logo-mark-dark.svg" media="(prefers-color-scheme: dark)"/><img src="/assets/brand/logo-mark.svg" alt="" width="16" height="16"/></picture>
+              <span class="presence__number"></span>
+            </span>
+          </div>
           <p class="presence__status"></p>
         </div>
       </div>

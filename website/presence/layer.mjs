@@ -28,6 +28,7 @@ export function createLayer({ svgText, flagURL = (cc) => `/vendor/flag-icons/fla
   const flags = new Map(); // country -> Image | null
   const bitten = new Map(); // pile -> until when it shakes
   const bite = (id) => bitten.set(id, performance.now() + 400);
+  let target = 0; // the ant this tab's ant walks to, while the server says so
   let you = 0, offset = 0, field = null, running = false, shown = false, last = 0, width = 0, height = 0, dpr = 1;
   const colors = { ink: INK, pine: PINE, trail: PINE };
 
@@ -94,6 +95,7 @@ export function createLayer({ svgText, flagURL = (cc) => `/vendor/flag-icons/fla
       }
       case 'leave': { const ant = ants.get(message.h); if (ant) ant.leaving = true; break; }
       case 'eat': { const ant = ants.get(message.h); if (ant) { ant.eatUntil = performance.now() + 2500; ant.body.target.eat = 1; } bite(message.food); break; }
+      case 'target': target = message.h; break;
       case 'food': if (field) field.food = message.food; else field = { food: message.food }; break;
     }
   }
@@ -165,6 +167,7 @@ export function createLayer({ svgText, flagURL = (cc) => `/vendor/flag-icons/fla
     context.setTransform(dpr, 0, 0, dpr, 0, 0);
     context.clearRect(0, 0, width, height);
     drawField();
+    drawTrack(time);
     let drawn = 0;
     const order = [...ants.entries()].sort(([h]) => (h === you ? -1 : 0));
     for (const [handle, ant] of order) {
@@ -210,6 +213,32 @@ export function createLayer({ svgText, flagURL = (cc) => `/vendor/flag-icons/fla
         context.beginPath(); context.ellipse(x + Math.cos(angle) * r + jitter, y + Math.sin(angle) * r, 1.6, 1.1, angle, 0, Math.PI * 2); context.fill();
       }
     }
+    context.restore();
+  }
+
+  // The track to the ant this tab's ant walks to: a dotted line from its
+  // head, the dots marching toward the target, and a dashed ring around it
+  // (the motion study's trail, in the accent), until the server says the
+  // walk ended.
+  function drawTrack(time) {
+    const mine = ants.get(you), other = ants.get(target);
+    if (!target || !mine || !other || other.leaving) return;
+    const a = mine.body, b = other.body;
+    const h = (a.heading * Math.PI) / 180, ring = LENGTH * 0.8;
+    const hx = a.x + Math.sin(h) * LENGTH * 0.55, hy = a.y - Math.cos(h) * LENGTH * 0.55;
+    const dx = b.x - hx, dy = b.y - hy, d = Math.hypot(dx, dy);
+    context.save();
+    context.fillStyle = context.strokeStyle = colors.pine;
+    const STEP = 9, march = reduced.matches ? 0 : ((time / 1000) * 18) % STEP;
+    for (let s = STEP - march; s < d - ring - 2; s += STEP) {
+      context.globalAlpha = 0.55 * Math.min(1, s / 30); // fades in from the ant
+      context.beginPath(); context.arc(hx + (dx / d) * s, hy + (dy / d) * s, 1.8, 0, Math.PI * 2); context.fill();
+    }
+    context.globalAlpha = 0.6;
+    context.lineWidth = 1.5;
+    context.setLineDash([4, 4]);
+    context.lineDashOffset = reduced.matches ? 0 : -(time / 1000) * 8;
+    context.beginPath(); context.arc(b.x, b.y, ring, 0, Math.PI * 2); context.stroke();
     context.restore();
   }
 

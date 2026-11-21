@@ -77,7 +77,7 @@
                 <xs:annotation><xs:documentation>What a greeted tab reads when the greeter's country is not known.</xs:documentation></xs:annotation>
               </xs:element>
               <xs:element name="count" type="with-ants">
-                <xs:annotation><xs:documentation>The menu's line about the field; {ants} is how many ants this tab sees.</xs:documentation></xs:annotation>
+                <xs:annotation><xs:documentation>What a screen reader says for the menu's count, which shows as the ant mark and a number; {ants} is how many ants this tab sees.</xs:documentation></xs:annotation>
               </xs:element>
             </xs:sequence>
             <xs:attribute name="server" use="required">

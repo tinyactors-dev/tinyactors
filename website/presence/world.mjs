@@ -151,6 +151,16 @@ export function createWorld(tinyactors, { chart, clock, random = Math.random, em
 
   const tell = (ant, event, data) => due.push([now(), ant.session, event, data]);
 
+  // An ant's mode, as the world last heard it from its chart. Its tab is
+  // told which ant it is walking to (it draws the track there), and when
+  // that ends: greeted, lost, given up or interrupted.
+  function setMode(ant, mode, target = 0) {
+    if (mode === 'approaching' && ant.target !== target) emit(ant.handle, { t: 'target', h: target });
+    else if (mode !== 'approaching' && ant.mode === 'approaching') emit(ant.handle, { t: 'target', h: 0 });
+    ant.mode = mode;
+    ant.target = mode === 'approaching' ? target : 0;
+  }
+
   function eat(ant, id) {
     const f = food.find((pile) => pile.id === id);
     const [x, y] = position(ant);
@@ -191,14 +201,14 @@ export function createWorld(tinyactors, { chart, clock, random = Math.random, em
       const ant = ants.get(Number(send.session));
       if (!ant) return;
       switch (send.event) {
-        case 'roam': ant.mode = 'roaming'; return roam(ant);
-        case 'approach': ant.mode = 'approaching'; return approach(ant, Number(send.data.target));
-        case 'eat': ant.mode = 'eating'; return eat(ant, Number(send.data.food));
+        case 'roam': setMode(ant, 'roaming'); return roam(ant);
+        case 'approach': setMode(ant, 'approaching', Number(send.data.target)); return approach(ant, Number(send.data.target));
+        case 'eat': setMode(ant, 'eating'); return eat(ant, Number(send.data.food));
         case 'greet': {
           const peer = ants.get(sessionOf(send.data.peer));
-          ant.mode = 'busy';
+          setMode(ant, 'busy');
           if (!peer) return;
-          peer.mode = 'busy';
+          setMode(peer, 'busy');
           const [ax, ay] = position(ant), [px, py] = position(peer);
           halt(ant, [round(px), round(py)]);
           halt(peer, [round(ax), round(ay)]);
@@ -207,13 +217,13 @@ export function createWorld(tinyactors, { chart, clock, random = Math.random, em
           return;
         }
         case 'greeted': {
-          ant.mode = 'busy';
+          setMode(ant, 'busy');
           emit(ant.handle, { t: 'greeted', country: send.data.country || null });
           return;
         }
         case 'sleep': {
           ant.asleep = true;
-          ant.mode = 'asleep';
+          setMode(ant, 'asleep');
           halt(ant);
           emit(null, { t: 'sleep', h: ant.handle, asleep: true });
           return;
@@ -257,7 +267,7 @@ export function createWorld(tinyactors, { chart, clock, random = Math.random, em
       const ant = {
         session: Number(actor.id), handle: nextHandle++, tab, country, address: actor.address.toString(),
         x0: x, y0: y, t0: t, x1: x, y1: y, t1: t, face: null, heading: random() * Math.PI * 2, trip: 0,
-        mode: 'starting', asleep: false, leaving: false, greetings: 0, ate: 0, fullUntil: 0, bumped: -Infinity,
+        mode: 'starting', target: 0, asleep: false, leaving: false, greetings: 0, ate: 0, fullUntil: 0, bumped: -Infinity,
       };
       ants.set(ant.session, ant);
       byHandle.set(ant.handle, ant);

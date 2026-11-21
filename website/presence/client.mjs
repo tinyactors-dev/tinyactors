@@ -20,6 +20,7 @@ function setup(root) {
   const status = root.querySelector('.presence__status');
   const toast = root.querySelector('.presence__toast');
   const count = root.querySelector('.presence__count');
+  const number = root.querySelector('.presence__number');
   let enabled = read(local, PREF) !== 'off';
   toggle.setAttribute('aria-checked', String(enabled));
   root.dataset.state = enabled ? 'connecting' : 'off';
@@ -122,7 +123,16 @@ function setup(root) {
     // Going to another page of the site drops the socket without a leave: the
     // server keeps the ant 20 s, and the next page's hello finds it again.
     greetButton.addEventListener('click', () => { const h = layer.someone(); if (h) actor.send('tap', { h }); });
-    setInterval(() => { if (root.dataset.state === 'joined') count.textContent = root.dataset.count.replace('{ants}', String(layer.count())); }, 2000);
+    // The count: the ant mark and a number; its sentence is what a screen reader says.
+    const counted = () => {
+      const joined = root.dataset.state === 'joined';
+      count.hidden = !joined;
+      if (!joined) return;
+      number.textContent = String(layer.count());
+      count.setAttribute('aria-label', root.dataset.count.replace('{ants}', number.textContent));
+    };
+    setInterval(counted, 2000);
+    root.querySelector('.presence__button').addEventListener('click', counted);
     return actor;
   }
 }
