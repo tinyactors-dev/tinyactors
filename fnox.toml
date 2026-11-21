@@ -18,3 +18,9 @@ value = "npm-token/password"
 [secrets.CLOUDFLARE_API_TOKEN]
 provider = "op"
 value = "tinyactors.dev Cloudflare API token/credential"
+
+# exe.dev's API key for the presence server's VM (ta-presence): its HTTP
+# API, POST https://exe.dev/exec (website/presence, mise run presence:*).
+[secrets.EXE_API_KEY]
+provider = "op"
+value = "tinyactors-exe-api-key/notesPlain"
