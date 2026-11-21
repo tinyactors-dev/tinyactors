@@ -91,7 +91,9 @@ Three points, in this order:
    are a formal model with W3C semantics, so state properties over
    generated runs instead of examples. Say "properties" and "generated
    runs", not "formal verification": there is no model checker, and the
-   site does not claim one.
+   site does not claim one. "Easy to verify" is fine (the maintainer,
+   2026-11-21): it says what a formal model allows, not that tinyactors
+   verifies a chart.
 
 The wording of each point is the content's (`content/site.xml`,
 `content/pages/home.xml`); this brief names what each argues, not how.
