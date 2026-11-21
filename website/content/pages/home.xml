@@ -80,10 +80,11 @@
 
   <section id="production">
     <heading>Run actors in production</heading>
+    <p>An actor in production stands for an entity, such as an account, and lives as long as it does. So you change and watch actors that are already running.</p>
     <list>
-      <item><term><link to="guide-migration">Migration</link></term><text>Running actors move to their chart's next version and keep the state they reached.</text></item>
-      <item><term><link to="guide-snapshots">Snapshots</link></term><text>A process holding two million actors copies into a 165 MB snapshot that another process restores.</text></item>
-      <item><term><link to="guide-telemetry">Telemetry</link></term><text>Each step an actor takes becomes a span in your OpenTelemetry collector.</text></item>
+      <item><term><link to="guide-migration">Migration</link></term><text>When your rules change, the accounts already running still follow the old ones. Add the chart's new version, and a migration moves each running actor to it, keeping the state it reached.</text></item>
+      <item><term><link to="guide-snapshots">Snapshots</link></term><text>You cannot try an upgrade on production's actors without changing them. A snapshot copies every actor of a running process, so you try the upgrade on a copy. Two million actors make a 165 MB snapshot.</text></item>
+      <item><term><link to="guide-telemetry">Telemetry</link></term><text>tinyactors traces every step of every actor as OpenTelemetry. You turn it on with an option, not with code.</text></item>
     </list>
   </section>
 </page>
