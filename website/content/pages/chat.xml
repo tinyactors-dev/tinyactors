@@ -18,7 +18,7 @@
   <section id="room">
     <heading>1. Create a room.</heading>
     <p>A room is an actor with a list of members. A <code>post</code> goes to every member, through a handler of type <code>chat:client</code>.</p>
-    <code src="../../examples/chat/1-room/charts/room.scxml" lines="8-17" language="scxml" file="charts/room.scxml"/>
+    <code src="../../examples/chat/1-room/charts/room.scxml" lines="8-19" language="scxml" file="charts/room.scxml"/>
     <p>The handler stands in for the screens. The program starts a room and sends it three events.</p>
     <example>
       <code src="../../examples/chat/1-room/main.mjs" lines="4-11" language="javascript" file="main.mjs"/>
@@ -30,9 +30,9 @@
   <section id="presence">
     <heading>2. Add presence.</heading>
     <p>Each user is an actor: offline, active or away. After 300 seconds without activity, a delayed <code>idle</code> event makes it away.</p>
-    <code src="../../examples/chat/2-presence/charts/user.scxml" lines="16-39" language="scxml" file="charts/user.scxml"/>
+    <code src="../../examples/chat/2-presence/charts/user.scxml" lines="19-52" language="scxml" file="charts/user.scxml"/>
     <p>The room now sends each post to each member's actor, by name. An offline user drops it.</p>
-    <code src="../../examples/chat/2-presence/charts/room.scxml" lines="12-18" language="scxml" file="charts/room.scxml"/>
+    <code src="../../examples/chat/2-presence/charts/room.scxml" lines="12-19" language="scxml" file="charts/room.scxml"/>
     <p>A <code>SimulatedClock</code> makes the 300 seconds take no time.</p>
     <example>
       <code src="../../examples/chat/2-presence/main.mjs" lines="27-35" language="javascript" file="main.mjs"/>
@@ -42,10 +42,10 @@
 
   <section id="workspace">
     <heading>3. Let the workspace make rooms.</heading>
-    <p>One actor decides which rooms exist, and only it spawns them. It asks the <code>Spawner</code> and tracks requests in flight, so no room is made twice.</p>
-    <code src="../../examples/chat/3-workspace/charts/workspace.scxml" lines="20-40" language="scxml" file="charts/workspace.scxml"/>
+    <p>One actor decides which rooms exist and spawns them through the <code>Spawner</code>. It records a name when it asks, so a second request for it is refused.</p>
+    <code src="../../examples/chat/3-workspace/charts/workspace.scxml" lines="19-44" language="scxml" file="charts/workspace.scxml"/>
     <p>A user joins rooms by name. Joining a room that does not exist fails with <code>error.communication</code>.</p>
-    <code src="../../examples/chat/3-workspace/charts/user.scxml" lines="18-29" language="scxml" file="charts/user.scxml"/>
+    <code src="../../examples/chat/3-workspace/charts/user.scxml" lines="21-38" language="scxml" file="charts/user.scxml"/>
     <p>The program asks the workspace with <code>actor.ask</code>.</p>
     <example>
       <code src="../../examples/chat/3-workspace/main.mjs" lines="30-39" language="javascript" file="main.mjs"/>
@@ -56,7 +56,7 @@
   <section id="roster">
     <heading>4. Share a roster.</heading>
     <p>Each user reports its status to the workspace when it changes. A user who comes online gets the whole roster, and everyone else gets the change.</p>
-    <code src="../../examples/chat/4-roster/charts/workspace.scxml" lines="55-66" language="scxml" file="charts/workspace.scxml"/>
+    <code src="../../examples/chat/4-roster/charts/workspace.scxml" lines="59-72" language="scxml" file="charts/workspace.scxml"/>
     <example>
       <code src="../../examples/chat/4-roster/output.txt" language="text" role="output"/>
     </example>
