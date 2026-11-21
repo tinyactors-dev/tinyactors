@@ -96,12 +96,16 @@ sentence says what the reader now has, not what comes next.
 ## Problems before solutions
 
 A feature is worth reading about only after its problem (failure 20).
+State the problem as the failure that happens, not as what "must" hold,
+and keep both halves literal: the product or the reader's code as the
+answer's subject.
 
 | Before | After | Why |
 |---|---|---|
-| People who go idle: a user at rest is saved to a store and woken by its next event, so a thousand users run with fifty in memory. | People who go idle: most users sit idle, but their state must survive until they return. A user at rest is saved to a store… | 20: the mechanism and the result, without the problem they solve |
-| Who is in which room: each room is an actor that keeps its members and handles one join or post at a time. | Who is in which room: joins and posts arrive at the same time, and the member list must stay right. Each room is an actor… | 20: a topic in place of the problem |
-| Who is online: a timer turns an active user away after 300 seconds. | Who is online: a user who goes quiet must turn away, though no event says so. Each user's chart… | 20: why a timer is needed is the problem |
+| Who is in which room: each room is an actor that keeps its members and handles one join or post at a time. | Who is in which room: two joins at the same moment can overwrite each other in a shared member list. A room actor handles one event at a time, so its member list keeps every join. | 20: a topic in place of the problem |
+| Who is online: a timer turns an active user away after 300 seconds. | Who is online: a user who stops being active sends no event, so nothing marks them as away. The user's chart restarts a timer on each activity and marks the user away after 300 seconds. | 20: why a timer is needed is the problem |
+| People who go idle: a user at rest is saved to a store and woken by its next event, so a thousand users run with fifty in memory. | People who go idle: most users are idle, and each one's data takes memory as long as it stays loaded. An idle user's actor is saved to a store and loaded again on its next event… | 20: the mechanism and the result, without the problem they solve |
+| (a first fix) "…the member list must stay right", "…their state must survive until they return", "A user who goes quiet must turn away, though no event says so." | (the afters above) | the voice: a "must" states a wish, not the failure; "survive" and an event that "says" are figures; "turn away" reads as "reject" |
 
 ## Sentences before code
 

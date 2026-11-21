@@ -72,9 +72,9 @@
     <p>A chat's hard part is its state: who is in which room, and who is online as people come and go.</p>
     <p>In the tutorial's five steps, each part of that state lives in an actor:</p>
     <list>
-      <item><term><link to="chat" section="room">Who is in which room</link></term><text>Joins and posts arrive at the same time, and the member list must stay right. Each room is an actor that keeps its members and handles one join or post at a time, in the order they arrive.</text></item>
-      <item><term><link to="chat" section="presence">Who is online</link></term><text>A user who goes quiet must turn away, though no event says so. Each user's chart is offline, active or away, and a timer turns an active user away after 300 seconds without activity.</text></item>
-      <item><term><link to="chat" section="hibernation">People who go idle</link></term><text>Most users sit idle, but their state must survive until they return. A user at rest is saved to a store and woken by its next event, so a thousand users run with fifty in memory.</text></item>
+      <item><term><link to="chat" section="room">Who is in which room</link></term><text>Two joins at the same moment can overwrite each other in a shared member list. A room actor handles one event at a time, so its member list keeps every join.</text></item>
+      <item><term><link to="chat" section="presence">Who is online</link></term><text>A user who stops being active sends no event, so nothing marks them as away. The user's chart restarts a timer on each activity and marks the user away after 300 seconds.</text></item>
+      <item><term><link to="chat" section="hibernation">People who go idle</link></term><text>Most users are idle, and each one's data takes memory as long as it stays loaded. An idle user's actor is saved to a store and loaded again on its next event: a thousand users ran with fifty in memory.</text></item>
     </list>
   </section>
 
