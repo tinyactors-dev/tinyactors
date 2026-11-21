@@ -12,8 +12,8 @@
       <command for="Browsers" guide="https://www.tinyactors.dev/guides/browser/">npm install @tinyactors/wasm</command>
     </install>
     <actions>
-      <action to="chat">Build a team chat</action>
-      <action to="property-testing">Test a chart</action>
+      <action to="anthill">See the demo</action>
+      <action to="property-testing">Verify a chart</action>
     </actions>
   </hero>
 
@@ -38,9 +38,6 @@
       <item><term>One chart runs in JavaScript, Python and C</term><text>Each language's package wraps one C core, and that core passes all 191 automatic tests of the W3C's <link href="https://www.w3.org/TR/scxml/">SCXML</link> suite.</text></item>
       <item><term>Small enough for every part of a system</term><text>An actor takes <link to="performance" section="actors">about 530 bytes</link> in Node.js, and one saved to a database while idle keeps about 120.</text></item>
     </list>
-    <actions>
-      <action to="anthill">Watch a million ants</action>
-    </actions>
   </section>
 
   <section id="verify">
@@ -63,6 +60,9 @@
       <item><term><link to="chat" section="presence">Who is online</link></term><text>A user who stops being active sends no event, so nothing marks them as away. The user's chart restarts a timer on each activity and marks the user away after 300 seconds.</text></item>
       <item><term><link to="chat" section="hibernation">People who go idle</link></term><text>Most users are idle, and each one's data takes memory as long as it stays loaded. An idle user's actor is saved to a store and loaded again on its next event: a thousand users ran with fifty in memory.</text></item>
     </list>
+    <actions>
+      <action to="chat">Build a team chat</action>
+    </actions>
   </section>
 
   <section id="production">
