@@ -158,14 +158,12 @@
         </nav>
         <!-- On a phone the links do not fit beside the wordmark: they open
              from a menu, so the sticky header stays one row. -->
-        <details class="site-menu">
-          <summary>Menu</summary>
-          <nav class="site-menu__links" aria-label="Site">
-            <xsl:call-template name="nav-links">
-              <xsl:with-param name="current" select="$current"/>
-            </xsl:call-template>
-          </nav>
-        </details>
+        <button class="site-menu" type="button" popovertarget="site-menu">Menu</button>
+        <nav class="site-menu__links" id="site-menu" popover="" aria-label="Site">
+          <xsl:call-template name="nav-links">
+            <xsl:with-param name="current" select="$current"/>
+          </xsl:call-template>
+        </nav>
       </div>
     </header>
   </xsl:template>

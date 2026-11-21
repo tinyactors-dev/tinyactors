@@ -32,28 +32,29 @@ img, picture { display: block; }
 .site-nav a:hover, .site-nav a[aria-current="page"] { color: var(--fg-1); }
 .site-nav a[aria-current="page"] { text-decoration: underline; text-decoration-color: var(--accent); text-underline-offset: 6px; }
 
-/* The phone's menu: hidden on wider screens, a loupe (the design system's
-   paper for menus) under the header when open. */
-.site-menu { display: none; }
-.site-menu > summary {
-  list-style: none; cursor: pointer; display: inline-flex; align-items: center; gap: var(--space-2);
+/* The phone's menu: a button and a popover of the links, which the
+   browser closes on a tap outside or Escape. A loupe (the design system's
+   paper for menus) under the header. */
+.site-menu {
+  display: none; align-items: center; gap: var(--space-2);
   min-height: 44px; padding: 0 var(--space-3); margin-right: calc(-1 * var(--space-3));
+  background: none; border: 0; cursor: pointer;
   font: var(--fw-medium) var(--fs-16)/1 var(--font-sans); color: var(--fg-1);
 }
-.site-menu > summary::-webkit-details-marker { display: none; }
-.site-menu > summary::after {
+.site-menu::after {
   content: ""; width: 8px; height: 8px; margin-top: -4px;
   border-right: 1.5px solid currentColor; border-bottom: 1.5px solid currentColor;
   transform: rotate(45deg); transition: transform var(--dur-base, 150ms) var(--ease-out, ease-out);
 }
-.site-menu[open] > summary::after { transform: rotate(-135deg); margin-top: 4px; }
-.site-menu > summary:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.site-header:has(.site-menu__links:popover-open) .site-menu::after { transform: rotate(-135deg); margin-top: 4px; }
+.site-menu:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 .site-menu__links {
-  position: absolute; left: var(--space-4); right: var(--space-4); top: calc(100% + var(--space-2));
-  display: flex; flex-direction: column; padding: var(--space-2) 0;
+  display: none; position: fixed; inset: calc(56px + var(--space-2)) var(--space-4) auto; margin: 0; width: auto;
+  flex-direction: column; padding: var(--space-2) 0; color: inherit;
   background: var(--paper-3); border: 1px solid var(--border-2); box-shadow: var(--shadow-pop);
   font: var(--fw-medium) var(--fs-18)/1.2 var(--font-sans);
 }
+.site-menu__links::backdrop { background: transparent; }
 .site-menu__links a { padding: var(--space-4) var(--space-5); color: var(--fg-2); text-decoration: none; }
 .site-menu__links a:hover { color: var(--fg-1); background: var(--surface-2); }
 .site-menu__links a[aria-current="page"] { color: var(--fg-1); box-shadow: inset 2px 0 0 var(--accent); }
@@ -274,9 +275,9 @@ ta-tabs { display: block; }
 
 @media (max-width: 720px) {
   .wrap { padding: 0 var(--space-4); }
-  .site-header__row { position: relative; }
   .site-nav { display: none; }
-  .site-menu { display: block; }
+  .site-menu { display: inline-flex; }
+  .site-menu__links:popover-open { display: flex; }
   .hero { padding-top: var(--space-4); }
   .hero__body { padding: var(--space-10) var(--space-5) var(--space-8); }
   .hero__headline { font: var(--type-h1); font-size: 40px; letter-spacing: var(--tracking-display); }
