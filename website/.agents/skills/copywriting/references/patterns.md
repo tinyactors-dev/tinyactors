@@ -68,6 +68,31 @@ A run of sentences opening the same way reads as filler, whatever each
 says: "Every ant and queen is…", "Each ant asks…", "Each colony is…",
 "Every 50 simulated milliseconds…" (17).
 
+## Guides
+
+A guide is steps: each heading an instruction in the reader's words, the
+thing they want to do, never the API's term for it; each step a sentence
+or two and the code that does it. Reference detail (every option, every
+case) goes in lists and tables under the step that needs it.
+
+| Before | After | Why |
+|---|---|---|
+| Pick a datamodel per host. | Choose the engine for each host. | 12: "datamodel" before the page says what it is |
+| A runaway evaluation ends in an error. | Stop a chart that loops forever. | a fact about the engine; the reader came to stop a chart |
+| Bound each evaluation's work and memory. | Limit how long one evaluation runs. / Limit memory for the whole engine. | 5: two limits in one heading; one step each |
+| Shared builtins, or a realm each. | Give each actor its own builtins. | 1: a label of two options; the after is the instruction |
+| Three edges differ from native. | Expect hibernation and values to differ. | 5 and 1: a count instead of what differs |
+| `hostStats` reports each pool's use and high water. | (an instruction:) See how full each pool is. | 12: code in a heading names the API, not the task |
+| Follow these habits in every test. | (one heading per habit that matters, or cut) | 4: says nothing until the list |
+| Or return it at once and await inside. | (its own instruction, standing alone) | a heading that leans on the one before it |
+| The host handles three cases. | (what the reader decides:) Decide what a send to a missing actor does. | 5: a count |
+| The lede: "The `quickjs` datamodel runs chart code in a separate engine, with no I/O and limits on time and memory." | "An uploaded chart runs in QuickJS, a separate engine inside the package, where a runaway loop ends in an error." | 12 and 5: a term first, then three features; the after is the reader's case and the one fact that settles it |
+| A `vm` context is not a security boundary. | A `vm` context looks like a sandbox but is not one. | 6: a negative kept, because it corrects a belief, and the belief is named |
+
+In a guide, a sentence that only joins two blocks ("This one reads the
+spans back.") still says what the block shows, and a section's last
+sentence says what the reader now has, not what comes next.
+
 ## Sentences before code
 
 The sentence says what the block shows, so a reader who skips the code
