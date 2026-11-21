@@ -113,6 +113,23 @@ host.close();
 A chart with more variables or longer strings needs more per resident
 actor; read `slabBytes.highWater` under load to see.
 
+Size the pools that fill at once, too. A pending delayed send holds a
+timer and an event, and one that falls due holds a second event for a
+moment, so `N` actors that each wait on a delayed send need `maxTimers`
+of `N` and `maxEvents` above it. Actors that become runnable together
+(timers due in the same tick, actors sending to each other) hold a
+workspace each, against a default of 4. On `@tinyactors/wasm` a pool
+that runs out costs most: the region is copied inside WebAssembly memory,
+which keeps its peak. The website's
+[measurement lab](https://github.com/tinyactors-dev/tinyactors/tree/main/website/examples/lab)
+(2026-11-21; Intel Xeon @ 2.10GHz, 4 CPUs, 16 GiB, Linux; Node.js
+22.23.5, `@tinyactors/wasm` 0.4.0) held a million timers in 605 B an
+actor with `maxTimers`, `maxEvents` (`N` and a sixteenth) and
+`workspaces` (1024) sized; with the default `workspaces` and room for
+4,000 events beyond `N`, the same host grew to 1,142 B an actor within
+ten seconds. It reached 35 workspaces at once, and 92 for a million
+actors sending to each other.
+
 ## What an actor costs
 
 The [memory program](https://github.com/tinyactors-dev/tinyactors/tree/main/tinyactors-napi/examples/memory) measures what one more actor, message and
