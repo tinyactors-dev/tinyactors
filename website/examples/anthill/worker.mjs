@@ -1,18 +1,31 @@
-// The anthill in a dedicated Worker: the host and the world run here, and
-// the page only draws. A module Worker has no import map, so it imports the
-// package by the path the website serves it at, and it does so inside
-// start(): the package loads its WebAssembly with a top-level await, and a
-// message that arrives while a statically imported module awaits finds no
-// handler and is lost. So the handler is installed first, and imports wait.
+// One colony in a dedicated Worker: its host and its part of the world run
+// here, the page only draws. The page starts two, and joins them with a
+// MessageChannel: each frame a colony waits for the other's last frame,
+// steps, and sends its own (world.mjs, step()), so the two keep in step on
+// two cores.
+//
+// A module Worker has no import map, so it imports the package by the path
+// the website serves it at, and it does so inside start(): the package
+// loads its WebAssembly with a top-level await, and a message that arrives
+// while a statically imported module awaits finds no handler and is lost.
+// So the handlers are installed first, and imports wait.
 import { FRAME } from './world.mjs';
 
 const text = (name) => fetch(new URL(`./${name}.scxml`, import.meta.url)).then((response) => response.text());
-let anthill;
+let colony;
 const inbox = [];
+const fromOther = [];
+let wake = null; // resolves when the other colony's next frame arrives
 
 onmessage = ({ data }) => {
-  if (data.start) start(data.population, data.seed).catch((error) => postMessage({ error: String(error?.stack ?? error) }));
-  else inbox.push(data);
+  if (data.start) {
+    data.port.onmessage = ({ data: frame }) => { fromOther.push(frame); wake?.(); wake = null; };
+    start(data).catch((error) => postMessage({ error: String(error?.stack ?? error) }));
+  } else inbox.push(data);
+};
+const nextFrame = async () => {
+  while (fromOther.length === 0) await new Promise((resolve) => { wake = resolve; });
+  return fromOther.shift();
 };
 
 // The size of tinyactors's WebAssembly memory, for the page's chart. The
@@ -31,44 +44,47 @@ function watchMemory() {
   WebAssembly.Instance = Watched;
 }
 
-async function start(population, seed) {
+async function start({ population, colony: index, seed, offset, port }) {
   watchMemory();
-  const [tinyactors, { createAnthill }] = await Promise.all([import('/vendor/tinyactors-wasm/index.mjs'), import('./world.mjs')]);
+  const [tinyactors, { createColony }] = await Promise.all([import('/vendor/tinyactors-wasm/index.mjs'), import('./world.mjs')]);
   const charts = { ant: await text('ant'), queen: await text('queen') };
-  anthill = await createAnthill(tinyactors, { charts, population, seed });
-  await anthill.populate((done) => postMessage({ progress: done }));
-  postMessage({ ready: true, capacity: anthill.capacity });
-  run();
+  colony = await createColony(tinyactors, { charts, population, colony: index, seed, offset });
+  await colony.populate((done) => postMessage({ progress: done }));
+  postMessage({ ready: true });
+  run(port);
 }
 
 // The simulation keeps to the wall clock, never faster. When a frame's
 // steps take longer than it lasts, the simulation falls behind and runs
 // slower than real time, and the page says so: no ant's decision is dropped.
-async function run() {
+async function run(port) {
   let wallStart = performance.now(), simulated = 0;
   let window = { wall: performance.now(), simulated: 0, decisions: 0 };
   let speed = 1, rate = 0;
+  let other = null; // the other colony's last frame (none before the first)
   for (;;) {
     for (const message of inbox.splice(0)) {
-      if (message.food) anthill.addFood(message.x, message.y);
-      if (message.squash) anthill.squash(message.x, message.y, message.radius);
+      if (message.food) colony.placeFood(message.x, message.y);
+      if (message.squash) colony.squash(message.x, message.y, message.radius);
     }
     const began = performance.now();
     while (simulated < began - wallStart && performance.now() - began < 40) {
-      await anthill.step();
+      if (simulated > 0) other = await nextFrame();
+      const frame = await colony.step(other);
+      port.postMessage(frame, [frame.arrivals.buffer, frame.struck.buffer, frame.eaten.buffer]);
       simulated += FRAME;
     }
     const behind = began - wallStart - simulated;
     if (behind > 250) wallStart += behind - 250; // owe at most a quarter second
     const now = performance.now();
     if (now - window.wall >= 1000) {
-      const stats = anthill.stats();
+      const stats = colony.stats();
       speed = (simulated - window.simulated) / (now - window.wall);
       rate = ((stats.decisions - window.decisions) * 1000) / (now - window.wall);
       window = { wall: now, simulated, decisions: stats.decisions };
     }
-    const delta = anthill.delta();
-    postMessage({ delta, stats: anthill.stats(), speed, rate, wall: now, memory: memory?.buffer.byteLength ?? null }, [delta.buffer]);
+    const delta = colony.delta();
+    postMessage({ delta, stats: colony.stats(), speed, rate, wall: now, memory: memory?.buffer.byteLength ?? null }, [delta.buffer]);
     await new Promise((resolve) => setTimeout(resolve, simulated < performance.now() - wallStart ? 0 : 16));
   }
 }

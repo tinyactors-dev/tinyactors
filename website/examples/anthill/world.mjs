@@ -1,12 +1,18 @@
-// Two anthills: every ant and both queens are actors (ant.scxml,
-// queen.scxml); the world is their I/O processor, urn:world. An ant decides
-// only when something happens to it: it asks the world for a trip (forage,
-// home, rest), and the world picks where it goes and how long it takes,
-// records the trip, and tells the ant when it arrives (arrive, or found when
-// it reached food). The world also tells two ants of different colonies
-// that arrive at one spot together to fight, and tells an old ant to die.
+// One anthill: its ants and its queen are actors (ant.scxml, queen.scxml)
+// on a host of their own, and the world is their I/O processor, urn:world.
+// An ant decides only when something happens to it: it asks the world for
+// a trip (forage, home, rest), and the world picks where it goes and how
+// long it takes, records the trip, and tells the ant when it arrives
+// (arrive, or found when it reached food). It also tells an old ant to die.
 // Between decisions nothing runs: a renderer draws each ant on its trip,
 // from the trip's two points and two times.
+//
+// The two colonies run side by side, a host each, and share the field:
+// after every frame a colony hands the other a message of what it did
+// (where its ants arrived, which enemies they struck, the food they ate)
+// and takes the other's message before its next frame. So two hosts run in
+// two Workers, and the field stays one: an ant that arrives where an enemy
+// arrived less than half a second before may fight it.
 //
 // The world takes the tinyactors package as an argument, so the same code
 // runs in Node.js (main.mjs, with @tinyactors/wasm from npm) and in a
@@ -29,17 +35,24 @@ const ARRIVE = 0, FOUND = 1, DIE = 2;
 const BROOD = 0, WORKER = 1;
 const CHUNK = 4096; // ants spawned between runs to idle (a burst would hold a workspace per ant)
 
-export async function createAnthill(tinyactors, { charts, population, seed = 1 }) {
+/**
+ * Colony `colony` of a field of two, with room for `population` ants. Both
+ * colonies of a field take the same `seed`, so they place the same food.
+ * Its slots are numbered from `offset` in what delta() answers.
+ */
+export async function createColony(tinyactors, { charts, population, colony, seed = 1, offset = 0 }) {
   const { compileCharts, Host, SimulatedClock } = tinyactors;
   const CAP = population;
-  const random = mulberry32(seed);
+  const random = mulberry32(seed * 2 + colony + 1);
+  const foodRandom = mulberry32(seed); // the same in both colonies
   const clock = new SimulatedClock();
   const now = () => clock.now / 1000;
+  const hill = HILLS[colony];
 
   // ---- the ants' slots: where each one is, and what it is waiting for
   const x0 = new Float32Array(CAP), y0 = new Float32Array(CAP), x1 = new Float32Array(CAP), y1 = new Float32Array(CAP);
   const t0 = new Float32Array(CAP), t1 = new Float32Array(CAP), deathAt = new Float32Array(CAP);
-  const colonyOf = new Uint8Array(CAP), stage = new Uint8Array(CAP), outside = new Uint8Array(CAP);
+  const stage = new Uint8Array(CAP), outside = new Uint8Array(CAP);
   const carrying = new Uint8Array(CAP), pending = new Uint8Array(CAP), target = new Int16Array(CAP);
   const sessionOf = new Float64Array(CAP); // 0: the slot is free
   let slotOf = new Int32Array(1024).fill(-1); // session → slot (sessions are never reused)
@@ -61,31 +74,32 @@ export async function createAnthill(tinyactors, { charts, population, seed = 1 }
     ring[Math.floor((at * 1000) / FRAME) % RING].push(slot, sessionOf[slot]);
   };
 
-  // ---- food, the meeting grid, the colonies
+  // ---- food: both colonies hold the same sources, and each tells the other what it ate
   const foodX = new Float32Array(FOOD.sources), foodY = new Float32Array(FOOD.sources), foodLeft = new Int32Array(FOOD.sources);
-  let foods = 0;
-  const COLS = Math.ceil(WIDTH / CELL), ROWS = Math.ceil(HEIGHT / CELL);
-  const cellAt = new Float32Array(COLS * ROWS).fill(-1e9), cellSlot = new Int32Array(COLS * ROWS), cellColony = new Int8Array(COLS * ROWS).fill(-1);
-  // A meeting turns into a fight one time in two, less often in a crowd:
-  // meetings grow faster than the population, and so would the deaths.
-  const FIGHT = 0.5 * Math.min(1, Math.sqrt(30_000 / CAP));
-  const colonies = HILLS.map(() => ({ queen: 0, workers: 0, brood: 0, harvest: 0, stored: 0, fights: 0, deaths: 0, born: 0 }));
-  let decisions = 0;
-
-  // A source holds a tenth of the population's worth of food: food stays
-  // what limits a colony, at every population.
-  const AMOUNT = Math.max(200, Math.round(CAP / 10));
-  function addFood(x, y, amount = AMOUNT) {
-    const i = foods < FOOD.sources ? foods++ : foodLeft.indexOf(Math.min(...foodLeft.slice(0, foods)));
-    foodX[i] = x; foodY[i] = y; foodLeft[i] = amount;
+  let eaten = new Int32Array(FOOD.sources);
+  let foods = 0, replaced = 0;
+  let placed = []; // food a reader placed here, for both colonies to add next frame
+  const AMOUNT = Math.max(200, Math.round(CAP / 5)); // a tenth of the field's population
+  function addFood(x, y) {
+    const i = foods < FOOD.sources ? foods++ : replaced++ % FOOD.sources; // the oldest goes
+    foodX[i] = x; foodY[i] = y; foodLeft[i] = AMOUNT;
   }
   // Food appears in mirrored pairs, so neither colony is favoured and both
   // meet over it in the middle.
   function sprout() {
-    const x = 330 + random() * 340, y = 60 + random() * 480;
+    const x = 330 + foodRandom() * 340, y = 60 + foodRandom() * 480;
     addFood(x, y); addFood(WIDTH - x, HEIGHT - y);
   }
   for (let i = 0; i < 4; i++) sprout();
+
+  // ---- enemies: where the other colony's ants arrived, a cell each
+  const COLS = Math.ceil(WIDTH / CELL), ROWS = Math.ceil(HEIGHT / CELL);
+  const enemyAt = new Float32Array(COLS * ROWS).fill(-1e9), enemySlot = new Int32Array(COLS * ROWS), enemySession = new Float64Array(COLS * ROWS);
+  // A meeting turns into a fight one time in two, less often in a crowd:
+  // meetings grow faster than the population, and so would the deaths.
+  const FIGHT = 0.5 * Math.min(1, Math.sqrt(30_000 / (2 * CAP)));
+  const counts = { workers: 0, brood: 0, harvest: 0, stored: 0, fights: 0, deaths: 0, born: 0 };
+  let decisions = 0;
 
   // ---- the world: what an ant asks for
   function trip(slot, x, y, kind, seconds) {
@@ -98,11 +112,10 @@ export async function createAnthill(tinyactors, { charts, population, seed = 1 }
   const travel = (slot, x, y) => Math.min(TRIP.max, Math.max(TRIP.min, Math.hypot(x - x1[slot], y - y1[slot]) / SPEED));
 
   function forage(slot) {
-    const colony = colonyOf[slot];
     if (stage[slot] === BROOD) { // a new worker leaves the hill
-      stage[slot] = WORKER; colonies[colony].brood--; colonies[colony].workers++;
+      stage[slot] = WORKER; counts.brood--; counts.workers++;
       deathAt[slot] = now() + LIFE.min + random() * (LIFE.max - LIFE.min);
-      placeInHill(slot, colony);
+      placeInHill(slot);
     }
     if (now() >= deathAt[slot]) { due(slot, now() + FRAME / 1000, DIE); return; }
     outside[slot] = 1;
@@ -131,7 +144,6 @@ export async function createAnthill(tinyactors, { charts, population, seed = 1 }
   }
 
   function home(slot) {
-    const hill = HILLS[colonyOf[slot]];
     carrying[slot] = 1;
     const x = hill.x + (random() - 0.5) * 10, y = hill.y + (random() - 0.5) * 10;
     trip(slot, x, y, ARRIVE, travel(slot, x, y));
@@ -139,23 +151,22 @@ export async function createAnthill(tinyactors, { charts, population, seed = 1 }
 
   function rest(slot) {
     outside[slot] = 0;
-    const hill = HILLS[colonyOf[slot]];
     trip(slot, hill.x, hill.y, ARRIVE, 6 + random() * 14); // a rest in the hill: 6 to 20 seconds
   }
 
-  function placeInHill(slot, colony) {
-    const hill = HILLS[colony], angle = random() * Math.PI * 2;
+  function placeInHill(slot) {
+    const angle = random() * Math.PI * 2;
     x1[slot] = hill.x + Math.cos(angle) * HILL_RADIUS * 0.8;
     y1[slot] = hill.y + Math.sin(angle) * HILL_RADIUS * 0.8;
   }
 
-  let host;
-  function lay(colony, eggs) {
-    const room = Math.min(eggs, freeTop, CAP - alive());
-    for (let i = 0; i < room; i++) hatch(colony, BROOD);
+  let host, queen = 0;
+  function lay(eggs) {
+    const room = Math.min(eggs, freeTop, CAP - counts.workers - counts.brood);
+    for (let i = 0; i < room; i++) hatch(BROOD);
   }
 
-  function hatch(colony, kind) {
+  function hatch(kind) {
     const actor = host.spawn('ant', { params: { colony, stage: kind === BROOD ? 'egg' : 'worker' } });
     const session = Number(actor.id);
     const slot = free[--freeTop];
@@ -166,21 +177,18 @@ export async function createAnthill(tinyactors, { charts, population, seed = 1 }
     }
     slotOf[session] = slot;
     sessionOf[slot] = session;
-    colonyOf[slot] = colony; stage[slot] = BROOD; outside[slot] = 0; carrying[slot] = 0;
-    placeInHill(slot, colony);
-    colonies[colony].brood++; colonies[colony].born++;
+    stage[slot] = BROOD; outside[slot] = 0; carrying[slot] = 0;
+    placeInHill(slot);
+    counts.brood++; counts.born++;
     touch(slot);
   }
-
-  const alive = () => colonies.reduce((sum, colony) => sum + colony.workers + colony.brood, 0);
 
   const world = {
     receive(send) {
       decisions++;
       const session = Number(send.session);
       if (send.event === 'lay') {
-        const colony = queens.indexOf(session);
-        if (colony >= 0) lay(colony, send.data.eggs);
+        if (session === queen) lay(send.data.eggs);
         return;
       }
       const slot = slotOf[session];
@@ -196,7 +204,7 @@ export async function createAnthill(tinyactors, { charts, population, seed = 1 }
     { name: 'queen.scxml', text: charts.queen },
   ]);
   host = new Host(compiled, {
-    system: 'anthill',
+    system: `anthill-${colony + 1}`,
     clock,
     config: { system: { maxActors: CAP + 64, maxEvents: Math.max(256, Math.ceil(CAP / 4)), maxTimers: Math.max(64, Math.ceil(CAP / 8)), tracing: false } },
     ioProcessors: { 'urn:world': world },
@@ -204,72 +212,94 @@ export async function createAnthill(tinyactors, { charts, population, seed = 1 }
       const session = Number(actor.id);
       const slot = slotOf[session];
       if (slot < 0 || sessionOf[slot] !== session) return;
-      const colony = colonies[colonyOf[slot]];
-      if (stage[slot] === BROOD) colony.brood--; else colony.workers--;
-      colony.deaths++;
+      if (stage[slot] === BROOD) counts.brood--; else counts.workers--;
+      counts.deaths++;
       sessionOf[slot] = 0; slotOf[session] = -1; outside[slot] = 0;
       free[freeTop++] = slot;
       touch(slot);
     },
   });
   compiled.close();
-  const queens = HILLS.map((_, colony) => Number(host.spawn('queen', { params: { colony } }).id));
-  colonies.forEach((colony, i) => { colony.queen = queens[i]; });
+  queen = Number(host.spawn('queen', { params: { colony } }).id);
 
   /** Spawns the first population: nine in ten workers, the rest brood. */
   async function populate(progress = () => {}) {
     for (let start = 0; start < CAP; start += CHUNK) {
-      for (let i = start; i < Math.min(CAP, start + CHUNK); i++) hatch(i & 1, random() < 0.9 ? WORKER : BROOD);
+      for (let i = start; i < Math.min(CAP, start + CHUNK); i++) hatch(random() < 0.9 ? WORKER : BROOD);
       await host.idle();
       progress(Math.min(CAP, start + CHUNK) / CAP);
     }
   }
 
-  /** One frame: the clock moves on, and each ant that arrived hears of it. */
-  async function step() {
+  /**
+   * One frame: the other colony's last frame is taken in, the clock moves
+   * on, and each ant that arrived hears of it. Answers this frame's message
+   * for the other colony.
+   */
+  async function step(other = null) {
+    const items = [];
+    if (other) {
+      for (let i = 0; i < FOOD.sources; i++) foodLeft[i] = Math.max(0, foodLeft[i] - other.eaten[i]);
+      for (let i = 0; i < other.arrivals.length; i += 4) {
+        const cell = other.arrivals[i];
+        enemyAt[cell] = other.arrivals[i + 1]; enemySlot[cell] = other.arrivals[i + 2]; enemySession[cell] = other.arrivals[i + 3];
+      }
+      for (let i = 0; i < other.struck.length; i += 2) {
+        const slot = other.struck[i], session = other.struck[i + 1];
+        if (sessionOf[slot] === session && outside[slot]) items.push({ target: session, event: 'fight' });
+      }
+    }
+    // Food a reader placed, in colony order, the same frame in both.
+    const mine = placed;
+    placed = [];
+    for (const [x, y] of colony === 0 ? [...mine, ...(other?.placed ?? [])] : [...(other?.placed ?? []), ...mine]) addFood(x, y);
+
     clock.increment(FRAME);
     const t = now();
     const bucket = ring[Math.floor(clock.now / FRAME) % RING];
     ring[Math.floor(clock.now / FRAME) % RING] = [];
-    const items = [];
+    eaten = new Int32Array(FOOD.sources);
+    const arrivals = [], struck = [];
     for (let i = 0; i < bucket.length; i += 2) {
       const slot = bucket[i], session = bucket[i + 1];
       if (sessionOf[slot] !== session) continue; // ended, or a newer ant in the slot
       let kind = pending[slot];
       if (kind === FOUND) {
         const food = target[slot];
-        if (food >= 0 && foodLeft[food] > 0) foodLeft[food]--; else kind = ARRIVE;
+        if (food >= 0 && foodLeft[food] > 0) { foodLeft[food]--; eaten[food]++; } else kind = ARRIVE;
       }
-      if (kind === ARRIVE && carrying[slot]) { carrying[slot] = 0; colonies[colonyOf[slot]].harvest++; colonies[colonyOf[slot]].stored++; }
+      if (kind === ARRIVE && carrying[slot]) { carrying[slot] = 0; counts.harvest++; counts.stored++; }
       items.push({ target: session, event: EVENTS[kind] });
-      if (outside[slot] && kind !== DIE) meet(slot, t, items);
+      if (outside[slot] && kind !== DIE) meet(slot, t, items, arrivals, struck);
     }
     host.sendMany(items);
     if (clock.now % (FOOD.every * 1000) === 0) sprout();
     if (clock.now % 1000 === 0) {
-      colonies.forEach((colony, i) => {
-        if (colony.harvest > 0) host.send(queens[i], 'harvest', { food: colony.harvest });
-        colony.harvest = 0;
-      });
+      if (counts.harvest > 0) host.send(queen, 'harvest', { food: counts.harvest });
+      counts.harvest = 0;
     }
     await host.idle();
+    return { arrivals: Float64Array.from(arrivals), struck: Float64Array.from(struck), eaten, placed: mine };
   }
 
-  // Two ants of different colonies that arrive in one cell within half a
-  // second of each other meet, and may fight.
-  function meet(slot, t, items) {
+  // An ant that arrives in a cell where an enemy arrived less than half a
+  // second before meets it, and may fight: this colony tells its own ant,
+  // and the message tells the other colony to tell the enemy.
+  function meet(slot, t, items, arrivals, struck) {
     const cell = Math.floor(y1[slot] / CELL) * COLS + Math.floor(x1[slot] / CELL);
-    const other = cellSlot[cell];
-    if (cellColony[cell] >= 0 && cellColony[cell] !== colonyOf[slot] && t - cellAt[cell] < MEETING && sessionOf[other] && outside[other] && random() < FIGHT) {
-      items.push({ target: sessionOf[slot], event: 'fight' }, { target: sessionOf[other], event: 'fight' });
-      colonies[0].fights++;
-      cellColony[cell] = -1;
-      return;
+    arrivals.push(cell, t, slot, sessionOf[slot]);
+    if (t - enemyAt[cell] < MEETING && random() < FIGHT) {
+      items.push({ target: sessionOf[slot], event: 'fight' });
+      struck.push(enemySlot[cell], enemySession[cell]);
+      counts.fights++;
+      enemyAt[cell] = -1e9;
     }
-    cellAt[cell] = t; cellSlot[cell] = slot; cellColony[cell] = colonyOf[slot];
   }
 
-  /** Kills the ants outside within `radius` of (x, y), now; answers how many. */
+  /** Food at (x, y), placed in both colonies next frame. */
+  function placeFood(x, y) { placed.push([x, y]); }
+
+  /** Kills this colony's ants outside within `radius` of (x, y), now; answers how many. */
   function squash(x, y, radius) {
     const t = now();
     let killed = 0;
@@ -296,24 +326,25 @@ export async function createAnthill(tinyactors, { charts, population, seed = 1 }
       const slot = changed[i];
       marked[slot] = 0;
       const at = i * 8;
-      out[at] = slot; out[at + 1] = x0[slot]; out[at + 2] = y0[slot]; out[at + 3] = x1[slot]; out[at + 4] = y1[slot];
-      out[at + 5] = t0[slot]; out[at + 6] = t1[slot]; out[at + 7] = sessionOf[slot] && outside[slot] ? colonyOf[slot] + 1 : 0;
+      out[at] = offset + slot; out[at + 1] = x0[slot]; out[at + 2] = y0[slot]; out[at + 3] = x1[slot]; out[at + 4] = y1[slot];
+      out[at + 5] = t0[slot]; out[at + 6] = t1[slot]; out[at + 7] = sessionOf[slot] && outside[slot] ? colony + 1 : 0;
     }
     changes = 0;
     return out;
   }
 
   function stats() {
+    const { workers, brood, stored, deaths, born, fights } = counts;
     return {
       time: now(),
       decisions,
-      colonies: colonies.map(({ workers, brood, stored, deaths, born }) => ({ workers, brood, stored, deaths, born })),
-      fights: colonies[0].fights,
+      colony: { workers, brood, stored, deaths, born },
+      fights,
       food: Array.from({ length: foods }, (_, i) => [foodX[i], foodY[i], foodLeft[i]]),
     };
   }
 
-  return { populate, step, squash, addFood, delta, stats, close: () => host.close(), capacity: CAP };
+  return { populate, step, squash, placeFood, delta, stats, close: () => host.close(), capacity: CAP };
 }
 
 const clamp = (value, low, high) => Math.min(high, Math.max(low, value));

@@ -1,11 +1,15 @@
 # Two anthills
 
 Every ant and both queens are tinyactors actors (`ant.scxml`,
-`queen.scxml`). The world, `world.mjs`, is their I/O processor: it picks
-where each ant goes, tells it when it arrives, and starts the fights. The website
-runs it in a Worker (`worker.mjs`) and draws it (`page.mjs`) at
-https://www.tinyactors.dev/anthill/; `main.mjs` runs a small colony in
-Node.js, seeded, for the website's tests.
+`queen.scxml`). Each colony is a host of its own, and the world,
+`world.mjs`, is its ants' I/O processor: it picks where each ant goes,
+tells it when it arrives, and starts the fights. After every frame a
+colony hands the other a message: where its ants arrived, which enemies
+they struck, the food they ate. The website runs each colony in a Worker
+of its own (`worker.mjs`), the two trading frames over a
+`MessageChannel`, and draws both (`page.mjs`) at
+https://www.tinyactors.dev/anthill/; `main.mjs` runs two small colonies
+in one Node.js process, taking turns, seeded, for the website's tests.
 
 ```sh
 npm ci

@@ -1,5 +1,5 @@
 // The anthill's page: the field, a population slider, two tools and the
-// live costs. The world runs in worker.mjs; renderer.mjs draws every ant
+// live costs. Each colony runs in a worker.mjs of its own; renderer.mjs draws every ant
 // with the design system's rigged ant (sprites.mjs) on the GPU, and where
 // WebGL2 is missing, this draws a dot per ant on a 2D canvas instead.
 // Hills and food are drawn on a 2D canvas above the ants.
@@ -54,7 +54,7 @@ export async function mount(root) {
   slider.addEventListener('input', showCount);
   showCount();
   // The population applies when the slider is let go: a new colony of that
-  // many ants in a new Worker (Restart starts the same population again).
+  // many ants in new Workers (Restart starts the same population again).
   slider.addEventListener('change', () => { if (world) begin(); });
 
   const sprites = await atlas(await (await fetch('/assets/brand/ant.svg')).text(), colors.colony);
@@ -62,7 +62,7 @@ export async function mount(root) {
   let world = null;
 
   function begin() {
-    world?.worker.terminate(); // its memory goes with it: a WebAssembly memory never shrinks
+    world?.workers.forEach((worker) => worker.terminate()); // their memory goes with them: a WebAssembly memory never shrinks
     world?.renderer.destroy?.();
     world?.canvas.remove();
     Object.values(costs).forEach((c) => c.clear());
@@ -75,22 +75,35 @@ export async function mount(root) {
       renderer = dots(canvas, population, colors);
     }
     stage.prepend(canvas);
-    const worker = new Worker(new URL('./worker.mjs', import.meta.url), { type: 'module' });
+    // A Worker per colony, each with half the room, joined by a channel
+    // they trade frames over.
+    const workers = HILLS.map(() => new Worker(new URL('./worker.mjs', import.meta.url), { type: 'module' }));
     world = {
-      worker, canvas, renderer, population, ready: false, stats: null, speed: 1, rate: 0, sim: 0, wall: 0, memory: null,
+      workers, canvas, renderer, population, ready: false, stats: null, speed: 1, rate: 0, sim: 0, wall: 0, memory: null,
+      parts: workers.map(() => ({ progress: 0, ready: false, data: null })),
       antSize: Math.max(2.5, 16 * (1000 / population) ** 0.25),
     };
     const current = world;
     status.textContent = `Hatching ${number.format(population)} ants…`;
-    worker.onmessage = ({ data }) => {
-      if (current !== world) return;
-      if (data.progress !== undefined) status.textContent = `Hatching ${number.format(population)} ants… ${Math.round(data.progress * 100)}%`;
-      if (data.ready) current.ready = true;
-      if (data.error) status.textContent = `The simulation stopped: ${data.error.split('\n')[0]}`;
-      if (data.delta) apply(current, data);
-    };
-    worker.onerror = (event) => { status.textContent = `The simulation stopped: ${event.message}`; };
-    worker.postMessage({ start: true, population, seed: Math.floor(Math.random() * 2 ** 31) });
+    const channel = new MessageChannel();
+    const seed = Math.floor(Math.random() * 2 ** 31);
+    workers.forEach((worker, colony) => {
+      const part = current.parts[colony];
+      worker.onmessage = ({ data }) => {
+        if (current !== world) return;
+        if (data.progress !== undefined) {
+          part.progress = data.progress;
+          const done = current.parts.reduce((sum, p) => sum + p.progress, 0) / current.parts.length;
+          status.textContent = `Hatching ${number.format(population)} ants… ${Math.round(done * 100)}%`;
+        }
+        if (data.ready) { part.ready = true; current.ready = current.parts.every((p) => p.ready); }
+        if (data.error) status.textContent = `The simulation stopped: ${data.error.split('\n')[0]}`;
+        if (data.delta) apply(current, part, data);
+      };
+      worker.onerror = (event) => { status.textContent = `The simulation stopped: ${event.message}`; };
+      const port = colony === 0 ? channel.port1 : channel.port2;
+      worker.postMessage({ start: true, population: population / 2, colony, seed, offset: colony * (population / 2), port }, [port]);
+    });
   }
   restart.addEventListener('click', begin);
 
@@ -164,7 +177,10 @@ export async function mount(root) {
     if (!pointers.delete(event.pointerId)) return;
     if (event.type === 'pointerup' && pointers.size === 0 && !dragged && world?.ready) {
       const [x, y] = toField(event.clientX, event.clientY);
-      world.worker.postMessage(tool === 'food' ? { food: true, x, y } : { squash: true, x, y, radius: Math.max(4, 16 / Math.sqrt(view.scale)) });
+      // Food goes to one colony, which hands it to the other for the same
+      // frame; a squash goes to both, each killing its own ants.
+      if (tool === 'food') world.workers[0].postMessage({ food: true, x, y });
+      else world.workers.forEach((worker) => worker.postMessage({ squash: true, x, y, radius: Math.max(4, 16 / Math.sqrt(view.scale)) }));
     }
     if (pointers.size < 2) pinch = null;
   };
@@ -187,9 +203,25 @@ export async function mount(root) {
     keys[event.key]();
   });
 
-  function apply(state, { delta, stats, speed, rate, wall, memory }) {
-    state.renderer.apply(delta);
-    Object.assign(state, { stats, speed, rate, sim: stats.time, wall, memory });
+  // Each colony reports its own frames; the field shows both, at the time
+  // of the one behind, which the other waits for.
+  function apply(state, part, data) {
+    state.renderer.apply(data.delta);
+    part.data = data;
+    const parts = state.parts.map((p) => p.data);
+    if (parts.some((p) => !p)) return;
+    const behind = parts.reduce((a, b) => (b.stats.time < a.stats.time ? b : a));
+    const stats = {
+      time: behind.stats.time,
+      colonies: parts.map((p) => p.stats.colony),
+      fights: parts.reduce((sum, p) => sum + p.stats.fights, 0),
+      food: parts[0].stats.food,
+    };
+    const memory = parts.every((p) => p.memory) ? parts.reduce((sum, p) => sum + p.memory, 0) : null;
+    Object.assign(state, {
+      stats, memory, sim: behind.stats.time, wall: behind.wall,
+      speed: Math.min(...parts.map((p) => p.speed)), rate: parts.reduce((sum, p) => sum + p.rate, 0),
+    });
     if (!state.ready) return;
     const ants = stats.colonies.reduce((sum, c) => sum + c.workers + c.brood, 0);
     hills.replaceChildren(...stats.colonies.map((c, i) => el('span', { class: `anthill__hill anthill__hill--${i + 1}` },
