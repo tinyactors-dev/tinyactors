@@ -16,7 +16,7 @@
     <heading>Read a trace.</heading>
     <p>This payment charges a card, retries after 30 seconds of silence, and gives up after three attempts.</p>
     <code src="../../examples/property/payment.scxml" language="scxml" file="payment.scxml"/>
-    <p>Run it, traced, while the service is silent once and then answers. Each row is a step, under the step that caused it. Select one to see its transitions and what it sent.</p>
+    <p>Run it, traced, while the service is silent once and then answers. Each row is a step under the step that caused it, and selecting one shows its transitions and sends.</p>
     <live src="../../examples/property/live.mjs" call="trace">
       <label>Run it</label>
     </live>
@@ -24,7 +24,7 @@
 
   <section id="on">
     <heading>Turn it on.</heading>
-    <p>Give the host an encoder in its config and a handler for the requests it writes. The handler gets OTLP bytes, ready to post to a collector. This one reads the spans back.</p>
+    <p>Give the host an encoder in its config and a handler for the requests it writes. The handler gets OTLP bytes to post to a collector, and this one reads the spans back.</p>
     <example>
       <code src="../../../tinyactors-napi/docs/guide/telemetry.md" section="Turning it on" fence="1" language="javascript" file="telemetry.mjs"/>
       <code src="../../../tinyactors-napi/docs/guide/telemetry.md" section="Turning it on" fence="2" language="text" role="output"/>

@@ -6,7 +6,10 @@
 
 # 1. test/invalid/: each document must be refused by the schema, with the
 #    rule its comment names (`expect: <rule>`): what content must never
-#    say (a claim with no source, a styling attribute, ...).
+#    say (a claim with no source, a styling attribute, a paragraph of
+#    three sentences, ...). The rule may go on with the start of the
+#    message, to name which of a type's assertions must refuse it (each
+#    assertion's test opens with a comment saying what it checks).
 # 2. test/broken-link/: a site whose link names a page it does not list;
 #    the build must stop, naming it (`expect: <message>`).
 # 3. The build (validation first), then every link and asset a page names
@@ -34,7 +37,7 @@ invalid.each do |file|
   out, ok = Website.capture('sxml', 'validate', "--schema=#{Website::SCHEMA}", file)
   if ok
     failures << "#{file.basename}: valid, but must be refused (#{rule})"
-  elsif !out.include?(" #{rule}:")
+  elsif !out.include?(" #{rule}")
     failures << "#{file.basename}: refused, but not by #{rule}:\n#{out}"
   end
 end

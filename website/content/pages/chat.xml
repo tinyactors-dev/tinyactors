@@ -69,7 +69,7 @@
       <code src="../../examples/chat/5-hibernation/main.mjs" lines="41-48" language="javascript" file="main.mjs"/>
       <code src="../../examples/chat/5-hibernation/output.txt" language="text" role="output"/>
     </example>
-    <p>An event wakes a hibernated actor. So does its <code>idle</code> timer. Your program never wakes one itself.</p>
+    <p>An event or its own <code>idle</code> timer wakes a hibernated actor. Your program never wakes one itself.</p>
   </section>
 
   <section id="next">

@@ -19,7 +19,7 @@
 
   <section id="actors">
     <heading>HTML for control flow.</heading>
-    <p>A statechart is a state machine that scales: states nest inside states, regions run in parallel, and every change happens in response to an event. David Harel invented the notation, UML adopted it, and the W3C wrote it down as <link href="https://www.w3.org/TR/scxml/">SCXML</link>, a markup language with one precise meaning that any runtime runs the same way. SCXML is to control flow what HTML is to documents.</p>
+    <p>A statechart is a state machine whose states nest inside states and run side by side in parallel regions. The W3C wrote it down as <link href="https://www.w3.org/TR/scxml/">SCXML</link>: a chart means the same in every runtime, as HTML does in every browser.</p>
     <p>Each actor in tinyactors runs one chart. This one charges a card, retries twice, and gives up.</p>
     <code src="../../examples/simulate/payment.scxml" language="scxml" file="payment.scxml"/>
   </section>
@@ -39,7 +39,7 @@
       </claim>
       <claim>
         <statement>Millions, mostly asleep.</statement>
-        <p>Idle actors hibernate to your store and wake on their next event. A hibernated actor keeps about 120 bytes in memory, and each operation costs about the same at four million actors as at two.</p>
+        <p>Idle actors hibernate to your store and wake on their next event, keeping about 120 bytes in memory meanwhile. Each operation costs about the same at four million actors as at two.</p>
         <source to="performance" section="scale">Costs stay flat</source>
       </claim>
     </claims>
@@ -60,7 +60,7 @@
 
   <section id="simulate">
     <heading>Simulate a thousand runs.</heading>
-    <p>Does the payment ever charge a card four times? Does it give up too early? A test that waits 30 seconds per retry cannot ask that a thousand times. A simulation can.</p>
+    <p>Does the payment ever charge a card four times, or give up too early? A test that waits 30 seconds per retry cannot ask that a thousand times, but a simulation can.</p>
     <list ordered="true">
       <item><term>A fake service</term><text>An I/O processor stands in for the payment service. A seeded random number decides whether it answers each charge.</text></item>
       <item><term>A fake clock</term><text>The host runs on a <code>SimulatedClock</code>, which jumps straight to the next timeout.</text></item>

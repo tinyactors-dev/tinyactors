@@ -1,3 +1,3 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!-- An excerpt is of a file: lines without src. expect: cvc-assertion -->
-<page xmlns="https://www.tinyactors.dev/ns/site" id="t" path="/t/"><title>T</title><description>A test page.</description><hero><headline>T</headline><lede>Lede.</lede></hero><section id="s"><heading>S</heading><code language="text" lines="1-2">text</code></section></page>
+<page xmlns="https://www.tinyactors.dev/ns/site" id="t" path="/t/"><title>T</title><description>A test page.</description><hero><headline>T.</headline><lede>Lede.</lede></hero><section id="s"><heading>S.</heading><code language="text" lines="1-2">text</code></section></page>

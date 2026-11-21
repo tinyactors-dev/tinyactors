@@ -1,0 +1,3 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- The site says properties over generated runs: there is no model checker. expect: cvc-assertion: element 'Q{https://www.tinyactors.dev/ns/site}page' breaks the assertion '(: never 'formal verification' -->
+<page xmlns="https://www.tinyactors.dev/ns/site" id="t" path="/t/"><title>T</title><description>A test page.</description><hero><headline>T.</headline><lede>Lede.</lede></hero><section id="s"><heading>S.</heading><p>Charts are ready for Formal Verification.</p></section></page>

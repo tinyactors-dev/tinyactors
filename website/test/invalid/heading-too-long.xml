@@ -1,0 +1,3 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- A heading has one to eight words. expect: cvc-assertion: element 'Q{https://www.tinyactors.dev/ns/site}heading' breaks the assertion '(: one to eight words :) -->
+<page xmlns="https://www.tinyactors.dev/ns/site" id="t" path="/t/"><title>T</title><description>A test page.</description><hero><headline>T.</headline><lede>Lede.</lede></hero><section id="s"><heading>A heading of nine words is one word too long.</heading><p>Text.</p></section></page>

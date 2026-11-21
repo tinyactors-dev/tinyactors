@@ -34,7 +34,7 @@
 
   <section id="properties">
     <heading>3. State the properties.</heading>
-    <p>Whatever the service does, the payment charges at most three times, gives up only after the third charge, and is paid only when the service answered.</p>
+    <p>Whatever the service does, the payment charges at most three times and gives up only after the third charge. It is paid only when the service answered.</p>
     <code src="../../examples/property/property.mjs" lines="43-50" language="javascript" file="property.mjs"/>
   </section>
 
@@ -77,7 +77,7 @@
 
   <section id="next">
     <heading>Go further.</heading>
-    <p>There is no library to install: the world, the properties, the generator, the search and the shrinker are 76 lines of your own code.</p>
+    <p>There is no library to install. The world, the properties, the generator, the search and the shrinker are 76 lines of your own code.</p>
     <list>
       <item><term>Richer worlds</term><text>Late, duplicate and reordered answers are more entries in the array.</text></item>
       <item><term>More actors</term><text>Generate the <link to="chat">team chat</link>'s inputs. Every online member sees every post.</text></item>
