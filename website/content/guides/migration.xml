@@ -1,0 +1,271 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<page xmlns="https://www.tinyactors.dev/ns/site" id="guide-migration" path="/guides/migration/">
+  <title>Migration</title>
+  <description>Move running actors to a chart's new version, each at rest, keeping its session, states and queue while the host goes on working.</description>
+  <hero>
+    <headline>Move running actors to a new version.</headline>
+    <lede>A migration moves each actor to its chart's new version when it is at rest, keeping its session, states, queue and delayed sends. Two million actors, most of them hibernated, moved while events kept coming.</lede>
+  </hero>
+
+  <section id="why-migrate">
+    <heading>Deploy without stopping long-lived actors.</heading>
+    <p>An order that waits a week for its delivery is still running when the chart's next version ships. Stopping it would lose its state.</p>
+    <p>A migration moves it instead, while the host goes on working. It is part of <link href="https://github.com/tinyactors-dev/tinyactors-napi/blob/main/README.md#operating-a-host">operating a host</link>.</p>
+  </section>
+
+  <section id="versions-and-segments">
+    <heading>Each image adds a segment.</heading>
+    <p>Each image makes a new segment of the host: those <code>new Host</code> was given, and each <code>host.addImage(image)</code> after.</p>
+    <p>An image that holds a chart whose name the host has gives that chart a new version. <code>host.spawn(name)</code> spawns the newest, which <code>host.chart(name)</code> returns.</p>
+    <p>So actors spawned from then on run the new version, and the running ones stay on theirs.</p>
+    <p>Adding the image is a deploy on its own: an actor that may finish on its version needs no migration.</p>
+    <p>An actor found by name is replaced when its owner spawns the new version under the name (<link to="guide-io-processors" section="updating-through-names">updating through names</link>). Migrate the actors that must not wait for their end.</p>
+  </section>
+
+  <section id="moving-running-actors">
+    <heading>The upgrade event carries the old variables.</heading>
+    <p><code>host.migrate()</code> moves the running actors to the newest version of their chart, during the next turns.</p>
+    <p>A moved actor keeps its session, its active states, its queue and its delayed sends with their data. Its states are matched by id (<link to="guide-migration" section="states-the-new-version-enters">below</link>).</p>
+    <p>Its variables do not carry over by themselves, since the new version may name them differently. The actor first gets <code>error.platform.upgrade</code>, whose data holds the old version's variables.</p>
+    <p>Version 2 of this counter renames <code>n</code> to <code>count</code> and takes the old value from the upgrade event:</p>
+    <example>
+      <code language="javascript" file="migrate.mjs"><![CDATA[
+import { compileCharts, Host } from '@tinyactors/node';
+
+const image = (name, text) => {
+  const compiled = compileCharts([{ name, text }]);
+  const bytes = compiled.image;
+  compiled.close();
+  return bytes;
+};
+
+const v1 = image('counter-v1.scxml', `
+<scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0"
+       datamodel="ecmascript" name="counter" initial="counting">
+  <datamodel><data id="n" expr="0"/></datamodel>
+  <state id="counting">
+    <transition event="add"><assign location="n" expr="n + 1"/><log expr="'v1 counts ' + n"/></transition>
+  </state>
+</scxml>`);
+
+// Version 2 renames n to count and counts by ten.
+const v2 = image('counter-v2.scxml', `
+<scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0"
+       datamodel="ecmascript" name="counter" initial="counting">
+  <datamodel><data id="count" expr="0"/></datamodel>
+  <state id="counting">
+    <transition event="error.platform.upgrade">
+      <assign location="count" expr="_event.data.n"/>
+      <log expr="'upgraded, the old variables were ' + JSON.stringify(_event.data)"/>
+    </transition>
+    <transition event="add"><assign location="count" expr="count + 10"/><log expr="'v2 counts ' + count"/></transition>
+  </state>
+</scxml>`);
+
+const host = new Host(v1, {
+  system: 'demo',
+  log: (entry) => console.log(entry.text),
+  migrated: (moved) => console.log(`session ${moved.session} moved to segment ${moved.segment}`),
+  migrationDone: (result) => console.log(`migration ${result.migration}: ${result.migrated} moved, ${result.failed.length} failed`),
+});
+
+const counter = host.spawn('counter');
+counter.send('add');
+counter.send('add');
+await host.idle();
+
+host.addImage(v2);                 // the deploy
+const id = host.migrate({ chart: 'counter' });
+console.log(`started migration ${id}`);
+await host.idle();
+
+counter.send('add');
+await host.idle();
+host.close();
+]]></code>
+      <code language="text" role="output">
+v1 counts 1
+v1 counts 2
+started migration 1
+session 1 moved to segment 1
+migration 1: 1 moved, 0 failed
+upgraded, the old variables were {"n":2}
+v2 counts 12
+</code>
+    </example>
+    <p>Once no actor runs on an old segment, the host retires it and frees its memory. <code>host.hostStats</code> counts the retired segments (<link to="guide-inspection"/>).</p>
+  </section>
+
+  <section id="states-the-new-version-enters">
+    <heading>A migration runs no <code>&lt;onentry></code>.</heading>
+    <p>A migration is not a transition. It enters the new version's states without their <code>&lt;onentry></code>, and leaves the old without their <code>&lt;onexit></code>.</p>
+    <p>The states are matched by id, and the configuration is completed to a legal one:</p>
+    <list>
+      <item><text>a state that is compound in the new version, and had no children in the old, is entered at its <code>initial</code> child, or its first;</text></item>
+      <item><text>a state the new version does not have at all is replaced by its parent's initial state, the chart's <code>initial</code> at the top;</text></item>
+      <item><text>a <code>&lt;parallel></code> gets all its regions, and an <code>&lt;invoke></code> of a state the migration enters is started.</text></item>
+    </list>
+    <p>So what an <code>&lt;onentry></code> would have done, such as arming a timer or telling your program, is the upgrade transition's job. <code>In()</code> tells it where the actor landed.</p>
+    <p>Version 2 of this subscription gives <code>pastDue</code> a grace period and drops <code>paused</code>:</p>
+    <example>
+      <code language="javascript" file="upgrade-states.mjs"><![CDATA[
+import { compileCharts, Host, SimulatedClock } from '@tinyactors/node';
+
+const image = (name, text) => {
+  const compiled = compileCharts([{ name, text }]);
+  const bytes = compiled.image;
+  compiled.close();
+  return bytes;
+};
+
+const v1 = image('sub-v1.scxml', `
+<scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0"
+       datamodel="ecmascript" name="subscription" initial="active">
+  <state id="active"><transition event="miss" target="pastDue"/><transition event="pause" target="paused"/></state>
+  <state id="pastDue"/>
+  <state id="paused"/>
+</scxml>`);
+
+// Version 2: pastDue starts a grace period, and paused is gone.
+const v2 = image('sub-v2.scxml', `
+<scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0"
+       datamodel="ecmascript" name="subscription" initial="active">
+  <state id="active">
+    <transition event="error.platform.upgrade"><log expr="_sessionid + ' upgraded into active'"/></transition>
+  </state>
+  <state id="pastDue" initial="grace">
+    <transition event="error.platform.upgrade" cond="In('grace')">
+      <log expr="_sessionid + ' upgraded into grace: arming its timer'"/>
+      <send event="graceOver" delay="7s"/>
+    </transition>
+    <state id="grace">
+      <onentry><log expr="'grace onentry'"/><send event="graceOver" delay="7s"/></onentry>
+    </state>
+  </state>
+</scxml>`);
+
+const host = new Host(v1, { system: 'demo', clock: new SimulatedClock(), log: (entry) => console.log(entry.text) });
+const late = host.spawn('subscription');
+const paused = host.spawn('subscription');
+late.send('miss');
+paused.send('pause');
+await host.idle();
+
+host.addImage(v2);
+host.migrate();
+await host.idle();
+for (const actor of [late, paused]) console.log(actor.id, JSON.stringify((await actor.state()).value));
+console.log('next deadline', host.nextDeadline);
+host.close();
+]]></code>
+      <code language="text" role="output">
+1 upgraded into grace: arming its timer
+2 upgraded into active
+1n {"pastDue":"grace"}
+2n "active"
+next deadline 7000
+</code>
+    </example>
+    <p><code>grace onentry</code> is never logged. Without the upgrade transition's <code>&lt;send></code>, actor 1 would wait in <code>grace</code> forever.</p>
+  </section>
+
+  <section id="the-calls">
+    <heading>One call starts it, two handlers report.</heading>
+    <list>
+      <item><term><code>host.migrate({ chart, session, wake, timeout })</code></term><text>starts a migration and returns its id, a number. With no options it moves the actors of every chart; <code>chart</code> names one chart, <code>session</code> one actor. <code>wake: true</code> asks for the hibernated actors. <code>timeout</code> is in milliseconds of the host's clock, rounded up to its next tick; 0 or none means none. A <code>chart</code> the host does not have throws <code>TA_ERROR_INVALID</code>, and a <code>session</code> that ended <code>TA_ERROR_STALE</code>: a migration that could move nothing is refused rather than reported done.</text></item>
+      <item><term><code>migrationDone: (result) => ...</code></term><text>in the host's options, gets the end of each migration: <code>{ migration, migrated, failed, pending }</code>. <code>failed</code> lists the actors it could not move, each <code>{ session, reason }</code> with <code>reason</code> core's status; <code>pending</code> lists the sessions (<code>bigint</code>s) its timeout left behind. It is a handler of the host, so a migration started by a host that was later <link to="guide-snapshots">restored</link> reports to the restored host's handler.</text></item>
+      <item><term><code>migrated: (moved) => ...</code></term><text>gets each actor moved, a view of <code>session</code>, <code>segment</code>, <code>chart</code> (its name) and <code>migration</code>, valid while the handler runs.</text></item>
+    </list>
+  </section>
+
+  <section id="when-a-migration-ends">
+    <heading>Give a migration a timeout.</heading>
+    <p>A migration ends when every actor it looks at has moved, or at its <code>timeout</code>.</p>
+    <p>An actor running an invocation, an invoked chart or a service, moves once the invocation ends. With a <code>timeout</code> the migration waits for that until the timeout.</p>
+    <p>Without a <code>timeout</code> it fails such an actor at once with <code>'TA_ERROR_STATE'</code>, since an invocation may never end.</p>
+    <p>A hibernated actor moves once it is woken. With <code>wake: true</code> the migration asks the host for it, and the host loads it from its <link to="guide-hibernation">store</link>.</p>
+    <p>The migration asks again if it finds the actor hibernated after a wake.</p>
+    <p>Without <code>wake</code>, a hibernated actor that nothing wakes holds the migration until its timeout. Without a timeout it holds it forever, and <code>migrationDone</code> is never called.</p>
+    <p>A migration still running when the host is closed never reaches <code>migrationDone</code>.</p>
+  </section>
+
+  <section id="actors-that-do-not-move">
+    <heading>An actor that cannot be written out stays.</heading>
+    <p>Such an actor stays on its version, in the result's <code>failed</code> with reason <code>'TA_ERROR_UNSUPPORTED'</code>. <code>host.hibernate</code> of the actor names the variable.</p>
+    <p>On the native datamodel, its variables hold a value outside the value table: a function, a <code>Map</code>, a <code>Date</code>.</p>
+    <p><link to="guide-hibernation" section="what-a-blob-stores">Hibernation</link> refuses the same actors.</p>
+    <p>On the native datamodel the upgrade event's data holds exactly the old version's variables. The old names the new version does not declare are gone.</p>
+    <p>The actor gets the new version's helpers. The new version's <code>var</code>s are declared and <code>undefined</code>, since a migration runs no script.</p>
+  </section>
+
+  <section id="most-actors-hibernated">
+    <heading>A resident bound paces a large migration.</heading>
+    <p>A migration with <code>wake: true</code> asks for every hibernated actor early. Woken all at once, they would all be in memory at once.</p>
+    <p>A host with a <code>resident</code> bound loads a migration's requests only while it holds fewer actors than the bound. It hibernates actors again after each turn, so the migration moves the population a few at a time.</p>
+    <p>An event's request still loads its actor at once.</p>
+    <p>A hundred counters with <code>resident: 10</code> migrate with at most 10 in memory between turns:</p>
+    <example>
+      <code language="javascript" file="paced.mjs"><![CDATA[
+import { compileCharts, Host, MemoryStore } from '@tinyactors/node';
+
+const image = (version) => {
+  const compiled = compileCharts([{ name: `v${version}.scxml`, text: `
+<scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0"
+       datamodel="ecmascript" name="counter" initial="s">
+  <datamodel><data id="version" expr="${version}"/></datamodel>
+  <state id="s"><transition event="error.platform.upgrade"/></state>
+</scxml>` }]);
+  const bytes = compiled.image;
+  compiled.close();
+  return bytes;
+};
+
+const store = new MemoryStore();
+/** @type {import('@tinyactors/node').MigrationResult | undefined} */
+let done;
+
+const host = new Host(image(1), {
+  system: 'demo',
+  store,
+  resident: 10,
+  migrationDone: (result) => (done = result),
+});
+
+for (let i = 0; i < 100; i++) host.spawn('counter');
+await host.idle();
+console.log(`${store.blobs.size} hibernated`);
+
+host.addImage(image(2));
+host.migrate({ wake: true });
+let mostResident = 0;
+while (done === undefined) {
+  await host.idle();
+  const stats = await host.hostStats();
+  mostResident = Math.max(mostResident, stats.host.actors - stats.host.hibernated);
+}
+console.log(`${done.migrated} moved, ${done.failed.length} failed, at most ${mostResident} in memory between turns`);
+host.close();
+]]></code>
+      <code language="text" role="output">
+90 hibernated
+100 moved, 0 failed, at most 10 in memory between turns
+</code>
+    </example>
+  </section>
+
+  <section id="at-scale">
+    <heading>Two million actors migrated with 1000 resident.</heading>
+    <p><link href="https://github.com/tinyactors-dev/tinyactors-napi/blob/main/tools/migration.mjs"><code>tools/migration.mjs</code></link> (<code>mise run migration</code>) runs this pattern at scale, with the actors past the bound in SQLite.</p>
+    <p>200,000 events came before the migration and 200,000 more during it. Every actor moved to version 2 with <code>wake: true</code>, in 3,688,635 loads from the store per run.</p>
+    <p>Every actor migrated, none failed and none was left. All 25,000 sampled actors had their count and version 2, and version 1's segment was retired.</p>
+    <p>After every eviction at most 1000 actors were resident.</p>
+    <table>
+      <caption>Two million actors of version 1 of a counter, at most 1000 resident, the rest in SQLite, all moved to version 2. One run of <code>tools/migration.mjs</code>, alone on the machine, 2026-11-20: Intel Xeon at 2.10 GHz, 4 CPUs, 16 GiB, Linux; Node.js 22.23.5, Bun 1.4.1.</caption>
+      <head><cell>Runtime, datamodel</cell><cell>Populate (2,000,000 and 200,000 events)</cell><cell>Migrate (2,000,000 moved, 200,000 events)</cell><cell>Peak resident</cell><cell>Core's region, both versions / after</cell><cell>SQLite file</cell></head>
+      <row><cell>node, native</cell><cell>58.4 s</cell><cell>217.8 s (9,180 a second)</cell><cell>756 MB (378 B per actor)</cell><cell>329 MB / 164 MB (82 B per actor)</cell><cell>590 MB</cell></row>
+      <row><cell>node, quickjs</cell><cell>52.0 s</cell><cell>181.8 s (11,000 a second)</cell><cell>935 MB (467 B per actor)</cell><cell>329 MB / 164 MB (82 B per actor)</cell><cell>777 MB</cell></row>
+      <row><cell>bun, native</cell><cell>52.4 s</cell><cell>195.4 s (10,240 a second)</cell><cell>967 MB (483 B per actor)</cell><cell>329 MB / 164 MB (82 B per actor)</cell><cell>590 MB</cell></row>
+      <row><cell>bun, quickjs</cell><cell>49.4 s</cell><cell>173.3 s (11,540 a second)</cell><cell>925 MB (462 B per actor)</cell><cell>329 MB / 164 MB (82 B per actor)</cell><cell>777 MB</cell></row>
+    </table>
+  </section>
+</page>

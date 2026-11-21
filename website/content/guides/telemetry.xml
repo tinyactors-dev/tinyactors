@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <page xmlns="https://www.tinyactors.dev/ns/site" id="guide-telemetry" path="/guides/telemetry/">
-  <title>Telemetry · tinyactors guides</title>
+  <title>Telemetry</title>
   <description>Export a span for each step an actor takes, a log record for each log line, and the host's metrics as OTLP requests your code sends.</description>
   <hero>
     <headline>See what your actors did in OpenTelemetry.</headline>

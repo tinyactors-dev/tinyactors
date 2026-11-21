@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <page xmlns="https://www.tinyactors.dev/ns/site" id="guide-testing" path="/guides/testing/">
-  <title>Testing your charts · tinyactors guides</title>
+  <title>Testing your charts</title>
   <description>Test a chart's logic without its I/O and without waiting for its timeouts, with handlers your test writes and a simulated clock.</description>
   <hero>
     <headline>Test an hour of timeouts in milliseconds.</headline>

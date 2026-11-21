@@ -1,0 +1,373 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<page xmlns="https://www.tinyactors.dev/ns/site" id="guide-io-processors" path="/guides/io-processors/">
+  <title>I/O processors</title>
+  <description>Charts send events to I/O processors, objects of your own that do the I/O and send the answers back as events.</description>
+  <hero>
+    <headline>Do a chart's I/O in your own code.</headline>
+    <lede>The host does no I/O. A chart sends an event to an I/O processor, an object of yours that does the work and answers with an event.</lede>
+  </hero>
+
+  <section id="charts-send-events">
+    <heading>Charts send their requests as events.</heading>
+    <p>An actor cannot reach the network, a file or a database itself. When a chart needs something from outside, it sends an event to an I/O processor.</p>
+    <p>Your processor does the work and, if there is an answer, sends it back as an event. The chart says what happens, and your code decides how.</p>
+  </section>
+
+  <section id="declaring-a-processor">
+    <heading>Give each processor a type.</heading>
+    <p>The host's <code>ioProcessors</code> option names the processors its charts may send to, each under a type: any URI you choose.</p>
+    <p>A processor is an object whose <code>receive(send)</code> the host calls for each send to its type. Its optional <code>location</code> is what the chart reads in <code>_ioprocessors[type].location</code>.</p>
+    <p>A class instance serves as well as a literal: <code>receive</code> is called as its method, so <code>this</code> is the processor.</p>
+    <example>
+      <code language="javascript" file="quote.mjs"><![CDATA[
+import { compileCharts, Host } from '@tinyactors/node';
+
+const compiled = compileCharts([{ name: 'quote.scxml', text: `
+<scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0"
+       datamodel="ecmascript" name="quote" initial="asking">
+  <state id="asking">
+    <onentry>
+      <send type="urn:example:prices" event="lookup" target="tea" id="ask-1">
+        <param name="currency" expr="'EUR'"/>
+      </send>
+    </onentry>
+    <transition event="price" target="known">
+      <log expr="'tea costs ' + _event.data.amount + ' ' + _event.data.currency + ' (answer to ' + _event.sendid + ')'"/>
+    </transition>
+  </state>
+  <final id="known"/>
+</scxml>` }]);
+
+const prices = { tea: 4 };
+const host = new Host(compiled, {
+  system: 'shop',
+  ioProcessors: {
+    'urn:example:prices': {
+      receive(send) {
+        console.log(`${send.type}: ${send.event} ${send.target} for session ${send.session}`);
+        send.answer('price', { amount: prices[send.target], currency: send.data.currency });
+      },
+    },
+  },
+  log: (entry) => console.log(entry.text),
+});
+compiled.close();
+host.spawn('quote');
+await host.idle();
+host.close();
+]]></code>
+      <code language="text" role="output">
+urn:example:prices: lookup tea for session 1
+tea costs 4 EUR (answer to ask-1)
+</code>
+    </example>
+    <p>A chart that sends to a type no processor serves gets <code>error.execution</code>. A plain function in place of the object is a <code>TypeError</code> at <code>new Host</code>, naming its type.</p>
+  </section>
+
+  <section id="the-send">
+    <heading>The send describes one <code>&lt;send&gt;</code>.</heading>
+    <p>The argument of <code>receive</code> holds the fields of one <code>&lt;send&gt;</code>, read on first access.</p>
+    <table>
+      <head><cell>Field</cell><cell>What it holds</cell></head>
+      <row><cell><code>host</code></cell><cell>the host the send came from</cell></row>
+      <row><cell><code>session</code></cell><cell>the sender's session, a <code>bigint</code></cell></row>
+      <row><cell><code>sender</code></cell><cell>the sender, an <code>Actor</code></cell></row>
+      <row><cell><code>event</code></cell><cell>the event's name (<code>&lt;send event&gt;</code>)</cell></row>
+      <row><cell><code>target</code></cell><cell><code>&lt;send target&gt;</code> as a string, <code>undefined</code> when it has none</cell></row>
+      <row><cell><code>sendid</code></cell><cell><code>&lt;send id&gt;</code>, or the id the host generated; <code>undefined</code> when it has none. A generated id is unique in the sender's session only (each session's first is <code>send.1</code>), so key what you keep by both: <code>`${send.session}:${send.sendid}`</code></cell></row>
+      <row><cell><code>data</code></cell><cell>the <code>&lt;param&gt;</code>s as an object, or the <code>&lt;content&gt;</code>'s value</cell></row>
+      <row><cell><code>type</code></cell><cell>the processor's type</cell></row>
+      <row><cell><code>origin</code></cell><cell>the sender's address, an <code>Address</code></cell></row>
+      <row><cell><code>traceparent</code></cell><cell>the sending step's trace as W3C text, <code>undefined</code> when untraced (<link to="guide-telemetry"/>)</cell></row>
+      <row><cell><code>message</code></cell><cell>the outgoing half, for a transport (<link to="guide-other-systems"/>)</cell></row>
+    </table>
+    <p>A handler calls at most one of the send's two methods:</p>
+    <list>
+      <item><term><code>send.answer(event, data, options)</code></term><text>Sends <code>event</code> back to the sender, with this send's <code>sendid</code> as its <code>_event.sendid</code>. The options are <code>traceparent</code> (the answer continues the send's trace unless you give another, or <code>null</code> for a new one), <code>origin</code> (the answer's <code>_event.origin</code>) and <code>raw</code> (the message as you read it, for a chart that wants it).</text></item>
+      <item><term><code>send.fail()</code></term><text>Gives the sender <code>error.communication</code> with this send's <code>sendid</code>, for a request that could not be done.</text></item>
+    </list>
+    <p>A second answer, or an answer after <code>fail()</code>, throws <code>TA_ERROR_STATE</code>. A handler may also answer nothing: the send was a notification, or the chart waits for a timeout of its own.</p>
+    <p>The fields <code>origin</code> and <code>message</code>, and the answer's <code>origin</code> and <code>raw</code>, follow the <link href="https://github.com/tinyactors-dev/tinyactors-napi/blob/main/README.md#wire-format">wire format</link>. They serve a processor that carries sends out of the process or speaks SCXML's BasicHTTP (<link to="guide-other-systems"/>).</p>
+    <p>The send is a view of the host's memory, valid while the handler runs. Read after the handler returned, it throws <code>TA_ERROR_STALE</code>, so copy what you keep for later.</p>
+  </section>
+
+  <section id="answering-later">
+    <heading>Return a promise to answer later.</heading>
+    <p>A handler that returns a promise has its send filled with every field before the host moves on. Its <code>answer()</code> and <code>fail()</code> then work whenever the promise gets there, while the host is open.</p>
+    <p>Until then the actor goes on with its other events, and the answer arrives as an event like any other.</p>
+    <p>If the sender ended meanwhile, <code>answer()</code> and <code>fail()</code> deliver nothing and return <code>false</code>, and <code>true</code> when the sender gets the event.</p>
+    <p>Any other refusal still throws: a second answer or a closed host (<code>TA_ERROR_STATE</code>), or data the value table cannot hold.</p>
+    <example>
+      <code language="javascript" file="mailer.mjs"><![CDATA[
+import { compileCharts, Host } from '@tinyactors/node';
+
+const compiled = compileCharts([{ name: 'mailer.scxml', text: `
+<scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0"
+       datamodel="ecmascript" name="mailer" initial="sending">
+  <state id="sending">
+    <onentry>
+      <send type="urn:example:mail" event="deliver" target="ada@example.com"><content expr="'hello'"/></send>
+      <send event="timeout" delay="5s"/>
+    </onentry>
+    <transition event="delivered" target="sent"><log expr="'delivered after ' + _event.data.ms + ' ms'"/></transition>
+    <transition event="error.communication" target="failed"/>
+    <transition event="timeout" target="failed"/>
+  </state>
+  <final id="sent"/>
+  <final id="failed"><onentry><log expr="'not delivered'"/></onentry></final>
+</scxml>` }]);
+
+// A stand-in for an SMTP client.
+const deliver = (to, body) => new Promise((resolve) => setTimeout(() => resolve(20), 20));
+
+const host = new Host(compiled, {
+  system: 'demo',
+  ioProcessors: {
+    'urn:example:mail': {
+      async receive(send) {
+        try {
+          const ms = await deliver(send.target, send.data); // send is still readable here
+          send.answer('delivered', { ms });
+        } catch {
+          send.fail();
+        }
+      },
+    },
+  },
+  log: (entry) => console.log(entry.text),
+});
+compiled.close();
+
+host.spawn('mailer');
+await host.idle();
+host.close();
+]]></code>
+      <code language="text" role="output">
+delivered after 20 ms
+</code>
+    </example>
+    <p><code>await host.idle()</code> waits for the host and for the promise the handler returned, so it resolves once the answer ran. A promise the handler starts and does not return is not waited for.</p>
+    <p>The pending <code>timeout</code> keeps the process alive until <code>host.close()</code>.</p>
+  </section>
+
+  <section id="when-the-sender-ends">
+    <heading>Settle a session's requests when it ends.</heading>
+    <p>An actor that reaches a top-level <code>&lt;final&gt;</code> ends at once, and SCXML drops the events still in its queue.</p>
+    <p>So a request queued with <code>actor.send</code> behind the event that ends the actor is lost, and no handler is called.</p>
+    <p>Let the chart say so first: its <code>&lt;final&gt;</code>'s <code>&lt;onentry&gt;</code> sends to your processor. The handler then settles everything it still holds for that session.</p>
+    <example>
+      <code language="javascript" file="login.mjs"><![CDATA[
+import { compileCharts, Host } from '@tinyactors/node';
+
+const compiled = compileCharts([{ name: 'login.scxml', text: `
+<scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0"
+       datamodel="ecmascript" name="login" initial="in">
+  <state id="in">
+    <transition event="request"><send type="urn:example:http" event="response"><content expr="'200 ' + _event.data"/></send></transition>
+    <transition event="logout" target="out"/>
+  </state>
+  <final id="out"><onentry><send type="urn:example:http" event="closed"/></onentry></final>
+</scxml>` }]);
+
+const pending = new Map(); // String(session) -> the resolvers of its requests, in order
+const host = new Host(compiled, {
+  system: 'web',
+  ioProcessors: {
+    'urn:example:http': {
+      receive(send) {
+        const waiting = pending.get(String(send.session)) ?? [];
+        if (send.event === 'response') waiting.shift()?.(send.data);
+        if (send.event === 'closed') {
+          for (const resolve of waiting.splice(0)) resolve('401 logged out');
+          pending.delete(String(send.session));
+        }
+      },
+    },
+  },
+});
+compiled.close();
+
+/** Sends `path` to the actor; resolves with its answer. */
+const request = (actor, path) => new Promise((resolve) => {
+  const key = String(actor.id);
+  pending.set(key, [...(pending.get(key) ?? []), resolve]);
+  actor.send('request', path);
+});
+
+const login = host.spawn('login');
+const first = request(login, '/home');
+login.send('logout');
+const second = request(login, '/account'); // queued behind the logout: dropped
+console.log(await first);
+console.log(await second);
+host.close();
+]]></code>
+      <code language="text" role="output">
+200 /home
+401 logged out
+</code>
+    </example>
+  </section>
+
+  <section id="when-a-handler-fails">
+    <heading>A handler that throws fails its send.</heading>
+    <p>A handler that throws before it answered, or whose promise rejects before it answered, has its send failed. The sender gets <code>error.communication</code>.</p>
+    <p>An error after the answer fails nothing, and the answer stands. The error itself is reported after the turn, to the first of these:</p>
+    <list ordered="true">
+      <item><text>the host's <code>onHandlerError(error, effect)</code>, when it has one, with the send as <code>effect</code>;</text></item>
+      <item><text>a waiting <code>host.idle()</code>, which rejects with it;</text></item>
+      <item><text>the runtime, as an uncaught exception, or as an unhandled rejection for a promise that rejected.</text></item>
+    </list>
+    <example>
+      <code language="javascript" file="flaky.mjs"><![CDATA[
+import { compileCharts, Host } from '@tinyactors/node';
+
+const compiled = compileCharts([{ name: 'c.scxml', text: `
+<scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0"
+       datamodel="ecmascript" name="c" initial="s">
+  <state id="s">
+    <onentry><send type="urn:example:flaky" event="go" id="g1"/></onentry>
+    <transition event="error.communication"><log expr="'the chart got error.communication for ' + _event.sendid"/></transition>
+  </state>
+</scxml>` }]);
+const host = new Host(compiled, {
+  system: 'demo',
+  ioProcessors: { 'urn:example:flaky': { receive() { throw new Error('connection refused'); } } },
+  log: (entry) => console.log(entry.text),
+});
+compiled.close();
+
+host.spawn('c');
+await host.idle().catch((error) => console.log('idle() rejected:', error.message));
+await host.idle();
+host.close();
+]]></code>
+      <code language="text" role="output">
+the chart got error.communication for g1
+idle() rejected: connection refused
+</code>
+    </example>
+    <p>The chart handled <code>error.communication</code> in the same turn, and the error came out of <code>idle()</code> at its end.</p>
+  </section>
+
+  <section id="inputs-from-a-handler">
+    <heading>A handler may call the host.</heading>
+    <p>Through <code>send.host</code> a handler may send an event to any actor, spawn one or terminate one. <code>send.sender.send(...)</code> sends to the sender.</p>
+    <p>The input applies at once, and the actors it concerns run in the same or a later turn.</p>
+    <p>A handler never takes the host's effects, so it has nothing to drain or acknowledge. When it returns, the host goes on.</p>
+  </section>
+
+  <section id="spawning-from-a-chart">
+    <heading>Start lasting actors with a <code>Spawner</code>.</heading>
+    <p>SCXML has no element that starts an actor which outlives its state: <code>&lt;invoke&gt;</code> stops its child when the state is left.</p>
+    <p>The package's <code>Spawner</code> is an I/O processor that does it. Give it to the host under a type you choose, and a chart sends it <code>{ chart, name, params }</code>.</p>
+    <p>The host spawns the chart's current version under the name. The sender gets <code>spawned</code> with <code>{ name, address }</code> and the send's <code>sendid</code>.</p>
+    <p>The <code>address</code> is what the sender sends to from then on. A chart the host does not have, or data of another shape, gives the sender <code>error.communication</code> instead.</p>
+    <example>
+      <code language="javascript" file="spawner.mjs"><![CDATA[
+import { compileCharts, Host, Spawner } from '@tinyactors/node';
+
+const compiled = compileCharts([
+  { name: 'lobby.scxml', text: `<scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0"
+      datamodel="ecmascript" name="lobby" initial="s">
+    <state id="s">
+      <onentry>
+        <send type="spawn" event="spawn">
+          <param name="chart" expr="'room'"/>
+          <param name="params" expr="({ topic: 'tea' })"/>
+        </send>
+      </onentry>
+      <transition event="spawned"><send event="hello" targetexpr="_event.data.address"/></transition>
+    </state>
+  </scxml>` },
+  { name: 'room.scxml', text: `<scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0"
+      datamodel="ecmascript" name="room" initial="s">
+    <datamodel><data id="topic"/></datamodel>
+    <state id="s"><transition event="hello"><log expr="'room about ' + topic + ' got hello'"/></transition></state>
+  </scxml>` },
+]);
+const host = new Host(compiled, {
+  system: 'demo',
+  ioProcessors: { spawn: new Spawner() },
+  log: (entry) => console.log(entry.text),
+});
+compiled.close();
+host.spawn('lobby');
+await host.idle();
+console.log((await host.actors({ chart: 'room' })).length, 'room');
+host.close();
+]]></code>
+      <code language="text" role="output">
+room about tea got hello
+1 room
+</code>
+    </example>
+  </section>
+
+  <section id="one-owner-per-name">
+    <heading>Give each name one owner.</heading>
+    <p>The <code>Spawner</code> spawns and does not look names up. One collection actor decides which actors of a kind exist, and only it spawns those names.</p>
+    <p>A workspace spawns its rooms, for one (<link to="guide-missing-actors" section="the-application-routes-it">the application routes it</link>).</p>
+    <p>As one actor, it makes one request at a time and records each, so it never asks twice for a name.</p>
+    <p>The <link href="https://github.com/tinyactors-dev/tinyactors-napi/blob/main/examples/chat-rooms/README.md">chat-rooms example</link>'s workspace keeps a <code>creating</code> table keyed by the spawn's <code>sendid</code>. An entry stays until <code>spawned</code> or <code>error.communication</code> answers it.</p>
+    <p>Two actors spawning one name is a design error in the application. The core's answer is defined, but it is not what the application meant.</p>
+    <p>Within one version the oldest holder keeps the name, and a newer version's holder wins (<code>ta_host_actor_by_name</code> in <link href="https://github.com/tinyactors-dev/tinyactors/blob/main/tinyactors-core/include/tinyactors/host.h">the core's host.h</link>).</p>
+  </section>
+
+  <section id="updating-through-names">
+    <heading>Deploy a version under an existing name.</heading>
+    <p>A new version of a chart is a new image: compile it and give it to <code>host.addImage</code>. Adding it is the deploy.</p>
+    <p>New actors of the chart start in the newest version, running ones finish on theirs, and nothing moves unless asked. The versions need not be compatible (<link to="guide-migration" section="versions-and-segments">versions and segments</link>).</p>
+    <p>An actor found by name updates the same way: its owner spawns the new version under the existing name.</p>
+    <p>From then on the name finds the new actor (<code>@room.acme.general</code>, <code>host.actor('room.acme.general')</code>), since names are looked up newest version first.</p>
+    <p>The old actor keeps its session, so its session address still reaches it. It runs on its version until it ends.</p>
+    <example>
+      <code language="javascript" file="names.mjs"><![CDATA[
+import { compileCharts, Host, Spawner } from '@tinyactors/node';
+
+const room = (version) => `<scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0"
+    datamodel="ecmascript" name="room" initial="s">
+  <state id="s"><transition event="hello"><log expr="_name + ' runs version ${version}'"/></transition></state>
+</scxml>`;
+const image = (documents) => {
+  const compiled = compileCharts(documents);
+  const bytes = compiled.image;
+  compiled.close();
+  return bytes;
+};
+const host = new Host(image([
+  { name: 'lobby.scxml', text: `<scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0"
+      datamodel="ecmascript" name="lobby" initial="s">
+    <state id="s">
+      <transition event="open">
+        <send type="spawn" event="spawn">
+          <param name="chart" expr="'room'"/>
+          <param name="name" expr="'room.acme.general'"/>
+        </send>
+      </transition>
+      <transition event="spawned"><send event="hello" targetexpr="_event.data.address"/></transition>
+    </state>
+  </scxml>` },
+  { name: 'room.scxml', text: room(1) },
+]), { system: 'demo', ioProcessors: { spawn: new Spawner() }, log: (entry) => console.log(entry.text) });
+const lobby = host.spawn('lobby');                    // the room's one owner
+lobby.send('open');
+await host.idle();
+const old = host.actor('room.acme.general');
+host.addImage(image([{ name: 'room.scxml', text: room(2) }]));   // the deploy
+lobby.send('open');                                   // version 2 starts under the name
+await host.idle();
+old.send('hello');                                    // the old room, at its session address
+await host.idle();
+host.close();
+]]></code>
+      <code language="text" role="output">
+room.acme.general runs version 1
+room.acme.general runs version 2
+room.acme.general runs version 1
+</code>
+    </example>
+    <p>A long-lived actor that must not wait for its end to change, such as a workspace, is moved instead.</p>
+    <p><code>host.migrate({ chart: 'workspace' })</code> moves the running actors to the new version (<link to="guide-migration"/>).</p>
+  </section>
+</page>

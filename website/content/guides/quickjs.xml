@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <page xmlns="https://www.tinyactors.dev/ns/site" id="guide-quickjs" path="/guides/quickjs/">
-  <title>The quickjs sandbox · tinyactors guides</title>
+  <title>The quickjs sandbox</title>
   <description>Run charts you did not write in QuickJS, a separate engine with no I/O and limits on time and memory.</description>
   <hero>
     <headline>Run charts you did not write.</headline>

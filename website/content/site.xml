@@ -9,6 +9,7 @@
     <link to="telemetry">Telemetry</link>
     <link to="performance">Performance</link>
     <link to="anthill">Anthill</link>
+    <link to="guides">Guides</link>
     <link href="https://github.com/tinyactors-dev/tinyactors">GitHub</link>
   </nav>
 
@@ -19,6 +20,21 @@
     <page src="pages/telemetry.xml"/>
     <page src="pages/performance.xml"/>
     <page src="pages/anthill.xml"/>
+    <page src="pages/guides.xml"/>
+    <page src="guides/browser.xml"/>
+    <page src="guides/capacity.xml"/>
+    <page src="guides/charts.xml"/>
+    <page src="guides/hibernation.xml"/>
+    <page src="guides/inspection.xml"/>
+    <page src="guides/io-processors.xml"/>
+    <page src="guides/migration.xml"/>
+    <page src="guides/missing-actors.xml"/>
+    <page src="guides/other-systems.xml"/>
+    <page src="guides/quickjs.xml"/>
+    <page src="guides/services.xml"/>
+    <page src="guides/snapshots.xml"/>
+    <page src="guides/telemetry.xml"/>
+    <page src="guides/testing.xml"/>
     <page src="pages/404.xml"/>
   </pages>
 

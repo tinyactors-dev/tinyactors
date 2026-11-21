@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <page xmlns="https://www.tinyactors.dev/ns/site" id="guide-services" path="/guides/services/">
-  <title>Invoked services · tinyactors guides</title>
+  <title>Invoked services</title>
   <description>Run a connection, a subprocess or a long computation for as long as a chart's state is active, with SCXML's invoke.</description>
   <hero>
     <headline>Run a service while a state is active.</headline>

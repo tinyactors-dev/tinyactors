@@ -1,0 +1,327 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<page xmlns="https://www.tinyactors.dev/ns/site" id="guide-inspection" path="/guides/inspection/">
+  <title>Inspecting a host</title>
+  <description>Ask a running host which state an actor is in, what its variables hold, when it acts next and what the host has done.</description>
+  <hero>
+    <headline>Ask a running host what its actors do.</headline>
+    <lede>Typed methods answer which state an actor is in, what its variables hold, when it acts next, which actors exist and what the host has done so far.</lede>
+  </hero>
+
+  <section id="ask">
+    <heading>Every answer comes in a later turn.</heading>
+    <p>A typed method reads the host as it is when you call it, and answers in a later turn. So each returns a promise: <code>await host.actorState({ session })</code>, or <code>actor.state()</code>, <code>actor.context()</code> and <code>actor.get()</code> for one actor.</p>
+    <p>The methods on an <code>Actor</code> are the application's, and those on <code>host</code> an operator's (<link href="https://github.com/tinyactors-dev/tinyactors-napi/blob/main/README.md#operating-a-host">Operating a host</link>).</p>
+    <example>
+      <code language="javascript" file="order.mjs"><![CDATA[
+import { compileCharts, Host } from '@tinyactors/node';
+
+const compiled = compileCharts([{ name: 'order.scxml', text: `
+<scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0"
+       datamodel="ecmascript" name="order" initial="open">
+  <datamodel>
+    <data id="items" expr="[]"/>
+  </datamodel>
+  <state id="open" initial="browsing">
+    <state id="browsing">
+      <transition event="add"><script>items.push(_event.data)</script></transition>
+    </state>
+  </state>
+</scxml>` }]);
+const host = new Host(compiled, { system: 'shop' });
+compiled.close();
+
+const order = host.spawn('order', { name: 'first' });
+order.send('add', 'tea');
+await host.idle(); // the actor has started and handled 'add'
+
+const { value } = await host.actorState({ session: order });
+console.log('state:', JSON.stringify(value));
+const { variables } = await order.context();
+console.log('variables:', JSON.stringify(variables));
+const actor = await order.get();
+console.log('actor:', actor.chart, 'mailbox', actor.mailbox);
+host.close();
+]]></code>
+      <code language="text" role="output">
+state: {"open":"browsing"}
+variables: {"items":["tea"]}
+actor: order mailbox 0
+</code>
+    </example>
+    <p>Asked before <code>await host.idle()</code>, the methods find an actor not yet started. It has no active state, and every variable is <code>undefined</code>, its <code>params</code> included.</p>
+    <p>An actor's <code>&lt;data&gt;</code> get their values, from <code>expr</code> or <code>params</code>, when it first runs, in the next turn after the spawn. A variable holding <code>undefined</code> reads <code>undefined</code>, and one holding <code>null</code> reads <code>null</code>, on both datamodels.</p>
+    <p>A state reads as nested objects, one key per compound state: <code>{"open": "browsing"}</code> is <code>browsing</code> inside <code>open</code>. A parallel state has one key per region: <code>{"p": {"r1": ..., "r2": ...}}</code>.</p>
+  </section>
+
+  <section id="the-methods">
+    <heading>One typed method per question.</heading>
+    <p>Each method takes its params as an object and resolves with its result.</p>
+    <table>
+      <head><cell>Method</cell><cell>Params</cell><cell>Result</cell></head>
+      <row><cell><code>actorState</code></cell><cell><code>{ session }</code></cell><cell><code>{ value, history }</code>: the active states, and where each history state would return (<link to="guide-inspection" section="delayed-sends-and-history">history</link>)</cell></row>
+      <row><cell><code>actorContext</code></cell><cell><code>{ session }</code></cell><cell><code>{ variables }</code>: each <code>&lt;data&gt;</code> and its value</cell></row>
+      <row><cell><code>actorGet</code></cell><cell><code>{ session }</code></cell><cell><code>{ session, segment, chart, parent, mailbox, invocations, timers, timersPending }</code>; <code>timers</code> are its pending delayed sends (<link to="guide-inspection" section="delayed-sends-and-history">delayed sends</link>)</cell></row>
+      <row><cell><code>actorList</code></cell><cell><code>{ cursor, limit }</code>, both optional</cell><cell><code>{ sessions, cursor }</code>: a page of sessions; <code>cursor</code> is <code>null</code> after the last page</cell></row>
+      <row><cell><code>hostStats</code></cell><cell>none</cell><cell><code>{ host, pools, charts }</code>: counters (<link to="guide-inspection" section="the-hosts-counters">the host's counters</link>)</cell></row>
+      <row><cell><code>hostConfig</code></cell><cell>none</cell><cell>the config the host runs with, every default filled in</cell></row>
+      <row><cell><code>traceConfigure</code>, <code>traceWatch</code>, <code>traceUnwatch</code>, <code>traceEnd</code>, <code>traceSpansDecode</code></cell><cell></cell><cell><link to="guide-telemetry"/></cell></row>
+    </table>
+    <p>A method without params is called with none: <code>await host.hostStats()</code>. A <code>session</code> param takes an <code>Actor</code> too.</p>
+    <p>The host checks the params: one the method does not take, of a wrong type or out of range fails. So is a session that names no actor, because it ended or never was.</p>
+    <p><code>actorContext</code> and <code>actorState</code> refuse a hibernated actor with <code>reason</code> <code>'state'</code>: wake it first (<link to="guide-hibernation"/>).</p>
+  </section>
+
+  <section id="sessions-are-numbers">
+    <heading>Sessions in a result are numbers.</heading>
+    <p>A result's sessions are numbers, while <code>actor.id</code> and the views give <code>bigint</code>s. So <code>result.sessions.includes(actor.id)</code> is false, and a <code>Map</code> keyed by one misses the other.</p>
+    <p>Compare with <code>Number(actor.id) === listed</code>, or key by <code>String(actor.id)</code> (<link href="https://github.com/tinyactors-dev/tinyactors-napi/blob/main/README.md#actors-sessions-and-addresses">Actors, sessions and addresses</link>).</p>
+    <p>The inputs take either as it is, as in <code>host.send(result.sessions[0], ...)</code>, and <code>host.actor(result.sessions[0])</code> gives its <code>Actor</code>. <code>await host.actors({ chart })</code> reads every page and lists the live actors as <code>Actor</code>s.</p>
+  </section>
+
+  <section id="typed-results">
+    <heading>The package types every param and result.</heading>
+    <p><code>index.d.ts</code> types each method's params and result (<code>SessionParams</code>, <code>ActorStateResult</code>, <code>ActorListResult</code>, <code>HostStatsResult</code>, <code>EffectiveHostConfig</code>, ...), and the config as <code>HostConfig</code>.</p>
+    <p>The types hold for the promises and the handlers' <code>result</code> alike. An editor completes <code>stats.pools[0].actors.highWater</code>, and <code>tsc</code> refuses a field a result lacks or a param a method does not take.</p>
+  </section>
+
+  <section id="delayed-sends-and-history">
+    <heading>See when an actor acts next.</heading>
+    <p><code>actorGet</code> answers when a waiting actor acts next, and <code>actorState</code> where it will go back to.</p>
+    <list>
+      <item><term><code>timers</code></term><text>The actor's pending delayed sends, each <code>&lt;send delay&gt;</code> not yet due and not cancelled, earliest first, as <code>{ sendid, event, due }</code>. <code>due</code> is in milliseconds on the clock <code>host.now()</code> reads, and a send without an <code>id</code> has a <code>sendid</code> of <code>null</code>.</text></item>
+      <item><term><code>timersPending</code></term><text>How many pending delayed sends there are. The list holds at most 32, so a <code>timersPending</code> above its length says it was cut.</text></item>
+      <item><term><code>history</code></term><text>For each history state the actor has recorded, its parent state as it would be entered again, in the shape of <code>value</code>. A history state records when its parent is exited, so before the first exit it is absent and <code>history</code> is <code>{}</code>.</text></item>
+    </list>
+    <example>
+      <code language="javascript" file="review.mjs"><![CDATA[
+import { compileCharts, Host, SimulatedClock } from '@tinyactors/node';
+
+const compiled = compileCharts([{ name: 'review.scxml', text: `
+<scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0"
+       datamodel="ecmascript" name="review" initial="reviewing">
+  <state id="reviewing" initial="draft">
+    <onentry><send id="sla" event="breach" delay="7200s"/></onentry>
+    <history id="back" type="deep"><transition target="draft"/></history>
+    <state id="draft"><transition event="submit" target="legal"/></state>
+    <state id="legal"/>
+    <transition event="hold" target="held"/>
+  </state>
+  <state id="held"><transition event="release" target="back"/></state>
+</scxml>` }]);
+const clock = new SimulatedClock();
+const host = new Host(compiled, { system: 'docs', clock });
+compiled.close();
+
+const doc = host.spawn('review');
+doc.send('submit');
+doc.send('hold');
+await host.idle();
+clock.increment(60_000); // a minute later
+
+const { timers, timersPending } = await host.actorGet({ session: doc });
+for (const { sendid, event, due } of timers) console.log(sendid, event, 'in', (due - host.now()) / 1000, 's');
+console.log('pending:', timersPending);
+const { value, history } = await host.actorState({ session: doc });
+console.log('state:', JSON.stringify(value), 'history:', JSON.stringify(history));
+host.close();
+]]></code>
+      <code language="text" role="output">
+sla breach in 7140 s
+pending: 1
+state: "held" history: {"back":{"reviewing":"legal"}}
+</code>
+    </example>
+    <p>A deep history (<code>type="deep"</code>) returns to the atomic states it recorded, so its value goes down to them. A shallow one names only the child it recorded, which enters its own initial state.</p>
+    <p>Neither costs anything per event: the host reads them only when asked.</p>
+  </section>
+
+  <section id="list-every-actor">
+    <heading>Page through every actor.</heading>
+    <p><code>actorList</code> answers a page of sessions and a <code>cursor</code> for the next, <code>null</code> after the last page.</p>
+    <example>
+      <code language="javascript" file="list.mjs"><![CDATA[
+import { compileCharts, Host } from '@tinyactors/node';
+
+const compiled = compileCharts([{ name: 'idle.scxml', text: `
+<scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0"
+       datamodel="ecmascript" name="idle"><state id="waiting"/></scxml>` }]);
+const host = new Host(compiled, { system: 'shop' });
+compiled.close();
+for (let i = 0; i < 5; i++) host.spawn('idle');
+
+const sessions = [];
+let cursor = 0;
+do {
+  const page = await host.actorList({ cursor, limit: 2 });
+  sessions.push(...page.sessions);
+  cursor = page.cursor;
+} while (cursor !== null);
+console.log('sessions:', sessions.join(' '));
+host.close();
+]]></code>
+      <code language="text" role="output">
+sessions: 1 2 3 4 5
+</code>
+    </example>
+  </section>
+
+  <section id="errors">
+    <heading>An error rejects with a <code>TinyactorsError</code>.</heading>
+    <p>The error's <code>code</code> is JSON-RPC's number, and its <code>reason</code> a word such as <code>stale</code>, <code>type</code> or <code>unknown</code>. Its <code>path</code> names the param it is about, and its message is for people.</p>
+    <p>A call the host refuses at once, on a closed host, rejects too.</p>
+    <example>
+      <code language="javascript" file="errors.mjs"><![CDATA[
+import { Host } from '@tinyactors/node';
+
+const host = new Host([], { system: 'shop' });
+try {
+  await host.actorState({ session: 99 });
+} catch (error) {
+  console.log(error.reason, error.path, error.code);
+}
+// @ts-expect-error: a param actorGet does not take, which the types refuse too
+await host.actorGet({ name: 'first' }).catch((error) => console.log(error.reason, error.path));
+host.close();
+]]></code>
+      <code language="text" role="output">
+stale params.session -32001
+unknown params.name
+</code>
+    </example>
+    <p>The rejection is yours to handle, since <code>host.idle()</code> does not see it. One you do not catch is an unhandled rejection, which ends a Node.js or Bun process by default.</p>
+    <p><code>host.close()</code> drops the methods still waiting, and their promises never settle.</p>
+  </section>
+
+  <section id="with-handlers">
+    <heading>Pass handlers instead of a promise.</heading>
+    <p>Each method also takes handlers, as <code>host.actorState(params, onResult, onError)</code>, and then returns nothing. A later turn calls <code>onResult(result)</code>, or <code>onError(error)</code> with the same <code>TinyactorsError</code>.</p>
+    <p>The promise is made only when no handler is given, so a caller that passes handlers pays for none. A method without params takes <code>undefined</code>: <code>host.hostStats(undefined, onResult)</code>.</p>
+    <example>
+      <code language="javascript" file="handlers.mjs"><![CDATA[
+import { compileCharts, Host } from '@tinyactors/node';
+
+const compiled = compileCharts([{ name: 'idle.scxml', text: `
+<scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0"
+       datamodel="ecmascript" name="idle"><state id="waiting"/></scxml>` }]);
+const host = new Host(compiled, { system: 'shop' });
+compiled.close();
+const session = host.spawn('idle');
+await host.idle();
+
+host.actorState({ session }, (result) => console.log('state:', JSON.stringify(result.value)));
+host.hostStats(undefined, (stats) => console.log('actors:', stats.host.actors));
+host.actorGet({ session: 99 }, () => {}, (error) => console.log('error:', error.reason));
+console.log('asked');
+await host.idle();
+host.close();
+]]></code>
+      <code language="text" role="output">
+asked
+state: "waiting"
+actors: 1
+error: stale
+</code>
+    </example>
+    <p>The handlers ran after <code>asked</code>, in a later turn. Without an <code>onError</code>, an error rejects a waiting <code>host.idle()</code>, or is thrown as an uncaught exception like a handler's.</p>
+  </section>
+
+  <section id="the-hosts-counters">
+    <heading><code>hostStats</code> counts what the host has done.</heading>
+    <p><code>hostStats</code> answers in three parts: the host, the pools of each segment, and each chart.</p>
+    <list>
+      <item><term><code>host</code></term><text><code>segments</code> (live), <code>actors</code> and <code>hibernated</code> (now), <code>runnable</code> (actors with work waiting), <code>migrations</code> (running), <code>regionBytes</code> (the memory of the live segments), <code>delivered</code> (events put in queues), <code>routed</code> (sends between the host's segments), <code>migrated</code> (actors moved), <code>retired</code> (segments freed after a migration) and <code>fuelClock</code> (the work the host has done, the clock its trace records are stamped with).</text></item>
+      <item><term><code>pools</code></term><text>An array with one entry per live segment, in segment order. Each entry has its <code>segment</code> number and one object per pool, <code>actors</code>, <code>events</code>, <code>timers</code>, <code>workspaces</code>, <code>requests</code> and <code>slabBytes</code>, each <code>{ capacity, used, highWater }</code>: <code>stats.pools[0].actors.used</code> (<link to="guide-capacity"/>).</text></item>
+      <item><term><code>charts</code></term><text>One entry per chart name, summed over its versions: <code>name</code>, <code>actors</code>, <code>hibernated</code>, <code>spawned</code>, <code>ended</code>, <code>turns</code>, <code>macrosteps</code>, <code>fuel</code>, <code>errorsExecution</code>, <code>errorsCommunication</code>, <code>errorsPlatform</code> (<code>error.platform</code> events raised in the chart's actors) and <code>faults</code> (actors the host had to end because their run failed inside the host).</text></item>
+    </list>
+    <p>The counters measure work in the host's own units:</p>
+    <list>
+      <item><term>Macrostep</term><text>Everything one event does to an actor: its transitions and those that follow on their own, until the actor waits for the next event. A microstep is one set of transitions taken together; spans are named after both (<link to="guide-telemetry"/>).</text></item>
+      <item><term>Fuel</term><text>The host's unit of work: an action, a transition, and a share of the JavaScript an expression runs.</text></item>
+      <item><term>Turn</term><text>One time an actor is given the processor. It runs until it waits or has spent its fuel for the turn (<code>system.quantum</code>), so a busy actor cannot starve the others.</text></item>
+      <item><term>Workspace</term><text>The room an actor needs while it runs. The host has a few, and an actor waits for one.</text></item>
+    </list>
+    <example>
+      <code language="javascript" file="stats.mjs"><![CDATA[
+import { compileCharts, Host } from '@tinyactors/node';
+
+const compiled = compileCharts([{ name: 'job.scxml', text: `
+<scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0"
+       datamodel="ecmascript" name="job" initial="running">
+  <state id="running">
+    <transition event="finish" target="done"/>
+    <transition event="break"><assign location="undeclared" expr="1"/></transition>
+  </state>
+  <final id="done"/>
+</scxml>` }]);
+const host = new Host(compiled, { system: 'shop' });
+compiled.close();
+
+const jobs = [1, 2, 3].map(() => host.spawn('job'));
+jobs[0].send('finish');
+jobs[1].send('break');
+await host.idle();
+const stats = await host.hostStats();
+const [job] = stats.charts;
+console.log(`${job.name}: ${job.spawned} spawned, ${job.ended} ended, ${job.actors} running, ${job.errorsExecution} execution error`);
+console.log(`${stats.host.segments} segment, ${stats.pools[0].actors.used} actors in its pool`);
+host.close();
+]]></code>
+      <code language="text" role="output">
+job: 3 spawned, 1 ended, 2 running, 1 execution error
+1 segment, 2 actors in its pool
+</code>
+    </example>
+  </section>
+
+  <section id="two-actors-that-never-rest">
+    <heading>Find actors that never rest.</heading>
+    <p>Actors that answer each other forever keep the host busy, and <code>await host.idle()</code> never resolves. Nothing is logged or thrown, since every step is legal.</p>
+    <p>The usual cause is SCXML's prefix match (<link href="https://github.com/tinyactors-dev/tinyactors-napi/blob/main/README.md#charts">Charts</link>): a transition on <code>join</code> also takes the answer <code>join.refused</code>, and asks again.</p>
+    <p>Between two readings with no input, a loop's charts gain <code>macrosteps</code> and <code>fuel</code> without end, and <code>host.delivered</code> grows. <code>host.runnable</code> stays above zero, where a host that is only slow drains its queue.</p>
+    <example>
+      <code language="javascript" file="busy.mjs"><![CDATA[
+import { compileCharts, Host } from '@tinyactors/node';
+
+const compiled = compileCharts([
+  { name: 'user.scxml', text: `<scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0" datamodel="ecmascript" name="user">
+    <state id="s">
+      <onentry><send event="join" target="tinyactors://chat/@room"/></onentry>
+      <transition event="join"><send event="join" target="tinyactors://chat/@room"/></transition>
+    </state>
+  </scxml>` },
+  { name: 'room.scxml', text: `<scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0" datamodel="ecmascript" name="room">
+    <state id="s"><transition event="join"><send event="join.refused" targetexpr="_event.origin"/></transition></state>
+  </scxml>` },
+]);
+const host = new Host(compiled, { system: 'chat' });
+compiled.close();
+host.spawn('room', { name: 'room' });
+const user = host.spawn('user');
+
+/** The charts whose actors kept working for `ms` with no input given. */
+async function busy(host, ms) {
+  const before = await host.hostStats();
+  await new Promise((resolve) => setTimeout(resolve, ms));
+  const after = await host.hostStats();
+  if (after.host.runnable === 0) return [];
+  return after.charts
+    .filter((chart) => chart.macrosteps - (before.charts.find((c) => c.name === chart.name)?.macrosteps ?? 0) > 1000)
+    .map((chart) => chart.name)
+    .sort();
+}
+
+console.log('busy:', (await busy(host, 200)).join(', '));
+user.terminate(); // in production: alert, and fix the chart
+await host.idle();
+console.log('idle again; busy:', (await busy(host, 50)).length);
+host.close();
+]]></code>
+      <code language="text" role="output">
+busy: room, user
+idle again; busy: 0
+</code>
+    </example>
+    <p>A watchdog running this on a timer finds such a loop, alerting when a chart stays busy over several readings.</p>
+    <p>Fix the chart: name the answer so it does not extend the request, as <code>refused.join</code>. Or make the <code>join</code> transition's <code>cond</code> refuse what is not a request.</p>
+  </section>
+</page>

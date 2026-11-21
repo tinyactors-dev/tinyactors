@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <page xmlns="https://www.tinyactors.dev/ns/site" id="guide-missing-actors" path="/guides/missing-actors/">
-  <title>When the actor is not there · tinyactors guides</title>
+  <title>When the actor is not there</title>
   <description>What a send does when its actor is hibernated, ended or never spawned, and the three ways an application handles it.</description>
   <hero>
     <headline>Decide what a send to nobody does.</headline>

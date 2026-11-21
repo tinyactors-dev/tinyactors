@@ -1,0 +1,499 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<page xmlns="https://www.tinyactors.dev/ns/site" id="guide-charts" path="/guides/charts/">
+  <title>Writing charts</title>
+  <description>Write SCXML charts whose data and expressions are JavaScript, compile several into one image, and start actors from charts.</description>
+  <hero>
+    <headline>Write chart logic in JavaScript.</headline>
+    <lede>A chart is an SCXML document whose data and expressions are JavaScript, and several charts compile into one image a host runs. The README's <link href="https://github.com/tinyactors-dev/tinyactors-napi/blob/main/README.md#concepts">Concepts</link> come first.</lede>
+  </hero>
+
+  <section id="variables-and-expressions">
+    <heading>Expressions see the variables by name.</heading>
+    <p>A chart's variables are its <code>&lt;data></code> elements. Each <code>expr</code> is evaluated once, when the actor starts, unless <code>spawn</code>'s <code>params</code> give <link href="https://github.com/tinyactors-dev/tinyactors-napi/blob/main/README.md#starting-an-actor-with-data">another value</link>.</p>
+    <p>Every expression (<code>cond</code>, <code>expr</code>, <code>&lt;log expr></code>, <code>&lt;script></code>) sees the variables by name, and these names too:</p>
+    <table>
+      <head><cell>Name</cell><cell>What it holds</cell></head>
+      <row><cell><code>_event</code></cell><cell>the event being handled: <code>name</code>, <code>data</code>, <code>type</code> (<code>'external'</code>, <code>'internal'</code> or <code>'platform'</code>), <code>sendid</code>, <code>origin</code>, <code>origintype</code>, <code>invokeid</code>, and <code>raw</code> when an I/O processor's answer gave one</cell></row>
+      <row><cell><code>_sessionid</code></cell><cell>the actor's session, as a string</cell></row>
+      <row><cell><code>_name</code></cell><cell>the actor's name, or its chart's name when it has none</cell></row>
+      <row><cell><code>_ioprocessors</code></cell><cell>the I/O processors, by type; <code>_ioprocessors.scxml.location</code> is the actor's address</cell></row>
+      <row><cell><code>In(id)</code></cell><cell>whether state <code>id</code> is active</cell></row>
+    </table>
+    <p>An expression is ordinary JavaScript: arrow functions, template strings, <code>JSON.stringify</code>, methods of arrays and strings.</p>
+    <p>An assignment to an undeclared name, to <code>_event</code> or to a system variable raises <code>error.execution</code>, as a throwing expression does.</p>
+    <p>This thermostat runs two regions at once, and its <code>typo</code> event assigns to a name it never declared:</p>
+    <example>
+      <code language="javascript" file="thermostat.mjs"><![CDATA[
+import { compileCharts, Host } from '@tinyactors/node';
+
+const chart = `
+<scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0"
+       datamodel="ecmascript" name="thermostat" initial="running">
+  <datamodel>
+    <data id="readings" expr="[]"/>
+    <data id="target" expr="20"/>
+  </datamodel>
+  <parallel id="running">
+    <state id="heater" initial="off">
+      <state id="off">
+        <onentry><log expr="'heater off'"/></onentry>
+        <transition event="reading" cond="_event.data.celsius &lt; target" target="on"/>
+      </state>
+      <state id="on">
+        <onentry><log expr="'heater on'"/></onentry>
+        <transition event="reading" cond="_event.data.celsius &gt;= target" target="off"/>
+      </state>
+    </state>
+    <state id="recorder">
+      <transition event="reading">
+        <assign location="readings" expr="[...readings, _event.data.celsius].slice(-3)"/>
+        <log expr="_event.data.celsius + '°C, last ' + readings.join(' ') + ', heating: ' + In('on')"/>
+      </transition>
+      <transition event="typo"><assign location="tagret" expr="21"/></transition>
+      <transition event="error.execution"><log expr="'that was an error.execution'"/></transition>
+    </state>
+  </parallel>
+</scxml>`;
+
+const compiled = compileCharts([{ name: 'thermostat.scxml', text: chart }]);
+const host = new Host(compiled, { system: 'home', log: (entry) => console.log(entry.text) });
+compiled.close();
+
+const thermostat = host.spawn('thermostat');
+for (const celsius of [18, 19, 21]) host.send(thermostat, 'reading', { celsius });
+host.send(thermostat, 'typo');
+await host.idle();
+host.close();
+]]></code>
+      <code language="text" role="output">
+heater off
+18°C, last 18, heating: false
+heater on
+19°C, last 18 19, heating: true
+21°C, last 18 19 21, heating: false
+heater off
+that was an error.execution
+</code>
+    </example>
+    <p>Inside an attribute, XML needs <code>&amp;lt;</code> for <code>&lt;</code> and <code>&amp;amp;</code> for <code>&amp;</code>.</p>
+    <p>Both regions of the <code>&lt;parallel></code> handle a <code>reading</code> in one step. The states it leaves are exited first, then every transition's actions run, then the new states are entered.</p>
+    <p>So <code>In('on')</code> in the recorder is true only when the heater stays on. At 18°C the recorder logs <code>heating: false</code> before the heater logs <code>heater on</code>.</p>
+  </section>
+
+  <section id="scripts">
+    <heading>Top-level declarations decide what a script means.</heading>
+    <p><code>&lt;script></code> runs statements in a transition, in <code>&lt;onentry></code> or <code>&lt;onexit></code>, or at the chart's top, once when an actor starts.</p>
+    <p>On the native datamodel every actor of a host is an object in one context the host shares. What a script declares at its top level decides what it means:</p>
+    <list>
+      <item><term><code>function</code> in a chart-level script</term><text>a helper of the chart, made once for the chart, not per actor. Every expression and script of the chart's actors can call it, and another chart's cannot. A helper sees no actor's variables by name: pass it what it reads.</text></item>
+      <item><term><code>function</code> in executable content</term><text>that run's own, gone when the script ends.</text></item>
+      <item><term><code>var</code></term><text>a variable of the actor, as a <code>&lt;data></code> is. It is read before the script runs and written back after, so it keeps its value between runs and is hibernated with the actor.</text></item>
+      <item><term><code>let</code>, <code>const</code> and <code>class</code></term><text>refused: the script is <code>error.execution</code> each time it runs. Inside a block or a function they are fine.</text></item>
+    </list>
+    <p><code>compileCharts</code> warns of every top-level <code>var</code>, <code>let</code>, <code>const</code> and <code>class</code> at the script's line, an error with <code>{warningsAsErrors: true}</code>.</p>
+    <p>The warning names the <code>&lt;data id></code> to declare instead, which other SCXML tools read. It is the same whichever datamodel a host runs the chart on.</p>
+    <p>This basket prices its items with a helper of the chart:</p>
+    <example>
+      <code language="javascript" file="basket.mjs"><![CDATA[
+import { compileCharts, Host } from '@tinyactors/node';
+
+const chart = `
+<scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0"
+       datamodel="ecmascript" name="basket" initial="open">
+  <datamodel>
+    <data id="items" expr="[]"/>
+  </datamodel>
+  <script>
+    function price(sku) { return ({ tea: 4, cake: 7 })[sku] ?? 0; }
+  </script>
+  <state id="open">
+    <transition event="add"><script>items.push(_event.data.sku)</script></transition>
+    <transition event="checkout" target="closed">
+      <log expr="'total ' + items.map(price).reduce((a, b) => a + b, 0)"/>
+    </transition>
+  </state>
+  <final id="closed"/>
+</scxml>`;
+
+const compiled = compileCharts([{ name: 'basket.scxml', text: chart }]);
+const host = new Host(compiled, { system: 'shop', log: (entry) => console.log(entry.text) });
+compiled.close();
+
+const basket = host.spawn('basket');
+for (const sku of ['tea', 'cake', 'tea']) host.send(basket, 'add', { sku });
+host.send(basket, 'checkout');
+await host.idle();
+host.close();
+]]></code>
+      <code language="text" role="output">
+total 15
+</code>
+    </example>
+    <p>A hibernated, migrated or snapshotted actor gets its helpers back from its chart, not from its blob.</p>
+    <p>A function held in a variable is not a value, so it keeps its actor in memory. Declare helpers with <code>function</code> in a chart-level script instead.</p>
+    <p>On quickjs a chart-level script runs as global code in the actor's context. Its declarations of every kind are the actor's own, and its functions see its variables.</p>
+    <p>The <link to="guide-quickjs" section="realms">quickjs guide</link> says what that context costs.</p>
+  </section>
+
+  <section id="sending-events">
+    <heading>One <code>&lt;send></code> reaches any target.</heading>
+    <p><code>&lt;send></code> is how an actor talks to itself, another actor, an I/O processor or a service. Each attribute has an <code>...expr</code> form that computes it:</p>
+    <table>
+      <head><cell>Attribute</cell><cell>What it gives</cell><cell>Default</cell></head>
+      <row><cell><code>event</code>, <code>eventexpr</code></cell><cell>the event's name</cell><cell>required</cell></row>
+      <row><cell><code>target</code>, <code>targetexpr</code></cell><cell>where it goes: an address, <code>#_scxml_&lt;session></code>, <code>#_parent</code>, <code>#_&lt;invokeid></code>, <code>#_internal</code></cell><cell>the actor itself, at the back of its queue</cell></row>
+      <row><cell><code>type</code>, <code>typeexpr</code></cell><cell>the I/O processor (<link to="guide-io-processors"/>)</cell><cell>SCXML's own, between actors</cell></row>
+      <row><cell><code>id</code>, <code>idlocation</code></cell><cell>the send's id, for <code>&lt;cancel></code> and the answer's <code>_event.sendid</code>; <code>idlocation</code> names a declared <code>&lt;data></code> that gets a generated id, unique in the actor's session only (every session's first is <code>send.1</code>)</cell><cell>none</cell></row>
+      <row><cell><code>delay</code>, <code>delayexpr</code></cell><cell>when: <code>500ms</code>, <code>1.5s</code>, <code>30s</code></cell><cell>now</cell></row>
+      <row><cell><code>namelist</code></cell><cell>variables whose names and values become the data</cell><cell>none</cell></row>
+    </table>
+    <p>The data is <code>&lt;param name expr></code>s and <code>namelist</code>, as an object, or one <code>&lt;content expr></code>, any value.</p>
+    <p><code>#_internal</code> puts the event in the actor's internal queue, which runs before anything waiting outside, as <code>&lt;raise></code> does.</p>
+    <p>This sender uses each form, and its internal event runs before the external one it sent first:</p>
+    <example>
+      <code language="javascript" file="send.mjs"><![CDATA[
+import { compileCharts, Host } from '@tinyactors/node';
+
+const sender = `
+<scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0"
+       datamodel="ecmascript" name="sender" initial="s">
+  <datamodel>
+    <data id="qty" expr="2"/>
+    <data id="sku" expr="'tea'"/>
+    <data id="lastid"/>
+    <data id="peer" expr="'#_scxml_2'"/>
+  </datamodel>
+  <state id="s">
+    <onentry>
+      <send event="self.order" namelist="qty sku" idlocation="lastid"/>
+      <send event="self.note" target="#_internal"/>
+      <send eventexpr="'hello.' + sku" targetexpr="peer"/>
+      <log expr="'the order went out as ' + lastid"/>
+    </onentry>
+    <transition event="self.*"><log expr="_event.name + ' (' + _event.type + ') ' + JSON.stringify(_event.data)"/></transition>
+  </state>
+</scxml>`;
+const receiver = `
+<scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0"
+       datamodel="ecmascript" name="receiver" initial="s">
+  <state id="s"><transition event="hello"><log expr="'receiver got ' + _event.name"/></transition></state>
+</scxml>`;
+
+const compiled = compileCharts([{ name: 'sender.scxml', text: sender }, { name: 'receiver.scxml', text: receiver }]);
+const host = new Host(compiled, { system: 'demo', log: (entry) => console.log(entry.text) });
+compiled.close();
+host.spawn('sender');
+host.spawn('receiver');
+await host.idle();
+host.close();
+]]></code>
+      <code language="text" role="output">
+the order went out as send.1
+receiver got hello.tea
+self.note (internal) undefined
+self.order (external) {"qty":2,"sku":"tea"}
+</code>
+    </example>
+    <p><code>idlocation</code> must name a declared <code>&lt;data></code>, as every assignment must. Otherwise the <code>&lt;send></code> fails with <code>error.execution</code> and nothing is sent.</p>
+  </section>
+
+  <section id="xml-data">
+    <heading>XML content becomes a document.</heading>
+    <p>A <code>&lt;data></code> whose content is XML holds a document, a small DOM of the package's own. Neither Node.js nor Bun has a <code>DOMParser</code>.</p>
+    <list>
+      <item><term>Every node</term><text>has <code>nodeType</code>, <code>nodeName</code>, <code>nodeValue</code>, <code>attributes</code>, <code>childNodes</code>, <code>firstChild</code>, <code>lastChild</code>, <code>parentNode</code> and <code>textContent</code>, and the methods <code>getElementsByTagName(name)</code> (an array, <code>'*'</code> for every element), <code>getAttribute(name)</code> and <code>hasAttribute(name)</code>.</text></item>
+      <item><term>A document</term><text>has <code>documentElement</code> too.</text></item>
+    </list>
+    <p>This menu walks its catalog's <code>price</code> elements with <code>&lt;foreach></code>:</p>
+    <example>
+      <code language="javascript" file="menu.mjs"><![CDATA[
+import { compileCharts, Host } from '@tinyactors/node';
+
+const chart = `
+<scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0"
+       datamodel="ecmascript" name="menu" initial="s">
+  <datamodel>
+    <data id="catalog">
+      <prices xmlns=""><price sku="tea">4</price><price sku="cake">7</price></prices>
+    </data>
+  </datamodel>
+  <state id="s">
+    <onentry>
+      <foreach array="catalog.getElementsByTagName('price')" item="node" index="i">
+        <log expr="(i + 1) + '. ' + node.getAttribute('sku') + ' ' + node.textContent"/>
+      </foreach>
+    </onentry>
+  </state>
+</scxml>`;
+
+const compiled = compileCharts([{ name: 'menu.scxml', text: chart }]);
+const host = new Host(compiled, { system: 'shop', log: (entry) => console.log(entry.text) });
+compiled.close();
+host.spawn('menu');
+await host.idle();
+host.close();
+]]></code>
+      <code language="text" role="output">
+1. tea 4
+2. cake 7
+</code>
+    </example>
+    <p>An actor whose variable holds a DOM stays in memory: hibernation and snapshots refuse it.</p>
+    <p>A DOM sent to an I/O processor in <code>&lt;content></code>, or read by <code>actorContext</code>, reaches your program as XML text. That is the text a document was read from, or a node written out, on both datamodels.</p>
+  </section>
+
+  <section id="several-charts-in-one-image">
+    <heading>Compile several charts into one image.</heading>
+    <p><code>compileCharts</code> takes a list of documents, each <code>{ name, text }</code>, and compiles them into one image.</p>
+    <p>Each chart is known by its <code>&lt;scxml name></code>: <code>host.spawn(name)</code> starts one, and <code>host.chart(name)</code> finds its current version. A document's <code>name</code> is what error messages and <code>src</code> attributes name.</p>
+    <p>A chart may read another document through <code>src</code>: <code>&lt;invoke src></code>, <code>&lt;script src></code> or <code>&lt;data src></code>. A document in the list answers a <code>src</code> with its name.</p>
+    <p>For any other <code>src</code>, give <code>compileCharts</code> a resolver, a function <code>(base, source) => text</code> the compile calls. <code>base</code> is the document that names the <code>src</code>.</p>
+    <p>A resolver may read a file, a map or a database. To refuse, it throws a <code>ResolveError</code>, which becomes a compile error at the line and column it gives:</p>
+    <example>
+      <code language="javascript" file="resolver.mjs"><![CDATA[
+import { compileCharts, CompileError, ResolveError } from '@tinyactors/node';
+
+const files = { 'child.scxml': '<scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0" name="child"><final id="f"/></scxml>' };
+const resolver = (base, source) => {
+  if (!(source in files)) throw new ResolveError(`${base} asks for ${source}, which is not in the store`, { line: 1, column: 1 });
+  return files[source];
+};
+
+const parent = (src) => `<scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0" name="parent">
+  <state id="s"><invoke src="${src}"/></state>
+</scxml>`;
+
+const compiled = compileCharts([{ name: 'parent.scxml', text: parent('child.scxml') }], { resolver });
+console.log('compiled', compiled.image.length > 0);
+compiled.close();
+
+try {
+  compileCharts([{ name: 'parent.scxml', text: parent('missing.scxml') }], { resolver });
+} catch (error) {
+  if (!(error instanceof CompileError)) throw error;
+  console.log(error.message);
+}
+]]></code>
+      <code language="text" role="output">
+compiled true
+missing.scxml:1:1: error: parent.scxml asks for missing.scxml, which is not in the store
+</code>
+    </example>
+    <p>Any other error a resolver throws, such as a file it cannot read, is thrown from <code>compileCharts</code> as it is.</p>
+  </section>
+
+  <section id="the-compile-result">
+    <heading>An image is plain bytes.</heading>
+    <p><code>compileCharts</code> returns an object whose <code>image</code> is a <code>Buffer</code>, yours from the first read. Its <code>diagnostics</code> lists the compiler's warnings.</p>
+    <p><code>new Host(compiled, options)</code> copies the image, so <code>close()</code> may free the compiler's memory at once. The garbage collector frees it otherwise.</p>
+    <p>Write an image to a file and give it to a host in another process: <code>new Host(readFileSync(path), options)</code>.</p>
+    <p><code>host.addImage(bytes)</code> adds an image to a running host. It copies the bytes and returns the image's segment, a number the host uses for that image.</p>
+    <p><code>new Host</code> takes one image or a list, compile results and bytes alike, each a segment in its order.</p>
+  </section>
+
+  <section id="charts-in-a-directory">
+    <heading>Compile a directory with <code>compileDir</code>.</heading>
+    <p><code>compileDir(dir)</code> compiles every <code>*.scxml</code> file under <code>dir</code> into one image. <code>dir</code> is a path, or a <code>file:</code> URL such as <code>new URL('./charts/', import.meta.url)</code>.</p>
+    <p>Each chart is named by its path under <code>dir</code>, <code>/</code>-separated, and the list is sorted by name. So the first is the image's default boot chart.</p>
+    <p>A <code>src</code> that names no file of the list is read relative to the directory of the document that names it. <code>orders/order.scxml</code> asking for <code>payment.scxml</code> reads <code>&lt;dir>/orders/payment.scxml</code>.</p>
+    <p>That resolver is confined to <code>dir</code>, and refuses as a compile error:</p>
+    <list>
+      <item><text>a path that leaves <code>dir</code>: <code>..</code> past it, an absolute path, or a symbolic link that points outside;</text></item>
+      <item><text>a file that does not exist;</text></item>
+      <item><text>a file that is not UTF-8.</text></item>
+    </list>
+    <p>Another error of the file system, such as no permission, is thrown as it is. A directory with no chart is refused with <code>InvalidError</code>.</p>
+    <p><code>compileDir(dir, { resolver })</code> reads each <code>src</code> with your resolver instead.</p>
+    <p>Here an order invokes the payment chart beside it, then a changed order reaches outside the directory:</p>
+    <example>
+      <code language="javascript" file="compile-dir.mjs"><![CDATA[
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { CompileError, compileDir, Host } from '@tinyactors/node';
+
+const root = mkdtempSync(join(tmpdir(), 'charts-'));
+mkdirSync(join(root, 'orders'));
+writeFileSync(join(root, 'orders', 'order.scxml'), `<scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0"
+    datamodel="ecmascript" name="order">
+  <state id="s"><invoke src="payment.xml"/></state>
+</scxml>`);
+writeFileSync(join(root, 'orders', 'payment.xml'), `<scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0"
+    datamodel="ecmascript" name="payment">
+  <state id="s"><onentry><log expr="'paying'"/></onentry></state>
+</scxml>`);
+
+const compiled = compileDir(root);
+const host = new Host(compiled, { system: 'demo', log: (entry) => console.log(entry.text) });
+compiled.close();
+host.spawn('order');
+await host.idle();
+host.close();
+
+writeFileSync(join(root, 'orders', 'order.scxml'), `<scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0" name="order">
+  <state id="s"><invoke src="../../etc/passwd"/></state>
+</scxml>`);
+try {
+  compileDir(root);
+} catch (error) {
+  if (!(error instanceof CompileError)) throw error;
+  console.log(error.diagnostics[0].message);
+}
+rmSync(root, { recursive: true });
+]]></code>
+      <code language="text" role="output">
+paying
+../../etc/passwd (from orders/order.scxml) leaves the charts' directory
+</code>
+    </example>
+    <p>A document the resolver read is named by its <code>src</code> as written. A <code>src</code> inside it is read relative to that name's directory.</p>
+  </section>
+
+  <section id="a-chart-that-starts-another">
+    <heading><code>&lt;invoke></code> starts a child actor.</heading>
+    <p><code>&lt;invoke src></code> starts a child, an actor of another chart, when its state is entered. Leaving the state stops it.</p>
+    <p>Its <code>&lt;param></code>s set the child's variables, as <code>spawn</code>'s <code>params</code> do.</p>
+    <p>The child sends to its parent with <code>target="#_parent"</code>, and its events carry the invoke's <code>id</code> as <code>_event.invokeid</code>.</p>
+    <p>When the child reaches a final state, the parent gets <code>done.invoke.&lt;id></code>, with the child's <code>&lt;donedata></code> as its data.</p>
+    <example>
+      <code language="javascript" file="invoke.mjs"><![CDATA[
+import { compileCharts, Host } from '@tinyactors/node';
+
+const parent = `
+<scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0"
+       datamodel="ecmascript" name="parent" initial="waiting">
+  <state id="waiting">
+    <invoke id="worker" src="worker.scxml"><param name="n" expr="21"/></invoke>
+    <transition event="progress"><log expr="'progress from ' + _event.invokeid + ': ' + _event.data.step"/></transition>
+    <transition event="done.invoke.worker" target="done">
+      <log expr="'the worker answered ' + _event.data.answer"/>
+    </transition>
+  </state>
+  <final id="done"/>
+</scxml>`;
+
+const worker = `
+<scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0"
+       datamodel="ecmascript" name="worker" initial="working">
+  <datamodel><data id="n" expr="0"/></datamodel>
+  <state id="working">
+    <onentry><send event="progress" target="#_parent"><param name="step" expr="'halfway'"/></send></onentry>
+    <transition target="finished"/>
+  </state>
+  <final id="finished">
+    <donedata><param name="answer" expr="n * 2"/></donedata>
+  </final>
+</scxml>`;
+
+const compiled = compileCharts([{ name: 'parent.scxml', text: parent }, { name: 'worker.scxml', text: worker }]);
+const host = new Host(compiled, { system: 'demo', log: (entry) => console.log(entry.text) });
+compiled.close();
+host.spawn('parent');
+await host.idle();
+host.close();
+]]></code>
+      <code language="text" role="output">
+progress from worker: halfway
+the worker answered 42
+</code>
+    </example>
+    <p>A parent sends to its child with <code>target="#_worker"</code>: <code>#_</code> and the invoke's id. An <code>&lt;invoke></code> of a type other than SCXML is a service your program runs (<link to="guide-services"/>).</p>
+  </section>
+
+  <section id="when-the-child-exists">
+    <heading>Send to a child from a later event.</heading>
+    <p>The child exists from the end of the macrostep that entered its state, as SCXML starts invocations then.</p>
+    <p>Until then a send to the child gets <code>error.communication</code>. That covers the state's own <code>&lt;onentry></code>, and anything else in the same macrostep:</p>
+    <list>
+      <item><text>a <code>&lt;raise></code>d event's transition;</text></item>
+      <item><text>an eventless transition;</text></item>
+      <item><text>a history state that re-enters several states at once.</text></item>
+    </list>
+    <p>Send from a later event: the child's first message to its parent, <code>ready</code> below, is the usual signal. What the child must know at its start goes in as a <code>&lt;param></code>, evaluated when it starts.</p>
+    <example>
+      <code language="javascript" file="child-ready.mjs"><![CDATA[
+import { compileCharts, Host } from '@tinyactors/node';
+
+const parent = `
+<scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0"
+       datamodel="ecmascript" name="parent" initial="running">
+  <state id="running">
+    <onentry>
+      <send event="hello" target="#_kid"/>
+      <raise event="soon"/>
+    </onentry>
+    <invoke id="kid" src="kid.scxml"/>
+    <transition event="soon"><send event="hello" target="#_kid"/></transition>
+    <transition event="error.communication"><log expr="'no child yet: error.communication'"/></transition>
+    <transition event="ready"><send event="hello" target="#_kid"/></transition>
+  </state>
+</scxml>`;
+const kid = `
+<scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0"
+       datamodel="ecmascript" name="kid" initial="s">
+  <state id="s">
+    <onentry><send event="ready" target="#_parent"/></onentry>
+    <transition event="hello"><log expr="'the child got hello'"/></transition>
+  </state>
+</scxml>`;
+
+const compiled = compileCharts([{ name: 'parent.scxml', text: parent }, { name: 'kid.scxml', text: kid }]);
+const host = new Host(compiled, { system: 'demo', log: (entry) => console.log(entry.text) });
+compiled.close();
+host.spawn('parent');
+await host.idle();
+host.close();
+]]></code>
+      <code language="text" role="output">
+no child yet: error.communication
+no child yet: error.communication
+the child got hello
+</code>
+    </example>
+  </section>
+
+  <section id="a-system-that-starts-its-own-actors">
+    <heading>A manifest names the actors to boot.</heading>
+    <p><code>compileSystem</code> compiles a manifest, a <code>&lt;system></code> document that lists its charts and the actors to start.</p>
+    <p>A chart is <code>&lt;chart name src></code>, read through the resolver, and an actor <code>&lt;actor name chart></code>.</p>
+    <p><code>host.boot(segment)</code> spawns those actors, each with its name. The image <code>new Host</code> was given first is segment 0.</p>
+    <example>
+      <code language="javascript" file="boot.mjs"><![CDATA[
+import { compileSystem, Host } from '@tinyactors/node';
+
+const files = {
+  'counter.scxml': `<scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0"
+      datamodel="ecmascript" name="counter" initial="s">
+    <datamodel><data id="n" expr="0"/></datamodel>
+    <state id="s">
+      <transition event="tick"><assign location="n" expr="n + 1"/><log expr="_name + ' ' + n"/></transition>
+    </state>
+  </scxml>`,
+};
+const manifest = `<system>
+  <chart name="counter" src="counter.scxml"/>
+  <actor name="left" chart="counter"/>
+  <actor name="right" chart="counter"/>
+</system>`;
+
+const compiled = compileSystem({ name: 'system.xml', text: manifest }, { resolver: (base, source) => files[source] });
+const host = new Host(compiled, { system: 'demo', log: (entry) => console.log(entry.text) });
+compiled.close();
+
+host.boot(0);
+host.actor('left').send('tick');
+host.actor('right').send('tick');
+host.actor('left').send('tick');
+await host.idle();
+host.close();
+]]></code>
+      <code language="text" role="output">
+left 1
+right 1
+left 2
+</code>
+    </example>
+    <p>Boot a system that starts the same actors every time: the manifest names them, so the program need not know which.</p>
+    <p>A program that spawns its own actors never needs <code>boot</code>. An image from <code>compileCharts</code> has one boot actor too, of its first chart, named after its <code>&lt;scxml name></code>.</p>
+  </section>
+</page>

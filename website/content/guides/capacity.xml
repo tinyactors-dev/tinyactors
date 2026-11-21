@@ -1,0 +1,147 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<page xmlns="https://www.tinyactors.dev/ns/site" id="guide-capacity" path="/guides/capacity/">
+  <title>Capacity and memory</title>
+  <description>Size a tinyactors host, read what it uses, and see what an actor costs and how each operation's cost holds as the population doubles.</description>
+  <hero>
+    <headline>Size a host for its population.</headline>
+    <lede>A started actor takes about 530 bytes on Node.js and a hibernated one about 120. Each operation costs about the same at four million actors as at two.</lede>
+  </hero>
+
+  <section id="regions">
+    <heading>A host grows one region per image.</heading>
+    <p>A host keeps its actors in blocks of memory, one region per segment, that is per image. It sizes each from its <code>config</code>, and grows one when something in it runs out.</p>
+    <p>Leave the sizes to the host, or size a host up front for the population you expect.</p>
+  </section>
+
+  <section id="the-sizes">
+    <heading>Sizes are where pools start, not limits.</heading>
+    <p>The <code>config</code> option's <code>system</code> map gives each new segment its first sizes. Each key is a whole number, and an absent key or 0 is the default.</p>
+    <table>
+      <head><cell>Key</cell><cell>Default</cell><cell>What it counts</cell></head>
+      <row><cell><code>maxActors</code></cell><cell>64</cell><cell>actors, hibernated ones included</cell></row>
+      <row><cell><code>maxEvents</code></cell><cell>256</cell><cell>events waiting in the actors' queues</cell></row>
+      <row><cell><code>maxTimers</code></cell><cell>64</cell><cell>pending delayed sends</cell></row>
+      <row><cell><code>maxRequests</code></cell><cell>16</cell><cell>running invocations (child charts and services)</cell></row>
+      <row><cell><code>workspaces</code></cell><cell>4</cell><cell>actors in the middle of a step at once (a sender keeps its workspace until its send is handled); never refused: an actor waits for one, and the host adds more</cell></row>
+      <row><cell><code>instanceBytes</code></cell><cell>derived from the image and <code>maxActors</code></cell><cell>the actors' variables and states</cell></row>
+      <row><cell><code>stringBytes</code></cell><cell>16384 + 16 × <code>maxActors</code></cell><cell>strings the actors hold</cell></row>
+      <row><cell><code>ticksPerSecond</code></cell><cell>1,000,000,000</cell><cell>the host's clock rate</cell></row>
+    </table>
+    <p>When a pool fills, the host grows that segment between runs. The new region has more of what ran out, and the rest as it was.</p>
+    <p>A pool doubles, or grows up to 16 times at once if doubling adds under a quarter of the region. So a small pool beside a large region grows in a few copies, in proportion to itself.</p>
+    <p>A grown region never shrinks, and <code>maxActors</code> is at most 8,388,606.</p>
+    <p>A run or an input is refused with <code>TA_ERROR_NO_MEMORY</code> only at a pool's largest size, or when the allocator refuses memory.</p>
+  </section>
+
+  <section id="reading-what-a-host-uses">
+    <heading><code>hostStats</code> reports each pool's use and high water.</heading>
+    <p><code>host.hostStats</code> (<link to="guide-inspection"/>) answers with <code>pools</code>, one entry per live segment, in segment order. An entry's <code>segment</code> is its place among <code>new Host</code>'s charts, or what <code>addImage</code> returned.</p>
+    <p>For <code>actors</code>, <code>events</code>, <code>timers</code>, <code>workspaces</code>, <code>requests</code> and <code>slabBytes</code>, an entry gives the pool's <code>capacity</code>, its <code>used</code> and its <code>highWater</code>. <code>slabBytes</code> is the instance and string memory.</p>
+    <p>Each segment grows on its own, so two images, or a migration's old and new versions, are two entries.</p>
+    <example>
+      <code language="javascript" file="stats.mjs"><![CDATA[
+import { compileCharts, Host } from '@tinyactors/node';
+
+const compiled = compileCharts([{ name: 'idle.scxml', text: `
+<scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0"
+       datamodel="ecmascript" name="idle"><state id="waiting"/></scxml>` }]);
+const image = compiled.image;
+compiled.close();
+
+for (const system of [{}, { maxActors: 1000 }]) {
+  const host = new Host(image, { system: 'demo', config: { system } });
+  const before = (await host.hostStats()).pools[0].actors;
+  for (let i = 0; i < 1000; i++) host.spawn('idle');
+  const after = (await host.hostStats()).pools[0].actors;
+  console.log(`maxActors ${system.maxActors ?? 'default'}: capacity ${before.capacity}, ` +
+    `then ${after.used} used, high water ${after.highWater}, grown: ${after.capacity > before.capacity}`);
+
+  host.addImage(image);
+  console.log('segments reported:', (await host.hostStats()).pools.map((pool) => pool.segment).join(', '));
+  host.close();
+}
+]]></code>
+      <code language="text" role="output">
+maxActors default: capacity 64, then 1000 used, high water 1000, grown: true
+segments reported: 0, 1
+maxActors 1000: capacity 1000, then 1000 used, high water 1000, grown: false
+segments reported: 0, 1
+</code>
+    </example>
+    <p>To size a host up front, run a realistic load, read the high-water marks, and give the next host those sizes. <code>host.hostConfig()</code> answers the sizes a host was made with, every default filled in.</p>
+  </section>
+
+  <section id="sizing-a-host-up-front">
+    <heading>Size a known population up front.</heading>
+    <p>Each growth copies the region, and a grown region keeps its size. A host that will hold a known population is better sized for it.</p>
+    <p>A hibernated actor keeps its slot and its record, about 64 bytes, so <code>maxActors</code> counts every actor. The instance and string memory are for the resident ones only.</p>
+    <p>The repository's hibernation gate sizes a host for <code>R</code> resident actors out of <code>N</code>, for a counter of a few variables:</p>
+    <example>
+      <code language="javascript" file="size.mjs"><![CDATA[
+import { Host } from '@tinyactors/node';
+
+const N = 2_000_000; // actors
+const R = 1000;      // resident at most
+const room = 64;
+const host = new Host([], { system: 'big', config: { system: {
+  maxActors: N + room, maxEvents: 4096,
+  instanceBytes: 2048 * (R + room), stringBytes: 16384 + 64 * (R + room),
+} } });
+console.log((await host.hostConfig()).system.maxActors);
+host.close();
+]]></code>
+      <code language="text" role="output">
+2000064
+</code>
+    </example>
+    <p>A chart with more variables or longer strings needs more per resident actor. Read <code>slabBytes.highWater</code> under load to see how much.</p>
+  </section>
+
+  <section id="what-an-actor-costs">
+    <heading>An actor takes about 530 bytes.</heading>
+    <p>The <link href="https://github.com/tinyactors-dev/tinyactors/tree/main/tinyactors-napi/examples/memory">memory program</link> measures the resident memory one more actor, message and delayed send adds to a process, the host included. Run it with your runtime, datamodel, chart and data:</p>
+    <code language="shell">node examples/memory/main.mjs --counts 1000000 --datamodel native</code>
+    <table src="../../../tinyactors-napi/docs/guide/capacity.md" section="What an actor costs" index="1">
+      <caption>A million actors. Measured 2026-11-20 on an Intel Xeon at 2.10 GHz, 4 CPUs, 16 GiB, Linux; Node.js 22.23.5 and Bun 1.4.1. A counter chart with one <code>&lt;data&gt;</code>, messages of <code>{"text": "hello"}</code>, tracing on; the hibernated column keeps at most 1000 actors resident and the rest in a store.</caption>
+    </table>
+    <p>A host's and an engine's fixed costs spread over the population, so an actor costs less in a larger one.</p>
+    <table src="../../../tinyactors-napi/docs/guide/capacity.md" section="What an actor costs" index="2">
+      <caption>Node.js on the native datamodel, the same run.</caption>
+    </table>
+    <p><link href="https://github.com/tinyactors-dev/tinyactors/blob/main/tinyactors-napi/examples/memory/results/2026-11-20.csv">The run's CSV</link> holds each row at every population and on every runtime, to compare with a chart of your own.</p>
+    <list>
+      <item><term>A started actor</term><text>holds its variables in the datamodel and its records in the core: 196 B for this chart at a million (81 B, its instance and its strings).</text></item>
+      <item><term>After an event</term><text>an actor keeps that event as <code>_event</code> until the next one.</text></item>
+      <item><term>A hibernated actor</term><text>keeps its core records only, 81 B to 89 B, and its blob is in your store: 145 B on the native datamodel and 147 B on quickjs, for this chart.</text></item>
+      <item><term>A message</term><text>costs 106 B in the core (57 B with tracing off) and its data in the datamodel.</text></item>
+      <item><term>A delayed send</term><text>holds its message until it falls due: 151 B in the core (102 B with tracing off).</text></item>
+      <item><term>quickjs</term><text>keeps every actor's variables in its own heap, bounded by <code>quickjs.memoryLimit</code>, 1 GiB unless the host sets another. A million resident actors after an event need about 1.2 GB of it, so the run above sets 8 GiB (<link to="guide-quickjs" section="the-limits">the quickjs sandbox</link>).</text></item>
+    </list>
+    <p>What a chart's scripts declare adds nothing per actor. Its helpers are the chart's, made once, and a top-level <code>var</code> is one more variable (<link to="guide-charts" section="scripts">Writing charts</link>).</p>
+  </section>
+
+  <section id="work-does-not-grow-with-the-population">
+    <heading>Twice the actors, the same cost.</heading>
+    <p><code>tools/scale.mjs</code> times every operation of the API on N actors and on 2N, each host in its own process.</p>
+    <p>It fails when an operation costs more than 1.5 times as much at 2N. The cost is per call on one actor, and per actor on the whole population.</p>
+    <p>Most of the actors are hibernated in SQLite, and one in a hundred runs an invoked service. Then the same runs with every actor resident.</p>
+    <p>Each cell is the cost at N, then at 2N, in microseconds, and their ratio. Every operation passed.</p>
+    <table src="../../../tinyactors-napi/docs/guide/capacity.md" section="Work does not grow with the population" index="1">
+      <caption>Hibernated: 2,000,000 and 4,000,000 actors, at most 1000 counters resident, 20,000 and 40,000 actors each running an invoked service. One run, alone on the machine, 2026-11-20: an Intel Xeon at 2.10 GHz, 4 CPUs, 16 GiB, Linux; Node.js 22.23.5 and Bun 1.4.1.</caption>
+    </table>
+    <table src="../../../tinyactors-napi/docs/guide/capacity.md" section="Work does not grow with the population" index="2">
+      <caption>All resident: 1,000,000 and 2,000,000 actors, the same run.</caption>
+    </table>
+    <p>Two million resident actors take up to 5.2 GiB on quickjs. So four million do not fit in 16 GiB beside the scenario's other work.</p>
+    <table>
+      <caption>Peak resident memory at N and 2N, in MiB, the same run.</caption>
+      <head><cell>runtime, datamodel</cell><cell>hibernated</cell><cell>all resident</cell></head>
+      <row><cell>node, native</cell><cell>1733 / 2579</cell><cell>1706 / 3007</cell></row>
+      <row><cell>node, quickjs</cell><cell>1773 / 3382</cell><cell>2555 / 5274</cell></row>
+      <row><cell>bun, native</cell><cell>1680 / 3251</cell><cell>2271 / 3828</cell></row>
+      <row><cell>bun, quickjs</cell><cell>1345 / 2554</cell><cell>2517 / 5278</cell></row>
+    </table>
+    <p>The run's files, every operation and sample, are in <link href="https://github.com/tinyactors-dev/tinyactors/tree/main/tinyactors-napi/tools/results/2026-11-20">tools/results/2026-11-20</link>. <code>mise run scale</code> in <code>tinyactors-napi</code> writes them to <code>build/scale-*.json</code>.</p>
+    <p>The repository's <link href="https://github.com/tinyactors-dev/tinyactors/blob/main/AGENTS.md#published-numbers">published numbers</link> rules say when to run it again.</p>
+  </section>
+</page>
