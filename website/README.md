@@ -25,7 +25,8 @@ content and runs the stylesheet. Node.js runs the examples and wrangler.
 | `content/pages/*.xml` | one page each: a hero, then sections of prose, lists, code, claims and actions |
 | `content/guides/*.xml` | the guides, one page each, served at `/guides/<name>/`; their examples run in `examples/guides` against the published packages |
 | `schema/site.xsd` | what content may say, as XSD 1.1: every element is documented there |
-| `render/site.xsl` | content to HTML, `sitemap.xml` and `llms.txt`; it stops at a link to a page or section that does not exist |
+| `render/site.xsl` | content to HTML and `sitemap.xml`; it stops at a link to a page or section that does not exist |
+| `render/markdown.xsl` | the site for agents ([llmstxt.org](https://llmstxt.org)): each page as Markdown beside its HTML (`/x/index.md`), `llms.txt`, which lists them in the navigation's groups, and `llms-full.txt`, every page but the changelog in one file |
 | `style/site.css` | the layout, on the design system's tokens |
 | `examples/` | the programs pages show, each run by `mise run test` against its `output.txt`; `examples/property/` also runs in the page (`<live>`), `examples/anthill/` and `examples/lab/` are playgrounds |
 | `components/` | the custom elements and scripts the pages use: `<ta-tabs>` (alternatives, one at a time), `chart.mjs` (a chart's diagram), `highlight.mjs` (syntax highlighting), `<ta-live>` (an example's export run in the browser), `<ta-playground>` (an example's program with controls of its own: the anthill, the lab), `costs.mjs` (the anthill's live charts), `timeline.mjs` (the lab's charts of a whole run) and `<ta-trace-view>` (a run's spans as a tree on a timeline) |
@@ -85,6 +86,7 @@ A page is a hero and sections. Each section has a heading and blocks:
   does not have. A link elsewhere is `href`, https only.
 - **No styling in content.** There is no class, colour or layout element.
   If a page needs a new kind of block, add it to the schema with its
-  meaning, then render it in `render/site.xsl`.
+  meaning, then render it in `render/site.xsl`, and as Markdown in
+  `render/markdown.xsl` (the build stops at a block with no Markdown).
 
 A new page goes in `content/pages/` and in `site.xml`'s `<pages>`.

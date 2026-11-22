@@ -12,7 +12,9 @@ rules.
 - **The schema is the vocabulary.** An element says what something *is*
   (a claim, an example, an install command), never how it looks. A new kind
   of block goes into `schema/site.xsd` with its documentation first, then
-  into `render/site.xsl`, then into `style/site.css`.
+  into `render/site.xsl`, then into `style/site.css`, and as Markdown into
+  `render/markdown.xsl`: what an agent reads (`llms.txt`, each page's
+  `index.md`) says what the page says.
 - **Every claim has its source**, a URL a reader can open: a file in a
   public repository, a decision record, a measurement. Before writing a
   number or a "passes all", find it in the repository and link it. When

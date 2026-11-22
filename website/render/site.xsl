@@ -7,7 +7,8 @@
     sxml transform -\-result-directory=build/site render/site.xsl content/site.xml
 
   It writes one HTML file per page (a path "/x/" as x/index.html, "/404" as
-  404.html), sitemap.xml and llms.txt. It stops with a message when a link
+  404.html), sitemap.xml, and the site for agents (render/markdown.xsl):
+  each page as Markdown beside its HTML, llms.txt and llms-full.txt. It stops with a message when a link
   names a page or a section that does not exist, or two pages share an id
   or a path: what the schema cannot see across documents.
 
@@ -21,6 +22,8 @@
                 xmlns:f="https://www.tinyactors.dev/ns/site/functions"
                 exclude-result-prefixes="xs s f"
                 expand-text="yes">
+
+  <xsl:include href="markdown.xsl"/>
 
   <xsl:output method="html" html-version="5" indent="no"/>
 
@@ -50,16 +53,7 @@
         </xsl:for-each>
       </urlset>
     </xsl:result-document>
-    <xsl:result-document href="llms.txt" method="text">
-      <xsl:text># {$site/s:name}&#10;&#10;> {$site/s:tagline}&#10;&#10;## Pages&#10;&#10;</xsl:text>
-      <xsl:for-each select="$pages[not(@path = '/404')]">
-        <xsl:text>- [{s:title}]({$origin}{@path}): {normalize-space(s:description)}&#10;</xsl:text>
-      </xsl:for-each>
-      <xsl:text>&#10;## Elsewhere&#10;&#10;</xsl:text>
-      <xsl:for-each select="$site/s:nav/s:link[@href]">
-        <xsl:text>- [{normalize-space(.)}]({@href})&#10;</xsl:text>
-      </xsl:for-each>
-    </xsl:result-document>
+    <xsl:call-template name="markdown"/>
   </xsl:template>
 
   <!-- What the schema cannot check: names across documents. -->
@@ -96,6 +90,7 @@
         <meta name="description" content="{normalize-space(s:description)}"/>
         <xsl:if test="not(@path = '/404')">
           <link rel="canonical" href="{$origin}{@path}"/>
+          <link rel="alternate" type="text/markdown" href="{f:md-path(@path)}"/>
         </xsl:if>
         <meta property="og:type" content="website"/>
         <meta property="og:site_name" content="{$site/s:name}"/>

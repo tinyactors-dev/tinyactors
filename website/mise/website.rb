@@ -54,7 +54,8 @@ module Website
   end
 
   # Validates the content, then writes the site into build/site: the pages,
-  # sitemap.xml, llms.txt and robots.txt from the XSLT, and assets/.
+  # sitemap.xml, each page's Markdown, llms.txt and llms-full.txt from the
+  # XSLT, robots.txt, and assets/.
   def build!
     validate!
     FileUtils.rm_rf(SITE)
@@ -107,9 +108,17 @@ module Website
     # Everything else keeps Cloudflare's default (revalidated by its ETag),
     # so a deploy is seen at once, and a response from before it (a 404 of
     # a file the deploy adds) is never kept.
+    # The site for agents (render/markdown.xsl) is UTF-8 text, and each
+    # page's Markdown says so with its type.
     SITE.join('_headers').write(<<~HEADERS)
       /assets/fonts/*
         Cache-Control: public, max-age=31536000, immutable
+      /*.md
+        Content-Type: text/markdown; charset=utf-8
+      /llms.txt
+        Content-Type: text/plain; charset=utf-8
+      /llms-full.txt
+        Content-Type: text/plain; charset=utf-8
     HEADERS
   end
 

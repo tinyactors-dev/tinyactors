@@ -13,7 +13,8 @@
 # 2. test/broken-link/: a site whose link names a page it does not list;
 #    the build must stop, naming it (`expect: <message>`).
 # 3. The build (validation first), then every link and asset a page names
-#    on this site resolves to a file, and every #anchor to an id there.
+#    on this site resolves to a file, and every #anchor to an id there;
+#    and the site for agents: each page's Markdown, llms.txt (3b).
 # 4. Each example: its packages installed from its package-lock.json (npm
 #    ci), then each program in it (a directory with an output.txt) run, and
 #    what it prints compared with its output.txt, which the page shows.
@@ -82,6 +83,57 @@ pages.each do |file, html|
   end
 end
 puts "website: #{links} links and assets in #{pages.size} pages resolve"
+
+# 3b. The site for agents (render/markdown.xsl): every page but the 404 has
+#     its Markdown beside its HTML, which names it; llms.txt lists each
+#     once; every link of the site's own origin in llms.txt, llms-full.txt
+#     and the Markdown resolves to a file of the build, and its #anchor to
+#     an id there (a Markdown file's ids are its <a id> anchors); and each
+#     page's Markdown holds a fence for every code block of its content.
+origin = Website::ORIGIN
+markdown = pages.keys.reject { |file| file.basename.to_s == '404.html' }.to_h { |file| [file, file.sub_ext('.md')] }
+llms = Website::SITE.join('llms.txt').read
+agent_files = [Website::SITE.join('llms.txt'), Website::SITE.join('llms-full.txt'), *markdown.values.select(&:file?)]
+markdown.each do |html, md|
+  name = md.relative_path_from(Website::SITE)
+  url = "#{origin}/#{name}"
+  next failures << "#{name}: no Markdown beside #{html.basename}" unless md.file?
+
+  failures << "#{html.relative_path_from(Website::SITE)}: names no Markdown alternate" unless pages[html].include?(%(type="text/markdown" href="/#{name}"))
+  count = llms.scan("](#{url})").size
+  failures << "llms.txt: lists #{name} #{count} times, not once" unless count == 1
+end
+md_ids = ->(file) { file.extname == '.md' ? file.read.scan(/<a id="([^"]+)"><\/a>/).flatten : ids.call(file) }
+agent_links = 0
+agent_files.each do |file|
+  file.read.scan(/\]\((#{Regexp.escape(origin)}[^)\s]*)\)|<(#{Regexp.escape(origin)}[^>\s]*)>/).flatten.compact.each do |url|
+    agent_links += 1
+    path, anchor = url.delete_prefix(origin).split('#', 2)
+    target = Website::SITE.join(path.delete_prefix('/'))
+    target = target.join('index.html') if path.end_with?('/')
+    if !target.file?
+      failures << "#{file.relative_path_from(Website::SITE)}: #{url}: no such file in the build"
+    elsif anchor && !md_ids.call(target).include?(anchor)
+      failures << "#{file.relative_path_from(Website::SITE)}: #{url}: no id #{anchor.inspect} there"
+    end
+  end
+end
+fences = 0
+Website.documents.each do |document|
+  text = document.read
+  path = text[/<page\b[^>]*\spath="([^"]+)"/, 1] or next
+  next if path == '/404'
+
+  md = Website::SITE.join("#{path.delete_prefix('/')}#{'index' if path.end_with?('/')}.md")
+  next unless md.file?
+
+  want = text.scan(/<code\s[^>]*language="/).size
+  got = md.read.scan(/^(`{3,})[a-z]/).size
+  fences += got
+  failures << "#{md.relative_path_from(Website::SITE)}: #{got} fenced blocks, but #{document.basename} has #{want} code blocks" unless got == want
+end
+puts "website: #{markdown.size} pages have their Markdown, each listed once in llms.txt; " \
+     "#{agent_links} links for agents resolve; #{fences} code blocks fenced"
 
 # 4. The examples, run: every directory under examples/ that holds an
 #    output.txt is a program, its package.json's "main" or main.mjs.
