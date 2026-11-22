@@ -2,7 +2,9 @@
 // live costs. Each colony runs in a worker.mjs of its own; renderer.mjs draws every ant
 // with the design system's rigged ant (sprites.mjs) on the GPU, and where
 // WebGL2 is missing, this draws a dot per ant on a 2D canvas instead.
-// Hills and food are drawn on a 2D canvas above the ants.
+// Hills and food are drawn on a 2D canvas above the ants. A reader may
+// follow one ant: the view keeps it in the middle, and follow.mjs shows its
+// chart beside it, lit in the states its host reports.
 import { WIDTH, HEIGHT, HILLS, HILL_RADIUS } from './world.mjs';
 import { atlas } from './sprites.mjs';
 import { createRenderer } from './renderer.mjs';
@@ -18,6 +20,7 @@ const duration = (seconds) => (seconds < 60 ? `${seconds} s` : `${seconds / 60} 
 const number = new Intl.NumberFormat('en');
 const FOOD_RADIUS = 12; // a full source, in field units
 const megabytes = (bytes) => `${number.format(Math.round(bytes / 1048576))} MB`;
+const FOLLOW_ZOOM = 8; // the least zoom while following, so the ant is seen
 
 export async function mount(root) {
   const colors = palette(root);
@@ -28,11 +31,12 @@ export async function mount(root) {
   const restart = el('button', { type: 'button', class: 'ta-btn ta-btn--primary' }, 'Restart');
   const tools = el('div', { role: 'radiogroup', class: 'ta-tabs ta-tabs--segmented', 'aria-label': 'Tool' });
   let tool = 'food';
-  for (const [name, label] of [['food', 'Drop food'], ['squash', 'Squash ants']]) {
+  for (const [name, label] of [['food', 'Drop food'], ['squash', 'Squash ants'], ['follow', 'Follow an ant']]) {
     const button = el('button', { type: 'button', role: 'radio', class: 'ta-tab', 'aria-checked': String(name === tool) }, label);
     button.addEventListener('click', () => {
       tool = name;
       for (const other of tools.children) other.setAttribute('aria-checked', String(other === button));
+      if (name === 'follow' && !world?.follow) followAny(); // a tap on the field picks another
     });
     tools.append(button);
   }
@@ -42,8 +46,9 @@ export async function mount(root) {
   const zoomLevel = el('output', { class: 'anthill__zoom-level', 'aria-live': 'polite' });
   const zoom = el('div', { class: 'anthill__zoom', role: 'group', 'aria-label': 'Zoom' }, zoomOut, zoomLevel, zoomIn, zoomFit);
   const overlay = el('canvas', { class: 'anthill__overlay', width: WIDTH, height: HEIGHT, tabindex: '0',
-    'aria-label': 'Two anthills. Select to drop food or squash ants; drag to move when zoomed in; plus, minus and 0 zoom; arrow keys move.' });
+    'aria-label': 'Two anthills. Select to drop food, squash ants or follow an ant; drag to move when zoomed in; plus, minus and 0 zoom; arrow keys move; Escape stops following.' });
   const stage = el('div', { class: 'anthill__stage' }, overlay);
+  const scene = el('div', { class: 'anthill__scene' }, stage);
   const status = el('p', { class: 'anthill__status', 'aria-live': 'polite' });
   const hills = el('p', { class: 'anthill__hills' });
   const costs = {
@@ -61,7 +66,7 @@ export async function mount(root) {
   root.append(
     el('div', { class: 'anthill__controls' }, el('label', { class: 'anthill__population' }, 'Ants ', slider, count),
       el('label', { class: 'anthill__population' }, 'Rest ', restSlider, restCount), restart, tools, zoom),
-    stage, hills, status,
+    scene, hills, status,
     el('div', { class: 'anthill__costs' }, ...Object.values(costs).map((c) => c.element)),
   );
   let world = null; // the running anthill: its Workers, renderer and latest numbers
@@ -80,7 +85,66 @@ export async function mount(root) {
   const sprites = await atlas(await (await fetch('/assets/brand/ant.svg')).text(), colors.colony);
   const paint = overlay.getContext('2d');
 
+  // ---- following one ant. Its colony's worker reports it after every
+  // frame (world.mjs, inspect()); the panel loads with the first follow.
+  let panel = null;
+  let requests = 0; // pick requests, so a late answer to an old one is ignored
+  async function showPanel() {
+    if (panel) return panel;
+    const [{ followPanel }, text] = await Promise.all([import('./follow.mjs'),
+      fetch(new URL('./ant.scxml', import.meta.url)).then((response) => response.text())]);
+    panel ??= followPanel(text, { onStop: stopFollowing, onAnother: followAny });
+    if (!panel.element.isConnected) scene.append(panel.element);
+    return panel;
+  }
+  /** Asks the colonies for an ant: near (x, y), or any when x is null. */
+  function pick(x = null, y = null) {
+    const state = world;
+    if (!state?.ready) return;
+    const request = ++requests;
+    const radius = Math.max(3, 24 / Math.sqrt(view.scale));
+    // Any ant: one colony, the other when it has none. Near a point: both, the nearer wins.
+    const colonies = x === null ? [Math.random() < 0.5 ? 0 : 1] : [0, 1];
+    state.picks = { request, answers: [], expected: colonies.length, any: x === null, tried: colonies };
+    colonies.forEach((c) => state.workers[c].postMessage({ pick: true, any: x === null, x, y, radius, request }));
+  }
+  function picked(state, data) {
+    const picks = state.picks;
+    if (!picks || data.request !== picks.request) return;
+    picks.answers.push(data.picked);
+    if (picks.answers.length < picks.expected) return;
+    const best = picks.answers.filter(Boolean).sort((a, b) => (a.distance ?? 0) - (b.distance ?? 0))[0];
+    state.picks = null;
+    if (best) startFollowing(best.slot);
+    else if (picks.any && picks.tried.length === 1) { // that colony had no worker: the other
+      const other = 1 - picks.tried[0];
+      state.picks = { ...picks, answers: [], tried: [...picks.tried, other] };
+      state.workers[other].postMessage({ pick: true, any: true, request: picks.request });
+    }
+  }
+  function followAny() { pick(); }
+  async function startFollowing(slot) {
+    const state = world;
+    const colony = slot < state.population / 2 ? 0 : 1;
+    state.workers.forEach((worker, c) => worker.postMessage({ follow: c === colony ? slot : null }));
+    state.follow = { slot, colony, report: null };
+    if (view.scale < FOLLOW_ZOOM) zoomTo(FOLLOW_ZOOM);
+    (await showPanel()).follow(slot, colony);
+  }
+  function stopFollowing() {
+    world?.workers.forEach((worker) => worker.postMessage({ follow: null }));
+    if (world) world.follow = null;
+    panel?.hide();
+  }
+  function followed(state, report) {
+    if (!state.follow || report.slot !== state.follow.slot) return;
+    if (report.ended) state.follow.ended = true; // the view stays where it died
+    else state.follow.report = report;
+    panel?.show(report);
+  }
+
   function begin() {
+    stopFollowing();
     world?.workers.forEach((worker) => worker.terminate()); // their memory goes with them: a WebAssembly memory never shrinks
     world?.renderer.destroy?.();
     world?.canvas.remove();
@@ -99,7 +163,7 @@ export async function mount(root) {
     // they trade frames over.
     const workers = HILLS.map(() => new Worker(new URL('./worker.mjs', import.meta.url), { type: 'module' }));
     world = {
-      workers, canvas, renderer, population, ready: false, stats: null, speed: 1, messages: 0, perMessage: null, added: null, sim: 0, wall: 0, memory: null,
+      workers, canvas, renderer, population, ready: false, follow: null, picks: null, stats: null, speed: 1, messages: 0, perMessage: null, added: null, sim: 0, wall: 0, memory: null,
       parts: workers.map(() => ({ progress: 0, ready: false, data: null })),
       antSize: Math.max(2.5, 16 * (1000 / population) ** 0.25),
     };
@@ -118,6 +182,8 @@ export async function mount(root) {
         }
         if (data.ready) { part.ready = true; part.base = data.base; current.ready = current.parts.every((p) => p.ready); }
         if (data.error) status.textContent = `The simulation stopped: ${data.error.split('\n')[0]}`;
+        if (data.picked !== undefined) picked(current, data);
+        if (data.followed) followed(current, data.followed);
         if (data.delta) apply(current, part, data);
       };
       worker.onerror = (event) => { status.textContent = `The simulation stopped: ${event.message}`; };
@@ -189,7 +255,8 @@ export async function mount(root) {
       const [x, y] = toField(event.clientX, event.clientY);
       // Food goes to one colony, which hands it to the other for the same
       // frame; a squash goes to both, each killing its own ants.
-      if (tool === 'food') world.workers[0].postMessage({ food: true, x, y });
+      if (tool === 'follow') pick(x, y);
+      else if (tool === 'food') world.workers[0].postMessage({ food: true, x, y });
       else world.workers.forEach((worker) => worker.postMessage({ squash: true, x, y, radius: Math.max(4, 16 / Math.sqrt(view.scale)) }));
     }
   };
@@ -237,6 +304,7 @@ export async function mount(root) {
     const step = 0.1 * WIDTH / view.scale;
     const keys = {
       '+': () => zoomTo(view.scale * 2), '=': () => zoomTo(view.scale * 2), '-': () => zoomTo(view.scale / 2), '0': () => zoomTo(1),
+      Escape: () => stopFollowing(),
       ArrowLeft: () => panBy(-step, 0), ArrowRight: () => panBy(step, 0), ArrowUp: () => panBy(0, -step), ArrowDown: () => panBy(0, step),
     };
     if (!keys[event.key]) return;
@@ -302,6 +370,13 @@ export async function mount(root) {
       // The simulation's time now: the last frame's, moved on by the wall
       // clock at the simulation's speed, never past the next frame.
       const t = state.sim + Math.min(0.1, ((performance.now() - state.wall) / 1000) * state.speed);
+      // A followed ant stays in the middle: where its trip puts it now.
+      const trip = state.follow?.report?.trip;
+      if (trip) {
+        const [fx, fy] = along(trip, t);
+        view.cx = fx; view.cy = fy;
+        settle();
+      }
       state.renderer.draw(t, state.antSize, view);
     }
     paint.setTransform(1, 0, 0, 1, 0, 0);
@@ -322,6 +397,16 @@ export async function mount(root) {
       paint.lineWidth = 1.5 / view.scale;
       paint.beginPath(); paint.arc(hill.x, hill.y, Math.max(4, HILL_RADIUS * Math.sqrt(share)), 0, Math.PI * 2); paint.fill(); paint.stroke();
     });
+    // A ring around the followed ant, dashed while it is inside the hill.
+    const report = state?.follow?.report;
+    if (report && !state.follow.ended) {
+      const [fx, fy] = along(report.trip, state.sim + Math.min(0.1, ((performance.now() - state.wall) / 1000) * state.speed));
+      paint.strokeStyle = colors.ink;
+      paint.lineWidth = 2 / view.scale;
+      paint.setLineDash(report.outside ? [] : [4 / view.scale, 3 / view.scale]);
+      paint.beginPath(); paint.arc(fx, fy, Math.max(3, state.antSize * 0.9), 0, Math.PI * 2); paint.stroke();
+      paint.setLineDash([]);
+    }
   }
   requestAnimationFrame(draw);
 
@@ -332,6 +417,12 @@ export async function mount(root) {
     begin();
   }, { rootMargin: '200px' });
   near.observe(root);
+}
+
+/** Where a trip [x0, y0, x1, y1, t0, t1] puts its ant at time t. */
+function along([x0, y0, x1, y1, t0, t1], t) {
+  const f = t1 > t0 ? Math.min(1, Math.max(0, (t - t0) / (t1 - t0))) : 1;
+  return [x0 + (x1 - x0) * f, y0 + (y1 - y0) * f];
 }
 
 /** A WebGL canvas draws at the screen's pixels; the 2D fallback at the field's. */

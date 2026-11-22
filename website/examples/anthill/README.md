@@ -28,3 +28,8 @@ WebAssembly memory (read from the instance as the Worker makes it), and
 decisions a second. The ants are the design system's rigged ant
 (`sprites.mjs`), walking on the GPU (`renderer.mjs`); without a GPU, each
 ant is a dot.
+
+A reader can follow one ant: the view keeps it in the middle, and
+`follow.mjs` shows its chart beside it in scxmljs's `<scxml-view>`, lit in
+the states the ant's host reports (`actor.state`, read after every frame
+by the colony's Worker) and the transitions the ant's events fired.

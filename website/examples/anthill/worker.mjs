@@ -68,6 +68,8 @@ async function run(port) {
       if (message.food) colony.placeFood(message.x, message.y);
       if (message.squash) colony.squash(message.x, message.y, message.radius);
       if (message.rest) colony.setRest(message.rest);
+      if ('follow' in message) colony.follow(message.follow);
+      if (message.pick) postMessage({ picked: message.any ? colony.pickAny() : colony.pick(message.x, message.y, message.radius), request: message.request });
     }
     const began = performance.now();
     while (simulated < began - wallStart && performance.now() - began < 40) {
@@ -90,8 +92,9 @@ async function run(port) {
       perMessage = handled > 0 ? ((busy - window.busy) * 1000) / handled : null; // microseconds
       window = { wall: now, simulated, decisions: stats.decisions, messages: stats.messages, busy };
     }
+    const followed = await colony.inspect(); // the followed ant, read from its host; null when none
     const delta = colony.delta();
-    postMessage({ delta, stats: colony.stats(), speed, rate, messages, perMessage, wall: now, memory: memory?.buffer.byteLength ?? null }, [delta.buffer]);
+    postMessage({ delta, stats: colony.stats(), speed, rate, messages, perMessage, wall: now, memory: memory?.buffer.byteLength ?? null, followed }, [delta.buffer]);
     await new Promise((resolve) => setTimeout(resolve, simulated < performance.now() - wallStart ? 0 : 16));
   }
 }

@@ -105,6 +105,10 @@ export async function createColony(tinyactors, { charts, population, colony, see
   const counts = { workers: 0, brood: 0, out: 0, harvest: 0, stored: 0, fights: 0, deaths: 0, born: 0 };
   let decisions = 0, messages = 0; // decisions: sends to the world; messages: those and the events sent in
   let resting = rest; // the mean rest in the hill, simulated seconds
+  // ---- the ant a reader follows: its slot and session, and the events it
+  // sent and was sent since the page last asked (inspect)
+  let followed = -1, followedSession = 0, heard = [];
+  const hear = (session, event, sent) => { if (session === followedSession) heard.push({ event, sent }); };
   const go = (slot, out) => { counts.out += out - outside[slot]; outside[slot] = out; };
 
   // ---- the world: what an ant asks for
@@ -195,6 +199,7 @@ export async function createColony(tinyactors, { charts, population, colony, see
     receive(send) {
       decisions++; messages++;
       const session = Number(send.session);
+      hear(session, send.event, true);
       if (send.event === 'lay') {
         if (session === queen) lay(send.data.eggs);
         return;
@@ -280,6 +285,7 @@ export async function createColony(tinyactors, { charts, population, colony, see
       items.push({ target: session, event: EVENTS[kind] });
       if (outside[slot] && kind !== DIE) meet(slot, t, items, arrivals, struck);
     }
+    if (followedSession) for (const item of items) hear(item.target, item.event, false);
     host.sendMany(items);
     messages += items.length;
     if (clock.now % (FOOD.every * 1000) === 0) sprout();
@@ -317,6 +323,7 @@ export async function createColony(tinyactors, { charts, population, colony, see
       const [px, py] = position(slot, t);
       if ((px - x) ** 2 + (py - y) ** 2 > radius * radius) continue;
       host.send(sessionOf[slot], 'kill');
+      hear(sessionOf[slot], 'kill', false);
       killed++; messages++;
     }
     return killed;
@@ -354,10 +361,71 @@ export async function createColony(tinyactors, { charts, population, colony, see
     };
   }
 
+  /**
+   * The ant nearest (x, y) within `radius`, outside the hill: answers its
+   * slot, numbered as delta() numbers them, and its distance; null for none.
+   */
+  function pick(x, y, radius) {
+    const t = now();
+    let best = -1, bestDistance = radius;
+    for (let slot = 0; slot < CAP; slot++) {
+      if (!sessionOf[slot] || !outside[slot]) continue;
+      const [px, py] = position(slot, t);
+      const d = Math.hypot(px - x, py - y);
+      if (d < bestDistance) { best = slot; bestDistance = d; }
+    }
+    return best < 0 ? null : { slot: offset + best, distance: bestDistance };
+  }
+
+  /** Any worker, one outside the hill when there is one; null when the colony has none. */
+  function pickAny() {
+    let fallback = -1;
+    for (let tries = 0; tries < 4096; tries++) {
+      const slot = Math.floor(Math.random() * CAP);
+      if (!sessionOf[slot] || stage[slot] !== WORKER) continue;
+      if (outside[slot]) return { slot: offset + slot };
+      if (fallback < 0) fallback = slot;
+    }
+    return fallback < 0 ? null : { slot: offset + fallback };
+  }
+
+  /** Follows the ant in `slot` (numbered as delta() numbers them), or none for null. */
+  function follow(slot) {
+    followed = slot === null ? -1 : slot - offset;
+    followedSession = followed >= 0 ? sessionOf[followed] : 0;
+    heard = [];
+  }
+
+  /**
+   * The followed ant now: its trip, whether it is outside, its state as core
+   * reports it (actor.state's value, actor.context's variables), and the
+   * events it sent and received since the last call. Null when no ant is
+   * followed; `ended` once it died.
+   */
+  async function inspect() {
+    if (followed < 0) return null;
+    const slot = followed, session = followedSession, events = heard;
+    heard = [];
+    const ended = { slot: offset + slot, colony, ended: true, events };
+    if (sessionOf[slot] !== session) { follow(null); return ended; }
+    let state, context;
+    try {
+      const actor = host.actor(session);
+      [state, context] = await Promise.all([actor.state(), actor.context()]);
+    } catch {
+      follow(null); // it ended while the page asked
+      return ended;
+    }
+    return {
+      slot: offset + slot, colony, ended: false, events, value: state.value, variables: context.variables,
+      trip: [x0[slot], y0[slot], x1[slot], y1[slot], t0[slot], t1[slot]], outside: Boolean(outside[slot]),
+    };
+  }
+
   /** Rests from now on last `seconds` on average. */
   function setRest(seconds) { resting = seconds; }
 
-  return { populate, step, squash, placeFood, setRest, delta, stats, close: () => host.close(), capacity: CAP };
+  return { populate, step, squash, placeFood, setRest, delta, stats, pick, pickAny, follow, inspect, close: () => host.close(), capacity: CAP };
 }
 
 const clamp = (value, low, high) => Math.min(high, Math.max(low, value));

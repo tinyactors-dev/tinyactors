@@ -10,7 +10,7 @@
 
   <section id="watch">
     <heading>Drop food and squash ants</heading>
-    <p>Tap the field to use the tool you picked, and pinch to zoom in on a fight.</p>
+    <p>Tap the field to use the tool you picked, and pinch to zoom in on a fight. Follow an ant to keep it in view beside its chart, lit in the state the ant is in.</p>
     <playground src="../../examples/anthill/page.mjs">
       <description>Two anthills on a field. Workers carry food home to their queen, and workers of the two colonies fight where they meet.</description>
     </playground>
