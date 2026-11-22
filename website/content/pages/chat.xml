@@ -17,9 +17,9 @@
 
   <section id="room">
     <heading>1. Create a room</heading>
-    <p>A room is an actor with a list of members. A <code>post</code> goes to every member, through a handler of type <code>chat:client</code>.</p>
+    <p>A room is an actor with a list of members: <code>join</code> adds to it, and <code>post</code> sends to all of them. The text leaves the chart as a <code>message</code> to <code>chat:client</code>, which your program handles.</p>
     <code src="../../examples/chat/1-room/charts/room.scxml" lines="8-19" language="scxml" file="charts/room.scxml"/>
-    <p>The handler stands in for the screens. The program starts a room and sends it three events.</p>
+    <p>Here a <code>Client</code> prints what each member's screen would show. The program starts a room and sends it two joins and a post.</p>
     <example>
       <code src="../../examples/chat/1-room/main.mjs" lines="4-11" language="javascript" file="main.mjs"/>
       <code src="../../examples/chat/1-room/main.mjs" lines="19-23" language="javascript" file="main.mjs"/>
@@ -28,12 +28,12 @@
   </section>
 
   <section id="presence">
-    <heading>2. Add presence</heading>
-    <p>Each user is an actor: offline, active or away. After 300 seconds without activity, a delayed <code>idle</code> event makes it away.</p>
+    <heading>2. Track who is online</heading>
+    <p>A user who stops typing sends no event, so nothing marks them away. The user's chart restarts a 300-second timer on each <code>activity</code>, and when it fires, the chart moves to <code>away</code>.</p>
     <code src="../../examples/chat/2-presence/charts/user.scxml" lines="19-52" language="scxml" file="charts/user.scxml"/>
-    <p>The room now sends each post to each member's actor, by name. An offline user drops it.</p>
+    <p>The room now sends each post to each member's user actor, by its name. A user who is offline ignores it.</p>
     <code src="../../examples/chat/2-presence/charts/room.scxml" lines="12-19" language="scxml" file="charts/room.scxml"/>
-    <p>A <code>SimulatedClock</code> makes the 300 seconds take no time.</p>
+    <p>A simulated clock moves 300 seconds in no time, so the program sees both users go away.</p>
     <example>
       <code src="../../examples/chat/2-presence/main.mjs" lines="27-35" language="javascript" file="main.mjs"/>
       <code src="../../examples/chat/2-presence/output.txt" language="text" role="output"/>
@@ -41,12 +41,12 @@
   </section>
 
   <section id="workspace">
-    <heading>3. Let the workspace make rooms</heading>
-    <p>One actor decides which rooms exist and spawns them through the <code>Spawner</code>. It records a name when it asks, so a second request for it is refused.</p>
+    <heading>3. Create each room once</heading>
+    <p>Two users who create <code>general</code> at the same moment could get two rooms. One workspace actor creates every room with a <code>spawn</code> send and records the name at once, so a repeat is refused.</p>
     <code src="../../examples/chat/3-workspace/charts/workspace.scxml" lines="19-44" language="scxml" file="charts/workspace.scxml"/>
-    <p>A user joins rooms by name. Joining a room that does not exist fails with <code>error.communication</code>.</p>
+    <p>A user joins a room by its name. A join sent to a room that does not exist comes back to the user as <code>error.communication</code>.</p>
     <code src="../../examples/chat/3-workspace/charts/user.scxml" lines="21-38" language="scxml" file="charts/user.scxml"/>
-    <p>The program asks the workspace with <code>actor.ask</code>.</p>
+    <p>With <code>actor.ask</code>, the program requests <code>general</code> twice and an invalid name; then bob joins a room that does not exist.</p>
     <example>
       <code src="../../examples/chat/3-workspace/main.mjs" lines="30-39" language="javascript" file="main.mjs"/>
       <code src="../../examples/chat/3-workspace/output.txt" language="text" role="output"/>
@@ -54,22 +54,23 @@
   </section>
 
   <section id="roster">
-    <heading>4. Share a roster</heading>
-    <p>Each user reports its status to the workspace when it changes. A user who comes online gets the whole roster, and everyone else gets the change.</p>
+    <heading>4. Show everyone who is online</heading>
+    <p>A user who connects late has missed every status change made before. Each user now reports its status to the workspace, which keeps them all.</p>
     <code src="../../examples/chat/4-roster/charts/workspace.scxml" lines="59-72" language="scxml" file="charts/workspace.scxml"/>
+    <p>A newcomer gets the whole roster, and each user online gets every change after that.</p>
     <example>
       <code src="../../examples/chat/4-roster/output.txt" language="text" role="output"/>
     </example>
   </section>
 
   <section id="hibernation">
-    <heading>5. Hibernate idle users</heading>
-    <p>The charts do not change. Give the host a store and a bound, and it keeps at most that many actors in memory.</p>
+    <heading>5. Keep idle users out of memory</heading>
+    <p>Most users sit idle, yet each one's actor stays in memory. Give the host a <code>store</code> and a <code>resident</code> bound, and actors past the bound wait in the store.</p>
     <example>
       <code src="../../examples/chat/5-hibernation/main.mjs" lines="41-48" language="javascript" file="main.mjs"/>
       <code src="../../examples/chat/5-hibernation/output.txt" language="text" role="output"/>
     </example>
-    <p>An event or its own <code>idle</code> timer wakes a hibernated actor. Your program never wakes one itself.</p>
+    <p>The charts are step 4's: an event, or a user's 300-second timer, loads a saved actor again.</p>
   </section>
 
   <section id="next">
