@@ -1,9 +1,12 @@
 // The live chat's page: the tutorial's finished charts (charts/, step 5's)
-// on @tinyactors/wasm in this tab, behind a chat window. You are one of the
-// people at a time; what the window shows is that person's screen, built
-// only from what the charts sent to them (chat.mjs). Beside it, any actor's
-// chart, lit in the states its host reports (components/live-chart.mjs),
-// and a simulated clock the reader runs, speeds up or skips.
+// on @tinyactors/wasm in this tab, behind a chat window laid out as team
+// chat clients are: the rooms and people in a sidebar, the room with its
+// messages and composer, and a details pane. You are one of the people at
+// a time; what the window shows is that person's screen, built only from
+// what the charts sent to them (chat.mjs). The details pane shows any
+// actor's chart, lit in the states its host reports
+// (components/live-chart.mjs); above the window, a simulated clock the
+// reader runs, speeds up or skips.
 import { createChat, PEOPLE } from './chat.mjs';
 import { liveChart, statePath } from '/assets/components/live-chart.mjs';
 
@@ -13,6 +16,32 @@ const TICK = 250; // wall milliseconds between clock steps while it runs
 const AWAY = 300_000; // the user chart's timer
 const clock = (seconds) => `${Math.floor(seconds / 60)}:${String(Math.floor(seconds % 60)).padStart(2, '0')}`;
 const STATUS = { active: 'active', away: 'away', offline: 'offline' };
+const GROUP = 300; // simulated seconds within which one author's messages share a header
+const COLOURS = ['#c5405b', '#d2722a', '#2e8b57', '#1f7f8f', '#3567a8', '#7a4fa3', '#a8457e', '#6b7d2a', '#9a6a12']; // avatars', one picked by the name
+
+/** A rounded square with the name's initial, on a colour the name picks. */
+function avatar(name, size) {
+  let hash = 0;
+  for (const char of name) hash = (hash * 31 + char.codePointAt(0)) >>> 0;
+  return el('span', { class: `chatlive__avatar chatlive__avatar--${size}`, style: `background: ${COLOURS[hash % COLOURS.length]}`, 'aria-hidden': 'true' },
+    name[0].toUpperCase());
+}
+
+/** The send button's arrow. */
+function arrow() {
+  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  svg.setAttribute('viewBox', '0 0 20 20');
+  svg.setAttribute('aria-hidden', 'true');
+  const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+  path.setAttribute('d', 'M2.5 2.8 18 10 2.5 17.2l2.2-6.4L12 10l-7.3-.8z');
+  svg.append(path);
+  return svg;
+}
+
+/** A sidebar section that folds, as a client's do. */
+function section(title, ...children) {
+  return el('details', { class: 'chatlive__section', open: '' }, el('summary', { class: 'chatlive__heading' }, title), ...children);
+}
 
 export async function mount(root) {
   root.classList.add('chatlive');
@@ -61,15 +90,15 @@ export async function mount(root) {
   }, TICK);
 
   // ---- the sidebar: who you are, the rooms, the people
-  const youSelect = el('select', { class: 'chatlive__you', 'aria-label': 'You are' },
+  const youSelect = el('select', { class: 'chatlive__you' },
     ...PEOPLE.map((name) => el('option', { value: name }, name)));
   youSelect.addEventListener('change', () => { you = youSelect.value; inspect(`user.${you}`); render(); });
-  const connect = el('button', { type: 'button', class: 'ta-btn ta-btn--secondary ta-btn--sm' });
+  const connect = el('button', { type: 'button', class: 'chatlive__connect' });
   connect.addEventListener('click', () => (online(you) ? chat.disconnect(you) : chat.connect(you)));
   const roomList = el('ul', { class: 'chatlive__rooms', 'aria-label': 'Rooms' });
   const newRoom = el('input', { type: 'text', class: 'chatlive__new', placeholder: 'new-room', 'aria-label': 'New room name', maxlength: '40' });
-  const create = el('button', { type: 'submit', class: 'ta-btn ta-btn--secondary ta-btn--sm' }, 'Add');
-  const createForm = el('form', { class: 'chatlive__create' }, newRoom, create);
+  const create = el('button', { type: 'submit', class: 'chatlive__add' }, 'Add');
+  const createForm = el('form', { class: 'chatlive__create' }, el('span', { class: 'chatlive__plus', 'aria-hidden': 'true' }, '+'), newRoom, create);
   const createNote = el('p', { class: 'chatlive__note', 'aria-live': 'polite' });
   createForm.addEventListener('submit', async (event) => {
     event.preventDefault();
@@ -82,20 +111,22 @@ export async function mount(root) {
   });
   const people = el('ul', { class: 'chatlive__people', 'aria-label': 'People' });
   const sidebar = el('nav', { class: 'chatlive__sidebar', 'aria-label': 'Workspace' },
-    el('label', { class: 'chatlive__label' }, 'You are ', youSelect), connect,
-    el('h3', { class: 'chatlive__heading' }, 'Rooms'), roomList, createForm, createNote,
-    el('h3', { class: 'chatlive__heading' }, 'People'), people);
+    el('div', { class: 'chatlive__head' }, el('label', { class: 'chatlive__label' }, 'You are', youSelect), connect),
+    section('Rooms', roomList, createForm, createNote),
+    section('People', people));
 
   // ---- the room you look at
   const roomTitle = el('h3', { class: 'chatlive__title' });
   const messages = el('ol', { class: 'chatlive__messages', 'aria-live': 'polite', 'aria-label': 'Messages' });
   const text = el('input', { type: 'text', class: 'chatlive__text', 'aria-label': 'Message', maxlength: '200' });
-  const send = el('button', { type: 'submit', class: 'ta-btn ta-btn--primary ta-btn--sm' }, 'Send');
-  const join = el('button', { type: 'button', class: 'ta-btn ta-btn--primary ta-btn--sm' });
+  const send = el('button', { type: 'submit', class: 'chatlive__send', 'aria-label': 'Send' }, arrow());
+  const join = el('button', { type: 'button', class: 'chatlive__join' });
   join.addEventListener('click', () => chat.join(you, room));
   const composer = el('form', { class: 'chatlive__composer' }, text, send);
+  const seen = new Map(); // each message's simulated time, when the page first saw it
   let typed = -Infinity; // the simulated time of the last activity sent for typing
   text.addEventListener('input', () => {
+    send.classList.toggle('chatlive__send--ready', text.value.trim() !== '');
     if (!online(you) || chat.now() - typed < 5) return; // one activity per 5 simulated seconds of typing
     typed = chat.now();
     chat.activity(you);
@@ -105,16 +136,21 @@ export async function mount(root) {
     const words = text.value.trim();
     if (!words) return;
     text.value = '';
+    send.classList.remove('chatlive__send--ready');
     chat.post(you, room, words);
   });
-  const main = el('section', { class: 'chatlive__room', 'aria-label': 'Room' }, roomTitle, messages, composer, join);
+  const main = el('section', { class: 'chatlive__room', 'aria-label': 'Room' }, el('header', { class: 'chatlive__bar-title' }, roomTitle), messages,
+    el('div', { class: 'chatlive__foot' }, composer, join));
 
   // ---- inside: any actor's chart, lit in its states
   const actorList = el('ul', { class: 'chatlive__actors', 'aria-label': 'Actors' });
   const frame = el('div', { class: 'chatlive__chart' });
   const stateLine = el('p', { class: 'chatlive__state', 'aria-live': 'polite' });
   const inside = el('aside', { class: 'chatlive__inside', 'aria-label': 'Inside' },
-    el('h3', { class: 'chatlive__heading' }, 'Actors'), actorList, frame, stateLine);
+    el('header', { class: 'chatlive__bar-title' }, el('h3', { class: 'chatlive__title' }, 'Inside')),
+    el('div', { class: 'chatlive__details' },
+      el('h4', { class: 'chatlive__subheading' }, 'Actors'), actorList,
+      el('h4', { class: 'chatlive__subheading' }, 'Chart'), frame, stateLine));
   const charts = {};
   function inspect(name) {
     inspected = name;
@@ -129,7 +165,7 @@ export async function mount(root) {
 
   root.replaceChildren(
     el('div', { class: 'chatlive__bar' }, el('span', { class: 'chatlive__clock' }, 'Simulated clock'), play, speeds, skip, time, memory),
-    el('div', { class: 'chatlive__app' }, sidebar, main, inside),
+    el('div', { class: 'chatlive__app' }, sidebar, el('div', { class: 'chatlive__pane' }, main, inside)),
     status,
   );
   status.textContent = '';
@@ -164,7 +200,8 @@ export async function mount(root) {
     connect.textContent = selfState?.online ? 'Disconnect' : 'Connect';
     const rooms = actors.filter((actor) => actor.chart === 'room').map((actor) => actor.name.slice(5));
     roomList.replaceChildren(...rooms.map((name) => {
-      const button = el('button', { type: 'button', class: 'chatlive__room-link', 'aria-current': String(name === room) }, `# ${name}`);
+      const button = el('button', { type: 'button', class: 'chatlive__room-link', 'aria-current': String(name === room) },
+        el('span', { class: 'chatlive__hash', 'aria-hidden': 'true' }, '#'), name);
       if (screen.rooms.includes(name)) button.classList.add('chatlive__room-link--joined');
       button.addEventListener('click', () => { room = name; render(); });
       return el('li', {}, button);
@@ -173,17 +210,28 @@ export async function mount(root) {
     people.replaceChildren(...PEOPLE.map((name) => {
       const state = STATUS[roster[name]] ?? 'unknown';
       return el('li', { class: `chatlive__person chatlive__person--${state}` },
-        el('span', { class: 'chatlive__dot', 'aria-hidden': 'true' }),
-        `${name}${name === you ? ' (you)' : ''}`,
+        el('span', { class: 'chatlive__face' }, avatar(name, 'small'), el('span', { class: 'chatlive__dot', 'aria-hidden': 'true' })),
+        el('span', { class: 'chatlive__name' }, name),
+        name === you ? el('span', { class: 'chatlive__you-mark' }, 'you') : '',
         el('span', { class: 'chatlive__presence' }, state === 'unknown' ? 'not on your screen' : state));
     }));
 
     // the room
     const joined = screen.rooms.includes(room);
-    roomTitle.textContent = `# ${room}`;
+    roomTitle.replaceChildren(el('span', { class: 'chatlive__hash', 'aria-hidden': 'true' }, '#'), room);
+    for (const name of PEOPLE) for (const message of chat.screen(name).messages) if (!seen.has(message)) seen.set(message, chat.now());
     const here = screen.messages.filter((message) => message.room === room);
-    messages.replaceChildren(...(here.length ? here.map((message) => el('li', { class: 'chatlive__message' },
-      el('span', { class: 'chatlive__from' }, message.from), el('span', {}, message.text)))
+    messages.replaceChildren(...(here.length ? here.map((message, index) => {
+      const at = seen.get(message);
+      const before = here[index - 1];
+      const stamp = el('time', { class: 'chatlive__at' }, clock(at));
+      if (before && before.from === message.from && at - seen.get(before) < GROUP) {
+        return el('li', { class: 'chatlive__message chatlive__message--more' }, stamp, el('p', { class: 'chatlive__body' }, message.text));
+      }
+      return el('li', { class: 'chatlive__message' }, avatar(message.from, 'large'),
+        el('p', { class: 'chatlive__line' }, el('span', { class: 'chatlive__from' }, message.from), stamp),
+        el('p', { class: 'chatlive__body' }, message.text));
+    })
       : [el('li', { class: 'chatlive__empty' }, joined ? 'No messages on your screen yet.' : `You have not joined #${room}.`)]),
       ...screen.notices.slice(-1).map((notice) => el('li', { class: 'chatlive__notice' }, notice)));
     messages.scrollTop = messages.scrollHeight;
@@ -191,13 +239,14 @@ export async function mount(root) {
     composer.hidden = !canPost;
     join.hidden = canPost || !selfState?.online;
     join.textContent = `Join #${room}`;
-    text.placeholder = `Message #${room} as ${you}`;
+    text.placeholder = `Message #${room}`;
     if (!selfState?.online) messages.append(el('li', { class: 'chatlive__notice' }, `${you} is offline: connect to post.`));
 
     // inside
     actorList.replaceChildren(...actors.map((actor) => {
       const button = el('button', { type: 'button', class: 'chatlive__actor', 'aria-current': String(actor.name === inspected) },
-        el('code', {}, actor.name), el('span', { class: 'chatlive__where' }, actor.stored ? 'in the store' : 'in memory'));
+        el('span', { class: 'chatlive__dot', 'aria-hidden': 'true' }), el('code', {}, actor.name),
+        el('span', { class: 'chatlive__where' }, actor.stored ? 'in the store' : 'in memory'));
       if (actor.stored) button.classList.add('chatlive__actor--stored');
       button.addEventListener('click', () => inspect(actor.name));
       return el('li', {}, button);

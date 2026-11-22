@@ -17,9 +17,11 @@ https://www.tinyactors.dev/chat/.
   node main.mjs
   ```
 
-- `page.mjs` draws it: who you are, the rooms and the people (your
-  screen), the room, and any actor's chart lit in the state its host
-  reports (`components/live-chart.mjs`), with the clock's controls.
+- `page.mjs` draws it as a team chat client looks (`.chatlive` in
+  `style/site.css`, in Lato): a sidebar with who you are, the rooms and the
+  people (your screen), the room with each message's simulated time, and a
+  details pane with any actor's chart lit in the state its host reports
+  (`components/live-chart.mjs`); the clock's controls sit above it.
 
 The roster a person's screen holds leaves out their own changes (the
 workspace sends a change to the other people online), so the page shows
