@@ -178,6 +178,24 @@ p code, li code, h1 code, h2 code, h3 code, figcaption code {
 .install__guide { font: var(--type-body-sm); }
 .install__guide::after { content: " →"; }
 .install__prompt { color: var(--code-muted); user-select: none; }
+.install__version { margin: 0; display: flex; flex-wrap: wrap; gap: var(--space-1) var(--space-4); font: var(--type-body-sm); color: var(--fg-3); }
+.install__version span { font-variant-numeric: tabular-nums; }
+
+/* The changelogs: the newest release of a package open, the older ones folded. */
+.changelog { display: grid; gap: var(--space-5); }
+.changelog__panel { display: grid; gap: var(--space-4); }
+.changelog__panel[hidden] { display: none; }
+.changelog__release { display: grid; gap: var(--space-3); }
+details.changelog__release { border-top: 1px solid var(--border-1); padding-top: var(--space-3); }
+.changelog__title { margin: 0; font: var(--type-h3); color: var(--fg-1); font-variant-numeric: tabular-nums; }
+summary.changelog__title { cursor: pointer; }
+.changelog__quote { margin: 0; padding-left: var(--space-4); border-left: 3px solid var(--border-2); color: var(--fg-2); display: grid; gap: var(--space-3); }
+.changelog__quote h4 { margin: var(--space-2) 0 0; font: var(--type-ui); color: var(--fg-1); }
+.changelog__quote p, .changelog__quote ul { margin: 0; font: var(--type-body); max-width: 46em; }
+.changelog__quote ul { padding-left: var(--space-5); display: grid; gap: var(--space-2); }
+.changelog__quote code { overflow-wrap: anywhere; }
+.changelog__more { margin: 0; font: var(--type-body-sm); }
+.changelog__more a::after { content: " →"; }
 
 .actions { display: flex; flex-wrap: wrap; gap: var(--space-3); margin-top: var(--space-8); }
 .actions .ta-btn { text-decoration: none; }

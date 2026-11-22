@@ -1,0 +1,3 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- A package's version comes from a component's CHANGELOG.md, never another file. expect: cvc-assertion: element 'Q{https://www.tinyactors.dev/ns/site}package' breaks the assertion '(: a component's changelog :) -->
+<site xmlns="https://www.tinyactors.dev/ns/site" origin="https://www.tinyactors.dev"><name>t</name><tagline>T.</tagline><nav><link href="https://example.com">E</link></nav><pages><page src="pages/t.xml"/></pages><packages source="https://github.com/o/r"><changes>What changed</changes><package id="node" for="Node.js and Bun" changelog="../../tinyactors-napi/VERSION.txt">@tinyactors/node</package></packages><footer><links><link href="https://example.com">E</link></links></footer></site>

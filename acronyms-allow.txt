@@ -31,6 +31,10 @@ CpuType        mise/lib/c_release/build.rb                               # llvm-
 
 # The DOM's names (Document.getElementById).
 getElementById tinyactors-core/web/**/*                                # DOM API
+getElementById website/components/*.mjs                                  # DOM API
+
+# scxmljs's compiled chart names its state lookup `byId` (Model.byId).
+byId           website/examples/anthill/follow.mjs                       # scxmljs Model field
 
 # The Temporal API's names (PlainDate's calendarId, Temporal.Now.timeZoneId),
 # which staticjs implements.

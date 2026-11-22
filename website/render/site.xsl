@@ -109,7 +109,7 @@
         <link rel="stylesheet" href="/assets/site.css?v={$version}"/>
         <!-- The vendored packages by their names, as a reader's code imports them (mise/website.rb, VENDOR). -->
         <script type="importmap">{$importmap}</script>
-        <xsl:if test=".//s:install[count(s:command) gt 1]">
+        <xsl:if test=".//s:install[count(s:command) gt 1] or .//s:changelog">
           <script type="module" src="/assets/components/tabs.mjs?v={$version}"></script>
         </xsl:if>
         <xsl:if test=".//s:code[@language = 'scxml' and @src]">
@@ -504,19 +504,73 @@
         <div role="tablist" class="ta-tabs ta-tabs--segmented" aria-label="Install for">
           <xsl:for-each select="s:command">
             <button type="button" role="tab" class="ta-tab" id="{$id}-tab-{position()}" aria-controls="{$id}-panel-{position()}"
-                    aria-selected="{position() = 1}" tabindex="{if (position() = 1) then 0 else -1}">{@for}</button>
+                    aria-selected="{position() = 1}" tabindex="{if (position() = 1) then 0 else -1}">{f:package(.)/@for}</button>
           </xsl:for-each>
         </div>
       </xsl:if>
       <xsl:for-each select="s:command">
         <div class="install__panel" role="{if (count(../s:command) gt 1) then 'tabpanel' else 'group'}" id="{$id}-panel-{position()}"
              aria-labelledby="{$id}-tab-{position()}">
-          <xsl:if test="count(../s:command) = 1"><xsl:attribute name="aria-label" select="'Install for ' || @for"/></xsl:if>
+          <xsl:if test="count(../s:command) = 1"><xsl:attribute name="aria-label" select="'Install for ' || f:package(.)/@for"/></xsl:if>
           <xsl:if test="position() gt 1"><xsl:attribute name="hidden" select="'hidden'"/></xsl:if>
-          <code class="install__command"><span class="install__prompt" aria-hidden="true">$ </span>{normalize-space(.)}</code>
-          <xsl:if test="@guide">
-            <a class="install__guide" href="{@guide}">{@for} guide</a>
-          </xsl:if>
+          <xsl:variable name="package" select="f:package(.)"/>
+          <xsl:variable name="release" select="f:releases($package)[1]"/>
+          <code class="install__command"><span class="install__prompt" aria-hidden="true">$ </span>{replace(normalize-space(.), '\{version\}', $release?version)}</code>
+          <p class="install__version">
+            <span>{$package} {$release?version}, {f:date($release?date)}</span>
+            <a href="{f:changelog-href($package)}">{$site/s:packages/s:changes}</a>
+            <xsl:if test="@guide">
+              <a class="install__guide" href="{@guide}">{$package/@for} guide</a>
+            </xsl:if>
+          </p>
+        </div>
+      </xsl:for-each>
+    </ta-tabs>
+  </xsl:template>
+
+  <!-- Every package's releases, behind the install commands' tabs (the
+       same tablist name, so the reader's platform holds): the newest
+       release open, the older ones folded, each the hand-written part of
+       its changelog section, quoted. -->
+  <xsl:template match="s:changelog">
+    <xsl:variable name="changelog" select="."/>
+    <xsl:variable name="id" select="generate-id()"/>
+    <xsl:variable name="packages" select="$site/s:packages/s:package"/>
+    <ta-tabs class="changelog">
+      <div role="tablist" class="ta-tabs ta-tabs--segmented" aria-label="Install for">
+        <xsl:for-each select="$packages">
+          <button type="button" role="tab" class="ta-tab" id="{$id}-tab-{position()}" aria-controls="{$id}-panel-{position()}"
+                  aria-selected="{position() = 1}" tabindex="{if (position() = 1) then 0 else -1}">{@for}</button>
+        </xsl:for-each>
+      </div>
+      <xsl:for-each select="$packages">
+        <xsl:variable name="package" select="."/>
+        <div class="changelog__panel" role="tabpanel" id="{$id}-panel-{position()}" aria-labelledby="{$id}-tab-{position()}">
+          <xsl:if test="position() gt 1"><xsl:attribute name="hidden" select="'hidden'"/></xsl:if>
+          <xsl:for-each select="f:releases($package)">
+            <xsl:variable name="release" select="."/>
+            <xsl:variable name="title" select="$package || ' ' || ?version || ', ' || f:date(?date)"/>
+            <xsl:variable name="body">
+              <blockquote class="changelog__quote">
+                <xsl:sequence select="f:release-body(?lines)"/>
+              </blockquote>
+              <p class="changelog__more"><a href="{f:release-href($package, $release)}">{$changelog/s:more}</a></p>
+            </xsl:variable>
+            <xsl:choose>
+              <xsl:when test="position() = 1">
+                <article class="changelog__release" id="{$package/@id}-{translate(?version, '.', '-')}">
+                  <h3 class="changelog__title">{$title}</h3>
+                  <xsl:sequence select="$body"/>
+                </article>
+              </xsl:when>
+              <xsl:otherwise>
+                <details class="changelog__release" id="{$package/@id}-{translate(?version, '.', '-')}">
+                  <summary class="changelog__title">{$title}</summary>
+                  <xsl:sequence select="$body"/>
+                </details>
+              </xsl:otherwise>
+            </xsl:choose>
+          </xsl:for-each>
         </div>
       </xsl:for-each>
     </ta-tabs>
@@ -651,6 +705,83 @@
       </xsl:matching-substring>
       <xsl:non-matching-substring>{.}</xsl:non-matching-substring>
     </xsl:analyze-string>
+  </xsl:function>
+
+  <!-- ===================================================== changelogs
+       A package's CHANGELOG.md (docs/adr/0002-changelogs.md): a release is
+       a "## [version] - date" section, newest first; its hand-written part
+       ("### Summary", "### Upgrading": paragraphs and "- " items, a line
+       each) runs to the "<!-\- Generated" line, the generated lists after
+       it. -->
+
+  <xsl:function name="f:package" as="element(s:package)">
+    <xsl:param name="command" as="element(s:command)"/>
+    <xsl:variable name="package" select="$site/s:packages/s:package[@id = $command/@package]"/>
+    <xsl:if test="empty($package)">
+      <xsl:message terminate="yes">site: {f:where($command)}: no package "{$command/@package}" in site.xml's packages</xsl:message>
+    </xsl:if>
+    <xsl:sequence select="$package"/>
+  </xsl:function>
+
+  <!-- Each release of a package, newest first: {version, date, lines}. -->
+  <xsl:function name="f:releases" as="map(*)*" cache="yes">
+    <xsl:param name="package" as="element(s:package)"/>
+    <xsl:variable name="lines" select="tokenize(unparsed-text(resolve-uri($package/@changelog, base-uri($package))), '\r?\n')"/>
+    <xsl:variable name="starts" select="index-of($lines ! matches(., '^## \[[^\]]+\] - \d{4}-\d{2}-\d{2}$'), true())"/>
+    <xsl:if test="empty($starts)">
+      <xsl:message terminate="yes">site: {$package/@changelog} has no "## [version] - date" section</xsl:message>
+    </xsl:if>
+    <xsl:for-each select="$starts">
+      <xsl:variable name="i" select="position()"/>
+      <xsl:variable name="section" select="subsequence($lines, . + 1, ($starts[$i + 1], count($lines) + 1)[1] - . - 1)"/>
+      <xsl:variable name="end" select="(index-of($section ! starts-with(., '&lt;!-- Generated'), true())[1], count($section) + 1)[1]"/>
+      <xsl:sequence select="map {
+        'heading': substring($lines[current()], 4),
+        'version': replace($lines[current()], '^## \[([^\]]+)\].*$', '$1'),
+        'date': replace($lines[current()], '^.* - ', ''),
+        'lines': subsequence($section, 1, $end - 1)
+      }"/>
+    </xsl:for-each>
+  </xsl:function>
+
+  <xsl:function name="f:date" as="xs:string">
+    <xsl:param name="date" as="xs:string"/>
+    <xsl:sequence select="format-date(xs:date($date), '[D] [MNn] [Y]', 'en', (), ())"/>
+  </xsl:function>
+
+  <!-- A release's hand-written part: "### " headings, paragraphs, lists. -->
+  <xsl:function name="f:release-body" as="node()*">
+    <xsl:param name="lines" as="xs:string*"/>
+    <xsl:for-each-group select="$lines[normalize-space()]" group-adjacent="if (starts-with(., '- ')) then 'item' else if (starts-with(., '### ')) then 'heading' else 'p' || position()">
+      <xsl:choose>
+        <xsl:when test="current-grouping-key() = 'heading'"><h4>{substring(., 5)}</h4></xsl:when>
+        <xsl:when test="current-grouping-key() = 'item'">
+          <ul><xsl:for-each select="current-group()"><li><xsl:sequence select="f:inline(substring(., 3))"/></li></xsl:for-each></ul>
+        </xsl:when>
+        <xsl:otherwise><p><xsl:sequence select="f:inline(.)"/></p></xsl:otherwise>
+      </xsl:choose>
+    </xsl:for-each-group>
+  </xsl:function>
+
+  <!-- A release's whole section in the changelog on main, which holds
+       every release (an early tag can predate the file): GitHub's anchor
+       of the heading. -->
+  <xsl:function name="f:release-href" as="xs:string">
+    <xsl:param name="package" as="element(s:package)"/>
+    <xsl:param name="release" as="map(*)"/>
+    <xsl:variable name="directory" select="tokenize($package/@changelog, '/')[last() - 1]"/>
+    <xsl:variable name="anchor" select="replace(replace(lower-case($release?heading), '[^a-z0-9 -]', ''), ' ', '-')"/>
+    <xsl:sequence select="$site/s:packages/@source || '/blob/main/' || $directory || '/CHANGELOG.md#' || $anchor"/>
+  </xsl:function>
+
+  <!-- The page that holds the changelogs, at the newest release of `package`. -->
+  <xsl:function name="f:changelog-href" as="xs:string">
+    <xsl:param name="package" as="element(s:package)"/>
+    <xsl:variable name="page" select="$pages[.//s:changelog][1]"/>
+    <xsl:if test="empty($page)">
+      <xsl:message terminate="yes">site: install commands link to the changelogs, and no page holds a changelog</xsl:message>
+    </xsl:if>
+    <xsl:sequence select="$page/@path || '#' || $package/@id || '-' || translate(f:releases($package)[1]?version, '.', '-')"/>
   </xsl:function>
 
   <xsl:function name="f:where" as="xs:string">

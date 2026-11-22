@@ -26,6 +26,7 @@
       <link to="guide-telemetry">Telemetry</link>
       <link to="guide-browser">In the browser</link>
     </group>
+    <link to="changelog">Changelog</link>
     <link to="about">About</link>
     <link href="https://github.com/tinyactors-dev/tinyactors">GitHub</link>
   </nav>
@@ -53,8 +54,18 @@
     <page src="guides/snapshots.xml"/>
     <page src="guides/telemetry.xml"/>
     <page src="guides/testing.xml"/>
+    <page src="pages/changelog.xml"/>
     <page src="pages/404.xml"/>
   </pages>
+
+  <!-- What a reader installs: each one's version and date come from its changelog. -->
+  <packages source="https://github.com/tinyactors-dev/tinyactors">
+    <changes>What changed</changes>
+    <package id="node" for="Node.js and Bun" changelog="../../tinyactors-napi/CHANGELOG.md">@tinyactors/node</package>
+    <package id="python" for="Python" changelog="../../tinyactors-cpython/CHANGELOG.md">tinyactors</package>
+    <package id="wasm" for="Browsers" changelog="../../tinyactors-napi/CHANGELOG.md">@tinyactors/wasm</package>
+    <package id="c" for="C" changelog="../../tinyactors-core/CHANGELOG.md">tinyactors-core</package>
+  </packages>
 
   <footer>
     <note>MIT licensed. Charts are <link href="https://www.w3.org/TR/scxml/">SCXML</link>.</note>

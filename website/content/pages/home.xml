@@ -7,9 +7,10 @@
     <headline>Like SQLite, but for <em>actors</em></headline>
     <lede>tinyactors runs millions of statecharts inside your program, in Node.js, Python, a browser or C. A statechart is a composable state machine that describes a reactive system formally and is easy to verify.</lede>
     <install>
-      <command for="Node.js and Bun" guide="https://github.com/tinyactors-dev/tinyactors-napi#readme">npm install @tinyactors/node</command>
-      <command for="Python" guide="https://github.com/tinyactors-dev/tinyactors-cpython#readme">pip install tinyactors</command>
-      <command for="Browsers" guide="https://www.tinyactors.dev/guides/browser/">npm install @tinyactors/wasm</command>
+      <command package="node" guide="https://github.com/tinyactors-dev/tinyactors-napi#readme">npm install @tinyactors/node</command>
+      <command package="python" guide="https://github.com/tinyactors-dev/tinyactors-cpython#readme">pip install tinyactors</command>
+      <command package="wasm" guide="https://www.tinyactors.dev/guides/browser/">npm install @tinyactors/wasm</command>
+      <command package="c" guide="https://github.com/tinyactors-dev/tinyactors/blob/main/tinyactors-core/docs/embedding.md">curl -L https://github.com/tinyactors-dev/tinyactors-core/releases/download/v{version}/tinyactors-{version}-src.tar.gz | tar xz</command>
     </install>
     <actions>
       <action to="anthill">See the demo</action>

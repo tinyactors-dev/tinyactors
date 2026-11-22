@@ -7,8 +7,8 @@
     <headline>Test properties, <em>not runs</em></headline>
     <lede>A unit test checks one run you thought of. A property holds for every run. Generate the runs, find the one that breaks, and shrink it. Everything on this page runs in your browser.</lede>
     <install>
-      <command for="Browsers" guide="https://github.com/tinyactors-dev/tinyactors-napi/blob/main/docs/guide/browser.md">npm install @tinyactors/wasm</command>
-      <command for="Node.js and Bun" guide="https://github.com/tinyactors-dev/tinyactors-napi/blob/main/docs/guide/testing.md">npm install @tinyactors/node</command>
+      <command package="wasm" guide="https://github.com/tinyactors-dev/tinyactors-napi/blob/main/docs/guide/browser.md">npm install @tinyactors/wasm</command>
+      <command package="node" guide="https://github.com/tinyactors-dev/tinyactors-napi/blob/main/docs/guide/testing.md">npm install @tinyactors/node</command>
     </install>
     <actions>
       <action to="property-testing" section="chart">Start</action>

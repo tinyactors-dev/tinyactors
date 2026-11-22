@@ -7,7 +7,7 @@
     <headline>Build a team chat</headline>
     <lede>Rooms, people who come and go, and a workspace that holds them. Five steps, each a program you can run.</lede>
     <install>
-      <command for="Node.js and Bun" guide="https://github.com/tinyactors-dev/tinyactors-napi#readme">npm install @tinyactors/node</command>
+      <command package="node" guide="https://github.com/tinyactors-dev/tinyactors-napi#readme">npm install @tinyactors/node</command>
     </install>
     <actions>
       <action to="chat" section="room">Start</action>

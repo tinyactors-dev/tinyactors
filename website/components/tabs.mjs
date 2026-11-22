@@ -4,7 +4,8 @@
 // panel shown; this makes the tabs work: a click or the arrow keys select a
 // tab, and the choice holds for every <ta-tabs> on the page whose tablist
 // has the same name (its aria-label), and for the next page (localStorage,
-// when the browser keeps it). Showing a panel dispatches `ta-panel-shown`
+// when the browser keeps it). A link to an element inside a panel shows
+// that panel. Showing a panel dispatches `ta-panel-shown`
 // on it, so what a panel holds can load when it is first seen.
 
 const KEY = 'tinyactors.tab.';
@@ -26,6 +27,15 @@ class Tabs extends HTMLElement {
     });
     const saved = read(this.group());
     if (saved) this.select(saved);
+    // A link to something inside a panel (a release on the changelog page)
+    // chooses that panel's tab, then shows the target.
+    const target = location.hash ? document.getElementById(decodeURIComponent(location.hash.slice(1))) : null;
+    const panel = target && this.contains(target) ? target.closest('[role="tabpanel"]') : null;
+    const tab = panel ? tabs.find((candidate) => candidate.getAttribute('aria-controls') === panel.id) : null;
+    if (tab) {
+      choose(this.group(), tab.textContent);
+      requestAnimationFrame(() => target.scrollIntoView());
+    }
   }
 
   tabs() {

@@ -1,6 +1,6 @@
 #!/usr/bin/env ruby
 #MISE description="Test the website: the content against its schema, the refusals the schema and the build must make, the build's internal links and anchors, and every example a page shows, run"
-#MISE sources=["content/**/*", "presence/**/*.{mjs,scxml,json}", ".agents/skills/ant-animation/scripts/ant.mjs", "schema/**/*", "render/**/*", "style/**/*", "components/**/*", "../tinyactors-napi/docs/guide/*.md", "examples/**/*.{scxml,mjs,txt,json}", "test/**/*", "tools/**/*", "package.json", "package-lock.json", "mise/website.rb", "mise/tasks/*", "../.agents/skills/tinyactors-design/styles.css", "../.agents/skills/tinyactors-design/tokens/**/*", "../.agents/skills/tinyactors-design/components/components.css", "../.agents/skills/tinyactors-design/assets/**/*"]
+#MISE sources=["content/**/*", "presence/**/*.{mjs,scxml,json}", ".agents/skills/ant-animation/scripts/ant.mjs", "schema/**/*", "render/**/*", "style/**/*", "components/**/*", "../tinyactors-napi/docs/guide/*.md", "../tinyactors-napi/CHANGELOG.md", "../tinyactors-cpython/CHANGELOG.md", "../tinyactors-core/CHANGELOG.md", "examples/**/*.{scxml,mjs,txt,json}", "test/**/*", "tools/**/*", "package.json", "package-lock.json", "mise/website.rb", "mise/tasks/*", "../.agents/skills/tinyactors-design/styles.css", "../.agents/skills/tinyactors-design/tokens/**/*", "../.agents/skills/tinyactors-design/components/components.css", "../.agents/skills/tinyactors-design/assets/**/*"]
 #MISE outputs={auto=true}
 # vim:ft=ruby
 
@@ -105,6 +105,24 @@ programs.each do |dir|
   end
 end
 puts "website: #{programs.size} example programs ran and printed their output.txt"
+
+# 4b. The version the site advertises is published: the newest release in
+#     tinyactors-napi's changelog is the @tinyactors/wasm every example
+#     installs from npm. A release's changelog section is committed before
+#     its packages are approved on npm, so an install command must not show
+#     it until the examples run on it.
+newest = Website::ROOT.join('../tinyactors-napi/CHANGELOG.md').read[/^## \[([^\]]+)\] - /, 1]
+pinned = Website::EXAMPLES.glob('*/package-lock.json').filter_map do |lock|
+  version = JSON.parse(lock.read).dig('packages', 'node_modules/@tinyactors/wasm', 'version')
+  [lock.dirname.basename.to_s, version] if version
+end
+pinned.each do |name, version|
+  next if version == newest
+
+  failures << "examples/#{name}: installs @tinyactors/wasm #{version}, but the site shows tinyactors-napi's newest release, #{newest}: " \
+              "update the examples to it once npm has it (npm install @tinyactors/wasm@#{newest})"
+end
+puts "website: the examples install @tinyactors/wasm #{newest}, the version the site shows"
 
 # 5. The guides' examples a page transcludes: in each <example>, a
 #    javascript <code src="...md" section fence> is run in examples/guides

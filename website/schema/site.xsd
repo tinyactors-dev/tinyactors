@@ -44,6 +44,7 @@
             </xs:sequence>
           </xs:complexType>
         </xs:element>
+        <xs:element ref="packages"/>
         <xs:element name="footer">
           <xs:complexType>
             <xs:sequence>
@@ -98,10 +99,50 @@
         </xs:simpleType>
       </xs:attribute>
     </xs:complexType>
+    <xs:unique name="package-ids">
+      <xs:selector xpath="packages/package"/>
+      <xs:field xpath="@id"/>
+    </xs:unique>
     <xs:unique name="page-files">
       <xs:selector xpath="pages/page"/>
       <xs:field xpath="@src"/>
     </xs:unique>
+  </xs:element>
+
+  <xs:element name="packages">
+    <xs:annotation><xs:documentation>
+      What a reader installs, one package per platform, each named for the
+      reader (`for`: "Node.js and Bun", "Python", "C"). The element's text
+      is the package's name; `changelog` is its CHANGELOG.md, relative to
+      site.xml, whose newest "## [version] - date" section gives the
+      version and date every install command and changelog shows, so no
+      version is written in the content. `source` is the repository the
+      changelogs are in, on its branch main.
+      `changes` is the words of the link from an install command to its
+      changelog.
+    </xs:documentation></xs:annotation>
+    <xs:complexType>
+      <xs:sequence>
+        <xs:element name="changes" type="plain"/>
+        <xs:element name="package" maxOccurs="unbounded">
+          <xs:complexType>
+            <xs:simpleContent>
+              <xs:extension base="plain-attribute">
+                <xs:attribute name="id" type="xs:NCName" use="required"/>
+                <xs:attribute name="for" type="plain-attribute" use="required"/>
+                <xs:attribute name="changelog" type="path" use="required"/>
+                <xs:assert test="(: a component's changelog :) matches(@changelog, '^(\.\./)+[a-z0-9-]+/CHANGELOG\.md$')"/>
+              </xs:extension>
+            </xs:simpleContent>
+          </xs:complexType>
+        </xs:element>
+      </xs:sequence>
+      <xs:attribute name="source" use="required">
+        <xs:simpleType>
+          <xs:restriction base="xs:anyURI"><xs:pattern value="https://github\.com/[A-Za-z0-9-]+/[A-Za-z0-9-]+"/></xs:restriction>
+        </xs:simpleType>
+      </xs:attribute>
+    </xs:complexType>
   </xs:element>
 
   <xs:complexType name="navigation">
@@ -228,6 +269,7 @@
       <xs:element ref="live"/>
       <xs:element ref="table"/>
       <xs:element ref="playground"/>
+      <xs:element ref="changelog"/>
     </xs:choice>
   </xs:group>
 
@@ -419,11 +461,13 @@
 
   <xs:element name="install">
     <xs:annotation><xs:documentation>
-      How to install: one command per platform, each named for the reader
-      (`for`: "Node.js and Bun", "Python", "Browsers"), with the guide to
-      read next (`guide`). The commands do the same thing in different
-      words, so a page shows one at a time, behind tabs, and the reader's
-      choice holds for every install on the page.
+      How to install: one command per package of site.xml's `packages`
+      (`package`, its id), which names it for the reader and gives its
+      version: the command shows the version and date, with a link to the
+      package's changelog. "{version}" in a command is that version. Each
+      has the guide to read next (`guide`). The commands do the same thing
+      in different words, so a page shows one at a time, behind tabs, and
+      the reader's choice holds for every install on the page.
     </xs:documentation></xs:annotation>
     <xs:complexType>
       <xs:sequence>
@@ -431,12 +475,30 @@
           <xs:complexType>
             <xs:simpleContent>
               <xs:extension base="nonempty">
-                <xs:attribute name="for" type="plain-attribute" use="required"/>
+                <xs:attribute name="package" type="xs:NCName" use="required"/>
                 <xs:attribute name="guide" type="external"/>
               </xs:extension>
             </xs:simpleContent>
           </xs:complexType>
         </xs:element>
+      </xs:sequence>
+    </xs:complexType>
+  </xs:element>
+
+  <xs:element name="changelog">
+    <xs:annotation><xs:documentation>
+      Every package's releases, newest first, behind the same tabs as the
+      install commands (the reader's platform holds): each release's
+      version, date and the hand-written part of its changelog section
+      (Summary, Upgrading), quoted as the release wrote it; the newest
+      open, the older ones folded. `more` is the words of each release's
+      link to its whole section (every commit, every API change) in the
+      changelog on the repository's main branch. One page holds it: the install
+      commands link there.
+    </xs:documentation></xs:annotation>
+    <xs:complexType>
+      <xs:sequence>
+        <xs:element name="more" type="plain"/>
       </xs:sequence>
     </xs:complexType>
   </xs:element>
