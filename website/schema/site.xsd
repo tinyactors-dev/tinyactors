@@ -112,7 +112,10 @@
   <xs:element name="packages">
     <xs:annotation><xs:documentation>
       What a reader installs, one package per platform, each named for the
-      reader (`for`: "Node.js and Bun", "Python", "C"). The element's text
+      reader (`for`: "Node.js and Bun", "Python", "C") and with the
+      platforms it runs on (`runs-on`), which the pages show as their icons
+      wherever they name the package's platform, `for` as its accessible
+      name. The element's text
       is the package's name; `changelog` is its CHANGELOG.md, relative to
       site.xml, whose newest "## [version] - date" section gives the
       version and date every install command and changelog shows, so no
@@ -130,6 +133,26 @@
               <xs:extension base="plain-attribute">
                 <xs:attribute name="id" type="xs:NCName" use="required"/>
                 <xs:attribute name="for" type="plain-attribute" use="required"/>
+                <xs:attribute name="runs-on" use="required">
+                  <xs:simpleType>
+                    <xs:restriction>
+                      <xs:simpleType>
+                        <xs:list>
+                          <xs:simpleType>
+                            <xs:restriction base="xs:token">
+                              <xs:enumeration value="node"/>
+                              <xs:enumeration value="bun"/>
+                              <xs:enumeration value="browser"/>
+                              <xs:enumeration value="python"/>
+                              <xs:enumeration value="c"/>
+                            </xs:restriction>
+                          </xs:simpleType>
+                        </xs:list>
+                      </xs:simpleType>
+                      <xs:minLength value="1"/>
+                    </xs:restriction>
+                  </xs:simpleType>
+                </xs:attribute>
                 <xs:attribute name="changelog" type="path" use="required"/>
                 <xs:assert test="(: a component's changelog :) matches(@changelog, '^(\.\./)+[a-z0-9-]+/CHANGELOG\.md$')"/>
               </xs:extension>

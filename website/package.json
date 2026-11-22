@@ -2,10 +2,12 @@
   "name": "tinyactors-website",
   "private": true,
   "type": "module",
-  "description": "What the site's pages load in the browser, vendored by the build into build/site/vendor/ (mise/website.rb, VENDOR): scxmljs's <scxml-view> for chart diagrams, and highlight.js (its browser ES modules) for code.",
+  "description": "What the site's pages load in the browser, vendored by the build into build/site/vendor/ (mise/website.rb, VENDOR): scxmljs's <scxml-view> for chart diagrams, and highlight.js (its browser ES modules) for code; and the platforms' icons the build inlines into the pages (render/site.xsl, f:platform): simple-icons (CC0) for Node.js, Bun, Python and C, lucide-static (ISC, the design system's icons) for browsers.",
   "dependencies": {
     "@highlightjs/cdn-assets": "11.12.0",
     "@tinyactors/scxmljs": "0.2.0",
-    "flag-icons": "7.6.0"
+    "flag-icons": "7.6.0",
+    "lucide-static": "0.460.0",
+    "simple-icons": "16.36.0"
   }
 }

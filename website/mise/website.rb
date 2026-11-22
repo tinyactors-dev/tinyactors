@@ -2,6 +2,7 @@
 
 require 'digest'
 require 'fileutils'
+require 'json'
 require 'open3'
 require 'pathname'
 require 'toolchain'
@@ -58,6 +59,7 @@ module Website
     validate!
     FileUtils.rm_rf(SITE)
     FileUtils.mkdir_p(SITE)
+    packages!
     run('sxml', 'transform', "--result-directory=#{SITE}", "--param=version=#{version}", STYLESHEET, CONTENT.join('site.xml'))
     assets!
     vendor!
@@ -128,8 +130,20 @@ module Website
   PRESENCE_BROWSER = [PRESENCE.join('client.mjs'), PRESENCE.join('layer.mjs'), PRESENCE.join('link.scxml'),
                       ROOT.join('.agents/skills/ant-animation/scripts/ant.mjs')].freeze
 
+  # website/'s packages, installed before the transform (it inlines the
+  # platforms' icons from simple-icons and lucide-static) and vendor!:
+  # installed again whenever one is missing or at another version than
+  # package.json pins, so a checkout with an older node_modules builds too.
+  def packages!
+    pinned = JSON.parse(ROOT.join('package.json').read).fetch('dependencies')
+    current = pinned.all? do |name, version|
+      manifest = ROOT.join('node_modules', name, 'package.json')
+      manifest.file? && JSON.parse(manifest.read)['version'] == version
+    end
+    run('npm', 'ci', '--no-audit', '--no-fund') unless current
+  end
+
   def vendor!
-    run('npm', 'ci', '--no-audit', '--no-fund') unless ROOT.join('node_modules/.package-lock.json').file?
     VENDOR.each do |name, (package, globs)|
       source = ROOT.join('node_modules', package)
       fail!("#{package} is not installed (npm ci in website/)") unless source.directory?

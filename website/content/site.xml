@@ -61,10 +61,10 @@
   <!-- What a reader installs: each one's version and date come from its changelog. -->
   <packages source="https://github.com/tinyactors-dev/tinyactors">
     <changes>What changed</changes>
-    <package id="node" for="Node.js and Bun" changelog="../../tinyactors-napi/CHANGELOG.md">@tinyactors/node</package>
-    <package id="python" for="Python" changelog="../../tinyactors-cpython/CHANGELOG.md">tinyactors</package>
-    <package id="wasm" for="Browsers" changelog="../../tinyactors-napi/CHANGELOG.md">@tinyactors/wasm</package>
-    <package id="c" for="C" changelog="../../tinyactors-core/CHANGELOG.md">tinyactors-core</package>
+    <package id="node" runs-on="node bun" for="Node.js and Bun" changelog="../../tinyactors-napi/CHANGELOG.md">@tinyactors/node</package>
+    <package id="python" runs-on="python" for="Python" changelog="../../tinyactors-cpython/CHANGELOG.md">tinyactors</package>
+    <package id="wasm" runs-on="browser" for="Browsers" changelog="../../tinyactors-napi/CHANGELOG.md">@tinyactors/wasm</package>
+    <package id="c" runs-on="c" for="C" changelog="../../tinyactors-core/CHANGELOG.md">tinyactors-core</package>
   </packages>
 
   <footer>

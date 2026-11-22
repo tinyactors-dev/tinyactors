@@ -325,7 +325,7 @@
     <ul class="versions">
       <xsl:for-each select="$site/s:packages/s:package">
         <xsl:variable name="release" select="f:releases(.)[1]"/>
-        <li><a href="#{@id}-{translate($release?version, '.', '-')}"><span class="versions__for">{@for}</span><xsl:text> </xsl:text><code>{.} {$release?version}</code></a></li>
+        <li><a href="#{@id}-{translate($release?version, '.', '-')}"><xsl:sequence select="f:platform(.)"/><code>{.} {$release?version}</code></a></li>
       </xsl:for-each>
     </ul>
   </xsl:template>
@@ -530,7 +530,7 @@
         <div role="tablist" class="ta-tabs ta-tabs--segmented" aria-label="Install for">
           <xsl:for-each select="s:command">
             <button type="button" role="tab" class="ta-tab" id="{$id}-tab-{position()}" aria-controls="{$id}-panel-{position()}"
-                    aria-selected="{position() = 1}" tabindex="{if (position() = 1) then 0 else -1}">{f:package(.)/@for}</button>
+                    aria-selected="{position() = 1}" tabindex="{if (position() = 1) then 0 else -1}"><xsl:sequence select="f:platform(f:package(.))"/></button>
           </xsl:for-each>
         </div>
       </xsl:if>
@@ -546,7 +546,7 @@
             <span>{$package} {$release?version}, {f:date($release?date)}</span>
             <a href="{f:changelog-href($package)}">{$site/s:packages/s:changes}</a>
             <xsl:if test="@guide">
-              <a class="install__guide" href="{@guide}">{$package/@for} guide</a>
+              <a class="install__guide" href="{@guide}"><xsl:sequence select="f:platform($package)"/> guide</a>
             </xsl:if>
           </p>
         </div>
@@ -566,7 +566,7 @@
       <div role="tablist" class="ta-tabs ta-tabs--segmented" aria-label="Install for">
         <xsl:for-each select="$packages">
           <button type="button" role="tab" class="ta-tab" id="{$id}-tab-{position()}" aria-controls="{$id}-panel-{position()}"
-                  aria-selected="{position() = 1}" tabindex="{if (position() = 1) then 0 else -1}">{@for}</button>
+                  aria-selected="{position() = 1}" tabindex="{if (position() = 1) then 0 else -1}"><xsl:sequence select="f:platform(.)"/></button>
         </xsl:for-each>
       </div>
       <xsl:for-each select="$packages">
@@ -808,6 +808,35 @@
       <xsl:message terminate="yes">site: install commands link to the changelogs, and no page holds a changelog</xsl:message>
     </xsl:if>
     <xsl:sequence select="$page/@path || '#' || $package/@id || '-' || translate(f:releases($package)[1]?version, '.', '-')"/>
+  </xsl:function>
+
+  <!-- ===================================================== platforms
+       A package's platforms as their icons (its `runs-on`), inlined from
+       the packages website/ installs: simple-icons' marks, and the design
+       system's Lucide for a browser. Each takes the text's colour; the
+       package's `for` is the accessible name, as text a screen reader
+       reads and the tabs compare (components/tabs.mjs), and the tooltip. -->
+
+  <xsl:function name="f:platform" as="element()">
+    <xsl:param name="package" as="element(s:package)"/>
+    <span class="platform" title="{$package/@for}">
+      <xsl:for-each select="tokenize($package/@runs-on)"><xsl:sequence select="f:icon(.)"/></xsl:for-each>
+      <span class="visually-hidden">{$package/@for}</span>
+    </span>
+  </xsl:function>
+
+  <xsl:function name="f:icon" as="element()" cache="yes">
+    <xsl:param name="platform" as="xs:string"/>
+    <xsl:variable name="file" select="map {
+      'node': 'simple-icons/icons/nodedotjs.svg', 'bun': 'simple-icons/icons/bun.svg',
+      'python': 'simple-icons/icons/python.svg', 'c': 'simple-icons/icons/c.svg',
+      'browser': 'lucide-static/icons/globe.svg' }($platform)"/>
+    <xsl:variable name="svg" select="doc(resolve-uri('../node_modules/' || $file, static-base-uri()))/*"/>
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="{$svg/@viewBox}" class="platform__icon platform__icon--{$platform}" aria-hidden="true" focusable="false">
+      <xsl:copy-of select="$svg/(@fill, @stroke, @stroke-width, @stroke-linecap, @stroke-linejoin)"/>
+      <xsl:if test="empty($svg/@fill)"><xsl:attribute name="fill" select="'currentColor'"/></xsl:if>
+      <xsl:copy-of select="$svg/* except $svg/*:title"/>
+    </svg>
   </xsl:function>
 
   <xsl:function name="f:where" as="xs:string">
