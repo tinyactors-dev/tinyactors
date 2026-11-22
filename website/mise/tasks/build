@@ -1,6 +1,6 @@
 #!/usr/bin/env ruby
 #MISE description="Validate the content against its schema and build the site into build/site: the pages, sitemap.xml, llms.txt and assets"
-#MISE sources=["content/**/*", "presence/*.{mjs,scxml}", ".agents/skills/ant-animation/scripts/ant.mjs", "schema/**/*", "render/**/*", "style/**/*", "components/**/*", "../tinyactors-napi/docs/guide/*.md", "../tinyactors-napi/CHANGELOG.md", "../tinyactors-cpython/CHANGELOG.md", "../tinyactors-core/CHANGELOG.md", "examples/**/*.{scxml,mjs,txt}", "package.json", "package-lock.json", "mise/website.rb", "mise/tasks/build", "../.agents/skills/tinyactors-design/styles.css", "../.agents/skills/tinyactors-design/tokens/**/*", "../.agents/skills/tinyactors-design/components/components.css", "../.agents/skills/tinyactors-design/assets/**/*"]
+#MISE sources=["content/**/*", "presence/*.{mjs,scxml}", ".agents/skills/ant-animation/scripts/ant.mjs", "schema/**/*", "render/**/*", "style/**/*", "icons/**/*", "components/**/*", "../tinyactors-napi/docs/guide/*.md", "../tinyactors-napi/CHANGELOG.md", "../tinyactors-cpython/CHANGELOG.md", "../tinyactors-core/CHANGELOG.md", "examples/**/*.{scxml,mjs,txt}", "package.json", "package-lock.json", "mise/website.rb", "mise/tasks/build", "../.agents/skills/tinyactors-design/styles.css", "../.agents/skills/tinyactors-design/tokens/**/*", "../.agents/skills/tinyactors-design/components/components.css", "../.agents/skills/tinyactors-design/assets/**/*"]
 #MISE outputs=["build/site/index.html"]
 # vim:ft=ruby
 

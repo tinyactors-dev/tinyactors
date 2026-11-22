@@ -811,11 +811,12 @@
   </xsl:function>
 
   <!-- ===================================================== platforms
-       A package's platforms as their icons (its `runs-on`), inlined from
-       the packages website/ installs: simple-icons' marks, and the design
-       system's Lucide for a browser. Each takes the text's colour; the
-       package's `for` is the accessible name, as text a screen reader
-       reads and the tabs compare (components/tabs.mjs), and the tooltip. -->
+       A package's platforms as their icons (its `runs-on`; icons/platforms/,
+       served at /assets/platforms/): a logo as an image of its own (their
+       gradients have ids, which an inlined copy would repeat), the globe of
+       a browser inlined, so it takes the text's colour. The package's `for`
+       is the accessible name, as text a screen reader reads and the tabs
+       compare (components/tabs.mjs), and the tooltip. -->
 
   <xsl:function name="f:platform" as="element()">
     <xsl:param name="package" as="element(s:package)"/>
@@ -827,11 +828,19 @@
 
   <xsl:function name="f:icon" as="element()" cache="yes">
     <xsl:param name="platform" as="xs:string"/>
-    <xsl:variable name="file" select="map {
-      'node': 'simple-icons/icons/nodedotjs.svg', 'bun': 'simple-icons/icons/bun.svg',
-      'python': 'simple-icons/icons/python.svg', 'c': 'simple-icons/icons/c.svg',
-      'browser': 'lucide-static/icons/globe.svg' }($platform)"/>
-    <xsl:variable name="svg" select="doc(resolve-uri('../node_modules/' || $file, static-base-uri()))/*"/>
+    <xsl:choose>
+      <xsl:when test="$platform = 'browser'">
+        <xsl:sequence select="f:inline-icon($platform)"/>
+      </xsl:when>
+      <xsl:otherwise>
+        <img class="platform__icon platform__icon--{$platform}" src="/assets/platforms/{$platform}.svg" alt="" width="18" height="18"/>
+      </xsl:otherwise>
+    </xsl:choose>
+  </xsl:function>
+
+  <xsl:function name="f:inline-icon" as="element()">
+    <xsl:param name="platform" as="xs:string"/>
+    <xsl:variable name="svg" select="doc(resolve-uri('../icons/platforms/' || $platform || '.svg', static-base-uri()))/*"/>
     <svg xmlns="http://www.w3.org/2000/svg" viewBox="{$svg/@viewBox}" class="platform__icon platform__icon--{$platform}" aria-hidden="true" focusable="false">
       <xsl:copy-of select="$svg/(@fill, @stroke, @stroke-width, @stroke-linecap, @stroke-linejoin)"/>
       <xsl:if test="empty($svg/@fill)"><xsl:attribute name="fill" select="'currentColor'"/></xsl:if>

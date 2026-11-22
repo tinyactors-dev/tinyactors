@@ -92,6 +92,8 @@ module Website
     FileUtils.cp_r(DESIGN.join('assets/fonts'), assets.join('fonts'))
     # The content's images (an author's portrait), served at /assets/images/.
     FileUtils.cp_r(CONTENT.join('images'), assets.join('images')) if CONTENT.join('images').directory?
+    FileUtils.mkdir_p(assets.join('platforms'))
+    ROOT.glob('icons/platforms/*.svg').each { |file| FileUtils.cp(file, assets.join('platforms')) }
     {
       'favicon.svg' => 'assets/brand/favicon/favicon.svg',
       'favicon.ico' => 'assets/brand/favicon/favicon.ico',
@@ -130,8 +132,7 @@ module Website
   PRESENCE_BROWSER = [PRESENCE.join('client.mjs'), PRESENCE.join('layer.mjs'), PRESENCE.join('link.scxml'),
                       ROOT.join('.agents/skills/ant-animation/scripts/ant.mjs')].freeze
 
-  # website/'s packages, installed before the transform (it inlines the
-  # platforms' icons from simple-icons and lucide-static) and vendor!:
+  # website/'s packages, installed before the transform and vendor!:
   # installed again whenever one is missing or at another version than
   # package.json pins, so a checkout with an older node_modules builds too.
   def packages!
