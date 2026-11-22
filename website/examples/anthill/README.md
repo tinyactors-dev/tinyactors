@@ -30,6 +30,6 @@ decisions a second. The ants are the design system's rigged ant
 ant is a dot.
 
 A reader can follow one ant: the view keeps it in the middle, and
-`follow.mjs` shows its chart beside it in scxmljs's `<scxml-view>`, lit in
+`follow.mjs` shows its chart beside it (the site's `components/live-chart.mjs`, over scxmljs's `<scxml-view>`), lit in
 the states the ant's host reports (`actor.state`, read after every frame
 by the colony's Worker) and the transitions the ant's events fired.

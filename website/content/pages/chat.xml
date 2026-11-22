@@ -15,6 +15,14 @@
     </actions>
   </hero>
 
+  <section id="try">
+    <heading>Try the finished chat</heading>
+    <p>These are step 5's charts, running in this tab. Post as anyone, then skip five minutes to watch people go away.</p>
+    <playground src="../../examples/chat-live/page.mjs">
+      <description>A chat with two rooms and six people, each person, room and the workspace an actor. You post as one person at a time, and beside the chat, any actor's chart shows the state it is in.</description>
+    </playground>
+  </section>
+
   <section id="room">
     <heading>1. Create a room</heading>
     <p>A room is an actor with a list of members: <code>join</code> adds to it, and <code>post</code> sends to all of them. The text leaves the chart as a <code>message</code> to <code>chat:client</code>, which your program handles.</p>

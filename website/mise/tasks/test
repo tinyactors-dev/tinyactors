@@ -176,6 +176,22 @@ pinned.each do |name, version|
 end
 puts "website: the examples install @tinyactors/wasm #{newest}, the version the site shows"
 
+# 4c. The live chat runs the tutorial's finished charts: its charts/ is a
+#     copy of step 5's, byte for byte, so the page runs what the tutorial
+#     built.
+live = Website::EXAMPLES.join('chat-live/charts')
+tutorial = Website::EXAMPLES.join('chat/5-hibernation/charts')
+names = ->(dir) { dir.glob('*.scxml').map { |file| file.basename.to_s }.sort }
+if names.call(live) != names.call(tutorial)
+  failures << "examples/chat-live/charts: holds #{names.call(live).join(', ')}, step 5 holds #{names.call(tutorial).join(', ')}"
+end
+names.call(tutorial).each do |name|
+  next if !live.join(name).file? || live.join(name).read == tutorial.join(name).read
+
+  failures << "examples/chat-live/charts/#{name}: differs from examples/chat/5-hibernation/charts/#{name}: copy it again"
+end
+puts "website: the live chat's charts are the tutorial's step 5"
+
 # 5. The guides' examples a page transcludes: in each <example>, a
 #    javascript <code src="...md" section fence> is run in examples/guides
 #    against the published package, and must print the output fence the

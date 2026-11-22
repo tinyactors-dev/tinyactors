@@ -1,0 +1,10 @@
+{
+  "name": "tinyactors-website-example-chat-live",
+  "private": true,
+  "type": "module",
+  "main": "main.mjs",
+  "description": "The chat tutorial's finished charts (step 5: charts/ is a copy of examples/chat/5-hibernation/charts, which the test checks) running in the reader's browser on @tinyactors/wasm, behind a chat UI (page.mjs). chat.mjs holds what it does; main.mjs runs it in Node.js against output.txt.",
+  "dependencies": {
+    "@tinyactors/wasm": "0.4.0"
+  }
+}

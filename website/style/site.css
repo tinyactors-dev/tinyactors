@@ -482,3 +482,60 @@ ta-tabs { display: block; }
 .hero__author { display: flex; align-items: center; gap: var(--space-3); margin-top: var(--space-5); font: var(--type-body); }
 .hero__author img { width: 48px; height: 48px; border-radius: 50%; border: 1px solid var(--border-2); }
 .hero__author a { color: var(--fg-1); }
+
+/* The live chat (examples/chat-live/page.mjs): a clock bar, then the
+   workspace's sidebar, the room and the actors' charts side by side; one
+   above the other on a narrow screen. */
+.chatlive { display: grid; gap: var(--space-3); }
+.chatlive__bar { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2) var(--space-4); }
+.chatlive__bar .ta-tab[aria-checked="true"] { color: var(--fg-1); background: var(--surface-1); }
+.chatlive__time { font: var(--type-code); color: var(--fg-1); font-variant-numeric: tabular-nums; min-width: 3.5em; }
+.chatlive__memory { font: var(--type-body-sm); color: var(--fg-3); font-variant-numeric: tabular-nums; }
+.chatlive__app { display: grid; grid-template-columns: 190px minmax(0, 1fr) minmax(0, 420px); min-height: 480px;
+  border: 1px solid var(--border-1); border-radius: var(--radius-2); overflow: hidden; background: var(--surface-1); }
+.chatlive__sidebar { display: flex; flex-direction: column; gap: var(--space-2); padding: var(--space-3); background: var(--surface-2, var(--surface-1));
+  border-right: 1px solid var(--border-1); font: var(--type-body-sm); }
+.chatlive__label { display: flex; align-items: center; gap: var(--space-2); color: var(--fg-2); }
+.chatlive__you { font: inherit; padding: 2px var(--space-1); }
+.chatlive__heading { margin: var(--space-2) 0 0; font: var(--type-ui); font-size: var(--fs-12, 12px); text-transform: uppercase; letter-spacing: 0.06em; color: var(--fg-3); }
+.chatlive__rooms, .chatlive__people, .chatlive__actors, .chatlive__messages { margin: 0; padding: 0; list-style: none; }
+.chatlive__room-link { all: unset; display: block; width: 100%; box-sizing: border-box; padding: 2px var(--space-2); border-radius: var(--radius-1, 4px); color: var(--fg-3); cursor: pointer; }
+.chatlive__room-link--joined { color: var(--fg-1); }
+.chatlive__room-link[aria-current="true"] { background: var(--accent); color: var(--surface-1); }
+.chatlive__room-link:focus-visible, .chatlive__actor:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.chatlive__create { display: flex; gap: var(--space-1); }
+.chatlive__new { min-width: 0; flex: 1; font: var(--type-code); font-size: 12px; padding: 2px var(--space-1); }
+.chatlive__note { margin: 0; color: var(--fg-3); min-height: 1.2em; }
+.chatlive__person { display: flex; align-items: center; gap: var(--space-2); padding: 2px 0; color: var(--fg-1); }
+.chatlive__presence { margin-left: auto; color: var(--fg-3); font-size: 11px; }
+.chatlive__dot { width: 8px; height: 8px; border-radius: 50%; border: 1.5px solid var(--fg-3); flex: none; }
+.chatlive__person--active .chatlive__dot { background: var(--accent); border-color: var(--accent); }
+.chatlive__person--away .chatlive__dot { border-color: var(--accent); }
+.chatlive__person--offline, .chatlive__person--unknown { color: var(--fg-3); }
+.chatlive__room { display: flex; flex-direction: column; min-width: 0; }
+.chatlive__title { margin: 0; padding: var(--space-3); border-bottom: 1px solid var(--border-1); font: var(--type-ui); font-weight: 600; color: var(--fg-1); }
+.chatlive__messages { flex: 1; overflow-y: auto; padding: var(--space-3); display: flex; flex-direction: column; gap: var(--space-2); max-height: 380px; font: var(--type-body-sm); }
+.chatlive__message { display: grid; gap: 2px; }
+.chatlive__from { font-weight: 600; color: var(--fg-1); }
+.chatlive__empty, .chatlive__notice { color: var(--fg-3); font-style: italic; }
+.chatlive__composer { display: flex; gap: var(--space-2); padding: var(--space-3); border-top: 1px solid var(--border-1); }
+.chatlive__composer[hidden], .chatlive__room > button[hidden] { display: none; }
+.chatlive__room > button { margin: var(--space-3); align-self: flex-start; }
+.chatlive__text { flex: 1; min-width: 0; font: var(--type-body-sm); padding: var(--space-1) var(--space-2); border: 1px solid var(--border-2); border-radius: var(--radius-1, 4px); background: var(--surface-1); color: var(--fg-1); }
+.chatlive__inside { display: flex; flex-direction: column; gap: var(--space-2); padding: var(--space-3); border-left: 1px solid var(--border-1); min-width: 0; font: var(--type-body-sm); }
+.chatlive__actors { display: flex; flex-wrap: wrap; gap: var(--space-1); }
+.chatlive__actor { all: unset; display: inline-flex; flex-direction: column; padding: 2px var(--space-2); border: 1px solid var(--border-1); border-radius: var(--radius-1, 4px); cursor: pointer; }
+.chatlive__actor code { font-size: 11px; color: var(--fg-1); }
+.chatlive__where { font-size: 10px; color: var(--accent); }
+.chatlive__actor--stored .chatlive__where { color: var(--fg-3); }
+.chatlive__actor[aria-current="true"] { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 10%, transparent); }
+.chatlive__chart { flex: 1; min-height: 300px; max-height: 460px; overflow: hidden; display: flex; justify-content: center; }
+.chatlive__chart scxml-view[hidden] { display: none; }
+.chatlive__state { margin: 0; color: var(--fg-2); min-height: 1.6em; }
+.chatlive__status { font: var(--type-body-sm); color: var(--fg-3); margin: 0; }
+@media (max-width: 900px) {
+  .chatlive__app { grid-template-columns: 1fr; }
+  .chatlive__sidebar { border-right: 0; border-bottom: 1px solid var(--border-1); }
+  .chatlive__inside { border-left: 0; border-top: 1px solid var(--border-1); }
+  .chatlive__chart { max-height: 360px; }
+}
