@@ -1,23 +1,23 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <page xmlns="https://www.tinyactors.dev/ns/site" id="chat" path="/chat/">
   <title>Build a team chat with tinyactors</title>
-  <description>Build a team chat in five steps: a room, presence, a workspace, a roster, and a thousand users with fifty in memory.</description>
+  <description>Try a team chat in your browser, then build it in five steps, ending with a thousand users and fifty in memory.</description>
 
   <hero>
     <headline>Build a team chat</headline>
-    <lede>Rooms, people who come and go, and a workspace that holds them. Five steps, each a program you can run.</lede>
+    <lede>Try the finished chat in this tab, then build it in five steps, each a program you can run.</lede>
     <install>
       <command package="node" guide="https://github.com/tinyactors-dev/tinyactors-napi#readme">npm install @tinyactors/node</command>
     </install>
     <actions>
-      <action to="chat" section="room">Start</action>
+      <action to="chat" section="room">Start building</action>
       <action href="https://github.com/tinyactors-dev/tinyactors/tree/main/website/examples/chat">Get the code</action>
     </actions>
   </hero>
 
   <section id="try">
     <heading>Try the finished chat</heading>
-    <p>These are step 5's charts, running in this tab. Post as anyone, then skip five minutes to watch people go away.</p>
+    <p>Each person, room and the workspace is an actor in this tab, running the charts the steps below build. Post as anyone, then skip five minutes to watch people go away.</p>
     <playground src="../../examples/chat-live/page.mjs">
       <description>A chat with two rooms and six people, each person, room and the workspace an actor. You post as one person at a time, and beside the chat, any actor's chart shows the state it is in.</description>
     </playground>
@@ -83,12 +83,12 @@
 
   <section id="next">
     <heading>Take it to production</heading>
-    <p>The charts stay. What changes is what the handlers connect to.</p>
+    <p>The charts stay as they are; what changes is what your program connects them to.</p>
     <list>
-      <item><term>Connections</term><text><code>chat:client</code> writes to sockets. A closed socket sends <code>disconnect</code>.</text></item>
-      <item><term>Storage</term><text><code>SQLiteStore</code> keeps hibernated actors on disk.</text></item>
-      <item><term>New versions</term><text>New users start on a new chart. A migration moves the running ones.</text></item>
-      <item><term>Telemetry</term><text>Every step is a span, so a slow post shows where it went.</text></item>
+      <item><term><link to="guide-io-processors">Connections</link></term><text>Here a screen is a list in memory. In production, <code>chat:client</code> writes to each user's socket, and a closed socket sends <code>disconnect</code>.</text></item>
+      <item><term><link to="guide-hibernation">Storage</link></term><text>Step 5's store forgets everything when the process ends. <code>SQLiteStore</code> keeps saved actors on disk.</text></item>
+      <item><term><link to="guide-migration">New versions</link></term><text>A new chart leaves running users on the old one. New users start on the new chart, and a migration moves the running ones.</text></item>
+      <item><term><link to="guide-telemetry">Telemetry</link></term><text>A slow post could be waiting in any of its actors. Every step is a span, so the trace shows where it waited.</text></item>
     </list>
     <actions>
       <action href="https://github.com/tinyactors-dev/tinyactors-napi#readme">Read the Node.js guide</action>

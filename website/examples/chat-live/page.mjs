@@ -16,7 +16,7 @@ const STATUS = { active: 'active', away: 'away', offline: 'offline' };
 
 export async function mount(root) {
   root.classList.add('chatlive');
-  const status = el('p', { class: 'chatlive__status', 'aria-live': 'polite' }, 'Starting the host…');
+  const status = el('p', { class: 'chatlive__status', 'aria-live': 'polite' }, 'Loading tinyactors…');
   root.append(status);
   const base = new URL('./charts/', import.meta.url);
   const texts = Object.fromEntries(await Promise.all(CHARTS.map(async (name) => [name, await (await fetch(new URL(name, base))).text()])));
@@ -128,7 +128,7 @@ export async function mount(root) {
   }
 
   root.replaceChildren(
-    el('div', { class: 'chatlive__bar' }, play, speeds, skip, time, memory),
+    el('div', { class: 'chatlive__bar' }, el('span', { class: 'chatlive__clock' }, 'Simulated clock'), play, speeds, skip, time, memory),
     el('div', { class: 'chatlive__app' }, sidebar, main, inside),
     status,
   );

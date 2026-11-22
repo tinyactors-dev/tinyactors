@@ -489,6 +489,7 @@ ta-tabs { display: block; }
 .chatlive { display: grid; gap: var(--space-3); }
 .chatlive__bar { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2) var(--space-4); }
 .chatlive__bar .ta-tab[aria-checked="true"] { color: var(--fg-1); background: var(--surface-1); }
+.chatlive__clock { font: var(--type-ui); color: var(--fg-2); }
 .chatlive__time { font: var(--type-code); color: var(--fg-1); font-variant-numeric: tabular-nums; min-width: 3.5em; }
 .chatlive__memory { font: var(--type-body-sm); color: var(--fg-3); font-variant-numeric: tabular-nums; }
 .chatlive__app { display: grid; grid-template-columns: 190px minmax(0, 1fr) minmax(0, 420px); min-height: 480px;
