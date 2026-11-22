@@ -136,7 +136,7 @@
           <xsl:with-param name="current" select="."/>
         </xsl:call-template>
         <main id="main">
-          <xsl:apply-templates select="s:hero, s:section"/>
+          <xsl:apply-templates select="s:hero, s:section, s:reference"/>
         </main>
         <xsl:call-template name="footer"/>
         <xsl:apply-templates select="$site/s:presence">
@@ -304,6 +304,32 @@
     </section>
   </xsl:template>
 
+  <!-- A reference page: its name, the facts the reader came for, then
+       the blocks, with no hero to scroll past. -->
+  <xsl:template match="s:reference">
+    <section class="reference" aria-labelledby="title">
+      <div class="wrap">
+        <header class="reference__head">
+          <h1 id="title" class="reference__headline"><xsl:apply-templates select="s:headline/node()"/></h1>
+          <xsl:apply-templates select="s:versions"/>
+        </header>
+        <div class="section__body">
+          <xsl:apply-templates select="* except (s:headline, s:versions)"/>
+        </div>
+      </div>
+    </section>
+  </xsl:template>
+
+  <!-- Each package's newest version, linking to its release below. -->
+  <xsl:template match="s:versions">
+    <ul class="versions">
+      <xsl:for-each select="$site/s:packages/s:package">
+        <xsl:variable name="release" select="f:releases(.)[1]"/>
+        <li><a href="#{@id}-{translate($release?version, '.', '-')}"><span class="versions__for">{@for}</span><xsl:text> </xsl:text><code>{.} {$release?version}</code></a></li>
+      </xsl:for-each>
+    </ul>
+  </xsl:template>
+
   <!-- Who wrote the page: the portrait beside the name, which links to
        where to find them. The portrait's alt is empty: the name is next
        to it. -->
@@ -329,7 +355,7 @@
     </section>
   </xsl:template>
 
-  <xsl:template match="s:section/s:p">
+  <xsl:template match="s:section/s:p | s:reference/s:p">
     <p class="prose"><xsl:apply-templates/></p>
   </xsl:template>
 

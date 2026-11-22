@@ -192,8 +192,13 @@
         <xs:element name="description" type="sentence">
           <xs:annotation><xs:documentation>One or two sentences for search results, link previews and llms.txt.</xs:documentation></xs:annotation>
         </xs:element>
-        <xs:element ref="hero"/>
-        <xs:element ref="section" minOccurs="0" maxOccurs="unbounded"/>
+        <xs:choice>
+          <xs:sequence>
+            <xs:element ref="hero"/>
+            <xs:element ref="section" minOccurs="0" maxOccurs="unbounded"/>
+          </xs:sequence>
+          <xs:element ref="reference"/>
+        </xs:choice>
       </xs:sequence>
       <xs:attribute name="id" type="xs:ID" use="required"/>
       <xs:attribute name="path" use="required">
@@ -222,6 +227,30 @@
         <xs:element ref="actions" minOccurs="0"/>
       </xs:sequence>
     </xs:complexType>
+  </xs:element>
+
+  <xs:element name="reference">
+    <xs:annotation><xs:documentation>
+      A page the reader comes to look something up on, not to be won over:
+      it has no hero. Its headline is the page's name ("Changelog"); the
+      facts the reader came for come at once below it (`versions`, each
+      package's newest), then the blocks that hold the rest.
+    </xs:documentation></xs:annotation>
+    <xs:complexType>
+      <xs:sequence>
+        <xs:element name="headline" type="title"/>
+        <xs:element ref="versions" minOccurs="0"/>
+        <xs:group ref="blocks" maxOccurs="unbounded"/>
+      </xs:sequence>
+    </xs:complexType>
+  </xs:element>
+
+  <xs:element name="versions">
+    <xs:annotation><xs:documentation>
+      The newest version of each package of site.xml's `packages`, read from
+      its changelog, each linking to that release on the page's changelog.
+    </xs:documentation></xs:annotation>
+    <xs:complexType/>
   </xs:element>
 
   <xs:element name="author">

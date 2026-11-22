@@ -204,6 +204,15 @@ summary.changelog__title { cursor: pointer; }
 /* ---------------------------------------------------- sections */
 
 .section { padding: var(--space-16) 0 0; }
+/* A reference page: its name and the facts it holds, then the blocks at once. */
+.reference { padding: var(--space-10) 0 0; }
+.reference__head { display: grid; gap: var(--space-4); margin-bottom: var(--space-8); }
+.reference__headline { font: var(--type-h1); letter-spacing: var(--tracking-display); }
+.versions { margin: 0; padding: 0; list-style: none; display: flex; flex-wrap: wrap; gap: var(--space-2) var(--space-6); font: var(--type-body-sm); }
+.versions a { color: var(--fg-2); text-decoration: none; }
+.versions a:hover code { text-decoration: underline; }
+.versions code { color: var(--fg-1); }
+.versions__for { color: var(--fg-3); }
 .section__head { max-width: var(--prose-max); margin-bottom: var(--space-6); }
 .section__head h2 { font: var(--type-h1); letter-spacing: var(--tracking-display); }
 .section__body { display: grid; gap: var(--space-6); }

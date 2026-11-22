@@ -3,16 +3,11 @@
   <title>tinyactors changelog</title>
   <description>Every release of tinyactors for Node.js, browsers, Python and C: what changed, and what a program must change to upgrade.</description>
 
-  <hero>
-    <headline>See what each release changes in your code</headline>
-    <lede>Each release describes what changed, and what a program written for the release before it must change to upgrade.</lede>
-  </hero>
-
-  <section id="releases">
-    <heading>Pick your platform</heading>
-    <p>The newest release comes first, quoted from its changelog, with a link to every commit and API change.</p>
+  <reference>
+    <headline>Changelog</headline>
+    <versions/>
     <changelog>
       <more>Every change in this release</more>
     </changelog>
-  </section>
+  </reference>
 </page>

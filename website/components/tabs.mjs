@@ -27,15 +27,18 @@ class Tabs extends HTMLElement {
     });
     const saved = read(this.group());
     if (saved) this.select(saved);
-    // A link to something inside a panel (a release on the changelog page)
-    // chooses that panel's tab, then shows the target.
+    this.reveal();
+    addEventListener('hashchange', () => this.reveal());
+  }
+
+  /** A link to something inside a panel (a release on the changelog page) chooses that panel's tab, then shows the target. */
+  reveal() {
     const target = location.hash ? document.getElementById(decodeURIComponent(location.hash.slice(1))) : null;
     const panel = target && this.contains(target) ? target.closest('[role="tabpanel"]') : null;
-    const tab = panel ? tabs.find((candidate) => candidate.getAttribute('aria-controls') === panel.id) : null;
-    if (tab) {
-      choose(this.group(), tab.textContent);
-      requestAnimationFrame(() => target.scrollIntoView());
-    }
+    const tab = panel ? this.tabs().find((candidate) => candidate.getAttribute('aria-controls') === panel.id) : null;
+    if (!tab) return;
+    choose(this.group(), tab.textContent);
+    requestAnimationFrame(() => target.scrollIntoView());
   }
 
   tabs() {
