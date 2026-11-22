@@ -546,7 +546,7 @@
             <span>{$package} {$release?version}, {f:date($release?date)}</span>
             <a href="{f:changelog-href($package)}">{$site/s:packages/s:changes}</a>
             <xsl:if test="@guide">
-              <a class="install__guide" href="{@guide}"><xsl:sequence select="f:platform($package)"/> guide</a>
+              <a class="install__guide" href="{@guide}">{$package/@for} guide</a>
             </xsl:if>
           </p>
         </div>
