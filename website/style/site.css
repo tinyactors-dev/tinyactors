@@ -229,7 +229,10 @@ summary.changelog__title { cursor: pointer; }
 .items { margin: 0; padding: 0; list-style: none; display: grid; gap: 0; border-top: 1px solid var(--border-1); }
 .items li { padding: var(--space-3) 0; border-bottom: 1px solid var(--border-1); font: var(--type-body); color: var(--fg-2); }
 .items--terms li { display: grid; grid-template-columns: minmax(8em, 13em) 1fr; gap: var(--space-4); }
-.items__term { font: var(--type-h3); font-size: var(--fs-16); color: var(--fg-1); }
+.items__term { font: var(--type-h3); font-size: var(--fs-16); color: var(--fg-1); min-width: 0; }
+/* A code term wraps inside its column: at its spaces (after commas), and
+   inside a word only when nothing else fits; its chip continues on each line. */
+.items__term code { white-space: normal; overflow-wrap: anywhere; -webkit-box-decoration-break: clone; box-decoration-break: clone; }
 .items__term a { color: inherit; }
 ol.items { counter-reset: item; }
 ol.items .items__term::before { counter-increment: item; content: counter(item) ". "; color: var(--fg-3); font-variant-numeric: tabular-nums; }
