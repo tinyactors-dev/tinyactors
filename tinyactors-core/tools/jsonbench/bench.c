@@ -14,6 +14,7 @@
 #include <tinyactors/compile.h>
 #include <tinyactors/datamodel_ecmascript.h>
 #include <tinyactors/datamodel_json.h>
+#include <tinyactors/datamodel_staticjs.h>
 #include <tinyactors/host.h>
 #include <tinyactors/runtime.h>
 
@@ -225,6 +226,95 @@ static ta_status f_yes(writer_call *call) {
     return TA_OK;
 }
 
+/* ---- the staticjs natives: the same functions over staticjs values ------------------- */
+
+enum { KIND_QUICKJS, KIND_JSON, KIND_STATICJS, KIND_STATICJS_NATIVES, KIND_COUNT };
+static const char *const kind_names[KIND_COUNT] = {"quickjs", "json", "staticjs", "staticjs+natives"};
+
+static int sjs_text_is(sjs_value v, const char *text) {
+    sjs_str t = sjs_string_text(v);
+    return v.kind == SJS_STRING && t.length == strlen(text) && !memcmp(t.ptr, text, t.length);
+}
+
+/* add's sku and qty, read from its object */
+static int sjs_read_add(sjs_value data, sjs_value *sku, double *qty) {
+    sjs_value q;
+    if (data.kind != SJS_OBJECT || sjs_object_get(data, SJS_STR("sku"), sku) != SJS_OK || sku->kind != SJS_STRING ||
+        sjs_object_get(data, SJS_STR("qty"), &q) != SJS_OK || q.kind != SJS_NUMBER)
+        return 0;
+    *qty = q.as.number;
+    return 1;
+}
+
+static double sjs_price(sjs_value sku) { return sjs_text_is(sku, "tea") ? 450 : sjs_text_is(sku, "mug") ? 1200 : -1; }
+
+static sjs_result sjs_refuse(sjs_native_call *call) {
+    call->fault = SJS_STR("bad arguments");
+    return SJS_ERR_PROGRAM;
+}
+
+static int sjs_item(sjs_native_call *call, sjs_value data, sjs_value *out) {
+    sjs_value sku;
+    double qty;
+    if (!sjs_read_add(data, &sku, &qty) || sjs_object_new(call->context, 3, out) != SJS_OK) return 0;
+    sjs_retain(sku);
+    sjs_property p[3] = {{SJS_STR("sku"), sku}, {SJS_STR("qty"), sjs_number(qty)}, {SJS_STR("cents"), sjs_number(sjs_price(sku))}};
+    for (int i = 0; i < 3; i++) sjs_object_put(call->context, out, &p[i]);
+    return 1;
+}
+
+static sjs_result native_known_item(void *self, sjs_native_call *call) {
+    (void)self;
+    sjs_value sku;
+    double qty;
+    if (call->count != 1) return sjs_refuse(call);
+    call->result = sjs_boolean(sjs_read_add(call->arguments[0], &sku, &qty) && sjs_price(sku) >= 0 && qty >= 1 && qty <= 99);
+    return SJS_OK;
+}
+
+static sjs_result native_new_item(void *self, sjs_native_call *call) {
+    (void)self;
+    if (call->count != 1 || !sjs_item(call, call->arguments[0], &call->result)) return sjs_refuse(call);
+    return SJS_OK;
+}
+
+static sjs_result native_add_item(void *self, sjs_native_call *call) {
+    (void)self;
+    if (call->count != 2 || call->arguments[0].kind != SJS_ARRAY) return sjs_refuse(call);
+    sjs_value items = call->arguments[0], array, item;
+    uint32_t n = sjs_length(items);
+    if (!sjs_item(call, call->arguments[1], &item)) return sjs_refuse(call);
+    if (sjs_array_new(call->context, n + 1, &array) != SJS_OK) return sjs_release(call->context, item), sjs_refuse(call);
+    for (uint32_t i = 0; i < n; i++) {
+        sjs_value e = sjs_array_at(items, i);
+        sjs_retain(e);
+        sjs_array_append(call->context, &array, e);
+    }
+    sjs_array_append(call->context, &array, item);
+    call->result = array;
+    return SJS_OK;
+}
+
+static sjs_result native_has_items(void *self, sjs_native_call *call) {
+    (void)self;
+    if (call->count != 1 || call->arguments[0].kind != SJS_ARRAY) return sjs_refuse(call);
+    call->result = sjs_boolean(sjs_length(call->arguments[0]) > 0);
+    return SJS_OK;
+}
+
+static sjs_result native_add(void *self, sjs_native_call *call) {
+    (void)self;
+    if (call->count != 2 || call->arguments[0].kind != SJS_NUMBER || call->arguments[1].kind != SJS_NUMBER) return sjs_refuse(call);
+    call->result = sjs_number(call->arguments[0].as.number + call->arguments[1].as.number);
+    return SJS_OK;
+}
+
+static sjs_result native_yes(void *self, sjs_native_call *call) {
+    (void)self;
+    call->result = sjs_boolean(1);
+    return SJS_OK;
+}
+
 /* ---- charts ------------------------------------------------------------------------------ */
 
 static const char JSON_ORDER[] =
@@ -268,8 +358,44 @@ static const char JS_APPEND[] =
     "<assign location='items[items.length]' expr=\"({sku: _event.data.sku, qty: _event.data.qty, cents: _event.data.sku === 'tea' ? 450 : 1200})\"/></transition>"
     "</state></scxml>";
 
+/* text with every `from` replaced by `to`, made new */
+static char *replace(const char *text, const char *from, const char *to) {
+    size_t n = strlen(text), f = strlen(from), t = strlen(to), count = 0;
+    for (const char *p = text; (p = strstr(p, from)); p += f) count++;
+    char *out = malloc(n + count * (t > f ? t - f : 0) + 1), *o = out;
+    for (const char *p = text;;) {
+        const char *q = strstr(p, from);
+        if (!q) {
+            strcpy(o, p);
+            break;
+        }
+        memcpy(o, p, (size_t)(q - p));
+        o += q - p;
+        memcpy(o, to, t);
+        o += t;
+        p = q + f;
+    }
+    return out;
+}
+
+/* the chart for a datamodel: staticjs runs the ECMAScript chart as it is, and
+ * with natives the json chart (whose grammar is JavaScript but for length()) */
+static char *chart_for(int kind, const char *json_text, const char *js_text) {
+    switch (kind) {
+    case KIND_JSON: return replace(json_text, "@", "@");
+    case KIND_STATICJS: return replace(js_text, "datamodel='ecmascript'", "datamodel='staticjs'");
+    case KIND_STATICJS_NATIVES: {
+        char *a = replace(json_text, "datamodel='json'", "datamodel='staticjs'");
+        char *b = replace(a, "items[length(items)]", "items[items.length]");
+        free(a);
+        return b;
+    }
+    default: return replace(js_text, "@", "@");
+    }
+}
+
 /* A chart whose document carries `pad`, a string of `size` bytes. */
-static char *blob_chart(int json, size_t size) {
+static char *blob_chart(int kind, size_t size) {
     size_t n = size + 1024;
     char *s = malloc(n);
     char *pad = malloc(size + 1);
@@ -279,7 +405,8 @@ static char *blob_chart(int json, size_t size) {
              "<scxml xmlns='http://www.w3.org/2005/07/scxml' version='1.0' datamodel='%s' name='blob' initial='s'>"
              "<datamodel><data id='n' expr='0'/><data id='pad' expr=\"'%s'\"/></datamodel>"
              "<state id='s'><transition event='touch'><assign location='n' expr='%s'/></transition></state></scxml>",
-             json ? "json" : "ecmascript", pad, json ? "add(n, 1)" : "n + 1");
+             kind == KIND_JSON ? "json" : kind == KIND_QUICKJS ? "ecmascript" : "staticjs", pad,
+             kind == KIND_JSON || kind == KIND_STATICJS_NATIVES ? "add(n, 1)" : "n + 1");
     free(pad);
     return s;
 }
@@ -287,7 +414,8 @@ static char *blob_chart(int json, size_t size) {
 /* ---- a host ---------------------------------------------------------------------------- */
 
 typedef struct bench {
-    int json;
+    int kind;
+    ta_datamodel_staticjs *staticjs_datamodel;
     counter host_bytes;
     ta_allocator allocator;
     ta_datamodel_json *json_datamodel;
@@ -297,7 +425,9 @@ typedef struct bench {
 } bench;
 
 static size_t datamodel_bytes(bench *b) {
-    return b->json ? ta_datamodel_json_bytes(b->json_datamodel) : ta_datamodel_ecmascript_heap_bytes(b->js_datamodel);
+    if (b->kind == KIND_JSON) return ta_datamodel_json_bytes(b->json_datamodel);
+    if (b->kind == KIND_QUICKJS) return ta_datamodel_ecmascript_heap_bytes(b->js_datamodel);
+    return ta_datamodel_staticjs_bytes(b->staticjs_datamodel);
 }
 
 static size_t total_bytes(bench *b) { return b->host_bytes.live + datamodel_bytes(b); }
@@ -323,11 +453,33 @@ static void run_idle(ta_host *host) {
 
 static uint32_t trust_results; /* TA_DATAMODEL_JSON_TRUST_RESULTS, for a run without the check */
 
-static void bench_open(bench *b, int json, const char *chart_text) {
+static void bench_open(bench *b, int kind, const char *chart_text) {
     memset(b, 0, sizeof *b);
-    b->json = json;
+    b->kind = kind;
     b->allocator = (ta_allocator){&b->host_bytes, count_alloc, count_free};
-    if (json) {
+    if (kind == KIND_STATICJS || kind == KIND_STATICJS_NATIVES) {
+        ta_datamodel_staticjs_config config;
+        memset(&config, 0, sizeof config);
+        config.size = sizeof config;
+        config.allocator = ta_runtime_malloc();
+        if (ta_datamodel_staticjs_new(&config, &b->staticjs_datamodel) != TA_OK) exit(1);
+        static const sjs_native_vtable known = {native_known_item, 0}, add_item = {native_add_item, 0}, new_item = {native_new_item, 0},
+                                       has_items = {native_has_items, 0}, add = {native_add, 0}, yes = {native_yes, 0};
+        static const struct {
+            const char *name;
+            const sjs_native_vtable *vtable;
+        } natives[] = {{"knownItem", &known}, {"addItem", &add_item}, {"newItem", &new_item},
+                       {"hasItems", &has_items}, {"add", &add}, {"yes", &yes}};
+        for (size_t i = 0; kind == KIND_STATICJS_NATIVES && i < sizeof natives / sizeof natives[0]; i++) {
+            ta_staticjs_function_entry e;
+            memset(&e, 0, sizeof e);
+            e.size = sizeof e;
+            e.name = (ta_string_view){natives[i].name, (uint32_t)strlen(natives[i].name)};
+            e.native = (sjs_native){0, natives[i].vtable};
+            ta_datamodel_staticjs_register(b->staticjs_datamodel, &e);
+        }
+        b->binding = ta_datamodel_staticjs_binding(b->staticjs_datamodel);
+    } else if (kind == KIND_JSON) {
         ta_datamodel_json_config config;
         memset(&config, 0, sizeof config);
         config.size = sizeof config;
@@ -385,8 +537,9 @@ static void bench_open(bench *b, int json, const char *chart_text) {
 
 static void bench_close(bench *b) {
     ta_host_free(b->host);
-    if (b->json) ta_datamodel_json_free(b->json_datamodel);
-    else ta_datamodel_ecmascript_free(b->js_datamodel);
+    if (b->kind == KIND_JSON) ta_datamodel_json_free(b->json_datamodel);
+    else if (b->kind == KIND_QUICKJS) ta_datamodel_ecmascript_free(b->js_datamodel);
+    else ta_datamodel_staticjs_free(b->staticjs_datamodel);
 }
 
 static uint64_t *spawn_all(bench *b, const char *chart, uint32_t n) {
@@ -453,9 +606,11 @@ static double time_events(bench *b, uint64_t *sessions, uint32_t actors, uint32_
     return (double)(ta_runtime_now_ns() - start) / events;
 }
 
-static void order(int json, uint32_t actors, uint32_t events) {
+static void order(int kind, uint32_t actors, uint32_t events) {
     bench b;
-    bench_open(&b, json, json ? JSON_ORDER : JS_ORDER);
+    char *chart = chart_for(kind, JSON_ORDER, JS_ORDER);
+    bench_open(&b, kind, chart);
+    free(chart);
     run_idle(b.host);
     size_t before = total_bytes(&b), datamodel_before = datamodel_bytes(&b);
     uint64_t *sessions = spawn_all(&b, "order", actors);
@@ -473,32 +628,34 @@ static void order(int json, uint32_t actors, uint32_t events) {
     size_t after = total_bytes(&b), datamodel_after = datamodel_bytes(&b);
     double guard = time_events(&b, sessions, actors, events, "guard");
     double check = time_events(&b, sessions, actors, events, "check");
-    printf("%-8s actors %u: bytes/actor idle %.0f (datamodel %.0f), after the order's 3 events %.0f (datamodel %.0f)\n",
-           json ? "json" : "quickjs", actors, (double)(idle - before) / actors, (double)(datamodel_idle - datamodel_before) / actors,
+    printf("%-16s actors %u: bytes/actor idle %.0f (datamodel %.0f), after the order's 3 events %.0f (datamodel %.0f)\n",
+           kind_names[kind], actors, (double)(idle - before) / actors, (double)(datamodel_idle - datamodel_before) / actors,
            (double)(after - before) / actors, (double)(datamodel_after - datamodel_before) / actors);
-    printf("%-8s ns/event: order's add/address %.0f, a guard alone %.0f, a guard and an assignment %.0f\n",
-           json ? "json" : "quickjs", per_order_event, guard, check);
+    printf("%-16s ns/event: order's add/address %.0f, a guard alone %.0f, a guard and an assignment %.0f\n",
+           kind_names[kind], per_order_event, guard, check);
     free(sessions);
     bench_close(&b);
 }
 
-static void blob(int json, size_t size, uint32_t events) {
-    char *chart = blob_chart(json, size);
+static void blob(int kind, size_t size, uint32_t events) {
+    char *chart = blob_chart(kind, size);
     bench b;
-    bench_open(&b, json, chart);
+    bench_open(&b, kind, chart);
     uint32_t actors = 64;
     uint64_t *sessions = spawn_all(&b, "blob", actors);
     double ns = time_events(&b, sessions, actors, events, "touch");
-    printf("%-8s document of %6zu bytes: an assignment %.0f ns/event\n", json ? "json" : "quickjs", size, ns);
+    printf("%-16s document of %6zu bytes: an assignment %.0f ns/event\n", kind_names[kind], size, ns);
     free(sessions);
     bench_close(&b);
     free(chart);
 }
 
 /* ns per event as each of 64 actors' arrays grows to `items`, by `event` */
-static double grow(int json, const char *event, uint32_t items) {
+static double grow(int kind, const char *event, uint32_t items) {
     bench b;
-    bench_open(&b, json, json ? JSON_APPEND : JS_APPEND);
+    char *chart = chart_for(kind, JSON_APPEND, JS_APPEND);
+    bench_open(&b, kind, chart);
+    free(chart);
     uint32_t actors = 64;
     uint64_t *sessions = spawn_all(&b, "cart", actors);
     unsigned char room[64];
@@ -513,26 +670,114 @@ static double grow(int json, const char *event, uint32_t items) {
     return ns;
 }
 
+/* What a binding pays with staticjs natives in another language: the
+ * arguments written as CBOR and the result read back, per call (addItem's). */
+static void sjs_allocator_free(void *self, const sjs_allocator_free_params *params) {
+    (void)self;
+    (void)params->size;
+    free(params->ptr);
+}
+static void *sjs_allocator_alloc(void *self, size_t size, size_t alignment) {
+    (void)self;
+    (void)alignment;
+    return malloc(size);
+}
+
+static void convert(uint32_t calls) {
+    static const sjs_allocator_vtable heap = {sjs_allocator_alloc, sjs_allocator_free};
+    sjs_context *context;
+    sjs_context_config config = {{0, &heap}, SJS_LIMITS_DEFAULT};
+    if (sjs_context_init(&context, &config) != SJS_OK) exit(1);
+    /* [[{sku: "tea", qty: 2, cents: 450}, {sku: "mug", qty: 1, cents: 1200}], {sku: "tea", qty: 3}] */
+    sjs_value items, data, arguments;
+    sjs_array_new(context, 2, &items);
+    const char *skus[] = {"tea", "mug"};
+    double qty[] = {2, 1}, cents[] = {450, 1200};
+    for (int i = 0; i < 2; i++) {
+        sjs_value item, sku;
+        sjs_object_new(context, 3, &item);
+        sjs_string_new(context, (sjs_str){skus[i], 3}, &sku);
+        sjs_property p[3] = {{SJS_STR("sku"), sku}, {SJS_STR("qty"), sjs_number(qty[i])}, {SJS_STR("cents"), sjs_number(cents[i])}};
+        for (int k = 0; k < 3; k++) sjs_object_put(context, &item, &p[k]);
+        sjs_array_append(context, &items, item);
+    }
+    sjs_value tea;
+    sjs_object_new(context, 2, &data);
+    sjs_string_new(context, SJS_STR("tea"), &tea);
+    sjs_property d[2] = {{SJS_STR("sku"), tea}, {SJS_STR("qty"), sjs_number(3)}};
+    for (int k = 0; k < 2; k++) sjs_object_put(context, &data, &d[k]);
+    sjs_array_new(context, 2, &arguments);
+    sjs_retain(items);
+    sjs_retain(data);
+    sjs_array_append(context, &arguments, items);
+    sjs_array_append(context, &arguments, data);
+    /* the result, three items, as CBOR */
+    static const uint8_t result[] = {0x83, 0xa3, 0x63, 's', 'k', 'u', 0x63, 't', 'e', 'a', 0x63, 'q', 't', 'y', 0x02, 0x65, 'c', 'e', 'n', 't', 's', 0x19, 0x01, 0xc2,
+                                     0xa3, 0x63, 's', 'k', 'u', 0x63, 'm', 'u', 'g', 0x63, 'q', 't', 'y', 0x01, 0x65, 'c', 'e', 'n', 't', 's', 0x19, 0x04, 0xb0,
+                                     0xa3, 0x63, 's', 'k', 'u', 0x63, 't', 'e', 'a', 0x63, 'q', 't', 'y', 0x03, 0x65, 'c', 'e', 'n', 't', 's', 0x19, 0x01, 0xc2};
+    uint8_t room[512];
+    uint64_t start = ta_runtime_now_ns();
+    for (uint32_t i = 0; i < calls; i++) {
+        sjs_writer *writer;
+        sjs_writer_config wc = {context, arguments, SJS_STR(""), SJS_FORMAT_CBOR, 0};
+        sjs_writer_init(&writer, &wc);
+        sjs_buffer buffer = {room, sizeof room, 0};
+        if (sjs_writer_write(writer, &buffer) != SJS_OK) exit(1);
+        sjs_writer_destroy(writer);
+        sjs_value v;
+        sjs_read_params rp = {SJS_FORMAT_CBOR, {result, sizeof result}, 0, 0};
+        if (sjs_value_read(context, &rp, &v) != SJS_OK) exit(1);
+        sjs_release(context, v);
+    }
+    double ns = (double)(ta_runtime_now_ns() - start) / calls;
+    uint64_t write_start = ta_runtime_now_ns();
+    for (uint32_t i = 0; i < calls; i++) {
+        sjs_writer *writer;
+        sjs_writer_config wc = {context, arguments, SJS_STR(""), SJS_FORMAT_CBOR, 0};
+        sjs_writer_init(&writer, &wc);
+        sjs_buffer buffer = {room, sizeof room, 0};
+        sjs_writer_write(writer, &buffer);
+        sjs_writer_destroy(writer);
+    }
+    double write_ns = (double)(ta_runtime_now_ns() - write_start) / calls;
+    printf("staticjs natives in another language, per addItem call: arguments to CBOR and the result back %.0f ns "
+           "(writing the arguments %.0f, reading the result %.0f)\n", ns, write_ns, ns - write_ns);
+    sjs_release(context, arguments);
+    sjs_release(context, items);
+    sjs_release(context, data);
+    sjs_context_destroy(context);
+}
+
 int main(int argc, char **argv) {
     uint32_t actors = argc > 1 ? (uint32_t)atoi(argv[1]) : 10000;
     uint32_t events = argc > 2 ? (uint32_t)atoi(argv[2]) : 200000;
+    if (argc > 3 && !strcmp(argv[3], "convert")) {
+        convert(events);
+        return 0;
+    }
     if (argc > 3 && !strcmp(argv[3], "append")) { /* the append comparison only */
         uint32_t sizes[] = {10, 50, 200};
         for (size_t i = 0; i < 3; i++) {
             trust_results = 0;
-            double add_checked = grow(1, "add", sizes[i]), append_checked = grow(1, "append", sizes[i]);
+            double add_checked = grow(KIND_JSON, "add", sizes[i]), append_checked = grow(KIND_JSON, "append", sizes[i]);
             trust_results = TA_DATAMODEL_JSON_TRUST_RESULTS;
-            double add_trusted = grow(1, "add", sizes[i]), append_trusted = grow(1, "append", sizes[i]);
-            double js_add = grow(0, "add", sizes[i]), js_append = grow(0, "append", sizes[i]);
+            double add_trusted = grow(KIND_JSON, "add", sizes[i]), append_trusted = grow(KIND_JSON, "append", sizes[i]);
+            trust_results = 0;
+            double js_add = grow(KIND_QUICKJS, "add", sizes[i]), js_append = grow(KIND_QUICKJS, "append", sizes[i]);
+            double sjs_add = grow(KIND_STATICJS, "add", sizes[i]), sjs_append = grow(KIND_STATICJS, "append", sizes[i]);
+            double sjsn_add = grow(KIND_STATICJS_NATIVES, "add", sizes[i]), sjsn_append = grow(KIND_STATICJS_NATIVES, "append", sizes[i]);
             printf("to %3u items, ns/event: json addItem %.0f (trusted %.0f), json items[length(items)] %.0f (trusted %.0f); "
-                   "quickjs concat %.0f, items[items.length] %.0f\n",
-                   sizes[i], add_checked, add_trusted, append_checked, append_trusted, js_add, js_append);
+                   "quickjs concat %.0f, items[items.length] %.0f; staticjs concat %.0f, items[items.length] %.0f; "
+                   "staticjs+natives addItem %.0f, newItem %.0f\n",
+                   sizes[i], add_checked, add_trusted, append_checked, append_trusted, js_add, js_append, sjs_add, sjs_append,
+                   sjsn_add, sjsn_append);
         }
         return 0;
     }
-    for (int json = 1; json >= 0; json--) order(json, actors, events);
+    static const int kinds[] = {KIND_JSON, KIND_STATICJS, KIND_STATICJS_NATIVES, KIND_QUICKJS};
+    for (size_t k = 0; k < 4; k++) order(kinds[k], actors, events);
     size_t sizes[] = {64, 1024, 16384, 60000};
     for (size_t i = 0; i < sizeof sizes / sizeof sizes[0]; i++)
-        for (int json = 1; json >= 0; json--) blob(json, sizes[i], events / 4);
+        for (size_t k = 0; k < 4; k++) blob(kinds[k], sizes[i], events / 4);
     return 0;
 }
