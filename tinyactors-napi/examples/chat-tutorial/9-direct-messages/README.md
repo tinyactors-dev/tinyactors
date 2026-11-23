@@ -30,6 +30,11 @@ The other person learns of a DM as they learn the roster (step 4).
 - When they come online, the workspace sends `dms`: their DMs, each its
   room and the other person.
 - When a DM is made with them while they are online, they get `dms` again.
+- When a DM is made with them while they reconnect (step 7),
+  `reconnecting` drops that `dms`. So on `connect` the user chart asks
+  the workspace with `dms.get`, as it asks `roster.get`, and the
+  workspace answers `dms`. The workspace keeps the DMs, so the user
+  chart asks instead of holding a copy.
 - The screen reads each new DM's posts from the store, as it does on
   `joined`. It lists a DM once you opened it or a post came, as Slack
   shows a DM to the recipient when the first message arrives.

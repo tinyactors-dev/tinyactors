@@ -4,7 +4,8 @@
 // on each side and a late joiner), a screen that loses deliveries, what a
 // screen missed read from the store on step 9, the times posts keep on
 // the way, a lost connection of someone who has none, and a direct message
-// (made once per pair, closed to a third person, on step 9 only).
+// (made once per pair, closed to a third person, on step 9 only), and the
+// roster and DMs that changed while a connection was lost, on step 9.
 // Run: node main.mjs
 import * as tinyactors from '@tinyactors/wasm';
 import { readFileSync } from 'node:fs';
@@ -188,3 +189,15 @@ const refusals = dm.screen('queen').notices.length;
 await dm.join('queen', room);
 console.log(`back on step 9: queen tries to join it: ${dm.screen('queen').notices.slice(refusals).join(', ') || 'let in'}; queen's screen holds: ${messages(dm, 'queen')}; forager's screen in the DM: ${dm.screen('forager').messages.filter((m) => m.room === room).map((m) => m.text).join(' | ')}`);
 dm.close();
+
+console.log('-- step 9: scout loses the connection for 20 s; meanwhile queen signs in and opens a DM with scout');
+const returning = await createChat(tinyactors, { versions });
+for (const name of ['scout', 'forager']) await returning.connect(name);
+await returning.loseConnection('scout', 20);
+await returning.advance(2_000);
+await returning.connect('queen');
+const queens = await returning.openDM('queen', 'scout');
+await returning.post('queen', queens, 'are you there?');
+await returning.advance(20_000); // scout's connection comes back
+console.log(`scout is back: the screen shows queen as ${returning.screen('scout').roster.queen}; scout's DMs: ${returning.directMessages('scout').map((each) => `${each.with}, last: ${each.last?.text}`).join('; ') || 'none'}`);
+returning.close();

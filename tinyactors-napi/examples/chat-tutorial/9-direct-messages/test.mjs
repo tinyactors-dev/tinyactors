@@ -70,4 +70,22 @@ for (const datamodel of ['native', 'quickjs']) {
     ]);
     host.close();
   });
+
+  test(`9-direct-messages, ${datamodel}: back from a lost connection, the screen gets the roster and the DMs made meanwhile`, async () => {
+    const { host, client, clock, users: [scout, queen] } = await signedIn(datamodel, ['scout', 'queen']);
+    queen.send('disconnect');
+    await host.idle();
+    scout.send('connection.lost');
+    await host.idle();
+    queen.send('connect');
+    queen.send('dm.open', { with: 'scout' });
+    await host.idle();
+    assert.equal(client.rosters.get('scout').queen, 'offline', 'reconnecting, the screen hears nothing');
+    clock.increment(20_000);
+    scout.send('connect');
+    await host.idle();
+    assert.equal(client.rosters.get('scout').queen, 'active');
+    assert.ok(client.lines.includes('scout has dm.queen.scout, the DM with queen, and reads nothing yet'));
+    host.close();
+  });
 }

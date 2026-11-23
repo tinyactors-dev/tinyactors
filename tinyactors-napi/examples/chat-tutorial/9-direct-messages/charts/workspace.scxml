@@ -6,8 +6,8 @@
      that did not change tells nobody.
      It makes the direct messages too: a room of two people, one per pair,
      kept apart from the rooms, so no channel list shows it. Each user gets
-     their direct messages when they come online, and when one is made
-     with them. -->
+     their direct messages when they come online, when one is made with
+     them, and when they ask (dms.get). -->
 <scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0"
        datamodel="ecmascript" name="workspace" initial="ready">
   <script>
@@ -134,6 +134,11 @@
     <transition event="roster.get">
       <send targetexpr="_event.origin" event="roster">
         <param name="roster" expr="roster"/>
+      </send>
+    </transition>
+    <transition event="dms.get">
+      <send targetexpr="_event.origin" event="dms">
+        <param name="dms" expr="dmsOf(dms, _event.data.user)"/>
       </send>
     </transition>
 

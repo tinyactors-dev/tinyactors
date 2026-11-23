@@ -39,13 +39,15 @@ const said = ({ at, from, text }) =>
 
 // What reaches each user's screen, as lines. A screen shows a numbered post
 // once: one read from the store may reach it as a message too. It knows
-// the direct messages the charts told it of, each by the other person.
-// When a user's connection opens, their screen reads the posts it lacks.
+// the direct messages the charts told it of, each by the other person, and
+// the roster, which it does not print. When a user's connection opens,
+// their screen reads the posts it lacks.
 class Client {
   lines = [];
   shown = new Set(); // "user room seq"
   rooms = new Map(); // user -> the rooms their screen joined, direct messages included
   dms = new Map(); // user -> (room -> the other person)
+  rosters = new Map(); // user -> (user -> status), as their screen shows it
 
   constructor(history) {
     this.history = history;
@@ -93,6 +95,8 @@ class Client {
     }
     if (send.event === 'typing') this.lines.push(`${data.to} sees ${data.user} typing in ${this.place(data.to, data.room)}`);
     if (send.event === 'error') this.lines.push(`${data.to} gets an error: ${data.reason}`);
+    if (send.event === 'roster') this.rosters.set(data.to, { ...data.roster });
+    if (send.event === 'roster.update') this.rosters.set(data.to, { ...this.rosters.get(data.to), [data.user]: data.status });
   }
 
   /** `user`'s connection opens: for each room joined, the screen reads the posts it lacks. */

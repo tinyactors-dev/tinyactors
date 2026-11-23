@@ -8,7 +8,7 @@
      after the last notice, or this user disconnects or loses the connection.
      A lost connection is not yet offline: the user reconnects within 30
      seconds without the others seeing a change, and gets the messages
-     that came meanwhile. -->
+     that came meanwhile and the roster as it is now. -->
 <scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0"
        datamodel="ecmascript" name="user" initial="offline">
   <datamodel>
@@ -16,7 +16,7 @@
     <data id="quiet" expr="({})"/>    <!-- room -> true while this user's typing was told less than 3 s ago -->
     <data id="typers" expr="({})"/>   <!-- "room user" -> { id, room, user }: an indicator on the screen and its timer -->
     <data id="timer"/>
-    <data id="held" expr="[]"/>       <!-- messages that came while reconnecting -->
+    <data id="held" expr="[]"/>       <!-- messages that came while reconnecting; the rest is dropped -->
   </datamodel>
   <state id="offline">
     <onentry>
@@ -189,7 +189,10 @@
   <state id="reconnecting">
     <onentry><send id="grace" event="grace.over" delay="30s"/></onentry>
     <onexit><cancel sendid="grace"/></onexit>
-    <transition event="connect" target="resume"/>
+    <!-- back: the screen missed the roster's changes, so the workspace sends it whole -->
+    <transition event="connect" target="resume">
+      <send target="tinyactors://chat/@workspace" event="roster.get"/>
+    </transition>
     <transition event="disconnect" target="offline"/>
     <transition event="grace.over" target="offline"/>
     <transition event="message">

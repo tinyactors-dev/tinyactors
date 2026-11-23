@@ -7,6 +7,10 @@ class Client {
   receive(send) {
     const { data } = send;
     if (send.event === 'roster.update') this.lines.push(`${data.to} sees ${data.user} is ${data.status}`);
+    if (send.event === 'roster') {
+      const statuses = Object.keys(data.roster).sort().map((user) => `${user} ${data.roster[user]}`);
+      this.lines.push(`${data.to} sees the roster: ${statuses.join(', ')}`);
+    }
     if (send.event === 'message') this.lines.push(`${data.to} sees ${data.from} in ${data.room}: ${data.text}`);
   }
 }
@@ -27,7 +31,7 @@ export async function run(options = {}) {
 
   const workspace = host.spawn('workspace', { name: 'workspace' });
   await workspace.ask('room.create', { name: 'general' });
-  for (const name of ['ada', 'bob']) {
+  for (const name of ['ada', 'bob', 'cy']) {
     const user = host.spawn('user', { name: `user.${name}`, params: { name } });
     user.send('connect');
     user.send('join', { room: 'general' });
@@ -36,9 +40,12 @@ export async function run(options = {}) {
   client.lines.length = 0; // the roster as they came online: step 4's
   const ada = host.actor('user.ada');
   const bob = host.actor('user.bob');
+  const cy = host.actor('user.cy');
 
-  client.lines.push('-- bob enters a tunnel, ada posts');
+  client.lines.push('-- bob enters a tunnel, cy signs out, ada posts');
   bob.send('connection.lost');
+  await host.idle();
+  cy.send('disconnect');
   await host.idle();
   ada.send('post', { room: 'general', text: 'where are you?' });
   await host.idle();
