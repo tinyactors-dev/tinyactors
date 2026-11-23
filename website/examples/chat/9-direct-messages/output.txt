@@ -1,0 +1,14 @@
+-- scout opens a DM with forager, who is signed out, and posts twice
+scout opens dm.forager.scout, the DM with forager, and reads nothing yet
+scout sees post 1 in the DM with forager from scout at 0:00: sugar by the oak
+scout sees post 2 in the DM with forager from scout at 0:30: can you carry?
+-- forager signs in, types and answers
+forager has dm.forager.scout, the DM with scout, and reads scout at 0:00: sugar by the oak | scout at 0:30: can you carry?
+scout sees forager typing in the DM with forager
+forager sees post 3 in the DM with scout from forager at 1:00: on my way
+scout sees post 3 in the DM with forager from forager at 1:00: on my way
+-- forager opens the DM with scout: the same one
+forager opens dm.forager.scout, the DM with scout, and reads scout at 0:00: sugar by the oak | scout at 0:30: can you carry? | forager at 1:00: on my way
+-- queen tries to read it
+queen gets an error: not a member
+the channels: general

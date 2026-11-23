@@ -1,0 +1,146 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- A workspace. It is the collection actor of its rooms: it decides
+     which rooms exist, and it alone spawns them.
+     It keeps the roster: each user's status. A user who comes online gets
+     the whole roster. The other online users get each change; a status
+     that did not change tells nobody.
+     It makes the direct messages too: a room of two people, one per pair,
+     kept apart from the rooms, so no channel list shows it. Each user gets
+     their direct messages when they come online, and when one is made
+     with them. -->
+<scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0"
+       datamodel="ecmascript" name="workspace" initial="ready">
+  <script>
+    // Why a new room is refused, or null.
+    function refusal(rooms, name) {
+      if (!/^[a-z0-9-]{1,32}$/.test(name)) return 'invalid name';
+      if (rooms.includes(name)) return 'exists';
+      return null;
+    }
+
+    // The users who are online, but `except`.
+    function online(roster, except) {
+      return Object.keys(roster).filter((user) => roster[user] !== 'offline' &amp;&amp; user !== except);
+    }
+
+    function cameOnline(roster, event) {
+      return (roster[event.data.user] ?? 'offline') === 'offline' &amp;&amp; event.data.status !== 'offline';
+    }
+
+    // The direct message `user` asks for with `with`: its room's name and
+    // its members. The name is "dm." and the members' names, sorted, so both
+    // sides get one name; a channel's name holds no dot, so no channel can
+    // take it. With oneself it has one member: a place for one's own notes.
+    function direct(event) {
+      const members = [...new Set([event.data.user, event.data.with])].sort();
+      return { room: 'dm.' + members.join('.'), members };
+    }
+
+    // `user`'s direct messages: each its room and the other member.
+    function dmsOf(dms, user) {
+      return Object.keys(dms).filter((room) => dms[room].includes(user))
+        .map((room) => ({ room, with: dms[room].find((member) => member !== user) ?? user }));
+    }
+  </script>
+  <datamodel>
+    <data id="rooms" expr="[]"/>          <!-- the names of the rooms, spawned or being spawned -->
+    <data id="creating" expr="({})"/>     <!-- spawn sendid -> { name, by } -->
+    <data id="sendid"/>
+    <data id="roster" expr="({})"/>       <!-- user -> offline, active or away -->
+    <data id="arriving"/>                 <!-- the status event brings its user online -->
+    <data id="dms" expr="({})"/>          <!-- direct message room -> its members -->
+    <data id="opening" expr="({})"/>      <!-- spawn sendid -> { room, by, with } -->
+    <data id="dm"/>                       <!-- the direct message being made: { room, members } -->
+  </datamodel>
+  <state id="ready">
+    <!-- The name joins rooms when the spawn is sent: a second room.create
+         for it may come before the Spawner answers, and it is refused. -->
+    <transition event="room.create" cond="refusal(rooms, _event.data.name) === null">
+      <send type="spawn" event="spawn" idlocation="sendid">
+        <param name="chart" expr="'room'"/>
+        <param name="name" expr="'room.' + _event.data.name"/>
+        <param name="params" expr="({ name: _event.data.name })"/>
+      </send>
+      <assign location="rooms" expr="rooms.concat([_event.data.name])"/>
+      <assign location="creating[sendid]" expr="({ name: _event.data.name, by: _event.origin })"/>
+    </transition>
+    <transition event="room.create">
+      <send targetexpr="_event.origin" event="room.refused">
+        <param name="name" expr="_event.data.name"/>
+        <param name="reason" expr="refusal(rooms, _event.data.name)"/>
+      </send>
+    </transition>
+
+    <!-- the Spawner answers by the sendid of the spawn -->
+    <transition event="spawned" cond="_event.sendid in creating">
+      <send targetexpr="creating[_event.sendid].by" event="room.created">
+        <param name="name" expr="creating[_event.sendid].name"/>
+      </send>
+      <script>delete creating[_event.sendid];</script>
+    </transition>
+
+    <!-- A direct message is made once per pair, asked from either side: a
+         second dm.open finds its name in dms. Its room exists by then: the
+         Spawner spawns it before this actor takes its next event. -->
+    <transition event="dm.open" cond="!(direct(_event).room in dms)">
+      <assign location="dm" expr="direct(_event)"/>
+      <send type="spawn" event="spawn" idlocation="sendid">
+        <param name="chart" expr="'room'"/>
+        <param name="name" expr="'room.' + dm.room"/>
+        <param name="params" expr="({ name: dm.room, members: dm.members, direct: true })"/>
+      </send>
+      <assign location="dms[dm.room]" expr="dm.members"/>
+      <assign location="opening[sendid]" expr="({ room: dm.room, by: _event.origin, with: _event.data.with })"/>
+    </transition>
+    <transition event="dm.open">
+      <send targetexpr="_event.origin" event="dm.opened">
+        <param name="room" expr="direct(_event).room"/>
+        <param name="with" expr="_event.data.with"/>
+      </send>
+    </transition>
+    <!-- made: the asker opens it, and each member online hears of it -->
+    <transition event="spawned" cond="_event.sendid in opening">
+      <send targetexpr="opening[_event.sendid].by" event="dm.opened">
+        <param name="room" expr="opening[_event.sendid].room"/>
+        <param name="with" expr="opening[_event.sendid].with"/>
+      </send>
+      <foreach array="dms[opening[_event.sendid].room].filter((user) => online(roster, null).includes(user))" item="user">
+        <send targetexpr="'tinyactors://chat/@user.' + user" event="dms">
+          <param name="dms" expr="dmsOf(dms, user)"/>
+        </send>
+      </foreach>
+      <script>delete opening[_event.sendid];</script>
+    </transition>
+
+    <!-- a status that did not change (a user back from a lost connection) tells nobody -->
+    <transition event="status" cond="roster[_event.data.user] === _event.data.status"/>
+    <transition event="status">
+      <assign location="arriving" expr="cameOnline(roster, _event)"/>
+      <assign location="roster[_event.data.user]" expr="_event.data.status"/>
+      <if cond="arriving">
+        <send targetexpr="_event.origin" event="roster">
+          <param name="roster" expr="roster"/>
+        </send>
+        <send targetexpr="_event.origin" event="dms">
+          <param name="dms" expr="dmsOf(dms, _event.data.user)"/>
+        </send>
+      </if>
+      <foreach array="online(roster, _event.data.user)" item="user">
+        <send targetexpr="'tinyactors://chat/@user.' + user" event="roster.update">
+          <content expr="_event.data"/>
+        </send>
+      </foreach>
+    </transition>
+    <transition event="roster.get">
+      <send targetexpr="_event.origin" event="roster">
+        <param name="roster" expr="roster"/>
+      </send>
+    </transition>
+
+    <transition event="rooms.list">
+      <send targetexpr="_event.origin" event="rooms">
+        <param name="rooms" expr="rooms"/>
+      </send>
+    </transition>
+  </state>
+</scxml>

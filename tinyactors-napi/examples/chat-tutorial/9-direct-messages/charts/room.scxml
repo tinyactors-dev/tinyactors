@@ -6,14 +6,23 @@
      made and answers, and the room sends the numbered post, with its time,
      to each member. A post the store refuses
      (error.communication) is neither stored nor delivered.
-     A join from a member already in the room adds nobody. -->
+     A join from a member already in the room adds nobody.
+     A direct message is a room whose members come with the spawn: a join
+     from anyone else is refused. A room takes typing and posts from its
+     members only. -->
 <scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0"
        datamodel="ecmascript" name="room" initial="open">
   <datamodel>
     <data id="name"/>
     <data id="members" expr="[]"/>
+    <data id="direct" expr="false"/>   <!-- a direct message: its members are fixed -->
   </datamodel>
   <state id="open">
+    <transition event="join" cond="direct &amp;&amp; !members.includes(_event.data.user)">
+      <send targetexpr="_event.origin" event="join.refused">
+        <param name="room" expr="name"/>
+      </send>
+    </transition>
     <transition event="join">
       <if cond="!members.includes(_event.data.user)">
         <assign location="members" expr="members.concat([_event.data.user])"/>
@@ -22,7 +31,7 @@
         <param name="room" expr="name"/>
       </send>
     </transition>
-    <transition event="typing">
+    <transition event="typing" cond="members.includes(_event.data.user)">
       <foreach array="members" item="member">
         <if cond="member !== _event.data.user">
           <send targetexpr="'tinyactors://chat/@user.' + member" event="others.typing">
@@ -32,7 +41,7 @@
         </if>
       </foreach>
     </transition>
-    <transition event="post">
+    <transition event="post" cond="members.includes(_event.data.user)">
       <!-- the store numbers and times the post and answers "appended"; if it fails
            the send, this room gets error.communication and the post is lost -->
       <send type="chat:history" event="append">

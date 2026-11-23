@@ -1,8 +1,8 @@
 // The team chat of the tutorial (examples/chat), finished: a workspace
 // that makes rooms, users who come and go, and a store that keeps idle
-// actors out of memory, on step 8's charts (typing, a grace period for a
-// lost connection, a room's history) or step 5's (none of them). On step
-// 8 a channel's history is data this program stores (`history` below):
+// actors out of memory, on step 9's charts (typing, a grace period for a
+// lost connection, a room's history, direct messages) or step 5's (none of
+// them). From step 8 on a channel's history is data this program stores (`history` below):
 // the room chart sends each post there, the store numbers it, and a screen
 // reads a channel's latest posts from the store when it joins. It takes the
 // tinyactors package as an argument, so the same code runs in Node.js
@@ -24,15 +24,15 @@ export const WORKSPACE = 'The Hill';
 export const PEOPLE = ['queen', 'scout', 'forager', 'nurse', 'guard', 'drone'];
 export const ROOMS = ['general', 'random'];
 export const RESIDENT = 4; // actors the host keeps in memory at rest
-/** Seconds step 8 waits before a lost connection is offline: `grace.over`'s delay in charts/step-8/user.scxml. */
+/** Seconds step 9 waits before a lost connection is offline: `grace.over`'s delay in charts/step-9/user.scxml. */
 export const GRACE = 30;
 /** The versions of the charts the chat runs: the tutorial's steps. */
 export const VERSIONS = {
   5: 'Step 5: no typing indicator; a lost connection is offline at once; a late joiner sees no history',
-  8: `Step 8: typing indicators; a lost connection has ${GRACE} seconds to come back; a late joiner sees the history`,
+  9: `Step 9: typing indicators; a lost connection has ${GRACE} seconds to come back; a late joiner sees the history; direct messages`,
 };
-/** The newest version: what steps 6 to 8 added is there. */
-export const LATEST = 8;
+/** The newest version: what steps 6 to 9 added is there. */
+export const LATEST = 9;
 const KEEP = 200; // the newest messages a screen keeps, and entries the log keeps
 
 /** The scripted experiments, each a list of [seconds from its start, what happens]. */
@@ -80,7 +80,7 @@ function generator(seed) {
 
 /**
  * The workspace, its rooms and PEOPLE, on a host with a simulated clock.
- * `versions` maps 5 and 8 to that step's charts (file name to text);
+ * `versions` maps 5 and 9 to that step's charts (file name to text);
  * `version` is the one it starts on. Every action waits for the host to
  * settle, one at a time, and then calls `onChange`.
  */
@@ -113,8 +113,9 @@ export async function createChat(tinyactors, { versions, version = LATEST, seed 
   const faults = new Map(); // user -> { drop: 0..1, delay: seconds }
   const screen = (user) => {
     let found = screens.get(user);
-    // newest: room -> the newest post number the screen has of it (step 8's), from a join on
-    if (!found) screens.set(user, (found = { rooms: [], messages: [], newest: {}, roster: {}, typing: {}, notices: [] }));
+    // newest: room -> the newest post number the screen has of it (step 9's), from a join on;
+    // dms: the direct messages the charts told it of, { room, with, opened } (opened: by this person)
+    if (!found) screens.set(user, (found = { rooms: [], messages: [], newest: {}, roster: {}, typing: {}, notices: [], dms: [] }));
     return found;
   };
   /**
@@ -154,10 +155,21 @@ export async function createChat(tinyactors, { versions, version = LATEST, seed 
       if (target.newest[room] !== undefined) recover(name, room, target.newest[room]);
     }
   };
+  /**
+   * `user`'s screen enters `room`, a channel it joined or a direct message:
+   * on step 9 it reads the room's latest posts from the store and adds those
+   * it lacks, by the store's numbers, at the store's times; step 5 keeps none.
+   */
+  const enter = (target, user, room) => {
+    if (!target.rooms.includes(room)) target.rooms = [...target.rooms, room];
+    if (current !== LATEST) return;
+    target.newest[room] ??= 0;
+    fill(user, room, history.read(room));
+  };
   const show = (event, data) => {
     const target = screen(data.to);
     if (event === 'message') {
-      // step 8 numbers each post: a screen shows one once (it came with a join's history too)
+      // step 9 numbers each post: a screen shows one once (it came with a join's history too)
       if (data.seq !== undefined && target.messages.some((m) => m.room === data.room && m.seq === data.seq)) return;
       // and a screen more than one post behind reads the gap from the store first
       if (data.seq !== undefined) {
@@ -165,7 +177,7 @@ export async function createChat(tinyactors, { versions, version = LATEST, seed 
         if (newest !== undefined && data.seq > newest + 1) recover(data.to, data.room, newest, data.seq);
         target.newest[data.room] = Math.max(newest ?? 0, data.seq);
       }
-      // step 8's posts carry the time the store recorded, so one held or delayed on the way shows
+      // step 9's posts carry the time the store recorded, so one held or delayed on the way shows
       // when it was posted; step 5's are not stored and carry none: the screen shows when it came
       target.messages.push({ room: data.room, seq: data.seq, from: data.from, text: data.text, at: data.at ?? now() });
       if (target.messages.length > KEEP) target.messages.shift();
@@ -173,29 +185,42 @@ export async function createChat(tinyactors, { versions, version = LATEST, seed 
     else if (event === 'roster.update') target.roster = { ...target.roster, [data.user]: data.status };
     else if (event === 'typing') target.typing = { ...target.typing, [data.room]: [...new Set([...(target.typing[data.room] ?? []), data.user])] };
     else if (event === 'typing.stopped') target.typing = { ...target.typing, [data.room]: (target.typing[data.room] ?? []).filter((user) => user !== data.user) };
-    else if (event === 'joined') {
-      if (!target.rooms.includes(data.room)) target.rooms = [...target.rooms, data.room];
-      // on step 8 a join reads the channel's latest posts from the store, and the screen adds those it
-      // lacks, by the store's numbers, at the store's times; step 5 keeps none
-      if (current === LATEST) {
-        target.newest[data.room] ??= 0;
-        fill(data.to, data.room, history.read(data.room));
+    else if (event === 'joined') enter(target, data.to, data.room);
+    // a direct message you opened, or those the workspace says are yours: each read from the
+    // store as a join reads a channel, and listed once you opened it or a post came (directMessages)
+    else if (event === 'dm.opened') {
+      const known = target.dms.find((dm) => dm.room === data.room);
+      if (known) known.opened = true;
+      else target.dms = [...target.dms, { room: data.room, with: data.with, opened: true }];
+      enter(target, data.to, data.room);
+    } else if (event === 'dms') {
+      for (const dm of data.dms) {
+        if (target.dms.some((known) => known.room === dm.room)) continue;
+        target.dms = [...target.dms, { room: dm.room, with: dm.with, opened: false }];
+        enter(target, data.to, dm.room);
       }
     }
     else if (event === 'error') target.notices.push(data.reason);
   };
   const describe = (event, data) => {
-    if (event === 'message') return `${data.from} in #${data.room}: ${data.text}`;
+    if (event === 'message') return `${data.from} in ${where(data.room)}: ${data.text}`;
+    if (event === 'dm.opened') return `the DM with ${data.with}, reads its latest posts from the store`;
+    if (event === 'dms') return `their DMs: ${data.dms.map((dm) => dm.with).join(', ') || 'none'}`;
     if (event === 'roster.update') return `${data.user} is ${data.status}`;
-    if (event === 'typing') return `${data.user} is typing in #${data.room}`;
-    if (event === 'typing.stopped') return `${data.user} stopped typing in #${data.room}`;
+    if (event === 'typing') return `${data.user} is typing in ${where(data.room)}`;
+    if (event === 'typing.stopped') return `${data.user} stopped typing in ${where(data.room)}`;
     if (event === 'roster') return 'the whole roster';
     if (event === 'joined') return `joined #${data.room}${current === LATEST ? ', reads the latest posts from the store' : ''}`;
     return `${event}${data.reason ? `: ${data.reason}` : ''}`;
   };
+  // a room's name in the log: a channel's with its #, a direct message's as it is (dm. and both names)
+  const where = (room) => (room.startsWith('dm.') ? room : `#${room}`);
+  const directRooms = new Map(); // the direct messages' rooms the charts named -> their members
   const client = {
     receive(send) {
       const event = send.event, data = { ...send.data }; // read now: the view ends with the batch
+      if (event === 'dm.opened') directRooms.set(data.room, [data.to, data.with]);
+      if (event === 'dms') for (const dm of data.dms) directRooms.set(dm.room, [data.to, dm.with]);
       const fault = faults.get(data.to) ?? { drop: 0, delay: 0 };
       if (fault.drop > 0 && random() < fault.drop) {
         send.fail(); // the sender gets error.communication; the screen never sees it
@@ -212,7 +237,7 @@ export async function createChat(tinyactors, { versions, version = LATEST, seed 
     },
   };
 
-  // ---- the channels' history, step 8's: data this program stores, a list
+  // ---- the channels' history, step 9's (since step 8): data this program stores, a list
   // of posts a channel. The room chart sends each post here (chat:history);
   // the store numbers it, per channel, records when it was made (the
   // simulated clock, in seconds) and answers `appended` with both, which
@@ -228,7 +253,7 @@ export async function createChat(tinyactors, { versions, version = LATEST, seed 
       const seq = posts.length + 1;
       const at = now();
       posts.push({ seq, at, from, text });
-      note('data', `#${room}'s history stores post ${seq} from ${from}`);
+      note('data', `${where(room)}'s history stores post ${seq} from ${from}`);
       send.answer('appended', { seq, at, room, from, text });
     },
     /** The latest `limit` posts of `room`. */
@@ -276,7 +301,7 @@ export async function createChat(tinyactors, { versions, version = LATEST, seed 
   const user = (name) => host.actor(`user.${name}`);
   /** Sends `event` to `name`'s user actor and logs it. */
   const tell = (name, event, data) => {
-    note('input', `${name} ← ${event}${data?.room ? ` #${data.room}` : ''}${data?.text ? `: ${data.text}` : ''}`);
+    note('input', `${name} ← ${event}${data?.room ? ` ${where(data.room)}` : ''}${data?.with ? ` with ${data.with}` : ''}${data?.text ? `: ${data.text}` : ''}`);
     user(name).send(event, data);
   };
 
@@ -307,7 +332,7 @@ export async function createChat(tinyactors, { versions, version = LATEST, seed 
     tell(name, 'disconnect');
   };
   /**
-   * `name`'s connection drops, and comes back `seconds` later. Step 8's
+   * `name`'s connection drops, and comes back `seconds` later. Step 9's
    * charts get `connection.lost`; step 5's know only `disconnect`, so an
    * application on them can say nothing else. A person with no connection
    * (signed out, or lost already) has none to lose.
@@ -358,10 +383,33 @@ export async function createChat(tinyactors, { versions, version = LATEST, seed 
     connected: (name) => connections.has(name),
     /** When `name`'s lost connection comes back (simulated seconds), or null when none is lost. */
     reconnects: (name) => (losses.has(name) ? losses.get(name).at / 1000 : null),
-    /** Typing: on step 8 the room hears of it; on both the user's away timer starts again. */
+    /** Typing: on step 9 the room hears of it; on both the user's away timer starts again. */
     typing: (name, room) => act(() => tell(name, current === LATEST ? 'typing' : 'activity', current === LATEST ? { room } : undefined)),
     join: (name, room) => act(() => tell(name, 'join', { room })),
     post: (name, room, text) => act(() => tell(name, 'post', { room, text })),
+    /**
+     * Opens `name`'s direct message with `other` (`name` again: their own
+     * notes): `name`'s user actor asks the workspace, which makes it once
+     * per pair, and the screen hears `dm.opened`. Answers its room, or null
+     * on step 5, whose charts have none, or when the screen did not hear.
+     */
+    openDM: (name, other) => act(async () => {
+      if (current !== LATEST) return null;
+      tell(name, 'dm.open', { with: other });
+      await host.idle();
+      return screen(name).dms.find((dm) => dm.with === other && dm.opened)?.room ?? null;
+    }),
+    /**
+     * `name`'s direct messages as a list shows them, newest first: those
+     * they opened and those with a post on their screen, each with its
+     * room, the other person and its last message (null for none).
+     */
+    directMessages: (name) => {
+      const target = screen(name);
+      return target.dms.map((dm) => ({ room: dm.room, with: dm.with, opened: dm.opened, last: target.messages.findLast((m) => m.room === dm.room) ?? null }))
+        .filter((dm) => dm.opened || dm.last)
+        .sort((a, b) => (b.last?.at ?? -1) - (a.last?.at ?? -1));
+    },
     /** Asks the workspace for a room: answers [event, data], room.created or room.refused. */
     createRoom: (name) => act(async () => {
       note('input', `workspace ← room.create #${name}`);
@@ -418,6 +466,13 @@ export async function createChat(tinyactors, { versions, version = LATEST, seed 
           tell(name, 'disconnect');
           note('version', `${name}'s connection is lost; step ${step} has no reconnecting, so ${name} is signed out until the reconnect at ${minutes(entry.at / 1000)}`);
         }
+        // step 5's workspace keeps no direct messages, and its room chart no `direct`: back on
+        // step 9 the workspace would make each again and its room would let anyone join. So each
+        // ends here, its posts kept in the store, and the workspace makes it again on the way back
+        for (const room of directRooms.keys()) {
+          host.actor(`room.${room}`).terminate();
+          note('version', `step ${step} has no direct messages: ${room} ends, its posts stay in the store`);
+        }
         await host.idle();
       }
       host.addImage(images[step]);
@@ -434,16 +489,25 @@ export async function createChat(tinyactors, { versions, version = LATEST, seed 
       current = step;
       // step 5 sends no typing.stopped: indicators from before the switch would stay
       if (step !== LATEST) for (const target of screens.values()) target.typing = {};
+      // back on step 9 the workspace makes each direct message again, asked for one of its members;
+      // its members' screens read its posts from the store when they open it
+      if (step === LATEST) {
+        for (const [room, [user, other]] of directRooms) {
+          await workspace.ask('dm.open', { user, with: other });
+          note('version', `the workspace makes ${room} again`);
+        }
+      }
       note('version', `moved to ${VERSIONS[step].split(':')[0]}: ${result?.migrated ?? 0} actors migrated, ${result?.failed?.length ?? 0} failed`);
       return result;
     }),
 
-    /** Every actor by name, with whether it is in memory or saved in the store. */
+    /** Every actor by name, with its chart, whether it is a direct message's room, and whether it is in memory or saved in the store. */
     actors: () => read(async () => {
-      const names = ['workspace', ...(await workspace.ask('rooms.list'))[1].rooms.map((room) => `room.${room}`), ...PEOPLE.map((name) => `user.${name}`)];
+      const direct = current === LATEST ? [...directRooms.keys()].sort().map((room) => `room.${room}`) : [];
+      const names = ['workspace', ...(await workspace.ask('rooms.list'))[1].rooms.map((room) => `room.${room}`), ...direct, ...PEOPLE.map((name) => `user.${name}`)];
       return names.map((name) => {
         const actor = host.actor(name);
-        return { name, chart: name.split('.')[0], session: actor.id, stored: store.blobs.has(String(actor.id)) };
+        return { name, chart: name.split('.')[0], direct: direct.includes(name), session: actor.id, stored: store.blobs.has(String(actor.id)) };
       });
     }),
     /**

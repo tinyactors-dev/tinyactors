@@ -1,11 +1,11 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <page xmlns="https://www.tinyactors.dev/ns/site" id="chat" path="/chat/">
   <title>Build a team chat with tinyactors</title>
-  <description>Try a team chat in your browser, then build it in eight steps, from one room to a history your program stores.</description>
+  <description>Try a team chat in your browser, then build it in nine steps, from one room to direct messages between two people.</description>
 
   <hero>
     <headline>Build a team chat</headline>
-    <lede>Try the finished chat in this tab, then build it in eight steps, each a program you can run.</lede>
+    <lede>Try the finished chat in this tab, then build it in nine steps, each a program you can run.</lede>
     <install>
       <command package="node" guide="https://github.com/tinyactors-dev/tinyactors-napi#readme">npm install @tinyactors/node</command>
     </install>
@@ -19,7 +19,7 @@
     <heading>Try the finished chat</heading>
     <p>Each person, room and the workspace is an actor in this tab, running the charts the steps below build. Switch person from the avatar at the bottom left; the debugger at the top right loses connections and switches chart versions.</p>
     <playground src="../../examples/chat-live/page.mjs">
-      <description>A team chat, The Hill, with two rooms and six people, each an actor. Its debugger loses connections, makes screens drop or delay messages, runs scenarios, and moves the running chat between the tutorial's steps 5 and 8 by live migration.</description>
+      <description>A team chat, The Hill, with two rooms and six people, each an actor. Its debugger loses connections, makes screens drop or delay messages, runs scenarios, and moves the running chat between the tutorial's steps 5 and 9 by live migration.</description>
     </playground>
   </section>
 
@@ -123,6 +123,23 @@
     <example>
       <code src="../../examples/chat/8-history/main.mjs" lines="109-126" language="javascript" file="main.mjs"/>
       <code src="../../examples/chat/8-history/output.txt" language="text" role="output"/>
+    </example>
+  </section>
+
+  <section id="direct-messages">
+    <heading>9. Send a direct message</heading>
+    <p>To talk privately, two people could only make a channel anyone can join, and could make two for one pair. A direct message is a room of the two, which the workspace makes once for the pair.</p>
+    <code src="../../examples/chat/9-direct-messages/charts/workspace.scxml" lines="85-100" language="scxml" file="charts/workspace.scxml"/>
+    <p>Either side asks for <code>dm.forager.scout</code>: the two names, sorted. A channel's name holds no dot, so no channel takes it.</p>
+    <code src="../../examples/chat/9-direct-messages/charts/workspace.scxml" lines="34-37" language="scxml" file="charts/workspace.scxml"/>
+    <p>The room chart is step 8's, so a direct message keeps history, typing and catch-up. Its members come with the spawn, and the room refuses anyone else's join.</p>
+    <code src="../../examples/chat/9-direct-messages/charts/room.scxml" lines="15-25" language="scxml" file="charts/room.scxml"/>
+    <p>The other person hears of their direct messages from the workspace when they come online, as they hear the roster.</p>
+    <code src="../../examples/chat/9-direct-messages/charts/workspace.scxml" lines="120-127" language="scxml" file="charts/workspace.scxml"/>
+    <p>Scout writes to forager, who is signed out and reads both posts on signing in. Queen's join is refused, and her post reaches nobody.</p>
+    <example>
+      <code src="../../examples/chat/9-direct-messages/main.mjs" lines="136-165" language="javascript" file="main.mjs"/>
+      <code src="../../examples/chat/9-direct-messages/output.txt" language="text" role="output"/>
     </example>
   </section>
 

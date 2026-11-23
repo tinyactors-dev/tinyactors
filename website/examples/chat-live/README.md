@@ -1,10 +1,10 @@
 # The live chat
 
-The chat tutorial's charts of steps 5 and 8 (`charts/step-5` and
-`charts/step-8`, copies of `examples/chat/5-hibernation/charts` and
-`examples/chat/8-history/charts`, which `mise run test` checks byte for
+The chat tutorial's charts of steps 5 and 9 (`charts/step-5` and
+`charts/step-9`, copies of `examples/chat/5-hibernation/charts` and
+`examples/chat/9-direct-messages/charts`, which `mise run test` checks byte for
 byte) running in the reader's browser on `@tinyactors/wasm`, at the top of
-https://www.tinyactors.dev/chat/. The page starts on step 8.
+https://www.tinyactors.dev/chat/. The page starts on step 9.
 
 - `chat.mjs` is what it does: the workspace (The Hill), two rooms and six people (an ant colony's
   castes: queen, scout, forager, nurse, guard, drone) on a
@@ -29,9 +29,11 @@ https://www.tinyactors.dev/chat/. The page starts on step 8.
   `style/site.css`, in Lato): a top bar whose search filters the room's
   messages on your screen; a rail of tabs with your avatar at its foot,
   whose menu signs you in or out and switches the person you are; a
-  sidebar with the rooms and the people (your screen); and the room with
+  sidebar with the rooms, your direct messages and the people (your
+  screen; a person opens your direct message with them, yourself your
+  notes); and the room or direct message with
   each message's simulated time, who else is typing under the composer,
-  and a "Connecting…" banner while your connection is lost on step 8 (on
+  and a "Connecting…" banner while your connection is lost on step 9 (on
   step 5 you are signed out). The Debugger button in the top bar opens a
   pane with the clock's controls and three tabs: Experiments (the charts'
   version, the scenarios, and per person a lost connection and the
@@ -48,20 +50,20 @@ last told another person online about you.
 
 On step 5 the page shows no typing indicator: those charts send none,
 and a switch to them clears the indicators, since they never send the
-`typing.stopped` that would end one step 8 started.
+`typing.stopped` that would end one step 9 started.
 
 Step 5 has no `reconnecting` state either. A live migration would put a
 person whose connection is lost in step 5's initial state, `offline`,
 without running its entry actions, so the workspace would never hear of
 it and everyone's roster would still show them active. So before a
 switch to step 5 the program ends each lost connection as an application
-on step 5's charts would have: it sends `disconnect` (step 8's chart
+on step 5's charts would have: it sends `disconnect` (step 9's chart
 then goes to `offline` and tells the workspace), keeps the reconnect the
 agenda holds, which signs the person in again, and says so in the log.
-A switch to step 8 needs nothing: on step 5 a lost connection is offline
-already.
+A switch to step 9 needs nothing for it: on step 5 a lost connection is
+offline already.
 
-On step 8 a channel's history is data this program stores (`chat.mjs`,
+On step 9 a channel's history is data this program stores (`chat.mjs`,
 `history`: the `chat:history` I/O processor the room chart sends each
 post to). The store numbers each channel's posts, records when each was
 made by the simulated clock, and answers the room with both, which the
@@ -80,3 +82,16 @@ from the store, for each room it joined, the posts after its newest
 number. When a message arrives more than one number ahead, the screen
 reads the gap first. Posts made on step 5 are not in the store, so on
 step 5 a screen catches up on nothing.
+
+Step 9 adds direct messages: a room of two that the workspace makes once
+per pair (`openDM`), named `dm.` and both names, which no channel name
+can be. The asker's screen hears `dm.opened`, and each member's screen
+hears `dms`, their direct messages, when they come online or one is made
+with them. A screen reads each from the store as it reads a channel it
+joins, and lists it once its person opened it or a post came
+(`directMessages`, newest first, each with its last message). Step 5's
+charts have none: the page hides the list, and a click on a person says
+so. Step 5's workspace keeps no direct messages and its room no `direct`,
+so before a switch to step 5 the program ends each direct message's room,
+its posts kept in the store, and after the switch back the workspace makes
+each again.

@@ -12,7 +12,11 @@
      Joining a room tells the screen, which reads the room's latest posts
      from the application's store; each message carries the number the
      store gave it, so a screen shows a post once, and the time the store
-     recorded, so a screen shows when it was posted, held or not. -->
+     recorded, so a screen shows when it was posted, held or not.
+     A direct message is a room of two that the workspace makes: the user
+     asks for one with another user, and the screen hears of it, and of
+     every direct message of theirs when they come online. A join of
+     someone else's is refused. -->
 <scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0"
        datamodel="ecmascript" name="user" initial="offline">
   <datamodel>
@@ -110,6 +114,13 @@
         <param name="user" expr="_event.data.user"/>
       </send>
     </transition>
+    <!-- before "join": that descriptor matches join.refused too -->
+    <transition event="join.refused">
+      <send type="chat:client" event="error">
+        <param name="to" expr="name"/>
+        <param name="reason" expr="'not a member'"/>
+      </send>
+    </transition>
     <transition event="join">
       <send id="join" targetexpr="'tinyactors://chat/@room.' + _event.data.room" event="join">
         <param name="user" expr="name"/>
@@ -126,6 +137,27 @@
       <send type="chat:client" event="error">
         <param name="to" expr="name"/>
         <param name="reason" expr="'no such room'"/>
+      </send>
+    </transition>
+    <!-- a direct message: the workspace makes it, or finds the one made before -->
+    <transition event="dm.open">
+      <send target="tinyactors://chat/@workspace" event="dm.open">
+        <param name="user" expr="name"/>
+        <param name="with" expr="_event.data.with"/>
+      </send>
+      <raise event="activity"/>
+    </transition>
+    <transition event="dm.opened">
+      <send type="chat:client" event="dm.opened">
+        <param name="to" expr="name"/>
+        <param name="room" expr="_event.data.room"/>
+        <param name="with" expr="_event.data.with"/>
+      </send>
+    </transition>
+    <transition event="dms">
+      <send type="chat:client" event="dms">
+        <param name="to" expr="name"/>
+        <param name="dms" expr="_event.data.dms"/>
       </send>
     </transition>
     <transition event="post">

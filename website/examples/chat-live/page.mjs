@@ -1,9 +1,10 @@
 // The live chat's page: the tutorial's charts (charts/step-5 and
-// charts/step-8) on @tinyactors/wasm in this tab, behind a chat window laid out as team
+// charts/step-9) on @tinyactors/wasm in this tab, behind a chat window laid out as team
 // chat clients are: a top bar with search, a rail of tabs with your avatar
 // at its foot (its menu signs you in or out and switches the person you
-// are), the rooms and people in a sidebar, and the room with its messages
-// and composer. You are one of the people at a time; what the window shows
+// are), the rooms, your direct messages and the people in a sidebar (a
+// person opens your direct message with them), and the room or direct
+// message with its messages and composer. You are one of the people at a time; what the window shows
 // is that person's screen, built only from what the charts sent to them
 // (chat.mjs). A debugger pane, closed at first, holds the demo's own
 // controls: the simulated clock; experiments (the charts' version, switched
@@ -20,7 +21,7 @@ const AWAY = 300_000; // the user chart's timer
 const clock = (seconds) => `${Math.floor(seconds / 60)}:${String(Math.floor(seconds % 60)).padStart(2, '0')}`;
 const STATUS = { active: 'active', away: 'away', offline: 'offline', reconnecting: 'reconnecting' };
 const LABEL = { active: 'Active', away: 'Away', offline: 'Offline', reconnecting: 'Connecting…' };
-const LOSSES = [[5, '5 s'], [20, '20 s'], [120, '2 min']]; // how long a lost connection lasts: two within step 8's grace, one past it
+const LOSSES = [[5, '5 s'], [20, '20 s'], [120, '2 min']]; // how long a lost connection lasts: two within step 9's grace, one past it
 const DROPS = [0, 0.25, 0.5, 1]; // the share of deliveries a faulty screen loses
 const DELAYS = [0, 2, 10]; // seconds a faulty screen gets each delivery late
 const KINDS = { input: 'Input', screen: 'Screen', lost: 'Lost', late: 'Late', fault: 'Fault', scenario: 'Scenario', version: 'Version', data: 'Data' };
@@ -157,6 +158,8 @@ export async function mount(root) {
   let query = ''; // the search, lowercased
   let part = 'experiments'; // the debugger's tab
   let migrating = false; // a version switch is under way
+  // the messages of each room or direct message you have seen, by "you\nroom": more is unread
+  const seen = new Map();
   const chat = await createChat(tinyactors, { versions: texts, version: LATEST, onChange: () => render() });
   // The people already talking: scout and forager in general, scout's find.
   await chat.connect('scout');
@@ -175,9 +178,14 @@ export async function mount(root) {
     search.value = '';
     query = '';
   }
-  // a result's channel, which opens it
+  // a room's name as you see it: a channel's with its #, a direct message's as the other person
+  const placeName = (name) => {
+    const dm = chat.screen(you).dms.find((each) => each.room === name);
+    return !dm ? `#${name}` : dm.with === you ? `${you} (you)` : dm.with;
+  };
+  // a result's channel or direct message, which opens it
   const channelLink = (name) => {
-    const link = el('button', { type: 'button', class: 'chatlive__in', title: `Open #${name}` }, `#${name}`);
+    const link = el('button', { type: 'button', class: 'chatlive__in', title: `Open ${placeName(name)}` }, placeName(name));
     link.addEventListener('click', () => { room = name; app.dataset.view = 'room'; clearSearch(); render(); });
     return link;
   };
@@ -273,14 +281,40 @@ export async function mount(root) {
     if (answer === 'room.created') { newRoom.value = ''; room = name; }
     render();
   });
+  // your direct messages, newest first, and the people: a person opens your direct message with them
+  const dmList = el('ul', { class: 'chatlive__people', 'aria-label': 'Direct messages' });
+  const dmSection = section('Direct messages', dmList);
   const people = el('ul', { class: 'chatlive__people', 'aria-label': 'People' });
+  const peopleNote = el('p', { class: 'chatlive__note chatlive__note--people', 'aria-live': 'polite' });
   const sidebar = el('nav', { class: 'chatlive__sidebar', 'aria-label': WORKSPACE },
     el('h3', { class: 'chatlive__workspace' }, WORKSPACE, icon('chevron')),
     section('Channels', roomList, createForm, createNote),
-    section('People', people));
+    dmSection,
+    section('People', people, peopleNote));
+  /** The direct message on your screen with `name`, or undefined. */
+  const dmWith = (name) => chat.screen(you).dms.find((dm) => dm.with === name);
+  /** Opens your direct message with `name` (yourself: your notes); the workspace makes it the first time. */
+  async function openDM(name) {
+    peopleNote.textContent = '';
+    if (chat.version() !== LATEST) {
+      peopleNote.textContent = `Step ${chat.version()}’s charts have no direct messages. Switch to step ${LATEST} in the debugger.`;
+      return;
+    }
+    // signed in, your actor asks the workspace; signed out or connecting, a direct message your screen has still opens
+    const made = selfState?.online ? await chat.openDM(you, name) : dmWith(name)?.room ?? null;
+    if (!made) {
+      peopleNote.textContent = `Sign in to message ${name}.`;
+      return;
+    }
+    room = made;
+    app.dataset.view = 'room';
+    clearSearch();
+    render();
+  }
 
   // ---- the room you look at
   const roomTitle = el('h3', { class: 'chatlive__title' });
+  const titleFace = face(you, 'small');
   const back = el('button', { type: 'button', class: 'chatlive__back', 'aria-label': 'Channels' }, icon('back'));
   back.addEventListener('click', () => { app.dataset.view = 'list'; });
   const banner = el('p', { class: 'chatlive__banner', role: 'status', hidden: '' },
@@ -373,6 +407,9 @@ export async function mount(root) {
       const result = await chat.useVersion(step);
       const pending = Array.isArray(result?.pending) ? result.pending.length : (result?.pending ?? 0);
       versionNote.textContent = `Migrated ${result?.migrated ?? 0} actors live, ${result?.failed?.length ?? 0} failed${pending ? `, ${pending} pending` : ''}`;
+      // step 5's charts have no direct messages: one open goes back to general
+      if (step !== LATEST && chat.screen(you).dms.some((dm) => dm.room === room)) room = 'general';
+      peopleNote.textContent = '';
     } catch (error) {
       versionNote.textContent = `The migration stopped: ${error.message}`;
     } finally {
@@ -425,7 +462,7 @@ export async function mount(root) {
     el('p', { class: 'chatlive__hint' }, 'A switch migrates every running actor to the other charts, without a restart.'), versionNote,
     el('h4', { class: 'chatlive__subheading' }, 'Scenarios'), scenarioList,
     el('h4', { class: 'chatlive__subheading' }, 'People'),
-    el('p', { class: 'chatlive__hint' }, `Step 8 waits ${GRACE} s before a lost connection is offline: ${within.join(' and ')} come back in time, ${past.join(' and ')} does not.`),
+    el('p', { class: 'chatlive__hint' }, `Step ${LATEST} waits ${GRACE} s before a lost connection is offline: ${within.join(' and ')} come back in time, ${past.join(' and ')} does not.`),
     personList);
 
   // the actors, and one actor's chart
@@ -588,7 +625,13 @@ export async function mount(root) {
     }
 
     // the sidebar
-    const rooms = actors.filter((actor) => actor.chart === 'room').map((actor) => actor.name.slice(5));
+    const rooms = actors.filter((actor) => actor.chart === 'room' && !actor.direct).map((actor) => actor.name.slice(5));
+    // a direct message of the other person's (after a person switch) is not yours: back to general
+    const dms = chat.version() === LATEST ? chat.directMessages(you) : [];
+    const yourDM = screen.dms.find((dm) => dm.room === room);
+    if (!rooms.includes(room) && !(yourDM && chat.version() === LATEST)) room = 'general';
+    const dm = chat.version() === LATEST ? screen.dms.find((each) => each.room === room) : undefined;
+
     keyed(roomList, rooms, (name) => {
       // a long name ends in an ellipsis, the whole of it in the title
       const button = el('button', { type: 'button', class: 'chatlive__room-link', title: `#${name}` },
@@ -600,33 +643,66 @@ export async function mount(root) {
       button.setAttribute('aria-current', String(name === room));
       button.classList.toggle('chatlive__room-link--joined', screen.rooms.includes(name));
     });
-    keyed(people, PEOPLE, (name) => el('li', {}, face(name, 'small'), el('span', { class: 'chatlive__name' }, name),
-      el('span', { class: 'chatlive__you-mark' }, 'you'), el('span', { class: 'chatlive__presence' })), (node, name) => {
+    // a person: avatar, presence, name; `note` says more to a screen reader. One button, which opens the direct message
+    const personButton = (name, open) => {
+      const button = el('button', { type: 'button', class: 'chatlive__person' }, face(name, 'small'), el('span', { class: 'chatlive__name' }, name),
+        el('span', { class: 'chatlive__you-mark' }, 'you'), el('span', { class: 'chatlive__presence' }));
+      button.addEventListener('click', open);
+      return el('li', {}, button);
+    };
+    const drawPerson = (button, name, state, current, extra = '') => {
+      const className = `chatlive__person chatlive__person--${state}${extra}`;
+      if (button.className !== className) button.className = className;
+      presence(button.firstChild, state);
+      button.children[2].hidden = name !== you;
+      button.setAttribute('aria-current', String(current));
+    };
+    dmSection.hidden = chat.version() !== LATEST;
+    // keyed by the room and the other person: switching person keeps no row of someone else's
+    const dmKey = (each) => `${each.room}\n${each.with}`;
+    keyed(dmList, dms.map(dmKey), (key) => personButton(key.split('\n')[1],
+      () => { room = key.split('\n')[0]; app.dataset.view = 'room'; clearSearch(); peopleNote.textContent = ''; render(); }), (node, key) => {
+      const each = dms.find((one) => dmKey(one) === key);
+      const count = screen.messages.filter((message) => message.room === each.room).length;
+      const unread = each.room !== room && count > (seen.get(`${you}\n${each.room}`) ?? 0);
+      const state = each.with === you ? yourStatus : STATUS[roster[each.with]] ?? 'unknown';
+      drawPerson(node.firstChild, each.with, state, !query && each.room === room, unread ? ' chatlive__person--unread' : '');
+      setText(node.firstChild.lastChild, `${state === 'unknown' ? '' : LABEL[state].toLowerCase()}${unread ? ', unread messages' : ''}`);
+      node.firstChild.title = `Message ${each.with}`;
+    });
+    keyed(people, PEOPLE, (name) => personButton(name, () => openDM(name)), (node, name) => {
       const state = STATUS[roster[name]] ?? 'unknown';
-      const className = `chatlive__person chatlive__person--${state}`;
-      if (node.className !== className) node.className = className;
-      presence(node.firstChild, state);
-      node.children[2].hidden = name !== you;
-      setText(node.lastChild, state === 'unknown' ? 'not on your screen' : LABEL[state].toLowerCase());
+      drawPerson(node.firstChild, name, state, false);
+      node.firstChild.title = chat.version() === LATEST ? `Message ${name}` : name;
+      setText(node.firstChild.lastChild, state === 'unknown' ? 'not on your screen' : LABEL[state].toLowerCase());
     });
 
     // the room
     const joined = screen.rooms.includes(room);
     // a search looks through every channel on your screen, as a client searches its workspace
     const searched = search.value.trim();
-    const heading = query ? `search\n${searched}` : `room\n${room}`;
+    const heading = query ? `search\n${searched}` : `room\n${room}\n${dm?.with === you ? 'you' : dm?.with}`;
     if (roomTitle.dataset.heading !== heading) {
       roomTitle.dataset.heading = heading;
+      // a direct message's title is the other person, with their presence, as a client's is
       if (query) roomTitle.replaceChildren(`Results for “${searched}”`);
+      else if (dm) roomTitle.replaceChildren(titleFace, dm.with, ...(dm.with === you ? [el('span', { class: 'chatlive__title-note' }, ' (you)')] : []));
       else roomTitle.replaceChildren(el('span', { class: 'chatlive__hash', 'aria-hidden': 'true' }, '#'), room);
-      roomTitle.title = query ? `Results for “${searched}”` : `#${room}`;
+      roomTitle.title = query ? `Results for “${searched}”` : placeName(room);
+      if (dm && titleFace.dataset.who !== dm.with) {
+        titleFace.dataset.who = dm.with;
+        titleFace.replaceChildren(...face(dm.with, 'small').childNodes);
+      }
     }
+    if (dm) presence(titleFace, dm.with === you ? yourStatus : STATUS[roster[dm.with]] ?? 'unknown');
+    main.setAttribute('aria-label', dm ? 'Direct message' : 'Channel');
     const inRoom = screen.messages.filter((message) => message.room === room);
     const here = query ? screen.messages.filter((message) => message.text.toLowerCase().includes(query)) : inRoom;
     const atBottom = messages.scrollHeight - messages.scrollTop - messages.clientHeight < 40;
     const empty = query ? `No messages on your screen match “${searched}”.`
-      : !joined && !inRoom.length ? `You have not joined #${room}.`
-        : 'No messages on your screen yet.';
+      : dm && !inRoom.length ? (dm.with === you ? 'Your notes. Only you see what you post here.' : `Your direct messages with ${dm.with} start here. Nobody else sees them.`)
+        : !joined && !inRoom.length ? `You have not joined #${room}.`
+          : 'No messages on your screen yet.';
     // one row per message, kept while the message stays on the screen; rebuilt only when its
     // header, time or the search's highlight changes
     const rows = new Map(here.map((message, index) => [keyOf(message), [message, here[index - 1]]]));
@@ -641,7 +717,7 @@ export async function mount(root) {
       const drawn = `${more}\n${message.at}\n${query}`;
       if (node.drawn === drawn) return;
       node.drawn = drawn;
-      // when the post was made (step 8's store records it), or on step 5 when it reached this screen
+      // when the post was made (step 9's store records it), or on step 5 when it reached this screen
       const stamp = el('time', { class: 'chatlive__at' }, clock(message.at));
       const body = el('p', { class: 'chatlive__body' }, ...marked(message.text, query));
       node.className = more ? 'chatlive__message chatlive__message--more' : 'chatlive__message';
@@ -650,6 +726,7 @@ export async function mount(root) {
         ...(query ? [channelLink(message.room)] : [])), body);
     });
     if (atBottom) messages.scrollTop = messages.scrollHeight;
+    if (!query) seen.set(`${you}\n${room}`, inRoom.length); // what is on screen now is read
     // the live region says each message new to this screen and room, not those there when you came
     const view = `${you}\n${room}`;
     const fresh = inRoom.filter((message) => !announced.has(keyOf(message)));
@@ -673,7 +750,7 @@ export async function mount(root) {
     join.disabled = reconnecting;
     signedOut.hidden = connected;
     join.textContent = `Join #${room}`;
-    text.placeholder = reconnecting ? 'Connecting…' : `Message #${room}`;
+    text.placeholder = reconnecting ? 'Connecting…' : dm?.with === you ? 'Jot something down' : `Message ${dm ? dm.with : `#${room}`}`;
     // step 5's charts send no typing notices, and no typing.stopped for those the newest sent before a switch
     const typers = connected && chat.version() === LATEST ? (screen.typing[room] ?? []).filter((name) => name !== you) : [];
     setText(typingLine, typers.length === 0 ? ''

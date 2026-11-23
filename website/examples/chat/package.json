@@ -2,7 +2,7 @@
   "name": "tinyactors-website-example-chat",
   "private": true,
   "type": "module",
-  "description": "The chat tutorial's five steps (tinyactors-napi/examples/chat-tutorial), against the published @tinyactors/node. Each step is a directory with a main.mjs and the output.txt the page shows.",
+  "description": "The chat tutorial's steps (tinyactors-napi/examples/chat-tutorial), against the published @tinyactors/node. Each step is a directory with a main.mjs and the output.txt the page shows.",
   "dependencies": {
     "@tinyactors/node": "0.4.0"
   }

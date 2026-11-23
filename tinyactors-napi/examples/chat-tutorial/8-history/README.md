@@ -80,3 +80,5 @@ Cat joined after two posts and read both from the store, each at its
 time; bob's second join added him once, so the third post reached him
 once. Cat was signed out for the fourth post, and read it five minutes
 later with the time it was posted.
+
+Next: [Direct messages](../9-direct-messages/).

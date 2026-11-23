@@ -2,14 +2,14 @@
 forager sees scout as offline
 scout's screen got: nothing
 scout went offline on forager's screen 3 times
--- step 8, scout in the tunnel
+-- step 9, scout in the tunnel
 forager sees scout as active
 scout's screen got: scout, are you there? | the sugar is by the oak | bring two more
 scout went offline on forager's screen once
--- step 5, migrated live to step 8 and back
+-- step 5, migrated live to step 9 and back
 on step 5 queen sees typing: nobody
-to step 8: 9 migrated, 0 failed
-on step 8 queen sees typing: scout
+to step 9: 9 migrated, 0 failed
+on step 9 queen sees typing: scout
 back to step 5, scout reconnecting: 9 migrated, 0 failed
 scout's connection is lost; step 5 has no reconnecting, so scout is signed out until the reconnect at 1:00
 scout is "offline"; queen's screen shows scout as offline
@@ -18,23 +18,33 @@ after the reconnect scout is {"online":"active"}; queen's screen shows scout as 
 scout's screen got: one | two | three | four | five | six
 forager's screen got: one | two | three | four | five
 lost on the way: 3
--- step 8: what nurse's screen missed, read from the store
+-- step 9: what nurse's screen missed, read from the store
 signed out and back: while you were out
 lost for 2 minutes and back: while you were out | in the grace | after the grace
 a dropped delivery, then the next post: while you were out | in the grace | after the grace | dropped | the next one
--- step 8: a post shows the time it was made, however late it reaches a screen
+-- step 9: a post shows the time it was made, however late it reaches a screen
 scout lost the connection from 0:00 to 0:09: one at 0:04 | two at 0:06
 a delivery 10 s late, then: one at 0:04 | two at 0:06 | three at 0:11
 nurse joins at 0:26 and reads: one at 0:04 | two at 0:06 | three at 0:11
 -- a late joiner, on each version
 step 5: nurse's screen got: bring a friend; scout's: sugar by the oak | bring a friend | bring a friend
-step 8: nurse's screen got: sugar by the oak | bring a friend; scout's: sugar by the oak | bring a friend
--- step 8 to step 5 and back, with posts on each side and a late joiner
-to step 5: 9 migrated, 0 failed; back to step 8: 9 migrated, 0 failed
+step 9: nurse's screen got: sugar by the oak | bring a friend; scout's: sugar by the oak | bring a friend
+-- step 9 to step 5 and back, with posts on each side and a late joiner
+to step 5: 9 migrated, 0 failed; back to step 9: 9 migrated, 0 failed
 scout's screen got: A | B | on step 5 | C | D | E
 forager's screen got: A | B | on step 5 | C | D | E
 queen joined late and got: A | B | C | D | E
 queen's posts carry the store's numbers: 1, 2, 3, 4, 5
 -- losing the connection of someone signed out, on each version
 step 5: queen has no connection to lose; queen was told nothing; signed in: nobody
-step 8: queen has no connection to lose; queen was told nothing; signed in: nobody
+step 9: queen has no connection to lose; queen was told nothing; signed in: nobody
+-- step 9: scout opens a DM with forager
+scout opened dm.forager.scout; the channels are still: general, random
+forager's DMs: scout, last: sugar by the oak
+scout sees typing in the DM: forager
+opened again from forager's side: dm.forager.scout
+scout's screen in the DM: scout: sugar by the oak | forager: on my way
+queen tries to join it: not a member; queen's DMs: 0; queen's screen holds: nothing
+scout's own notes: dm.scout
+to step 5: 9 migrated; scout opens a DM with forager: none, these charts have none
+back on step 9: queen tries to join it: not a member; queen's screen holds: nothing; forager's screen in the DM: sugar by the oak | on my way | back on step 9

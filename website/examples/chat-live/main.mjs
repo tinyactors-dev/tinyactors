@@ -1,9 +1,10 @@
 // The live chat, run in Node.js: what the page's controls do, printed as
 // the screens show it. The same scenario on step 5's charts and on step
-// 8's, a live migration between them (and from 8 to 5 and back, with posts
+// 9's, a live migration between them (and from 9 to 5 and back, with posts
 // on each side and a late joiner), a screen that loses deliveries, what a
-// screen missed read from the store on step 8, the times posts keep on
-// the way, and a lost connection of someone who has none.
+// screen missed read from the store on step 9, the times posts keep on
+// the way, a lost connection of someone who has none, and a direct message
+// (made once per pair, closed to a third person, on step 9 only).
 // Run: node main.mjs
 import * as tinyactors from '@tinyactors/wasm';
 import { readFileSync } from 'node:fs';
@@ -11,12 +12,12 @@ import { createChat, PEOPLE } from './chat.mjs';
 
 const read = (step) => Object.fromEntries(['workspace.scxml', 'room.scxml', 'user.scxml']
   .map((name) => [name, readFileSync(new URL(`./charts/step-${step}/${name}`, import.meta.url), 'utf8')]));
-const versions = { 5: read(5), 8: read(8) };
+const versions = { 5: read(5), 9: read(9) };
 const messages = (chat, name) => chat.screen(name).messages.map((m) => m.text).join(' | ') || 'nothing';
 const clock = (seconds) => `${Math.floor(seconds / 60)}:${String(Math.floor(seconds % 60)).padStart(2, '0')}`;
 const timed = (chat, name) => chat.screen(name).messages.map((m) => `${m.text} at ${clock(m.at)}`).join(' | ') || 'nothing';
 
-for (const version of [5, 8]) {
+for (const version of [5, 9]) {
   const chat = await createChat(tinyactors, { versions, version });
   await chat.scenario('tunnel');
   await chat.advance(2_000);
@@ -29,7 +30,7 @@ for (const version of [5, 8]) {
   chat.close();
 }
 
-console.log('-- step 5, migrated live to step 8 and back');
+console.log('-- step 5, migrated live to step 9 and back');
 const chat = await createChat(tinyactors, { versions, version: 5 });
 for (const name of ['queen', 'scout']) {
   await chat.connect(name);
@@ -37,10 +38,10 @@ for (const name of ['queen', 'scout']) {
 }
 await chat.typing('scout', 'general');
 console.log(`on step 5 queen sees typing: ${chat.screen('queen').typing.general?.join(', ') || 'nobody'}`);
-const there = await chat.useVersion(8);
-console.log(`to step 8: ${there.migrated} migrated, ${there.failed.length} failed`);
+const there = await chat.useVersion(9);
+console.log(`to step 9: ${there.migrated} migrated, ${there.failed.length} failed`);
 await chat.typing('scout', 'general');
-console.log(`on step 8 queen sees typing: ${chat.screen('queen').typing.general?.join(', ') || 'nobody'}`);
+console.log(`on step 9 queen sees typing: ${chat.screen('queen').typing.general?.join(', ') || 'nobody'}`);
 await chat.loseConnection('scout', 60);
 const back = await chat.useVersion(5);
 console.log(`back to step 5, scout reconnecting: ${back.migrated} migrated, ${back.failed.length} failed`);
@@ -69,7 +70,7 @@ console.log(`forager's screen got: ${messages(flaky, 'forager')}`);
 console.log(`lost on the way: ${flaky.log().filter((e) => e.kind === 'lost').length}`);
 flaky.close();
 
-console.log('-- step 8: what nurse\'s screen missed, read from the store');
+console.log('-- step 9: what nurse\'s screen missed, read from the store');
 const away = await createChat(tinyactors, { versions });
 for (const name of ['forager', 'nurse']) {
   await away.connect(name);
@@ -93,7 +94,7 @@ await away.post('forager', 'general', 'the next one');
 console.log(`a dropped delivery, then the next post: ${messages(away, 'nurse')}`);
 away.close();
 
-console.log('-- step 8: a post shows the time it was made, however late it reaches a screen');
+console.log('-- step 9: a post shows the time it was made, however late it reaches a screen');
 const kept = await createChat(tinyactors, { versions });
 for (const name of ['scout', 'forager']) {
   await kept.connect(name);
@@ -117,7 +118,7 @@ console.log(`nurse joins at ${clock(kept.now())} and reads: ${timed(kept, 'nurse
 kept.close();
 
 console.log('-- a late joiner, on each version');
-for (const version of [5, 8]) {
+for (const version of [5, 9]) {
   const late = await createChat(tinyactors, { versions, version });
   await late.connect('scout');
   await late.join('scout', 'general');
@@ -130,8 +131,8 @@ for (const version of [5, 8]) {
   late.close();
 }
 
-console.log('-- step 8 to step 5 and back, with posts on each side and a late joiner');
-const trip = await createChat(tinyactors, { versions, version: 8 });
+console.log('-- step 9 to step 5 and back, with posts on each side and a late joiner');
+const trip = await createChat(tinyactors, { versions, version: 9 });
 for (const name of ['scout', 'forager']) {
   await trip.connect(name);
   await trip.join(name, 'general');
@@ -140,8 +141,8 @@ await trip.post('forager', 'general', 'A');
 await trip.post('scout', 'general', 'B');
 const to5 = await trip.useVersion(5);
 await trip.post('forager', 'general', 'on step 5');
-const to8 = await trip.useVersion(8);
-console.log(`to step 5: ${to5.migrated} migrated, ${to5.failed.length} failed; back to step 8: ${to8.migrated} migrated, ${to8.failed.length} failed`);
+const to9 = await trip.useVersion(9);
+console.log(`to step 5: ${to5.migrated} migrated, ${to5.failed.length} failed; back to step 9: ${to9.migrated} migrated, ${to9.failed.length} failed`);
 for (const text of ['C', 'D', 'E']) await trip.post('forager', 'general', text);
 await trip.connect('queen');
 await trip.join('queen', 'general');
@@ -152,7 +153,7 @@ console.log(`queen's posts carry the store's numbers: ${trip.screen('queen').mes
 trip.close();
 
 console.log('-- losing the connection of someone signed out, on each version');
-for (const version of [5, 8]) {
+for (const version of [5, 9]) {
   const quiet = await createChat(tinyactors, { versions, version });
   await quiet.loseConnection('queen', 5); // nobody is signed in: queen has no connection to lose
   await quiet.advance(10_000);
@@ -161,3 +162,29 @@ for (const version of [5, 8]) {
   console.log(`step ${version}: ${quiet.log().find((e) => e.kind === 'fault').text}; queen was told ${told.join(', ') || 'nothing'}; signed in: ${signedIn.join(', ') || 'nobody'}`);
   quiet.close();
 }
+
+console.log('-- step 9: scout opens a DM with forager');
+const dm = await createChat(tinyactors, { versions });
+for (const name of ['scout', 'forager', 'queen']) await dm.connect(name);
+await dm.join('queen', 'general');
+const room = await dm.openDM('scout', 'forager');
+console.log(`scout opened ${room}; the channels are still: ${(await dm.rooms()).join(', ')}`);
+await dm.post('scout', room, 'sugar by the oak');
+const forager = dm.directMessages('forager');
+console.log(`forager's DMs: ${forager.map((each) => `${each.with}, last: ${each.last.text}`).join('; ')}`);
+await dm.typing('forager', room);
+console.log(`scout sees typing in the DM: ${dm.screen('scout').typing[room]?.join(', ') || 'nobody'}`);
+await dm.post('forager', room, 'on my way');
+console.log(`opened again from forager's side: ${await dm.openDM('forager', 'scout')}`);
+console.log(`scout's screen in the DM: ${dm.screen('scout').messages.filter((m) => m.room === room).map((m) => `${m.from}: ${m.text}`).join(' | ')}`);
+await dm.join('queen', room);
+console.log(`queen tries to join it: ${dm.screen('queen').notices.at(-1)}; queen's DMs: ${dm.directMessages('queen').length}; queen's screen holds: ${messages(dm, 'queen')}`);
+console.log(`scout's own notes: ${await dm.openDM('scout', 'scout')}`);
+const there5 = await dm.useVersion(5);
+console.log(`to step 5: ${there5.migrated} migrated; scout opens a DM with forager: ${await dm.openDM('scout', 'forager') ?? 'none, these charts have none'}`);
+await dm.useVersion(9);
+await dm.post('scout', room, 'back on step 9');
+const refusals = dm.screen('queen').notices.length;
+await dm.join('queen', room);
+console.log(`back on step 9: queen tries to join it: ${dm.screen('queen').notices.slice(refusals).join(', ') || 'let in'}; queen's screen holds: ${messages(dm, 'queen')}; forager's screen in the DM: ${dm.screen('forager').messages.filter((m) => m.room === room).map((m) => m.text).join(' | ')}`);
+dm.close();
