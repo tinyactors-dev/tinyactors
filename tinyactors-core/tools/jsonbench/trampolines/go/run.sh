@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# Build and run the Go trampoline spike: one line per function
-# (language, function, ns/call; Go rows add allocations per call).
+# Build and run the Go trampoline spike: one line per function and mode
+# (language, function, mode: writer, bytes or bytes+check; ns/call; Go rows
+# add allocations per call).
 #   run.sh [-n 1000000] [-runs 5]
 set -euo pipefail
 here="$(cd "$(dirname "$0")" && pwd)"
