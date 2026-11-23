@@ -83,7 +83,9 @@ canvas layer: ant.mjs (planted feet), Path2D of the rig
   the site's navigation (the same `nav-links` template as the header) and
   the ants switch (`role="switch"`). The greeting line sits in it as a
   polite live region and also shows briefly beside the button. Its words
-  live in `content/site.xml`.
+  live in `content/site.xml`. It fades out while it would cover an
+  element marked `data-presence-aside` (the live chat's window), unless
+  it has focus or its menu is open.
 
 ### The server
 

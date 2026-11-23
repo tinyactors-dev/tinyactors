@@ -242,7 +242,8 @@ export async function mount(root) {
   await chat.join('forager', 'general');
   await chat.post('scout', 'general', 'Found sugar by the old oak. Who can carry?');
 
-  const app = el('div', { class: 'chatlive__app', 'data-view': 'room' });
+  // data-presence-aside: the site's ant button steps aside while it would cover the window
+  const app = el('div', { class: 'chatlive__app', 'data-view': 'room', 'data-presence-aside': '' });
 
   // ---- the top bar: search, and the debugger's switch
   const search = el('input', { type: 'search', class: 'chatlive__search-field', placeholder: `Search ${WORKSPACE}`, 'aria-label': `Search ${WORKSPACE}`, maxlength: '80' });

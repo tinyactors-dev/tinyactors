@@ -21,6 +21,7 @@ function setup(root) {
   const toast = root.querySelector('.presence__toast');
   const count = root.querySelector('.presence__count');
   const number = root.querySelector('.presence__number');
+  stepAside(root);
   let enabled = read(local, PREF) !== 'off';
   toggle.setAttribute('aria-checked', String(enabled));
   root.dataset.state = enabled ? 'connecting' : 'off';
@@ -135,6 +136,37 @@ function setup(root) {
     root.querySelector('.presence__button').addEventListener('click', counted);
     return actor;
   }
+}
+
+// The button steps aside while it would cover a part of the page that
+// asks for its corner (data-presence-aside: the live chat's window, whose
+// bar and debugger reach the bottom right on a phone). It stays while
+// it has focus or its menu is open, so a keyboard never loses it.
+function stepAside(root) {
+  const menu = root.querySelector('.presence__menu');
+  const watched = new WeakSet();
+  const sizes = new ResizeObserver(() => schedule());
+  let pending = 0;
+  const check = () => {
+    pending = 0;
+    const own = root.getBoundingClientRect();
+    let covers = false;
+    for (const part of document.querySelectorAll('[data-presence-aside]')) {
+      if (!watched.has(part)) { watched.add(part); sizes.observe(part); }
+      const r = part.getBoundingClientRect();
+      if (r.left < own.right && r.right > own.left && r.top < own.bottom && r.bottom > own.top) { covers = true; break; }
+    }
+    const kept = root.contains(document.activeElement) || menu?.matches(':popover-open');
+    if (covers && !kept) root.dataset.aside = ''; else delete root.dataset.aside;
+  };
+  const schedule = () => { if (!pending) pending = requestAnimationFrame(check); };
+  addEventListener('scroll', schedule, { passive: true });
+  addEventListener('resize', schedule);
+  sizes.observe(document.body);
+  root.addEventListener('focusin', schedule);
+  root.addEventListener('focusout', schedule);
+  menu?.addEventListener('toggle', schedule);
+  schedule();
 }
 
 function idle(callback) {
