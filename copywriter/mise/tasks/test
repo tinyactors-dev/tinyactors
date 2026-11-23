@@ -1,5 +1,5 @@
 #!/usr/bin/env ruby
-#MISE description="The copywriter's tests: node:test of the charts and the core, then the acronym check of its files"
+#MISE description="The copywriter's tests: node:test of the charts and the core, the build, Playwright on the built extension and widget, then the acronym check of its files"
 # vim:ft=ruby
 
 # Each step is a command run from the project's directory; the task stops
@@ -20,6 +20,10 @@ end
 STEPS = [
   # node expands the glob itself, so it is passed as one argument.
   ['node tests (charts and core)', -> { %w[node --test test/*.test.mjs] }],
+  ['build', -> { %w[mise run build] }],
+  # Chromium drives the unpacked extension and the widget on a fixture page.
+  ['extension (Playwright)', -> { %w[node --test test/extension.spec.mjs] }],
+  ['widget and site (Playwright)', -> { %w[node --test test/embed.spec.mjs] }],
   ['acronyms', -> { ['mise', 'run', '//:check-acronyms', '--', *project_files] }],
 ].freeze
 

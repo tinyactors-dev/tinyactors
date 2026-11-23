@@ -1,0 +1,95 @@
+#!/usr/bin/env ruby
+#MISE description="Build the extension (dist/extension/, dist/copywriter-extension.zip) and the /copywriter/ site (dist/site/: the page, embed.js, tinyactors.wasm, the ZIP)"
+#MISE sources=["src/**/*", "site/**/*", "package.json", "package-lock.json", "mise/tasks/build"]
+#MISE outputs=["dist/site/index.html", "dist/site/embed.js", "dist/copywriter-extension.zip"]
+# vim:ft=ruby
+
+# esbuild (the pinned one, node_modules/.bin) bundles each entry point: the
+# extension's content script as a classic script (content scripts cannot be
+# modules), its pages and the widget as modules. The wasm module is copied
+# beside each and named by URL (wasmURL), so no bundler places it. The ZIP
+# is written here, entries sorted and dated 1980-01-01, so one tree gives
+# the same bytes on every host.
+
+require 'fileutils'
+require 'json'
+require 'zlib'
+
+ROOT = File.expand_path('../..', __dir__)
+DIST = File.join(ROOT, 'dist')
+EXTENSION = File.join(DIST, 'extension')
+SITE = File.join(DIST, 'site')
+ZIP = File.join(DIST, 'copywriter-extension.zip')
+SOURCE = File.join(ROOT, 'src/platform/extension')
+FONTS = File.join(ROOT, '../.agents/skills/tinyactors-design/assets/fonts')
+# The fonts the panel and the extension's pages name.
+FONT_FACES = [['IBM Plex Sans', 400, 'IBMPlexSans-400'], ['IBM Plex Sans', 500, 'IBMPlexSans-500'],
+              ['IBM Plex Sans', 600, 'IBMPlexSans-600'], ['IBM Plex Mono', 500, 'IBMPlexMono-500'],
+              ['Newsreader', 400, 'Newsreader-400']].freeze
+
+def run(*command)
+  system(*command, chdir: ROOT) or abort "build: #{command.first} failed"
+end
+
+def esbuild(entry, out, format:)
+  run(File.join(ROOT, 'node_modules/.bin/esbuild'), entry, '--bundle', "--format=#{format}", '--target=chrome116',
+      '--minify', '--legal-comments=eof', '--log-level=warning', "--outfile=#{out}")
+end
+
+# A ZIP of `dir`'s files, deflated, in name order, every date 1980-01-01.
+def zip(dir, out)
+  files = Dir.glob('**/*', base: dir).select { |name| File.file?(File.join(dir, name)) }.sort
+  body = String.new(encoding: Encoding::BINARY)
+  central = String.new(encoding: Encoding::BINARY)
+  date = (0 << 9) | (1 << 5) | 1 # 1980-01-01
+  files.each do |name|
+    data = File.binread(File.join(dir, name))
+    deflater = Zlib::Deflate.new(9, -Zlib::MAX_WBITS)
+    packed = deflater.deflate(data, Zlib::FINISH)
+    deflater.close
+    crc = Zlib.crc32(data)
+    offset = body.bytesize
+    body << [0x04034b50, 20, 0x0800, 8, 0, date, crc, packed.bytesize, data.bytesize, name.bytesize, 0].pack('VvvvvvVVVvv')
+    body << name.b << packed
+    central << [0x02014b50, 20, 20, 0x0800, 8, 0, date, crc, packed.bytesize, data.bytesize, name.bytesize, 0, 0, 0, 0,
+                0o100644 << 16, offset].pack('VvvvvvvVVVvvvvvVV') << name.b
+  end
+  ending = [0x06054b50, 0, 0, files.size, files.size, central.bytesize, body.bytesize, 0].pack('VvvvvVVv')
+  File.binwrite(out, body + central + ending)
+end
+
+run('npm', 'ci', '--no-audit', '--no-fund') unless File.exist?(File.join(ROOT, 'node_modules/.bin/esbuild'))
+version = JSON.parse(File.read(File.join(ROOT, 'package.json'))).fetch('version')
+wasm = File.join(ROOT, 'node_modules/@tinyactors/wasm/tinyactors.wasm')
+
+FileUtils.rm_rf(DIST)
+FileUtils.mkdir_p([EXTENSION, SITE])
+
+# The extension, unpacked.
+esbuild('src/platform/extension/content.mjs', File.join(EXTENSION, 'content.js'), format: 'iife')
+%w[sidepanel mic service-worker].each do |name|
+  esbuild("src/platform/extension/#{name}.mjs", File.join(EXTENSION, "#{name}.js"), format: 'esm')
+end
+manifest = JSON.parse(File.read(File.join(SOURCE, 'manifest.json')))
+manifest['version'] = version
+File.write(File.join(EXTENSION, 'manifest.json'), "#{JSON.pretty_generate(manifest)}\n")
+%w[sidepanel.html mic.html].each { |name| FileUtils.cp(File.join(SOURCE, name), EXTENSION) }
+FileUtils.cp_r(File.join(SOURCE, 'icons'), EXTENSION)
+FileUtils.mkdir_p(File.join(EXTENSION, 'fonts'))
+faces = FONT_FACES.map do |family, weight, file|
+  FileUtils.cp(File.join(FONTS, "#{file}.woff2"), File.join(EXTENSION, 'fonts'))
+  "@font-face { font-family: '#{family}'; font-weight: #{weight}; font-display: swap; src: url(fonts/#{file}.woff2) format('woff2'); }"
+end
+File.write(File.join(EXTENSION, 'fonts.css'), "#{faces.join("\n")}\n")
+FileUtils.cp(wasm, EXTENSION)
+zip(EXTENSION, ZIP)
+
+# The site: the page, the widget, its wasm, the extension's ZIP.
+esbuild('src/platform/embed/embed.mjs', File.join(SITE, 'embed.js'), format: 'esm')
+FileUtils.cp(File.join(ROOT, 'site/index.html'), SITE)
+FileUtils.cp(wasm, SITE)
+FileUtils.cp(ZIP, SITE)
+
+kb = ->(path) { "#{(File.size(path) / 1024.0).round} KB" }
+puts "build: dist/extension (#{Dir.glob('**/*', base: EXTENSION).count { |f| File.file?(File.join(EXTENSION, f)) }} files), " \
+     "dist/copywriter-extension.zip (#{kb.(ZIP)}), dist/site (embed.js #{kb.(File.join(SITE, 'embed.js'))})"
