@@ -265,7 +265,13 @@ export async function mount(root) {
   };
   const debugToggle = el('button', { type: 'button', class: 'chatlive__top-button', 'aria-label': 'Debugger', 'aria-pressed': 'false', title: 'Debugger and experiments' },
     icon('bug'), el('span', { class: 'chatlive__top-label' }, 'Debugger'));
-  debugToggle.addEventListener('click', () => openDebugger(debugToggle.getAttribute('aria-pressed') !== 'true'));
+  // opening it puts focus on its heading, so a keyboard is in it at once: it comes after the
+  // conversation in the page's order, as a client's side panes do, which a screen reader reads that way
+  debugToggle.addEventListener('click', () => {
+    const open = debugToggle.getAttribute('aria-pressed') !== 'true';
+    openDebugger(open);
+    if (open) debugTitle.focus();
+  });
   const top = el('div', { class: 'chatlive__top' },
     el('label', { class: 'chatlive__search' }, icon('search'), search),
     debugToggle);
@@ -1045,8 +1051,9 @@ export async function mount(root) {
 
   const closeDebugger = el('button', { type: 'button', class: 'chatlive__close', 'aria-label': 'Close debugger' }, icon('close'));
   closeDebugger.addEventListener('click', () => { openDebugger(false); debugToggle.focus(); });
+  const debugTitle = el('h3', { class: 'chatlive__title', tabindex: '-1' }, 'Debugger');
   const debug = el('aside', { class: 'chatlive__debug', 'aria-label': 'Debugger', hidden: '' },
-    el('header', { class: 'chatlive__bar-title' }, el('h3', { class: 'chatlive__title' }, 'Debugger'), closeDebugger),
+    el('header', { class: 'chatlive__bar-title' }, debugTitle, closeDebugger),
     el('div', { class: 'chatlive__details' },
       el('div', { class: 'chatlive__clockbar' },
         el('p', { class: 'chatlive__clock' }, 'Simulated time ', time),
@@ -1070,6 +1077,13 @@ export async function mount(root) {
     showChart();
     render();
   }
+  // Escape in the debugger closes it, as its close button does
+  debug.addEventListener('keydown', (event) => {
+    if (event.key !== 'Escape' || event.defaultPrevented) return;
+    event.preventDefault();
+    openDebugger(false);
+    debugToggle.focus();
+  });
   function openDebugger(open) {
     debug.hidden = !open;
     debugToggle.setAttribute('aria-pressed', String(open));
@@ -1225,7 +1239,8 @@ export async function mount(root) {
       const button = el('button', { type: 'button', class: 'chatlive__room-link', title: `#${name}` },
         el('span', { class: 'chatlive__hash', 'aria-hidden': 'true' }, '#'), el('span', { class: 'chatlive__room-name' }, name),
         el('span', { class: 'chatlive__room-note' }), el('span', { class: 'chatlive__room-count', 'aria-hidden': 'true', hidden: '' }));
-      button.addEventListener('click', () => openRoom(name));
+      // opening it puts focus where you act in it, as Browse and Activity do (on a phone: its title)
+      button.addEventListener('click', () => openRoom(name, true));
       return el('li', {}, button);
     }, (node, name) => {
       const button = node.firstChild;
@@ -1258,7 +1273,7 @@ export async function mount(root) {
     // keyed by the room and the other person: switching person keeps no row of someone else's
     const dmKey = (each) => `${each.room}\n${each.with}`;
     keyed(dmList, dms.map(dmKey), (key) => personButton(key.split('\n')[1],
-      () => openRoom(key.split('\n')[0])), (node, key) => {
+      () => openRoom(key.split('\n')[0], true)), (node, key) => {
       const each = dms.find((one) => dmKey(one) === key);
       const unread = unreadOn(screen, each.room);
       const state = each.with === you ? yourStatus : STATUS[roster[each.with]] ?? 'unknown';
@@ -1266,7 +1281,7 @@ export async function mount(root) {
       setText(node.firstChild.lastChild, `${state === 'unknown' ? '' : LABEL[state].toLowerCase()}${unread ? ', unread messages' : ''}`);
       node.firstChild.title = `Message ${each.with}`;
     });
-    keyed(people, PEOPLE, (name) => personButton(name, () => openDM(name)), (node, name) => {
+    keyed(people, PEOPLE, (name) => personButton(name, () => openDM(name, true)), (node, name) => {
       const state = STATUS[roster[name]] ?? 'unknown';
       drawPerson(node.firstChild, name, state, false);
       node.firstChild.title = chat.version() === LATEST ? `Message ${name}` : name;
