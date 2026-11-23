@@ -197,7 +197,7 @@ path       = root *segment
 root       = variable / %s"_event" / %s"_sessionid" / %s"_name"
            / %s"_ioprocessors"
 segment    = "." name / "[" index "]"
-index      = position / string / path
+index      = position / string / path / call
 position   = "0" / %x31-39 *DIGIT
 
 literal    = number / string / %s"true" / %s"false" / %s"null"
@@ -237,6 +237,12 @@ function   = name                       ; not a reserved word
 - **No operators** (the maintainer, 2026-11-23: "just JSON and function
   calls"). `hp <= 1` is `weak(hp)`. The W3C suite needed no more than 18
   small functions for that ("Validation").
+- **An index may be a call,** and `length(x)` is built in (an array's
+  items, a map's pairs, a text's bytes), so a chart appends without
+  passing the array through a function:
+  `<assign location="items[length(items)]" expr="newItem(_event.data)"/>`
+  writes at the array's length, which appends ("Writing a path"). A
+  function registered as `length` for a chart replaces it (decision 8).
 - **Calls nest** (`total(addItem(items, _event.data))`), evaluated
   innermost first, left to right, stopping at the first failure.
 - **Nesting is bounded:** calls and path indices to 16 levels, literals to
@@ -329,7 +335,8 @@ typedef struct ta_json_call {
     uint32_t argument_count;
     void *context;           /* the function's own, as registered */
     ta_bytes arguments;      /* one CBOR array of the arguments, valid during the call */
-    ta_cbor_writer *result;  /* write exactly one item */
+    ta_buffer *result;       /* lent: one encoded item, its length set; TA_ERROR_NO_MEMORY
+                                with length the room it needs */
     ta_string_view message;  /* a failing function sets it; the datamodel copies it */
 } ta_json_call;
 
@@ -340,10 +347,10 @@ typedef ta_status (*ta_json_function)(ta_json_call *call);
 |---|---|
 | `context` | what the application registered with the function: nothing for a C function, a closure's handle for a binding's trampoline |
 | `arguments` | the arguments as one CBOR array, in the chart's order, read with `ta_cbor_reader` or decoded by the language's serialization |
-| `result` | a writer over the datamodel's result room; the function writes one item, which the datamodel checks and makes canonical |
+| `result` | the datamodel's result room, lent: the function writes one encoded item into it, however its binding encodes (a `ta_cbor_writer` over the room in C and Swift, the language's own encoder in Go and Kotlin), and sets its length; the datamodel checks it ("Checking a result") |
 | `message` | a failure's text, for the datamodel's `failure` entry |
 
-- **`TA_OK` with one item written** is the function's value. Any other
+- **`TA_OK` with one item in the room** is the function's value. Any other
   status, or a result that is not one value of the table, is
   `error.execution`, with `message` in the event's `{"reason", "message"}`
   data (`src/core/core.c:211-240`).
@@ -352,10 +359,15 @@ typedef ta_status (*ta_json_function)(ta_json_call *call);
   It extends the datamodel's callback surface; it is no new kind of
   callback (decision 5).
 - **The result room** is one block of `max_document_bytes`, allocated with
-  the datamodel, which the writer fills without growing (a writer with no
-  allocator, `cbor.h:126-130`, `:159-162`): a result that does not fit is
-  `TA_ERROR_NO_MEMORY` there and `error.execution` with the reason
-  `memory`. A call allocates nothing.
+  the datamodel. A result that does not fit is `TA_ERROR_NO_MEMORY`, with
+  the room's `length` the size it needs, and `error.execution` with the
+  reason `memory`. A call allocates nothing.
+- **Checking a result:** the datamodel reads the bytes once with
+  `ta_cbor_reader` (well-formed, definite lengths, UTF-8 text, no tag but
+  32, no simple value but `false`, `true`, `null` and `undefined`) before
+  it uses them. A binding we write produces canonical value-table CBOR, so
+  the check guards against a binding's bug; whether a release build skips
+  it is decision 7.
 
 ### Fuel
 
@@ -381,8 +393,16 @@ A function must end: no fuel stops it once called.
 
 A binding registers one trampoline with each function, the closure as its
 `context`. The trampoline decodes `arguments` into the closure's
-parameter types, calls it, and encodes its result into `result`, with the
-serialization the language already has:
+parameter types, calls it, and puts its encoded result in the room, the
+cheapest way for its runtime. Where a call into C costs nothing (C,
+Swift, Python, Node) the binding streams the value through core's
+`ta_cbor_writer` over the room, as `tinyactors-core/docs/bindings.md`
+(section 9) asks of every binding. Where each call into C is a crossing
+(cgo about 90 ns, JNI about 150) streaming would cost a crossing per item,
+so Go and Kotlin encode with the language's own library and copy the bytes
+in once: a language-side codec, which section 9 forbids today and would
+allow for those runtimes. With the serialization the language already
+has:
 
 | | Arguments and result | Failure |
 |---|---|---|
@@ -393,10 +413,10 @@ serialization the language already has:
 | **wasm** | a side module's function set into the core's table and called directly, or a JavaScript function through an import | a status, or a thrown exception |
 
 On Kotlin each call is one call into the JVM, and on Go one cgo call;
-nothing else crosses, since every vtable entry runs in C. Their cost is
-**unverified** until each binding's first spike. For wasm, a side
-module's function through the table measured 3.43 ns a call on Node.js
-against 6.47 ns through a JavaScript import ("History").
+nothing else crosses, since every vtable entry runs in C. Their measured
+costs are under "Validation". For wasm, a side module's function through
+the table measured 3.43 ns a call on Node.js against 6.47 ns through a
+JavaScript import ("History").
 
 ## Payloads, events and loops
 
@@ -643,6 +663,48 @@ least of 5 runs; arguments `[[two items]]` for `hasItems` and
    `TA_CBOR_COUNT_LATER` (a `UINT32_C` macro) not at all:** a binding
    casts and redefines them.
 
+**Second round** (the same day, on the same branch, timed one program
+after another on an idle machine; `tools/jsonbench/RESULTS.md`): the
+result handed back as bytes in a lent room, with and without the check,
+and appending through an index that is a call.
+
+A function call, ns, the least of 5 runs of 1,000,000 (`newItem` returns
+one item from `[{"sku", "qty"}]`; "writer": through `ta_cbor_writer`,
+re-emitted item by item for Go and Kotlin; "bytes": copied into the room):
+
+| | `addItem` writer | bytes | bytes + check | `newItem` writer | bytes | bytes + check |
+|---|---|---|---|---|---|---|
+| C | 560 | 561 | 798 | 167 | 166 | 249 |
+| Go | 2,866 | 2,168 | 2,612 | 1,178 | 790 | 895 |
+| Kotlin | 2,100 | 1,399 | 1,712 | 700 | 479 | 599 |
+
+- **Bytes save what the re-emit cost:** 700 ns on Go's `addItem`, 700 on
+  Kotlin's, 300 to 400 on `newItem`; C, which writes into the room
+  either way, is unchanged. A Kotlin direct `ByteBuffer` over the room
+  saves a little more (1,335 and 439 ns) but kotlinx cannot encode into
+  one, so the copy only moves into Kotlin.
+- **The check costs** 240 ns on a three-item result and 80 on one item in
+  C (about 14 ns an item read), 7 to 20 on a boolean.
+
+Appending, ns per event, averaged while each of 64 actors' arrays grows
+to N items (two runs):
+
+| N | json, `addItem(items, …)` | json, `items[length(items)]` | quickjs, `concat` | quickjs, `items[items.length]` |
+|---|---|---|---|---|
+| 10 | 4,267 to 4,361 | 2,143 to 2,241 | 3,453 to 4,751 | 2,596 to 2,765 |
+| 50 | 13,352 to 14,484 | 3,251 to 3,412 | 4,171 to 4,305 | 2,587 to 2,709 |
+| 200 | 50,515 to 51,563 | 7,559 to 8,493 | 6,972 to 7,763 | 2,527 to 4,821 |
+
+- **Naming only the new item** makes appending 2 to 7 times cheaper than
+  passing the array through a function and back, and cheaper than quickjs
+  at 10 items. Turning the check off saves 5 % of an append and up to 20 %
+  of an `addItem`.
+- **It still grows with the array:** 7.6 µs at 200 items against
+  quickjs's 2.5 to 4.8. Each write walks the containers it changes to find
+  their ends (`item_size`) and copies the document; most likely the walk
+  dominates at this size (4.4 KB copied), unverified. An index of each
+  container's end, or a count kept with the document, would remove it.
+
 **What the spike simplified,** so a real layer differs: `_event` is built
 at `bind_event` as one map with its data copied in (the proposal keeps a
 reference); a `<foreach>` copies its array (the proposal keeps a
@@ -672,7 +734,15 @@ overstate the memory and the time per event.
    rules. Accept it as part of the datamodel's callback surface, and update
    the rule and C6 to say which callbacks the public headers hold?
 6. **A function's result as bytes** in a `ta_buffer` the datamodel lends,
-   in place of `ta_cbor_writer` ("Validation", item 1).
+   in place of `ta_cbor_writer`: measured on the branch, it saves 300 to
+   700 ns a call in Go and Kotlin and costs C nothing ("Validation",
+   second round). With it, `bindings.md` section 9 allows a language-side
+   codec where a call into C is a crossing (Go, the JVM).
+7. **Checking a function's result:** always (240 ns on a three-item
+   result, 5 to 20 % of an event), or only in debug builds and the
+   conformance suite, trusting the binding's encoder in release.
+8. **`length` built in,** and an index that may be a call: a reserved
+   name, or one a chart's own function may replace (as the spike does).
 
 ## Appendix A: an order, end to end
 
