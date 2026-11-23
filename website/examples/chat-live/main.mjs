@@ -44,12 +44,16 @@ console.log(`on step 8 queen sees typing: ${chat.screen('queen').typing.general?
 await chat.loseConnection('scout', 60);
 const back = await chat.useVersion(5);
 console.log(`back to step 5, scout reconnecting: ${back.migrated} migrated, ${back.failed.length} failed`);
-// step 5 has no reconnecting: the migration puts scout in the chart's initial state, offline,
-// and nothing tells the workspace, so queen's screen still shows scout active
+// step 5 has no reconnecting: the program signs scout out before the migration, and the reconnect
+// the agenda holds signs scout in again
+console.log(chat.log().find((e) => e.kind === 'version' && e.text.startsWith('scout')).text);
 await chat.advance(1_000); // an event loads scout from the store
 await chat.typing('scout', 'general');
 const scout = await chat.state('user.scout');
 console.log(`scout is ${scout.stored ? 'in the store' : JSON.stringify(scout.value)}; queen's screen shows scout as ${chat.screen('queen').roster.scout}`);
+await chat.advance(60_000);
+const returned = await chat.state('user.scout');
+console.log(`after the reconnect scout is ${returned.stored ? 'in the store' : JSON.stringify(returned.value)}; queen's screen shows scout as ${chat.screen('queen').roster.scout}`);
 chat.close();
 
 console.log('-- forager\'s screen loses half of what reaches it');

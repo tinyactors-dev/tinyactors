@@ -50,6 +50,17 @@ On step 5 the page shows no typing indicator: those charts send none,
 and a switch to them clears the indicators, since they never send the
 `typing.stopped` that would end one step 8 started.
 
+Step 5 has no `reconnecting` state either. A live migration would put a
+person whose connection is lost in step 5's initial state, `offline`,
+without running its entry actions, so the workspace would never hear of
+it and everyone's roster would still show them active. So before a
+switch to step 5 the program ends each lost connection as an application
+on step 5's charts would have: it sends `disconnect` (step 8's chart
+then goes to `offline` and tells the workspace), keeps the reconnect the
+agenda holds, which signs the person in again, and says so in the log.
+A switch to step 8 needs nothing: on step 5 a lost connection is offline
+already.
+
 On step 8 a channel's history is data this program stores (`chat.mjs`,
 `history`: the `chat:history` I/O processor the room chart sends each
 post to). The store numbers each channel's posts, records when each was

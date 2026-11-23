@@ -11,7 +11,9 @@ on step 5 queen sees typing: nobody
 to step 8: 9 migrated, 0 failed
 on step 8 queen sees typing: scout
 back to step 5, scout reconnecting: 9 migrated, 0 failed
-scout is "offline"; queen's screen shows scout as active
+scout's connection is lost; step 5 has no reconnecting, so scout is signed out until the reconnect at 1:00
+scout is "offline"; queen's screen shows scout as offline
+after the reconnect scout is {"online":"active"}; queen's screen shows scout as active
 -- forager's screen loses half of what reaches it
 scout's screen got: one | two | three | four | five | six
 forager's screen got: one | two | three | four | five

@@ -485,7 +485,7 @@ export async function mount(root) {
     const told = PEOPLE.filter((name) => name !== you && ['active', 'away'].includes(mine[name]))
       .map((name) => chat.screen(name).roster[you]).find(Boolean);
     if (told === 'offline') return null;
-    if (last === 'reconnecting' && chat.reconnects(you) !== null) return last;
+    if (last === 'reconnecting' && chat.reconnects(you) !== null && chat.version() === LATEST) return last;
     if (!told) return asSelf(last);
     return { online: told };
   }

@@ -407,6 +407,17 @@ export async function createChat(tinyactors, { versions, version = LATEST, seed 
      */
     useVersion: (step) => act(async () => {
       if (step === current) return null;
+      // step 5 has no reconnecting: the migration would put a person whose connection is lost in
+      // step 5's initial state, offline, running no onentry, so the workspace would never hear of
+      // it. Ended first as an application on step 5 would have: signed out now, and back at the
+      // reconnect the agenda holds (step 5's connect)
+      if (step !== LATEST) {
+        for (const [name, entry] of losses) {
+          tell(name, 'disconnect');
+          note('version', `${name}'s connection is lost; step ${step} has no reconnecting, so ${name} is signed out until the reconnect at ${minutes(entry.at / 1000)}`);
+        }
+        await host.idle();
+      }
       host.addImage(images[step]);
       const done = new Promise((resolve) => { migrating = resolve; });
       host.migrate({ wake: true });
