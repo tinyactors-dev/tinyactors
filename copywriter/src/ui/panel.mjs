@@ -172,6 +172,7 @@ export function mountPanel(root, reviewer, { layout = 'sidebar' } = {}) {
   const keys = {};
   let state = reviewer.getState();
   let lastPlace = null;
+  let lastChosen = null;   // the card previewed when last drawn: a new one is scrolled into view, Keep with it
   let lastCount = 0;
   let alive = true;
   let scheduled = false;
@@ -863,6 +864,9 @@ export function mountPanel(root, reviewer, { layout = 'sidebar' } = {}) {
     if (where !== lastPlace) main.scrollTop = where === 'chat' || where.startsWith('detail:') ? main.scrollHeight : 0;
     else if (n > lastCount && (nearBottom || where !== 'list')) main.scrollTop = main.scrollHeight;
     else main.scrollTop = scroll;
+    const chosen = a && a.state === 'previewing' ? `${a.id}:${a.chosenID}` : null;
+    if (chosen && chosen !== lastChosen) main.querySelector('.cw-card.is-chosen')?.scrollIntoView({ block: 'nearest' });
+    lastChosen = chosen;
     lastPlace = where;
     lastCount = n;
   }

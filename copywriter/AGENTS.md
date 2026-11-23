@@ -235,7 +235,11 @@ Charts in `charts/`, one actor per annotation plus one per page session.
 Actors reach the world only through `<send type="...">` to I/O processors
 the core registers: `page`, `model`, `store`, `ui`, and `spawn` (the
 package's `Spawner`: the session actor spawns an annotation actor for each
-`propose_rewrite` of the page chat that names `original_text`). A processor
+`propose_rewrite` of the page chat that names `original_text`). When the
+model answers the page chat with function calls only, the `model`
+processor sends their results back once (the model's turn as it came,
+then a `functionResponse` per call) and takes the words of that second
+answer; failing that, the message lists the proposals (`proposed`). A processor
 answers with an event (`model.reply`, `model.error`, `page.located`,
 `page.previewed`, ...) or fails the send (`error.communication`). Each
 chart's header comment lists its sends and answers. The UI is never called

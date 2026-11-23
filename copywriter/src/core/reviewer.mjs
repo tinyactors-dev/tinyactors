@@ -5,7 +5,7 @@
 
 import { init, compileCharts, Host, Spawner } from '@tinyactors/wasm/init';
 import { charts } from './charts.mjs';
-import { generate, contents, reading } from './gemini.mjs';
+import { generate, contents, reading, callResults } from './gemini.mjs';
 import { DEFAULT_MODEL, MODELS, listModels, checkKey } from './models.mjs';
 import { DEFAULT_PERSONA } from './personas.mjs';
 import { createIndexedDBStore, createMemoryStore } from './store.mjs';
@@ -247,11 +247,20 @@ export function createReviewer({
       intro.push('To propose a change to a piece of the page\'s text, call propose_rewrite with original_text copied exactly from the page:',
         'one sentence, heading or paragraph, never more.');
     }
-    const result = await generate({
+    const request = {
       apiKey, fetch, model: settings.model, system: intro.filter((l) => l !== null).join('\n'),
       contents: contents(messages, { prompt, clip }),
-    });
-    const { text, rewrites, note } = reading(result);
+    };
+    const result = await generate(request);
+    const { rewrites, note } = reading(result);
+    let { text } = reading(result);
+    if (!text && event === 'chat' && result.calls.length) {
+      // Function calls only: their results go back, and the model says in
+      // words what it proposed and why. Failing that, the proposals speak.
+      try {
+        text = (await generate({ ...request, contents: [...request.contents, ...callResults(result)] })).text;
+      } catch { /* the proposals below */ }
+    }
     if (event === 'chat') {
       // The text the model names, anchored where it is on the page.
       for (const r of rewrites) {

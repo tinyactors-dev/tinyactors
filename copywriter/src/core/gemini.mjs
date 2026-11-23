@@ -96,7 +96,20 @@ export function parse(body) {
     if (typeof part.text === 'string') texts.push(part.text);
     if (part.functionCall) calls.push({ name: part.functionCall.name, args: part.functionCall.args || {} });
   }
-  return { text: texts.join('').trim(), calls };
+  // the parts as given (thought signatures included), to send back with the calls' results
+  return { text: texts.join('').trim(), calls, parts: candidate.content?.parts || [] };
+}
+
+/**
+ * The turns that answer a reply of function calls: the model's own turn
+ * as it came, then each call's result. Sent again with the same request,
+ * they ask the model for the words it left out.
+ */
+export function callResults({ parts, calls }, result = 'Shown to the reviewer as a proposal to preview.') {
+  return [
+    { role: 'model', parts },
+    { role: 'user', parts: calls.map((c) => ({ functionResponse: { name: c.name, response: { result } } })) },
+  ];
 }
 
 /**

@@ -322,3 +322,19 @@ test('the page chat: a failure is the chat\'s error, not a message; the next mes
   assert.equal(chat.messages.at(-1).proposed, undefined);
   reviewer.close();
 });
+
+test('the page chat: function calls only, then the calls\' results go back and the model says it in words', async () => {
+  const fetch = fakeFetch(
+    geminiReply('', [['propose_rewrite', { original_text: 'Actors are cheap', replacement: 'An actor costs 287 bytes', rationale: 'A number.' }]]),
+    geminiReply('“Actors are cheap” is the vaguest line: the page measures an actor, so say the number.'));
+  const { reviewer } = await setup({ fetch });
+  await reviewer.dispatch({ type: 'chat', text: 'Weakest sentence?' });
+  const reply = reviewer.getState().chat.messages.at(-1);
+  assert.equal(reply.text, '“Actors are cheap” is the vaguest line: the page measures an actor, so say the number.');
+  assert.equal(reply.proposed, undefined);
+  assert.equal(reply.annotations.length, 1);
+  const again = fetch.requests[1].body.contents;
+  assert.deepEqual(again.at(-2).parts[0].functionCall.name, 'propose_rewrite', 'the model\'s turn as it came');
+  assert.equal(again.at(-1).parts[0].functionResponse.name, 'propose_rewrite');
+  reviewer.close();
+});
