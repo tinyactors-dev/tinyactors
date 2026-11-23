@@ -1,18 +1,20 @@
-# A struct datamodel: fixed fields, the application's compiled functions
+# A struct datamodel: the application's types, functions and data paths
 
-**Status:** Sketch (2026-11-21), revised after an adversarial review the
-same day (what it changed is under "Review").
-**Touches:** tinyactors-core (a new datamodel layer, `src/datamodel_struct`,
-and its header), tinyactors-napi's `@tinyactors/wasm` (its C and its
-JavaScript), the website's anthill.
+**Status:** Sketch (2026-11-21; rewritten 2026-11-23, see "What changed
+from the first sketch").
+**Touches:** tinyactors-core (a new freestanding layer,
+`src/datamodel_struct`, and its header); each binding that offers it
+(`@tinyactors/wasm` first; Swift, Kotlin and Go when they exist); the
+website's anthill.
 **Not a plan:** nothing here is decided or scheduled. ADRs and roadmaps win.
 
 ## Goal
 
-A chart whose variables are a C struct and whose guards and actions are
-functions the application compiled, called by name from the chart. A
-session's state is a fixed number of bytes; a guard is one indirect call
-on those bytes, with no runtime of another language in between.
+A chart whose variables are a struct the application declares in its own
+language, whose `<data>`, `<assign>` and every `*expr` attribute are data
+paths into that struct and the event, and whose decisions and actions are
+the application's functions, called by name with arguments the chart
+names:
 
 ```xml
 <scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0"
@@ -20,407 +22,493 @@ on those bytes, with no runtime of another language in between.
   <datamodel>
     <data id="colony" expr="0"/>
     <data id="hp" expr="2"/>
+    <data id="queen"/>
   </datamodel>
   <state id="worker">
-    <transition event="fight" cond="weak" target="dead"/>
-    <transition event="fight"><script>hurt</script></transition>
-    ...
+    <transition event="fight" cond="weak(hp)" target="dead"/>
+    <transition event="fight">
+      <assign location="hp" expr="hurt(hp, _event.data.damage)"/>
+    </transition>
+    <transition event="food">
+      <send targetexpr="queen" event="food">
+        <param name="amount" expr="_event.data.amount"/>
+      </send>
+    </transition>
   </state>
   <final id="dead"/>
 </scxml>
 ```
 
-```c
-struct ant { double colony, hp; };            /* the <data> in document order */
-int32_t weak(struct ant *ant) { return ant->hp <= 1; }
-int32_t hurt(struct ant *ant) { ant->hp -= 1; return 0; }
-```
+The state is a fixed number of bytes known before the first spawn; a guard
+is one indirect call on those bytes; the chart says what flows where, and
+the code says only how to compute.
 
 ## Whom it serves, and who pays
 
-- **First, the C embedder and the application developer on
-  `@tinyactors/wasm`** whose actors are many and simple (a simulation, a
-  game, a fleet of devices), and whose logic is in a compiled language
-  already. They ask how many actors and decisions a machine holds; today
-  the ECMAScript datamodel's work is the largest single part of a
-  decision (measured below).
-- **Then the capacity planner:** a session's datamodel cost is a fixed
-  number of bytes known from the chart, in the module's memory, where the
-  anthill's memory chart already counts it.
+- **First, the application developer in a compiled language without an
+  `eval`:** Swift and Kotlin (no expression language to run in either,
+  on iOS and Android), Go, C, and C, Rust or Zig compiled to wasm under
+  `@tinyactors/wasm`. Today their charts must be ECMAScript on quickjs,
+  with their own code only in services and I/O processors. Here their
+  code is the chart's logic, in their types, with nothing interpreted
+  between.
+- **Then the capacity planner:** a session's datamodel cost is its
+  struct's size, known from the types, not measured after the fact.
+- **Then the binding author:** the datamodel is one C layer every binding
+  links. A binding adds only how its language describes a type and how it
+  calls a function (below, "Per language"); nothing of the datamodel is
+  written twice.
 - **Who pays:**
-  - core: one datamodel layer, freestanding, linked only by those who use
-    it: the null datamodel's entries plus a reader of names and integer
-    literals, two tables, payload rows and their CBOR (size
-    **unverified**);
-  - `@tinyactors/wasm`: more than one option. Its host takes one datamodel
-    today (`wasm/src/host.c:227`), accepts input data only for an
-    `"ecmascript"` chart (`ta_web_host_takes_data`, `host.c:693-718`;
-    `lib/host.mjs:314-324`), and reads every SEND's payload with its one
-    ECMAScript datamodel, whatever the effect's datamodel index says
-    (`lib/host.mjs:300-309`). It needs a second binding, payloads routed by
-    the chart's datamodel in C and JavaScript, effects read by their
-    datamodel index, the side-module loader, and snapshots of two states;
-  - per event: nothing for charts on other datamodels; one indirect call
-    per guard or action on this one.
-- **Out of scope:** `@tinyactors/node` and `tinyactors` for Python. Their
-  application code is JavaScript or Python, which their native datamodels
-  already run; native functions there would need a loadable library per
-  platform. Sandboxing: the functions are the application's trusted code,
-  as a native chart's ECMAScript is. Charts written by someone else belong
-  on quickjs, or on staticjs once its datamodel exists. Mixed images, where
-  a struct chart exchanges data with a chart on another datamodel (below,
-  "Open in core").
+  - core: one freestanding layer (a path parser, a type checker run at
+    attach, the conversions between the struct and CBOR, two `ta_table`s),
+    linked only by those who register it; size **unverified**;
+  - per event, on this datamodel: `bind_event` keeps a reference on the
+    payload; each guard or action is its arguments copied into a buffer and
+    one indirect call; per event on other datamodels: nothing;
+  - per actor: the struct's size, rounded to its alignment, and a session
+    row;
+  - each binding: a type describer and a function trampoline (below).
+- **Out of scope:** Python's and Node's own datamodels, which already run
+  their language. A sandbox: the functions are the application's trusted
+  code, as a native ECMAScript chart's code is; charts written by someone
+  else belong on quickjs. A type system in SCXML: the chart names
+  variables and functions, and the application's types say what they are.
 
 ## What exists, and why it does not do this
 
 | Datamodel | Where a guard runs | Why not this |
 |---|---|---|
-| `null` (core) | nowhere: conditions are `In()` only | no variables; the ant's `hp` must become states |
-| `"ecmascript"`, native (`@tinyactors/wasm`, `@tinyactors/node`) | the application's JavaScript engine, through the import `ta_web.datamodel` for each vtable entry (`wasm/src/datamodel.c:59-76`) | each entry crosses into JavaScript; a session is a scope object on the JavaScript heap (Node: 197 B at rest, `tinyactors-napi/AGENTS.md`; the wasm package's is **unverified**) |
-| `"ecmascript"`, quickjs | quickjs inside the module | an interpreter per evaluation, a heap per session |
-| staticjs ([proposal](staticjs.md), its datamodel not built) | a pure, total subset of JavaScript compiled to bytecode in C | see below |
+| `null` (core) | nowhere: conditions are `In()` only | no variables |
+| `"ecmascript"` on quickjs | an interpreter inside core | the application's logic is written again in JavaScript; a heap per session |
+| a binding's native datamodel (`"python"`, Node's `"ecmascript"`) | the language's own runtime | needs a language that evaluates text at run time; Swift, Kotlin, Go and C have none |
+| staticjs (its datamodel not built) | a pure subset of JavaScript compiled in C | an expression language of its own; not chosen now |
 
-staticjs aims at the same speed for actors as a control layer ("a guard
-costs tens of nanoseconds, not a call into another runtime"), with no
-side effects, modules and a sandbox. Once its datamodel exists it could
-run the anthill's ant as it is (`hp <= 1`, `hp - 1`) with no compiled
-module at all. What a struct datamodel adds is different: it calls code
-the application already compiled, mutates state in place, and a session's
-size is fixed by its chart. Which of the two the anthill should show is
-decision 6.
+## The model
 
-## Measured
+Three things, and nothing else: **types** the application declares,
+**functions** it registers by name, and **data paths** the chart writes.
+The layer is configured once per host with all three; each chart on
+`"struct"` names its session's type by the chart's name.
 
-On one machine (x86_64 Linux 6.18, 4 CPUs, Node.js 22.23.5, Bun 1.4.1,
-Chromium 157), 2026-11-21: the website's anthill
-(`website/examples/anthill`), one colony of 500,000 ants on
-`@tinyactors/wasm` 0.4.0, 300 frames of 50 ms, the last 200 timed. The
-review reran it and got 6.89 to 7.22 µs and 4.08 µs.
+### Types are descriptors the application's language fills
 
-| The ant on | Per decision | Per spawn |
+Core does not lay out memory. A type is a descriptor: its size, its
+alignment, and its fields, each with a name, a kind and an offset. C fills
+it with `offsetof` and `sizeof`; a binding fills it from its language's
+own type (below). Core checks every descriptor once: fields inside the
+size, aligned, not overlapping. It then reads and writes only through
+those offsets, so a wrong descriptor gives wrong values but never a write
+outside a session's bytes.
+
+| Kind | In memory at its offset | As a neutral value (CBOR) |
 |---|---|---|
-| `"ecmascript"`, native | 7.36, 7.20 µs | 10.33, 10.83 µs |
-| `null` (`hp` as a parallel region, the stage as two charts; the queen still on ECMAScript) | 4.22, 4.12 µs | 3.69, 3.90 µs |
+| `BOOL` | 1 byte, 0 or 1 | `false`, `true` |
+| `I32`, `I64` | two's complement, the machine's byte order | an integer (refused out of range) |
+| `F64` | IEEE double | a float, or an integer exactly representable |
+| `TEXT` (capacity N) | a `uint32_t` length, then N bytes of UTF-8 | text (refused when longer than N or not UTF-8) |
+| `ADDRESS` (capacity N) | as `TEXT`, holding an actor's address | tag 32 on the text |
+| `STRUCT` (a type) | the nested type's bytes | a map of its fields by name |
+| an array of any of these (capacity N) | a `uint32_t` count at its `count_offset`, then N elements at its stride | an array of at most N |
+| `VALUE` | a payload handle (8 bytes), 0 for undefined | any neutral value |
 
-What the null row bounds: the cost of the datamodel's entries per event
-(`bind_event`, `detach_event`, a cond per transition tried). One colony
-has no enemies, so no `fight` came and no guard or action of the ant's
-ran in either row; a struct datamodel's indirect calls are not in the
-bound, and its estimate (near 4.3 µs) is **unverified** until built.
+- **Fixed capacity, inline.** Text and arrays live inside the struct with a
+  capacity the descriptor states, so a session is one block of known size,
+  hibernation and snapshots copy no pointer, and every language can read
+  it as bytes. A write past a capacity is `error.execution`.
+- **`VALUE` is the escape hatch:** a field that holds any neutral value
+  as a payload reference (the datamodel's own rows, below), for data the
+  application does not want to type, such as a whole `_event.data` kept
+  for later. A function receives it as CBOR bytes, valid during the call.
+  It is the only field that is not inline, and the only one whose size a
+  capacity planner cannot read from the type.
+- **The chart's `<data>` ids are exactly the type's fields.** A `<data>`
+  with no field, or a field with no `<data>`, refuses the attach: the
+  chart declares the state (SCXML 5.2), the type lays it out. `<data
+  expr>` initializes the field (below, "Data paths"); no `expr` leaves it
+  zero.
 
-Profiles of the two runs: the datamodel's JavaScript is about 21% of the
-native run (`datamodel.mjs` and the realm); the null run spends 50% in the
-module, 20% in the world (the application's I/O processor) and about 23%
-in the package's JavaScript around effects. The native profile also holds
-15% of shutdown work: 0.4.0's `close()` throws once per actor (fixed in
-`lib/host.mjs`, not released), which the profiled whole run included.
+### Functions are called by name, with arguments the chart names
 
-A spike (session scratchpad, `spike-table/`) settled how a second
-module's functions reach the core's code without JavaScript:
+A function is registered under a name with its kind, its argument type
+(a descriptor like any other: argument *i* is field *i*) and, for a
+value function, its result's kind:
 
-- A function exported by a module that imports the core's memory, set
-  into the core's function table, is called by `call_indirect` from C and
-  reads and writes the core's memory in place: 3.43 ns a call on Node.js,
-  2.84 on Bun, 2.88 on Chromium, against 6.47, 6.65 and 8.05 ns for the
-  same work through a JavaScript import.
-- **A module built the usual way corrupts the core.** Linked with
-  `--import-memory` alone, it places its data at address 1024 and its
-  stack near 66 KB of the shared memory: it overwrote the spike's data
-  when it was instantiated and 186 bytes when one function ran. In
-  `tinyactors.wasm` (stack first: `__stack_pointer` at 393216, data from
-  there) both land in the low part of the core's stack.
-- **A side module does not** (the dynamic-linking convention of
-  [WebAssembly's tool conventions](https://github.com/WebAssembly/tool-conventions/blob/main/DynamicLinking.md),
-  `clang --target=wasm32 -fPIC -Wl,--experimental-pic -Wl,-shared`): it
-  imports its memory base (and, when it uses them, the stack pointer, the
-  table and the table base), and its `dylink.0` section says how many
-  bytes of data and zeroed data it needs. Given a block the core allocated
-  as its memory base and the core's own stack pointer, its data landed in
-  its block and its stack in the core's stack, and both functions ran
-  correctly through the table.
+| Kind | Used in | Gets | Answers |
+|---|---|---|---|
+| guard | `cond` | the session's fields, read only; its arguments | a `BOOL` result |
+| value | any value expression: `<assign expr>`, `<param expr>`, `<data expr>`, `<log expr>`, `*expr` | the same | its result, converted to the location's kind |
+| action | `<script>` (executable content, and the chart's top-level `<script>` once at the start) | the session's fields, writable; its arguments | nothing |
 
-## The datamodel
+Every function has one signature, in every language:
 
-Named `"struct"` in a chart's `datamodel` attribute. It needs no change to
-core's datamodel interface (`include/tinyactors/datamodel.h`); what core
-must settle first is under "Open in core".
+```c
+typedef struct ta_struct_call {
+    void *context;          /* the function's own, as registered: a closure, a handle, an index */
+    void *fields;           /* the session's struct; a guard and a value function must not write it */
+    const void *arguments;  /* laid out as the function's argument type */
+    void *result;           /* a value function's result, laid out as its result kind */
+    ta_string_view message; /* a failing function may set it: error.execution's message */
+    ta_bytes (*value)(const struct ta_struct_call *call, uint64_t handle); /* a VALUE field's CBOR */
+} ta_struct_call;
 
-### Variables are a struct of doubles
+typedef int32_t (*ta_struct_function)(ta_struct_call *call); /* 0: done; nonzero: error.execution */
+```
 
-- Every `<data>` of the chart, in document order, is a field of 8 bytes
-  holding an IEEE double, at offset 8 × its index. One type, because the
-  compiler keeps none for a `<data>` (`ta_data_info`,
-  `include/tinyactors/image.h:86-91`) and every binding's numbers are
-  doubles or integers within them.
-- A `<data expr>` is an integer literal, `true` (1) or `false` (0); none
-  is 0. Integers only, because core has a formatter of doubles
-  (`ta_cbor_diagnostic`, `include/tinyactors/cbor.h:80-89`) but no
-  correctly rounded reader, and a freestanding layer has no `strtod`: a
-  fraction is an action's work.
-- A spawn's or an invoke's params set the fields of the same name (SCXML
-  6.4.3): `create` keeps the init payload, `init_data` reads it.
-- Storage: one session table (`ta_table`, `table.h`) whose row is the
-  chart's index and the handle of the session's fields in its chart's
-  table of fields (8 bytes a field). The instance handle core keeps is the
-  session row's: a handle has all 64 bits (`table.c:65`), and the
-  per-instance calls carry no chart (`datamodel.h:126-130`), so the chart
-  must be in the row. The ant: 16 bytes of fields and a 16-byte session
-  row, each with its slot's metadata.
+- **`context` is what makes it work in every language.** A C function
+  ignores it; a binding registers one trampoline and passes its closure's
+  handle (a Swift box, a JNI global reference or an index, a Go
+  `cgo.Handle`, a wasm table index). The first sketch's `int32_t
+  f(void *fields)` had no context, so only C and wasm side modules could
+  provide functions.
+- **Arguments, not scratch fields.** A function reads `_event.data`
+  through the arguments the chart passes it (`hurt(hp, _event.data.damage)`),
+  converted to the argument's kind before the call. It never parses CBOR
+  and never needs a field that only exists to carry an event's value in.
+- **A failure has a message.** A nonzero return is `error.execution`; the
+  datamodel keeps `message` for its `failure` entry
+  (`TA_DATAMODEL_FAILURE_EXCEPTION`), and core gives the event its
+  `{"reason", "message"}` data, which this datamodel's `from_wire` reads
+  like any value.
+- **Each call charges one unit of fuel.** A function must end: no fuel
+  stops it once called.
+- **A guard can write the fields in C** (the pointer is not enforced), so
+  SCXML B's "no side effects" holds by contract, as on the native
+  ECMAScript datamodel; decision 4 is whether to enforce it by copy.
 
-### Expressions are names
+### Data paths and the expression grammar
 
-`chart_attach` reads every expression of the chart once
-(`ta_image_expression`) and turns it into one of these. A name with no
-function, or an expression of another form, refuses the attach: SCXML lets
-a processor reject a document with ill-formed expressions when it loads
-it (5.9.4), and a missing function is then found when the image is added,
-as a linker finds it.
+Every expression of a chart on `"struct"` is one of four forms, parsed and
+checked once at `chart_attach`:
 
-| Where | What it may be |
+```
+expression := path | literal | call | "In(" string ")"
+call       := name "(" [ argument { "," argument } ] ")"
+argument   := path | literal
+path       := root { "." name | "[" ( integer | path ) "]" }
+root       := name | "_event" | "_sessionid" | "_name"
+literal    := integer | decimal | string | "true" | "false" | "null"
+```
+
+No operators and no nesting: what needs arithmetic or a comparison is a
+function. That keeps the parser small, every expression's cost one copy
+and at most one call, and every check at attach.
+
+- **A path into the fields is typed:** `order.items[2].qty` is checked
+  against the descriptors at attach, so a misspelt name refuses the
+  chart before any actor runs. An index that is a path or out of the
+  array's count at run time is `error.execution`.
+- **A path into the event is not:** `_event.data.damage` is read from the
+  payload's CBOR when evaluated and converted to the kind it is used as;
+  a key that is absent, or a value of another kind, is `error.execution`.
+  `_event.name`, `.type`, `.sendid`, `.origin`, `.origintype` and
+  `.invokeid` are text; `_event.data` alone is the whole value.
+- **Literals:** integers; decimals only where Clinger's fast path is exact
+  (at most 15 significant digits and a small exponent), since a
+  freestanding layer has no `strtod` and core has no correctly rounded
+  reader; strings in single or double quotes.
+
+Where each form may appear:
+
+| SCXML | Takes |
 |---|---|
-| `cond` | a guard's name; `In('state')` (`ta_image_state_by_name`); `true`, `false` |
-| `<script>` in executable content | an action's name |
-| `<assign location>` | a field's name |
-| `<assign expr>`, `<param expr>`, `<data expr>` | an integer literal, a field's name, `_event.data.<name>` |
-| `<log expr>` | a field's name, written with `ta_cbor_diagnostic`, or a string literal |
-| `eventexpr`, `targetexpr`, `delayexpr`, `typeexpr`, `srcexpr`, `idlocation`, `<content>`, `<foreach>`, `<script>` at the top | refused: no strings, no arrays, no global code |
+| `cond` | a guard call, a `BOOL` path, `In('state')`, `true`, `false` |
+| `<data expr>`, `<assign expr>`, `<param expr>`, `<content expr>`, `<log expr>`, `<donedata>` | a path, a literal or a value call |
+| `<assign location>`, `<foreach item index>`, `idlocation`, `namelist` | a path into the fields (`namelist`: read, and named by its last segment) |
+| `eventexpr`, `targetexpr`, `typeexpr`, `srcexpr`, `delayexpr` | a path, a literal or a value call of kind `TEXT` or `ADDRESS` |
+| `<foreach array>` | a path to an array field |
+| `<script>` | an action call |
 
-A function is `int32_t f(void *fields)`. A guard answers nonzero for
-true. An action answers 0, or nonzero to fail, which is an
-`error.execution` (its data: below). Each call charges one unit of fuel
-(`ta_datamodel_environment_charge`).
+- **Assignment converts by kind.** A struct path assigned a map sets the
+  fields the map names and zeroes the rest; a key with no field is
+  `error.execution`. An array assigned an array of more than its capacity
+  is `error.execution`.
+- **A spawn's or an invoke's params** set the fields of the same name
+  (SCXML 5.2.2, 6.4.3), as an assignment of the params map to the whole
+  struct but without zeroing fields it does not name.
+- **`<foreach>` binds `item` and `index` to fields the chart declares.** A
+  struct cannot grow, so a `<foreach>` whose item is not a `<data>`
+  refuses the attach; SCXML 4.6 would declare it (W3C 150 and 151 test
+  that), which goes on this datamodel's skip list.
 
-**SCXML B says a datamodel's condition language "MUST not have side
-effects".** A guard here is the application's function: the datamodel
-cannot keep it from writing the fields. This datamodel does not meet B by
-construction; a chart that relies on it, as on the native ECMAScript
-datamodel's, trusts the application (decision 7).
+### Payloads are CBOR
 
-The names come from xstate's `setup({ guards, actions })`: a chart
-refers to an implementation by name, and the application provides it.
+A payload is a row holding one neutral value's CBOR bytes and a reference
+count, in the datamodel's payload table (`ta_table`) through the host's
+allocator.
 
-### Events and payloads
-
-- A payload is a row: one number, or a map of up to 8 (name, number)
-  pairs whose names are at most 23 bytes, inline. `capture` writes
-  `<param>`s and namelists into a map, a `TA_CAPTURE_VALUE` (a trace's
-  value) and `variable` (actor.context) into one number. More pairs or a
-  longer name refuse (`error.execution`).
-- `bind_event` keeps the event's payload (`retain`) as `_event.data`, read
-  only through `_event.data.<name>` (absent: 0). The datamodel sets
-  `TA_DATAMODEL_EVENT_DETACHABLE`; core releases its own event after
-  `detach_event` (`src/core/core.c:534-543`), and the retained row stays.
-- `to_wire` writes a number or a CBOR map of text to numbers; `from_wire`
-  reads only those (anything else: `TA_ERROR_INVALID`).
-- **An action's failure carries no data.** Core builds an
-  `error.execution`'s data as `{"reason", "message"}`, two texts, and
-  reads it with the datamodel's own `from_wire`
-  (`src/core/core.c:211-247`), which refuses text here: the event comes
-  without data, and the failing function's name reaches no one
-  (decision 8).
+- `capture` writes the `<param>`s, `namelist` or `<content>` straight
+  from the struct to CBOR through the descriptors; `to_wire` and
+  `payload_serialize` hand the bytes out as they are; `from_wire` and
+  `payload_deserialize` check them and keep them.
+- **Nothing is limited by count:** the first sketch's eight pairs of
+  23-byte names were a layout of its own; here a payload is the value
+  table's.
+- **A payload is already a neutral value,** so a payload that crosses to a
+  chart on another datamodel needs only `to_wire` on one side and
+  `from_wire` on the other. Whether core does that today is open (below,
+  "Open in core").
 
 ### Hibernation, migration, snapshots
 
-- `serialize` writes `{"vars": {id: number}, "event": payload | null}` in
-  CBOR, by name, so `deserialize` under a newer chart keeps the fields
-  both declare. `migrate` answers the old fields as one map payload: a
-  chart with more than 8 `<data>` has none to answer, and core raises
-  `error.platform.upgrade` without data (`src/system/hibernate.c:1095`).
-- `payload_serialize` and `payload_deserialize` are `to_wire` and
-  `from_wire`.
+- `serialize` writes `{"vars": {name: value}, "event": [...] | null}`, the
+  form the other datamodels write, from the descriptors. By name, so
+  `deserialize` under another version of the chart, or in a host whose
+  language laid the struct out differently, sets the fields both
+  declare. Raw bytes would be shorter and are refused for that reason:
+  the layout belongs to one build of the application.
+- `migrate` answers the old fields as one map payload; core initializes
+  the new chart's added `<data>` and raises `error.platform.upgrade` with
+  it (`include/tinyactors/datamodel.h`, `migrate`).
+- `variable` (`actor.context`) is a field's value as a new payload.
 - A snapshot writes the tables' handle namespaces (`ta_table_snapshot`)
-  and their rows as they are: the fields are already bytes.
-
-### What a function may not do
-
-It runs inside a run, so the rules of `datamodel.h` hold: no I/O, no call
-of the host. It must end: no fuel stops it. In the wasm package a trap
-inside it (a bad memory access, `unreachable`) unwinds through the core
-to the export JavaScript called; the package catches it there and refuses
-every later call into its module (`lib/module.mjs:105-147`, `#poison`):
-every host of that module ends, not only the one whose actor trapped.
+  and every row by name, as hibernation does.
 
 ## In core
 
-A new layer beside `datamodel_ecmascript`, freestanding, with the shape of
-quickjs's header:
+A layer beside `datamodel_ecmascript`, freestanding, with the shape of
+quickjs's header. Every function and callback takes at most three
+parameters (root `AGENTS.md`).
 
 ```c
 /* include/tinyactors/datamodel_struct.h */
-typedef int32_t (*ta_struct_function)(void *fields);
+enum {
+    TA_STRUCT_BOOL = 1, TA_STRUCT_I32, TA_STRUCT_I64, TA_STRUCT_F64,
+    TA_STRUCT_TEXT, TA_STRUCT_ADDRESS, TA_STRUCT_STRUCT, TA_STRUCT_VALUE
+};
+
+typedef struct ta_struct_field {
+    ta_string_view name;
+    uint32_t kind;         /* TA_STRUCT_* */
+    uint32_t offset;       /* from the start of the struct, as the language laid it out */
+    uint32_t capacity;     /* TEXT, ADDRESS: bytes; an array: elements; else 0 */
+    uint32_t count_offset; /* an array's uint32_t count; TA_NIL for a single value */
+    uint32_t stride;       /* an array's element size */
+    uint32_t type;         /* STRUCT: the index of its type */
+} ta_struct_field;
+
+typedef struct ta_struct_type {
+    ta_string_view name;
+    uint32_t size, align;
+    uint32_t field_count;
+    const ta_struct_field *fields;
+} ta_struct_type;
+
+enum { TA_STRUCT_GUARD = 1, TA_STRUCT_VALUE_FUNCTION = 2, TA_STRUCT_ACTION = 3 };
 
 typedef struct ta_struct_function_entry {
-    uint32_t size;
     ta_string_view name;
+    uint32_t kind;            /* TA_STRUCT_GUARD / _VALUE_FUNCTION / _ACTION */
+    uint32_t arguments;       /* the index of its argument type; TA_NIL for none */
+    ta_struct_field result;   /* a value function's result, at offset 0; a guard's is BOOL */
     ta_struct_function function;
+    void *context;
 } ta_struct_function_entry;
 
-typedef struct ta_struct_chart {          /* the functions of the chart of that name */
-    uint32_t size;
-    uint32_t function_count;
-    ta_string_view chart;
-    const ta_struct_function_entry *functions;
+typedef struct ta_struct_chart {
+    ta_string_view chart;     /* a chart's name */
+    uint32_t type;            /* its session's type */
 } ta_struct_chart;
 
 typedef struct ta_datamodel_struct_config {
     uint32_t size;
-    uint32_t chart_count;
+    uint32_t type_count, function_count, chart_count;
+    const ta_struct_type *types;
+    const ta_struct_function_entry *functions;
     const ta_struct_chart *charts;
-    ta_allocator allocator;               /* its tables' rows */
+    ta_allocator allocator;   /* its tables' rows and sessions' bytes */
 } ta_datamodel_struct_config;
 
-TA_API ta_datamodel_struct *ta_datamodel_struct_new(const ta_datamodel_struct_config *config);
+TA_API ta_status ta_datamodel_struct_new(const ta_datamodel_struct_config *config,
+                                         ta_datamodel_struct **out);
 TA_API void ta_datamodel_struct_free(ta_datamodel_struct *datamodel);
 TA_API ta_datamodel_binding ta_datamodel_struct_binding(ta_datamodel_struct *datamodel);
+TA_API ta_status ta_datamodel_struct_last_error(ta_datamodel_struct *datamodel, ta_buffer *out);
 TA_API ta_status ta_datamodel_struct_snapshot(ta_datamodel_struct *datamodel, ta_buffer *out);
 TA_API ta_status ta_datamodel_struct_restore(ta_datamodel_struct *datamodel, ta_bytes state);
 ```
 
-A host passes the binding beside its other datamodels
-(`ta_host_environment.datamodels`, at most 8, `host.h:112`).
+- `ta_datamodel_struct_new` checks every descriptor (inside the size,
+  aligned, no overlap, a nested type that exists and does not contain
+  itself) and every function's argument type; `last_error` names what it
+  refused, and why an attach was refused (the chart, the expression's line
+  and column, the name).
+- A host passes the binding beside its other datamodels
+  (`ta_host_environment.datamodels`, at most 8, `host.h:112`). Nothing in
+  `include/tinyactors/datamodel.h` changes.
+- Storage: a session table whose row is the chart's type and the handle of
+  the session's bytes in a table of blocks of that type's size; the
+  instance handle core keeps is the session row's.
 
 ### Open in core
 
 - **A failed attach leaks the charts attached before it.**
   `attach_charts` returns at the first failure without detaching charts
-  `0..c-1` (`src/system/system.c:245-258`), and the host frees the
-  segment (`src/host/host.c:666-680`). No datamodel fails an attach in
-  practice today; this one would, for every misspelt name. A fix in core
-  first, with a test.
-- **The attach's refusal says only a status.** A message naming the chart
-  and the function needs the datamodel to keep its last error (as
-  quickjs's `ta_datamodel_ecmascript_last_error` does), or the binding to
-  check the names itself before `addImage` (it reads the image's
-  expressions with the same calls).
+  `0..c-1` (`src/system/system.c:243-258`, checked 2026-11-23). No
+  datamodel fails an attach in practice today; this one does for every
+  misspelt name. A fix in core first, with a test.
 - **Payloads between datamodels (plausible, unverified).** ADR 0009,
   decision 7: "a payload is handed only to the datamodel whose index it
-  carries". The review found paths that may not hold to it: the event
-  view's data is the event's payload whatever its datamodel
-  (`src/core/event_pool.c:177`), an invoke's params reach the child's
-  `create` as `init` (`src/system/route.c:296`, `src/core/core.c:2115-2136`),
-  and done.invoke's data goes back to the parent (`route.c:830-831`). A
-  core test settles it: an ECMAScript parent that invokes, or sends data
-  to, a chart on another datamodel. The Python binding already runs two
-  datamodels in one host. Until it is settled, a struct chart exchanges
-  data only with struct charts and the host.
+  carries". The first sketch's review found paths that may not hold to it:
+  the event view's data whatever its datamodel
+  (`src/core/event_pool.c:177`), an invoke's params reaching the child's
+  `create` (`src/system/route.c:296`, `src/core/core.c:2115-2136`), and
+  done.invoke's data going back to the parent (`route.c:830-831`). A core
+  test settles it. Until then a struct chart exchanges data only with
+  struct charts and the host.
 
-## In `@tinyactors/wasm`
+## Per language
+
+What each binding writes: a **describer** (its type to a `ta_struct_type`)
+and a **trampoline** (one C function that calls the closure in
+`context`). Each cost below is **unverified** until its binding's spike.
+
+| | Types | Functions | A call costs |
+|---|---|---|---|
+| **C** | descriptors by hand, with `offsetof` and `sizeof` | plain C functions | an indirect call |
+| **wasm** (`@tinyactors/wasm`) | a side module's C, Rust or Zig, which exports the descriptors (below) | the side module's functions, through the core's table | `call_indirect`: 3.4 ns on Node.js (spike, below) |
+| **Swift** | `MemoryLayout<T>.size`, `.alignment` and `.offset(of: \T.field)` (SE-0210); fixed text and arrays as `InlineArray` (SE-0453, Swift 6.2), or a struct imported from a C header; a macro could write the describer | typed closures, `(Int32, Int32) -> Int32`, read from `arguments` by the binding; one `@convention(c)` trampoline | the trampoline and the closure; no copy |
+| **Kotlin** | no value types over native memory: the binding lays the struct out itself (C's rules) and gives a typed view over it | typed lambdas; one JNI trampoline, `context` an index into the binding's table of functions | a JNI call into Kotlin per guard or action, and the session's bytes copied into and out of a reused `ByteArray` (`SetByteArrayRegion`), or a direct buffer; S0's spike measures which |
+| **Go** | `reflect` and `unsafe.Offsetof`, from a struct of fixed-size fields; Go's own layout, which may differ from C's on 32-bit targets, is what the descriptor says | `func` values; one `//export` trampoline, `context` a `cgo.Handle` | a cgo call into Go per guard or action; or, with no cgo, the core's wasm module under a Go wasm runtime, functions as host functions |
+
+- **Swift and Go read the session's bytes as their own struct,** through
+  a pointer, since their descriptor is their compiler's layout. Kotlin
+  cannot, and pays a copy or a buffer view; its gain is still that the
+  logic is Kotlin's and not JavaScript's.
+- **Every binding tests its describer against core's check:** a struct of
+  each kind, nested, with arrays and text, round-tripped through `capture`
+  and `from_wire`.
+
+### In `@tinyactors/wasm`
 
 ```js
 import { compileCharts, Host } from '@tinyactors/wasm';
 
 const ant = await WebAssembly.compile(await (await fetch('ant.wasm')).arrayBuffer());
-const host = new Host(compiled, { system: 'anthill', structs: { ant } });
+const host = new Host(compiled, { system: 'anthill', structs: ant });
 ```
 
-- **`structs: { [chart]: WebAssembly.Module }`**: the functions of each
-  chart on the struct datamodel, a side module. The package instantiates
-  it once per module and package instance: its data and zeroed data in a
-  block from `ta_wasm_alloc` (`__memory_base`), table slots grown for it
+- **`structs: WebAssembly.Module`**, a side module (WebAssembly's
+  [dynamic-linking convention](https://github.com/WebAssembly/tool-conventions/blob/main/DynamicLinking.md)),
+  instantiated once per module and package instance: its data in a block
+  from `ta_wasm_alloc` (`__memory_base`), table slots grown for it
   (`__table_base`), the core's `__stack_pointer`; then
-  `__wasm_apply_data_relocs` and `__wasm_call_ctors`, when it exports
-  them. It sets each function it exports into the table and gives the
-  datamodel the indices as its function pointers.
-- **The core's module changes how it links.** The package links it with
-  `zig cc` (`mise/wasm.rb:67`), which refuses `--growable-table`, and an
-  exported table that cannot grow refuses `Table.grow` (the review's
-  spike). So the module imports its table (`--import-table`), which the
-  package makes growable and passes in, and exports its
-  `__stack_pointer` (`--export=__stack_pointer` works under `zig cc`).
-- **What the package refuses**, before it instantiates: a module with no
-  `dylink.0` section or no `__memory_base` import (the corruption above);
-  one that imports anything but the five names of the convention and
-  `memory`; and an export other than the convention's own
-  (`__wasm_call_ctors`, `__wasm_apply_data_relocs`, `__dso_handle`) whose
-  type, read from its type section, is not `(i32) -> i32`, since a
-  `call_indirect` of another type traps. A chart on `"struct"` with no
-  module, or a function a chart names that its module does not export,
-  refuses `addImage` with an error that names both.
-- **Not refused, and not checked:** a function that calls `memory.grow`
-  (whether the core's allocator tolerates memory another module grew is
-  **unverified**), or that recurses deep enough to run the core's stack
-  below 0 (a trap, which poisons the module).
-- **Snapshots:** the package labels one datamodel state per pack today
-  (`wasm/src/host.c:651-656`); it would write the struct datamodel's state
-  beside the ECMAScript one in that state, as the Python binding packs its
-  two (`tinyactors-cpython/AGENTS.md`, "Snapshots").
+  `__wasm_apply_data_relocs` and `__wasm_call_ctors`.
+- **It exports one function the package calls,** `ta_struct_config`,
+  returning the address of its `ta_datamodel_struct_config` in the shared
+  memory: the same value a C embedder builds, compiled against the same
+  header for wasm32, so the package reads nothing of its own format.
+- **The core's module changes how it links:** it imports its table
+  (`--import-table`), which the package makes growable (`zig cc` refuses
+  `--growable-table`), and exports `__stack_pointer`.
+- **What the package refuses before it instantiates:** a module with no
+  `dylink.0` section or no `__memory_base` import; one that imports
+  anything but the convention's names and `memory`; a function in the
+  config whose table entry's type is not `(i32) -> i32`, since a
+  `call_indirect` of another type traps.
+- **A trap in a function** unwinds through the core to the export
+  JavaScript called; the package refuses every later call into its module
+  (`lib/module.mjs:105-147`, `#poison`), so every host of that module ends.
+- Not checked: a function that grows memory (whether the core's allocator
+  tolerates it is **unverified**), or that runs the core's stack below 0.
+
+The spike behind this (2026-11-21, session scratchpad `spike-table/`):
+
+- A function of a module that imports the core's memory, set into the
+  core's table, is called by `call_indirect` from C and reads and writes
+  the core's memory in place: 3.43 ns a call on Node.js, 2.84 on Bun,
+  2.88 on Chromium, against 6.47, 6.65 and 8.05 ns through a JavaScript
+  import.
+- A module linked with `--import-memory` alone places its data at 1024
+  and its stack near 66 KB of the shared memory, inside the core's stack
+  (`tinyactors.wasm`: `__stack_pointer` at 393216): it overwrote the
+  spike's data. A side module does not: its data landed in the block the
+  core allocated, its stack in the core's stack, and its functions ran
+  correctly through the table.
 
 ## The anthill on it
 
-The ant and the queen move to `"struct"`; `ant.c` and `queen.c` hold six
-functions (`isEgg`, `weak`, `hurt`, `eat`, `lay`, `canLay`), built into
-side modules by the website's build with the root's pinned clang (it
-targets wasm32 and links with `wasm-ld`; the spike used it). The queen's
-`food + _event.data.food` becomes `<assign location="gain"
-expr="_event.data.food"/><script>eat</script>`. Both charts on one
-datamodel, so the open question of mixed images does not arise.
-Expected near 4.3 µs a decision against 7.3 µs (**unverified**).
+The ant and the queen move to `"struct"`, their functions (`weak`, `hurt`,
+`isEgg`, `canLay`, `lay`, `add`) in a side module the website builds with
+the root's pinned clang. The queen's `food + _event.data.food` becomes
+`<assign location="food" expr="add(food, _event.data.food)"/>`.
+
+Measured on `@tinyactors/wasm` 0.4.0 (x86_64 Linux 6.18, 4 CPUs, Node.js
+22.23.5, 2026-11-21; one colony of 500,000 ants, 300 frames of 50 ms, the
+last 200 timed):
+
+| The ant on | Per decision | Per spawn |
+|---|---|---|
+| `"ecmascript"`, native | 7.36, 7.20 µs | 10.33, 10.83 µs |
+| `null` (`hp` as a parallel region) | 4.22, 4.12 µs | 3.69, 3.90 µs |
+
+The null row bounds the datamodel entries' cost per event; no `fight`
+came, so no guard ran in either row. This datamodel's figure is
+**unverified** until built.
 
 ## Lifetimes
 
 | Object | Owner | Created | Read by | Ends |
 |---|---|---|---|---|
-| a chart's resolved functions | the datamodel | `chart_attach` | every evaluation of the chart | `chart_detach` |
-| a session's row and its fields | the session table and its chart's table | `create`, `deserialize` | its functions, during a call | `destroy` (after `serialize` too) |
-| a payload's row | the payload table | `capture`, `from_wire`, `payload_deserialize` | `bind_event`'s `_event.data`, `to_wire` | `release` to 0 |
-| `serialize`'s, `to_wire`'s bytes | the datamodel | the call | core, which copies them | the datamodel's next call (`datamodel.h:9-13`) |
-| a side module's instance, data block, table slots (wasm) | the package's module, by `WebAssembly.Module` | the first host that names it | the datamodel's indirect calls | the package's module (a table never shrinks) |
+| the config's descriptors, names, functions and contexts | the application | before `ta_datamodel_struct_new` | the datamodel, at every call | `ta_datamodel_struct_free`, which the application calls after `ta_host_free` |
+| a chart's compiled expressions | the datamodel | `chart_attach` | every evaluation of the chart | `chart_detach` |
+| a session's row and its bytes | the datamodel's tables | `create`, `deserialize` | its functions, during a call | `destroy` (after `serialize` too) |
+| a call's `arguments`, `result` and `value` bytes | the datamodel | before the call | the function | the call's return |
+| a failing call's `message` | the function | the call | the datamodel, which copies it | the call's return |
+| a payload's row | the payload table | `capture`, `from_wire`, `payload_deserialize`, a `VALUE` assignment | `_event.data`, `to_wire`, `VALUE` fields | `release` to 0 |
+| `serialize`'s and `to_wire`'s bytes | the datamodel | the call | core, which copies them | the datamodel's next call (`datamodel.h:9-13`) |
+
+## Conformance
+
+The W3C suite's charts use the `conf:` notation, which `confPython.xsl`
+translates for the python datamodel (`tinyactors-test/suites/w3c`). A
+`confStruct.xsl` could translate each `conf:` operation into a call of a
+small library of functions the adapter registers, with every variable a
+`VALUE` field, so the suite runs on this datamodel through the same
+runner. How many tests that passes, and the skip list it needs (W3C 150
+and 151, and every test of the ECMAScript data model), is **unverified**.
+The scenarios that need no strings beyond paths run on it as they are.
+
+## What changed from the first sketch
+
+| The first sketch | Now |
+|---|---|
+| fields are doubles only, at 8 × index | the application's types, with their language's layout, described |
+| `int32_t f(void *fields)`, no context | `int32_t f(ta_struct_call *)` with a context: closures in any language |
+| a function sees only the fields; event data reaches it through a scratch field | arguments named by the chart: `hurt(hp, _event.data.damage)` |
+| `<assign location>` a bare field name; no strings, so no `eventexpr`, `targetexpr`, `<content>`, `<foreach>` | data paths everywhere; `TEXT`, `ADDRESS` and arrays; every SCXML element but `<foreach>` declaring a variable |
+| payloads of at most 8 pairs of 23-byte names | CBOR, the value table, no limit |
+| an action's failure carries no data | a message, given to `error.execution` |
+| no layout check | descriptors checked by core; every name and path checked at attach |
+| wasm only, other bindings out of scope | one layer for C, wasm, Swift, Kotlin and Go |
 
 ## Decisions for the maintainer
 
-1. **A callback in a public header.** `tinyactors-core/AGENTS.md` allows
+1. **Callbacks in a public header.** `tinyactors-core/AGENTS.md` allows
    "no callbacks except the datamodel vtable" (the allocator and the
-   resolver are there too). The functions are callbacks by nature: accept
-   them as part of a datamodel's binding, or keep them out of the public
-   header and have each embedder build the layer with its functions
-   linked in?
-2. **The name** `"struct"`, and the option `structs`.
-3. **Doubles only**, or typed fields declared somewhere the compiler
-   keeps. Nothing in the image carries a type today.
-4. **One module per chart**, or one per host with names qualified by
-   chart. Per chart keeps two charts' layouts apart.
-5. **No layout check.** Nothing ties `struct ant` to the `<data>` order;
-   a check would need a convention of ours (a custom section), which the
-   bindings' rule to invent nothing weighs against.
-6. **The anthill: this, or staticjs.** staticjs's datamodel would run the
-   ant unchanged, with no compiled module; this datamodel shows the
-   application's own compiled code. Both need work in core before the
-   anthill can use them.
-7. **SCXML B.** Guards that are the application's functions can have side
-   effects. State the deviation in the datamodel's documentation, as the
-   native datamodel trusts its charts, or refuse something?
-8. **An action's failure.** Without data, or payloads that also hold
-   text (a message), or core building the error's data in a way that
-   does not go through `from_wire`.
+   resolver are there too). Accept `ta_struct_function` as part of a
+   datamodel's configuration?
+2. **The name** `"struct"`, and the wasm option `structs`.
+3. **The kinds.** Unsigned integers, `F32`, or bytes are left out; `VALUE`
+   is in. Add or remove before the first binding uses them.
+4. **Guards' purity.** By contract (as above), or by copy: a guard and a
+   value function get a copy of the fields, which costs the struct's size
+   per call and makes SCXML B hold by construction.
+5. **Exact `<data>` to fields,** or fields the chart does not declare,
+   kept by the application (an index, a cache) and invisible to paths.
+6. **No operators.** Every comparison is a function (`cond="weak(hp)"`,
+   not `cond="hp <= 1"`). A few operators on paths and literals (`==`,
+   `<`, `!`, `+`) would make small charts readable without a function
+   each, at the cost of a grammar that grows.
+7. **The anthill: this, or the null datamodel it measures against,** once
+   this is built.
 
 ## Stages
 
-1. Core: the attach leak fixed, the mixed-datamodel test written; then
-   the layer, with unit tests of every entry and `ta-conform`'s scenarios
-   that need no strings run on it.
-2. The wasm package: the table import and stack pointer export, the
-   side-module loader and its refusals, `structs`, payloads and effects
-   routed by datamodel, snapshots; tests under Node.js, Bun and Chromium.
-3. The anthill on it, measured against the native datamodel on the same
-   machine, side by side, with fights (two colonies), so the guards run.
-
-## Review
-
-An adversarial review (2026-11-21) against the repository, the spikes and
-the SCXML recommendation changed this sketch:
-
-- the table export (`--growable-table`) does not link under the
-  package's `zig cc`: the module imports its table instead;
-- side modules import the stack pointer only when they use it, and export
-  the convention's own functions: the refusals were rewritten so they do
-  not refuse a correct module;
-- an action's failure cannot carry its message through this
-  `from_wire` (decision 8);
-- core does have a number formatter; what it lacks is a decimal reader,
-  so literals are integers;
-- a table per chart cannot name its chart in a 64-bit handle: one
-  session table with the chart in its rows;
-- the wasm package's cost was understated (one datamodel per host, data
-  for ECMAScript charts only, SEND payloads read with one datamodel);
-- mixed images, the attach leak, the 5.9.4 and B citations, the staticjs
-  comparison, and what the null measurement bounds (no guards ran).
+1. **Core:** the attach leak fixed, the mixed-datamodel test written; the
+   layer, with unit tests of every vtable entry and every refusal, and
+   `ta-conform` registering it with a C test library so the scenarios run
+   on it.
+2. **`@tinyactors/wasm`:** the table import, the side-module loader, the
+   anthill moved, and both rows measured again.
+3. **Each new binding** (Swift, Kotlin, Go): its describer and trampoline,
+   the conformance run, and the cost per call measured beside quickjs.

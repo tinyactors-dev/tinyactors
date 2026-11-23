@@ -37,7 +37,7 @@ Every proposal starts with a status line:
 | [staticjs: the compiler and evaluator, from scratch](staticjs-compiler.md) | Sketch | staticjs (the compiler) |
 | [staticjs: exceptions, and async functions over host promises](staticjs-exceptions-and-async.md) | Sketch | staticjs (every stage), staticjs-js |
 | [A JavaScript API for staticjs.wasm](staticjs-js-api.md) | Adopted → [ADR 0013](../adr/0013-staticjs-javascript-package.md) | a new staticjs-js, staticjs's release packaging |
-| [A struct datamodel: fixed fields, the application's compiled functions](struct-datamodel.md) | Sketch | tinyactors-core (a new datamodel layer), tinyactors-napi (`@tinyactors/wasm`), website |
+| [A struct datamodel: the application's types, functions and data paths](struct-datamodel.md) | Sketch | tinyactors-core (a new datamodel layer), `@tinyactors/wasm`, the Swift, Kotlin and Go bindings, website |
 | [SQLite host](sqlite-host.md) | Sketch | tinyactors-core, a new tinyactors-sqlite |
 | [PostgreSQL host](postgres-host.md) | Sketch | tinyactors-core, a new tinyactors-postgres |
 | [Host kernel](host-kernel.md) | Adopted → [kernel ADRs](../../tinyactors-host/docs/adr/README.md), [roadmap](../../ROADMAP.md) | tinyactors-napi, tinyactors-test, a new tinyactors-host |
