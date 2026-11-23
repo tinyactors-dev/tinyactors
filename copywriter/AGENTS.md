@@ -92,7 +92,10 @@ one-off Python.
 - **Storage.** IndexedDB (`copywriter` database) in the panel's origin:
   annotations per page URL, the page chat's conversations per page URL,
   settings (not the key: the model, thinking, the voice when edited, the
-  active audiences), audiences (one list for every page). Kept changes
+  last set of audiences used), audiences (one list for every page), each
+  page's own set of audiences (`pages`, by URL; the database's version 4
+  added it: the settings' `audienceIDs` stay as the last set used, the set
+  of every page without its own, and no page gets one by the upgrade). Kept changes
   are re-applied to a page when it is opened again.
 - **Export.** A ZIP with `packet.xml` (valid against `spec/work-packet.xsd`,
   copied into the ZIP), `CHANGES.md` (a prompt a coding agent can follow:
@@ -130,6 +133,29 @@ one-off Python.
   were written for (`audiences`), which the export prints ("Written
   for"). The database's version 2 moved an edited default persona's
   instructions to the voice and dropped the other personas.
+- **Pages remember their audiences** (the maintainer, 2026-11-23). The
+  active audiences are the open page's set: choosing them (Settings'
+  switches, a strip chip's menu, the model's `use_audiences` or
+  `define_audience {use: true}`) writes the page's set, and opening a page
+  activates its set; a page without one writes for the last set used on
+  any page. A page with no set, first opened with a key and saved
+  audiences (or when a key is first saved on it), is asked about once:
+  one request at `low` thinking with no thoughts, the page's first 6,000
+  characters and the audiences' names and descriptions, the function
+  `page_audiences {names}` forced (`functionCallingConfig` `ANY`;
+  `SUGGEST_RULES`). Its answer is a suggestion (`page.audienceSuggestion`),
+  never applied by itself: accepted, adjusted (choosing a set) or
+  dismissed (the set in use becomes the page's). The export says which
+  audiences each page is for ("For:" under its heading in `CHANGES.md`).
+- **Rewrites side by side** (the maintainer, 2026-11-23). With two or
+  more audiences active, an annotation's rewrites (a message, Suggest, a
+  note that asks at once) are one per active audience, each a
+  `propose_rewrite` with `audience` set to its name, and maybe one with
+  `everyone`; each suggestion keeps its `audienceID` (null: for everyone),
+  in the audiences' order, the one for everyone last; a kept one is
+  exported as written for its audience. A finding, one audience's, and a
+  page with one or no audience active get one rewrite at a time, with no
+  `audienceID`.
 - **Reading as an audience** (the maintainer, 2026-11-23). "Read as"
   an audience (from its chip in the list, its row in Settings, "Read as
   all active", or the page chat's `read_as` tool when the reviewer asks
@@ -248,7 +274,7 @@ copywriter/
   src/platform/extension/ manifest.json, service-worker.mjs, content.mjs (page adapter), sidepanel.html/.mjs, mic.html/.mjs
   src/platform/embed/     embed.mjs (launcher, Shadow DOM, page adapter on the live DOM), loader snippet
   site/                   the /copywriter/ page: download the extension, turn the widget on for this device
-  test/                   node:test for charts and core (readings.test.mjs: the reading actors; talks.test.mjs:
+  test/                   node:test for charts and core (readings.test.mjs: the reading actors; audiences.test.mjs: pages' sets and side-by-side rewrites; talks.test.mjs:
                           conversations with an audience); Playwright for
                           the panel over src/ui/mock-reviewer.mjs (?read=0: no reading yet), the extension and the widget
   mise/tasks/             build, test, charts, eval, read-eval, talk-eval (Ruby)
@@ -281,7 +307,12 @@ annotation's id.
 ```js
 {
   status: 'booting' | 'ready' | 'error', error?: string,   // error also when the store failed to save
-  page: { url, title },
+  page: {
+    url, title,
+    audienceSuggestion,                    // a page with no set of its own: { state: 'asking', audienceIDs: [] } while the
+                                           //   model is asked which audiences read it, { state: 'ready', audienceIDs } until
+                                           //   accepted, adjusted or dismissed; else null
+  },
   selection: { text, fits } | null,        // the page's current selection or pick, if any; fits false: more than one
                                            // sentence, heading or paragraph (another block, or over 600 characters)
   picking,                                 // true in pick mode (pick.start until pick.stop, an annotation, or Escape)
@@ -293,7 +324,8 @@ annotation's id.
     voice: { instructions, custom },       // how to write; custom false: the default voice
     audiences: [{ id, name, description, knows?, wants?, tasks?, objections?,
       source? }],                          // who reads; source 'model': defined by the model (define_audience)
-    audienceIDs,                           // the active audiences, in order
+    audienceIDs,                           // the active audiences, in order: the open page's own set, or, for a
+                                           //   page that has none, the last set used on any page
   },
   annotations: [{                          // this page's, newest first
     id, state,                             // 'draft' | 'transcribing' | 'asking' | 'suggested' | 'previewing' | 'kept' | 'dismissed' | 'failed'
@@ -304,8 +336,9 @@ annotation's id.
                                            //   one belongs under; item: {field, status} of the checklist gap it was made of
     pageLevel?,                            // true: no anchor (what the page lacks); never previewed, exported as "add"
     note,                                  // the user's note (why)
-    suggestions: [{ id, text, rationale, own?, after? }],   // own: the user's text (edit); after: the number of
-                                           // messages before it (it follows the reply that brought it)
+    suggestions: [{ id, text, rationale, own?, after?, audienceID? }],   // own: the user's text (edit); after: the number
+                                           // of messages before it (it follows the reply that brought it); audienceID: a
+                                           // rewrite side by side, the audience it is for (null: for everyone)
     chosenID,                              // suggestion previewed or kept
     audiences,                             // the names of the audiences its last rewrites were written for
     messages: [message],                   // below
@@ -359,8 +392,8 @@ transcript exists; then the message shows, and the conversation goes on
 | `annotate` | `note?` | an annotation of the current selection or pick; with a note, it asks the model at once; it ends pick mode. A selection that does not fit (`fits` false) is refused: "Select one sentence, heading or paragraph." |
 | `pick.start` / `pick.stop` | | pick mode on the page (`page.pick`); refused where the page has none |
 | `select` / `deselect` | `id` | the active annotation; highlights its text in the page |
-| `ask` | `id`, `text` | a message about one annotation; the model answers and may propose rewrites |
-| `suggest` | `id` | more alternatives, no message |
+| `ask` | `id`, `text` | a message about one annotation; the model answers and may propose rewrites (one per active audience when several are) |
+| `suggest` | `id` | more alternatives, no message (one more per active audience when several are) |
 | `edit` | `id`, `text` | the user's own replacement, added as a suggestion and previewed |
 | `preview` | `id`, `suggestionID` | the page shows that suggestion in place of the original |
 | `keep` | `id` | the previewed suggestion is kept (its approval) |
@@ -372,7 +405,8 @@ transcript exists; then the message shows, and the conversation goes on
 | `chat.open` | `id` | opens an earlier conversation of this page (an empty one only when it is held with an audience) |
 | `talk` | `audienceID` | a new conversation with that audience (the open one when it is empty and held with it); resolves to its id |
 | `record.start` / `record.stop` | `target` | push-to-talk: the clip is transcribed, and the transcript is the next message for `target`; an empty one is not sent ("Nothing was heard.") |
-| `settings.save` | `apiKey?`, `rememberKey?`, `model?`, `thinking?`, `length?`, `tools?` (`{search?, url?, code?}`, merged), `voice?`, `audience?`, `audienceIDs?` | a new key is checked with models.list first: one Google refuses is not saved ("That key was not accepted by Google."); `voice` is the instructions ('' for the default); `audience` `{id?, name, description, knows?, wants?, tasks?, objections?}` creates or updates one; `audienceIDs` sets the active ones |
+| `settings.save` | `apiKey?`, `rememberKey?`, `model?`, `thinking?`, `length?`, `tools?` (`{search?, url?, code?}`, merged), `voice?`, `audience?`, `audienceIDs?` | a new key is checked with models.list first: one Google refuses is not saved ("That key was not accepted by Google."); `voice` is the instructions ('' for the default); `audience` `{id?, name, description, knows?, wants?, tasks?, objections?}` creates or updates one; `audienceIDs` sets the open page's set (and the last set used) |
+| `audiences.accept` / `audiences.dismiss` | | the page's audience suggestion becomes its set / the set in use becomes its set; refused with none |
 | `settings.deleteAudience` | `id` | deletes an audience (it stops being active) |
 | `settings.forgetKey` | | |
 | `models.refresh` | | |
@@ -488,7 +522,8 @@ and sends `model` a `transcribe` of that id, which answers
 `model.transcript {text}`.
 
 The model's tools (`src/core/gemini.mjs`, `FUNCTIONS`): `propose_rewrite
-{original_text?, replacement, rationale}`, `set_note {note}`,
+{original_text?, replacement, rationale, audience?}` (`audience` only in a
+per-audience request: its name, or `everyone`), `set_note {note}`,
 `define_audience {name, description, knows?, wants?, tasks?, objections?,
 use?}` (create or update by name; `use: true` makes it active) and
 `use_audiences {names}` (the active ones), `read_as {audience}` (the
@@ -507,7 +542,9 @@ explanation, replacement?, section?}` and `report_coverage {item, status,
 answer_text?, explanation}` (`readingOf` reads them); the reading actor
 sends `model` a `read {page, audienceID}`, answered `model.reading
 {items, findings, thoughts?, seconds?}` with the findings' anchors and
-the items' found, at most `MAX_FINDINGS`.
+the items' found, at most `MAX_FINDINGS`. A page's suggestion asks with
+`SUGGEST_FUNCTIONS` only (`page_audiences {names}`, `suggestedNames`
+reads it).
 
 `src/core/charts.mjs` is generated by `mise run charts` from
 `charts/*.scxml` and `spec/work-packet.xsd` (string constants, so the

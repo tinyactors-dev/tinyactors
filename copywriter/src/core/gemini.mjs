@@ -18,6 +18,7 @@ export const FUNCTIONS = Object.freeze([
         },
         replacement: { type: 'string', description: 'The proposed replacement, plain text.' },
         rationale: { type: 'string', description: 'One sentence: why the rewrite is better. When audiences are active, which need of which one it serves, by name.' },
+        audience: { type: 'string', description: 'Only when asked for one rewrite per audience: the name of the audience this rewrite is for, exactly, or "everyone" for one that serves them all.' },
       },
       required: ['replacement', 'rationale'],
     },
@@ -275,7 +276,7 @@ const CALL_RESULTS = Object.freeze({
  */
 export async function generate({
   apiKey, model, system, contents, fetch = globalThis.fetch,
-  thinking = DEFAULT_THINKING, includeThoughts = true, tools = FUNCTIONS, builtIn = {},
+  thinking = DEFAULT_THINKING, includeThoughts = true, tools = FUNCTIONS, builtIn = {}, callOnly = false,
 }) {
   if (!apiKey) throw new GeminiError('No Gemini key: add yours in Settings.');
   const servers = Object.entries(BUILT_IN_TOOLS).filter(([name]) => builtIn[name]).map(([, tool]) => ({ [tool]: {} }));
@@ -285,6 +286,8 @@ export async function generate({
     contents,
     ...(all.length ? { tools: all } : {}),
     ...(servers.length && tools.length ? { toolConfig: { includeServerSideToolInvocations: true } } : {}),
+    // callOnly: the answer is a function call (a suggestion), never words
+    ...(callOnly && tools.length && !servers.length ? { toolConfig: { functionCallingConfig: { mode: 'ANY' } } } : {}),
     generationConfig: { maxOutputTokens: MAX_OUTPUT_TOKENS, thinkingConfig: thinkingConfig(model, thinking, { includeThoughts }) },
   };
   let response;
@@ -307,7 +310,7 @@ export async function generate({
     } catch { /* not JSON */ }
     // A model the table does not know refuses the level: once more at 'high'.
     if (response.status === 400 && /thinking level/i.test(detail) && thinking !== 'high') {
-      return generate({ apiKey, model, system, contents, fetch, thinking: 'high', includeThoughts, tools, builtIn });
+      return generate({ apiKey, model, system, contents, fetch, thinking: 'high', includeThoughts, tools, builtIn, callOnly });
     }
     throw new GeminiError(explain(response.status, detail, reason), { status: response.status });
   }
@@ -340,6 +343,7 @@ export function reading({ text, calls, thoughts = '', sources = [] }) {
     if (call.name === 'propose_rewrite' && typeof a.replacement === 'string' && a.replacement.trim()) {
       const r = { replacement: a.replacement.trim(), rationale: typeof a.rationale === 'string' ? a.rationale : '' };
       if (typeof a.original_text === 'string' && a.original_text.trim()) r.original_text = a.original_text.trim();
+      if (clean(a.audience, 80)) r.audience = clean(a.audience, 80);
       rewrites.push(r);
     } else if (call.name === 'set_note' && typeof a.note === 'string') {
       note = a.note.trim();
@@ -362,6 +366,28 @@ export function reading({ text, calls, thoughts = '', sources = [] }) {
     }
   }
   return { text, rewrites, note, audiences, reads, talks, updates, gaps, thoughts, sources };
+}
+
+/**
+ * The one function of a page's audience suggestion: which saved audiences
+ * read the page.
+ */
+export const SUGGEST_FUNCTIONS = Object.freeze([
+  {
+    name: 'page_audiences',
+    description: 'Name the saved audiences who read this page: those it is written for or that would come to it.',
+    parameters: {
+      type: 'object',
+      properties: { names: { type: 'array', items: { type: 'string' }, description: 'The audiences\' names, exactly as listed, most important first; empty when none of them would read it.' } },
+      required: ['names'],
+    },
+  },
+]);
+
+/** The names a page_audiences call gives, or [] when the model made none. */
+export function suggestedNames({ calls }) {
+  const call = calls.find((c) => c.name === 'page_audiences');
+  return Array.isArray(call?.args?.names) ? call.args.names.filter((n) => typeof n === 'string' && n.trim()).map((n) => n.trim()) : [];
 }
 
 /** What the transcription asks of the model. */

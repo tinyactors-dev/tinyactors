@@ -175,13 +175,15 @@ test('a conversation with an audience comes back with the page, still the reader
   first.reviewer.close();
   assert.equal((await store.conversations('https://www.tinyactors.dev/')).find((c) => c.id === id).audienceID, 'lead');
 
-  const fetch = fakeFetch(geminiReply('Still the tech lead.'));
+  // the page opens with a key and an audience: it is asked which audiences read it, once
+  const fetch = fakeFetch(geminiReply('', [['page_audiences', { names: [] }]]), geminiReply('Still the tech lead.'));
   const { reviewer } = await setup({ store, fetch, page: fakePage({ text: TEXT }) });
   assert.equal(chat(reviewer).id, id, 'the newest conversation opens');
   assert.equal(chat(reviewer).audienceID, 'lead');
   assert.equal(chat(reviewer).conversations[0].audienceID, 'lead');
   await reviewer.dispatch({ type: 'chat', text: 'And now?' });
-  assert.deepEqual(functions(fetch.requests[0]), ['update_audience', 'note_gap']);
+  assert.deepEqual(functions(fetch.requests[0]), ['page_audiences']);
+  assert.deepEqual(functions(fetch.requests[1]), ['update_audience', 'note_gap']);
   await reviewer.dispatch({ type: 'settings.deleteAudience', id: 'lead' });
   await reviewer.dispatch({ type: 'chat', text: 'Still there?' });
   assert.equal(chat(reviewer).error, 'That audience was deleted.');

@@ -67,7 +67,8 @@ function summary(a) {
 
 /**
  * The packet's three texts: `{xml, changes, readme}`. `pages` maps a URL
- * to `{title, lang}` where known. Throws when there is nothing to export.
+ * to `{title, lang, audiences?}` where known (audiences: the names of the
+ * page's own set, which its section in CHANGES.md says it is for). Throws when there is nothing to export.
  */
 export async function buildPacket({ annotations, gaps = [], pages = {}, title = 'Copy review', at = new Date().toISOString() }) {
   const items = packetItems(annotations, gaps);
@@ -174,6 +175,7 @@ function changesMarkdown(items, pages, at) {
   for (const url of items.pages) {
     const title = pages[url]?.title;
     lines.push(`## ${url}${title ? ` (${title})` : ''}`, '');
+    if (pages[url]?.audiences?.length) lines.push(`For: ${pages[url].audiences.join(', ')}`, '');
     let n = 0;
     for (const a of items.changes.filter((c) => c.page === url)) {
       const kept = keptText(a);

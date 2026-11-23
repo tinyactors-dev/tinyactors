@@ -14,10 +14,16 @@
 //   deleteAudience(id)
 //   readings(page?) → [record]     every page's, or one page's, last reading per audience (charts/reading.scxml's record)
 //   putReading(record)              by (record.page, record.audienceID)
+//   pages() → [record]              every page's audiences (charts/audiences.scxml's record: {url, audienceIDs, suggestion, state})
+//   putPage(record)                 by record.url
 //
 // Version 2 of the database replaced a page's one chat with conversations
 // (the old chat is the conversation `c0`) and the personas with the voice
 // (an edited default persona's instructions are the voice) and audiences.
+// Version 3 added the readings, version 4 the pages: each page's own set
+// of audiences. The settings' audienceIDs stay as the last set used, the
+// set of every page that has none of its own (no page gets one by the
+// upgrade, so each can still be suggested).
 
 const copy = (value) => (value === undefined ? undefined : structuredClone(value));
 
@@ -27,6 +33,7 @@ export function createMemoryStore() {
   const conversations = new Map();
   const audiences = new Map();
   const readings = new Map();
+  const pages = new Map();
   let settings = {};
   const key = (page, id) => `${page}\n${id}`;
   return {
@@ -44,10 +51,12 @@ export function createMemoryStore() {
     async deleteAudience(id) { audiences.delete(id); },
     async readings(page) { return [...readings.values()].filter((r) => page === undefined || r.page === page).map(copy); },
     async putReading(record) { readings.set(key(record.page, record.audienceID), copy(record)); },
+    async pages() { return [...pages.values()].map(copy); },
+    async putPage(record) { pages.set(record.url, copy(record)); },
     dump() {
       return JSON.stringify({
         annotations: [...annotations.values()], conversations: [...conversations.values()], settings, audiences: [...audiences.values()],
-        readings: [...readings.values()],
+        readings: [...readings.values()], pages: [...pages.values()],
       });
     },
   };
@@ -61,7 +70,7 @@ const request = (r) => new Promise((resolve, reject) => {
 /** The IndexedDB store: the `copywriter` database of `indexedDB`. */
 export function createIndexedDBStore({ indexedDB = globalThis.indexedDB, name = 'copywriter' } = {}) {
   const opening = new Promise((resolve, reject) => {
-    const open = indexedDB.open(name, 3);
+    const open = indexedDB.open(name, 4);
     open.onupgradeneeded = (event) => {
       const db = open.result;
       const tx = open.transaction;
@@ -74,6 +83,7 @@ export function createIndexedDBStore({ indexedDB = globalThis.indexedDB, name = 
         const readings = db.createObjectStore('readings', { keyPath: ['page', 'audienceID'] });
         readings.createIndex('page', 'page');
       }
+      if (event.oldVersion < 4) db.createObjectStore('pages', { keyPath: 'url' });
       if (event.oldVersion >= 2) return;
       const conversations = db.createObjectStore('conversations', { keyPath: ['page', 'id'] });
       conversations.createIndex('page', 'page');
@@ -131,6 +141,8 @@ export function createIndexedDBStore({ indexedDB = globalThis.indexedDB, name = 
     deleteAudience(id) { return run('audiences', 'readwrite', (s) => s.delete(id)); },
     readings(page) { return run('readings', 'readonly', (s) => (page === undefined ? s.getAll() : s.index('page').getAll(page))); },
     putReading(record) { return run('readings', 'readwrite', (s) => s.put(record)); },
+    pages() { return run('pages', 'readonly', (s) => s.getAll()); },
+    putPage(record) { return run('pages', 'readwrite', (s) => s.put(record)); },
     async close() { (await opening).close(); },
   };
 }
