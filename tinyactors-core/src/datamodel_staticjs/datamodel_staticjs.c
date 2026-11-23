@@ -1356,6 +1356,89 @@ ta_status ta_datamodel_staticjs_register(ta_datamodel_staticjs *datamodel, const
     return TA_OK;
 }
 
+/* ---- functions of the json datamodel's kind, as natives -------------------------------- */
+
+typedef struct sjson_function {
+    ta_datamodel_staticjs *datamodel;
+    ta_json_function function;
+    void *context;
+    uint8_t *room; /* the result's, grown when the function asks for more */
+    uint32_t room_capacity;
+    uint32_t fault_length;
+    char fault[256];
+} sjson_function;
+
+static sjs_result json_fault(sjson_function *f, sjs_native_call *call, ta_string_view text) {
+    uint32_t length = text.length < sizeof f->fault ? text.length : (uint32_t)sizeof f->fault;
+    if (length) ta_memcpy(f->fault, text.pointer, length);
+    f->fault_length = length;
+    call->fault = (sjs_str){f->fault, length};
+    return SJS_ERR_PROGRAM;
+}
+
+static sjs_result json_function_call(void *self, sjs_native_call *call) {
+    sjson_function *f = (sjson_function *)self;
+    ta_datamodel_staticjs *datamodel = f->datamodel;
+    sjs_value arguments;
+    if (sjs_array_new(call->context, call->count, &arguments) != SJS_OK) return json_fault(f, call, ta_string("out of memory"));
+    for (uint32_t i = 0; i < call->count; i++) {
+        sjs_retain(call->arguments[i]);
+        if (sjs_array_append(call->context, &arguments, call->arguments[i]) != SJS_OK) {
+            sjs_release(call->context, arguments);
+            return json_fault(f, call, ta_string("out of memory"));
+        }
+    }
+    sjs_bytes bytes;
+    int written = write_value(datamodel, arguments, SJS_FORMAT_CBOR, &bytes);
+    sjs_release(call->context, arguments);
+    if (!written) return json_fault(f, call, ta_string("an argument is not a value of the value table"));
+    for (;;) {
+        ta_buffer result = {f->room, f->room_capacity, 0};
+        ta_json_call json = {sizeof json, call->count, f->context, {bytes.ptr, bytes.length}, &result, {0, 0}};
+        ta_status status = f->function(&json);
+        if (status == TA_ERROR_NO_MEMORY && result.length > f->room_capacity) {
+            uint8_t *room = (uint8_t *)salloc(&datamodel->memory, result.length);
+            if (!room) return json_fault(f, call, ta_string("out of memory"));
+            sfree(&datamodel->memory, f->room);
+            f->room = room;
+            f->room_capacity = (uint32_t)result.length;
+            continue;
+        }
+        if (status != TA_OK) return json_fault(f, call, json.message.length ? json.message : ta_string("the function failed"));
+        sjs_value value;
+        if (!read_cbor(datamodel, (ta_bytes){f->room, result.length}, &value))
+            return json_fault(f, call, ta_string("the function's result is not a value of the value table"));
+        call->result = value;
+        return SJS_OK;
+    }
+}
+
+static void json_function_release(void *self) {
+    sjson_function *f = (sjson_function *)self;
+    smemory *memory = &f->datamodel->memory;
+    sfree(memory, f->room);
+    sfree(memory, f);
+}
+
+static const sjs_native_vtable json_function_vtable = {json_function_call, json_function_release};
+
+ta_status ta_datamodel_staticjs_register_json(ta_datamodel_staticjs *datamodel, const ta_json_function_entry *entry) {
+    if (!entry->function) return TA_ERROR_INVALID;
+    sjson_function *f = (sjson_function *)salloc(&datamodel->memory, sizeof *f);
+    if (!f) return TA_ERROR_NO_MEMORY;
+    ta_memset(f, 0, sizeof *f);
+    f->datamodel = datamodel;
+    f->function = entry->function;
+    f->context = entry->context;
+    f->room_capacity = 1024;
+    f->room = (uint8_t *)salloc(&datamodel->memory, f->room_capacity);
+    if (!f->room) return sfree(&datamodel->memory, f), TA_ERROR_NO_MEMORY;
+    ta_staticjs_function_entry native = {sizeof native, 0, entry->name, entry->chart, {f, &json_function_vtable}};
+    ta_status status = ta_datamodel_staticjs_register(datamodel, &native);
+    if (status != TA_OK) json_function_release(f);
+    return status;
+}
+
 ta_datamodel_binding ta_datamodel_staticjs_binding(ta_datamodel_staticjs *datamodel) {
     ta_datamodel_binding binding = {&staticjs_vtable, datamodel};
     return binding;

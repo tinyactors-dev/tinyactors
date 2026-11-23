@@ -1,0 +1,35 @@
+<?xml version="1.0"?>
+<!-- An order: the shop's catalog is the app's (knows, priced); the rest is
+the chart's. -->
+<scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0" datamodel="staticjs" name="order" initial="open">
+  <datamodel>
+    <data id="items" expr="[]"/>
+    <data id="address" expr="({country: ''})"/>
+    <data id="total" expr="0"/>
+  </datamodel>
+  <state id="open">
+    <transition event="add" cond="knows(_event.data)">
+      <assign location="items" expr="items.concat([priced(_event.data)])"/>
+      <log label="added" expr="items.length + ' items'"/>
+    </transition>
+    <transition event="add">
+      <log label="refused" expr="'no such item: ' + _event.data.sku"/>
+    </transition>
+    <transition event="address">
+      <assign location="address.country" expr="_event.data.country"/>
+    </transition>
+    <transition event="error.*"><log label="error" expr="_event.name + ': ' + _event.data.message"/></transition>
+    <transition event="place" cond="items.length > 0 &amp;&amp; address.country !== ''" target="placed">
+      <foreach array="items" item="line">
+        <assign location="total" expr="total + line.cents * line.quantity"/>
+      </foreach>
+    </transition>
+  </state>
+  <final id="placed">
+    <donedata>
+      <param name="items" expr="items"/>
+      <param name="total" expr="total"/>
+      <param name="country" expr="address.country"/>
+    </donedata>
+  </final>
+</scxml>

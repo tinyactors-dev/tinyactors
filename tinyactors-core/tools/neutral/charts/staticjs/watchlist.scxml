@@ -1,0 +1,34 @@
+<?xml version="1.0"?>
+<!-- Quotes and whether they are fresh: live while the feed is, stale from
+the moment it is not (their last price and time stay, and the report says
+so). Each quote and each snapshot goes on to the alerts. -->
+<scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0" datamodel="staticjs" name="watchlist" initial="stale">
+  <datamodel>
+    <data id="quotes" expr="({})"/>
+  </datamodel>
+
+  <state id="watching" initial="stale">
+    <invoke id="alerts" src="alerts.scxml"/>
+
+    <transition event="alert.set"><send target="#_alerts" event="alert.set"><content expr="_event.data"/></send></transition>
+    <transition event="alert.fired"><send target="#_parent" event="alert.fired"><content expr="_event.data"/></send></transition>
+    <transition event="report"><log label="watchlist" expr="summary(quotes, In('live'))"/></transition>
+
+    <state id="stale">
+      <transition event="feed.live" target="live"/>
+    </state>
+    <state id="live">
+      <transition event="quote">
+        <assign location="quotes[_event.data.symbol]" expr="_event.data"/>
+        <send target="#_alerts" event="quote"><content expr="_event.data"/></send>
+      </transition>
+      <transition event="snapshot">
+        <foreach array="_event.data.quotes" item="quote">
+          <assign location="quotes[quote.symbol]" expr="quote"/>
+        </foreach>
+        <send target="#_alerts" event="snapshot"><content expr="_event.data"/></send>
+      </transition>
+      <transition event="feed.down" target="stale"/>
+    </state>
+  </state>
+</scxml>

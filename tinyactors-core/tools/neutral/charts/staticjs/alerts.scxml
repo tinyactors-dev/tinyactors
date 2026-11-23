@@ -1,0 +1,42 @@
+<?xml version="1.0"?>
+<!-- Price alerts: each fires once, when a quote crosses it. A crossing that
+a snapshot shows (it happened while the feed was down) fires as late. -->
+<scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0" datamodel="staticjs" name="alerts" initial="watching">
+  <datamodel>
+    <data id="rules" expr="[]"/>
+  </datamodel>
+
+  <state id="watching">
+    <transition event="alert.set">
+      <assign location="rules" expr="rules.concat([ruleFrom(_event.data)])"/>
+    </transition>
+    <transition event="quote">
+      <foreach array="rules" item="rule" index="i">
+        <if cond="!rule.fired &amp;&amp; crossed(rule, _event.data)">
+          <assign location="rules[i].fired" expr="true"/>
+          <send target="#_parent" event="alert.fired">
+            <param name="symbol" expr="rule.symbol"/>
+            <param name="above" expr="rule.above"/>
+            <param name="price" expr="_event.data.price"/>
+            <param name="late" expr="false"/>
+          </send>
+        </if>
+      </foreach>
+    </transition>
+    <transition event="snapshot">
+      <foreach array="_event.data.quotes" item="quote">
+        <foreach array="rules" item="rule" index="i">
+          <if cond="!rule.fired &amp;&amp; crossed(rule, quote)">
+            <assign location="rules[i].fired" expr="true"/>
+            <send target="#_parent" event="alert.fired">
+              <param name="symbol" expr="rule.symbol"/>
+              <param name="above" expr="rule.above"/>
+              <param name="price" expr="quote.price"/>
+              <param name="late" expr="true"/>
+            </send>
+          </if>
+        </foreach>
+      </foreach>
+    </transition>
+  </state>
+</scxml>

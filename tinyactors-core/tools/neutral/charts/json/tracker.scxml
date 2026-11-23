@@ -1,0 +1,86 @@
+<?xml version="1.0"?>
+<!-- The market tracker's root: whether the device has a network (the app
+reports its reachability: network.offline, network.online) and the price
+feed's connection. Offline, the feed is suspended: no reconnect attempts
+and no backoff timers until the network is back, then one attempt at once.
+A feed lost while online retries with a backoff that doubles. The
+subscriptions are state, not a queue: every connection subscribes to the
+whole watchlist, and the feed answers with a snapshot that fills the gap. -->
+<scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0" datamodel="json" name="tracker" initial="running">
+  <datamodel>
+    <data id="symbols" expr='["AAPL", "MSFT"]'/>
+    <data id="backoff" expr="1000"/>
+  </datamodel>
+
+  <parallel id="running">
+    <invoke id="watchlist" src="watchlist.scxml"/>
+
+    <!-- the UI's requests, whatever the network -->
+    <transition event="watch.add">
+      <assign location="symbols[length(symbols)]" expr="_event.data.symbol"/>
+      <if cond='In("live")'>
+        <send type="urn:market:app" target="feed" event="subscribe"><param name="symbols" expr="symbols"/></send>
+      <else/>
+        <log label="tracker: watched once the feed is back" expr="_event.data.symbol"/>
+      </if>
+    </transition>
+    <transition event="alert.set"><send target="#_watchlist" event="alert.set"><content expr="_event.data"/></send></transition>
+    <transition event="report"><send target="#_watchlist" event="report"/></transition>
+    <transition event="alert.fired">
+      <send type="urn:market:app" target="ui" event="notify"><content expr="_event.data"/></send>
+    </transition>
+
+    <state id="network" initial="online">
+      <state id="online">
+        <transition event="network.offline" target="offline"/>
+      </state>
+      <state id="offline">
+        <transition event="network.online" target="online"/>
+      </state>
+    </state>
+
+    <state id="feed" initial="checking">
+      <!-- where an attempt starts: none while offline -->
+      <state id="checking">
+        <transition cond='In("offline")' target="suspended"/>
+        <transition target="connecting"/>
+      </state>
+      <state id="connecting">
+        <onentry><send type="urn:market:app" target="feed" event="connect"/></onentry>
+        <transition event="feed.connected" target="live"/>
+        <transition event="feed.failed" target="waiting"/>
+      </state>
+      <state id="live">
+        <onentry>
+          <assign location="backoff" expr="1000"/>
+          <send type="urn:market:app" target="feed" event="subscribe"><param name="symbols" expr="symbols"/></send>
+          <send target="#_watchlist" event="feed.live"/>
+        </onentry>
+        <onexit><send target="#_watchlist" event="feed.down"/></onexit>
+        <transition event="feed.tick"><send target="#_watchlist" event="quote"><content expr="_event.data"/></send></transition>
+        <transition event="feed.snapshot"><send target="#_watchlist" event="snapshot"><content expr="_event.data"/></send></transition>
+        <transition event="feed.lost" target="waiting"/>
+        <transition event="network.offline" target="suspended">
+          <send type="urn:market:app" target="feed" event="disconnect"/>
+        </transition>
+      </state>
+      <state id="waiting">
+        <onentry>
+          <log label="tracker: feed lost, retrying in ms" expr="backoff"/>
+          <send id="retry" event="retry" delayexpr="ms(backoff)"/>
+          <assign location="backoff" expr="nextBackoff(backoff)"/>
+        </onentry>
+        <onexit><cancel sendid="retry"/></onexit>
+        <transition event="retry" target="checking"/>
+      </state>
+      <state id="suspended">
+        <onentry><log label="tracker" expr='"offline: the feed waits for the network, no attempts meanwhile"'/></onentry>
+        <transition event="network.online" target="checking">
+          <assign location="backoff" expr="1000"/>
+        </transition>
+      </state>
+      <!-- offline from any other state: drop what was pending -->
+      <transition event="network.offline" target="suspended"/>
+    </state>
+  </parallel>
+</scxml>

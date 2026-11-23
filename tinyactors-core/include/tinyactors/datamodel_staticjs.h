@@ -13,6 +13,7 @@
 #include <staticjs.h>
 #include <tinyactors/allocator.h>
 #include <tinyactors/datamodel.h>
+#include <tinyactors/datamodel_json.h>
 #include <tinyactors/types.h>
 
 #ifdef __cplusplus
@@ -39,6 +40,12 @@ TA_API ta_status ta_datamodel_staticjs_new(const ta_datamodel_staticjs_config *c
                                            ta_datamodel_staticjs **out);
 TA_API ta_status ta_datamodel_staticjs_register(ta_datamodel_staticjs *datamodel,
                                                 const ta_staticjs_function_entry *entry);
+/* A function of the json datamodel's kind (its arguments one CBOR array, its
+ * result one CBOR item), offered as a staticjs native: the values are written
+ * as CBOR for the call and the result read back. A binding registers one
+ * function with either datamodel this way. */
+TA_API ta_status ta_datamodel_staticjs_register_json(ta_datamodel_staticjs *datamodel,
+                                                     const ta_json_function_entry *entry);
 TA_API ta_datamodel_binding ta_datamodel_staticjs_binding(ta_datamodel_staticjs *datamodel);
 /* The context the datamodel's values live in, to make values and natives. */
 TA_API sjs_context *ta_datamodel_staticjs_context(ta_datamodel_staticjs *datamodel);
