@@ -14,7 +14,7 @@
   audience calls of a reply (`define_audience`, `use_audiences`) go to the
   `settings` processor, and the model's message names them (`audiences`).
 
-    model    chat         → model.reply {text, proposed?, rewrites, audiences, for, thoughts?, seconds?} | model.error {message}
+    model    chat         → model.reply {text, proposed?, rewrites, audiences, for, sources?, thoughts?, seconds?} | model.error {message}
              transcribe   → model.transcript {text} | model.error {message}   (the clip's id)
     spawn    spawn        → spawned {name, address}    (tinyactors' Spawner)
     settings audience     → audience.saved {ids: {name: id}} | audience.refused {message}
@@ -58,13 +58,15 @@
     }
 
     // The model's message of a reply: its words, the annotations its
-    // rewrites made, the audience calls and the summary of its thinking.
+    // rewrites made, the audience calls, the web pages it was grounded on
+    // and the summary of its thinking.
     function reply(data, pending) {
       var m = { role: 'model', text: data.text || 'No change proposed.', at: new Date().toISOString() };
       if (pending.length) m.annotations = pending.map((p) => p.name);
       if (data.proposed) m.proposed = true;
       var named = (data.audiences || []).flatMap((c) => (c.action === 'use' ? c.names : [c.name]).map((name) => ({ name: name, action: c.action })));
       if (named.length) m.audiences = named;
+      if (data.sources &amp;&amp; data.sources.length) m.sources = data.sources;
       if (data.thoughts) m.thoughts = data.thoughts;
       if (data.seconds) m.seconds = data.seconds;
       return m;

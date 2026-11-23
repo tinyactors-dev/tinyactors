@@ -4,7 +4,7 @@
   model's rewrites, and the user's decision. The actor reaches the world only
   through four I/O processors:
 
-    model  rewrite        → model.reply {text, rewrites, note, audiences, for, thoughts?, seconds?} | model.error {message}
+    model  rewrite        → model.reply {text, rewrites, note, audiences, for, sources?, thoughts?, seconds?} | model.error {message}
            transcribe     → model.transcript {text} | model.error {message}   (a spoken message: the clip's id)
     settings audience     → audience.saved {ids: {name: id}} | audience.refused {message}
     page   locate         → page.located {found}
@@ -53,11 +53,13 @@
 
   <script>
     // The model's message of a reply: its words, the audience calls it made,
-    // and the summary of its thinking. A helper of the chart.
+    // the web pages it was grounded on and the summary of its thinking. A
+    // helper of the chart.
     function reply(data) {
       var m = { role: 'model', text: data.text || 'No change proposed.', at: new Date().toISOString() };
       var named = (data.audiences || []).flatMap((c) => (c.action === 'use' ? c.names : [c.name]).map((name) => ({ name: name, action: c.action })));
       if (named.length) m.audiences = named;
+      if (data.sources &amp;&amp; data.sources.length) m.sources = data.sources;
       if (data.thoughts) m.thoughts = data.thoughts;
       if (data.seconds) m.seconds = data.seconds;
       return m;

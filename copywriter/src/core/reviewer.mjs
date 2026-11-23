@@ -6,7 +6,9 @@
 
 import { init, compileCharts, Host, Spawner } from '@tinyactors/wasm/init';
 import { charts } from './charts.mjs';
-import { generate, contents, reading, callResults, transcribe, DEFAULT_THINKING, THINKING_LEVELS } from './gemini.mjs';
+import {
+  generate, contents, reading, callResults, transcribe, DEFAULT_THINKING, THINKING_LEVELS, BUILT_IN_TOOLS, DEFAULT_TOOLS,
+} from './gemini.mjs';
 import { DEFAULT_MODEL, MODELS, listModels, checkKey } from './models.mjs';
 import { DEFAULT_VOICE } from './voice.mjs';
 import { createIndexedDBStore, createMemoryStore } from './store.mjs';
@@ -41,6 +43,7 @@ function message(m) {
     ...(m.annotations ? { annotations: m.annotations } : {}),
     ...(m.proposed ? { proposed: true } : {}),
     ...(m.audiences?.length ? { audiences: m.audiences.map((a) => ({ name: a.name, action: a.action, ...(a.id ? { id: a.id } : {}) })) } : {}),
+    ...(m.sources?.length ? { sources: m.sources.map((x) => ({ title: x.title, uri: x.uri })) } : {}),
     ...(m.thoughts ? { thoughts: m.thoughts } : {}),
     ...(m.seconds ? { seconds: m.seconds } : {}),
   };
@@ -69,10 +72,23 @@ function view(r) {
  * to what the page says.
  */
 export const RULES = Object.freeze([
-  'Always answer the reviewer in one or two sentences of text, as well as calling functions: name the sentence you change and say why.',
   'Never add a claim, number, name or capability that the original or the page does not state. Keep the original\'s point.',
   'Write sentence case. No serial comma: "a, b and c", never "a, b, and c".',
 ]);
+
+/**
+ * How long the model's own answers are (settings.length), first among the
+ * rules; the rewrites' length follows the voice. An instruction, not a
+ * token cap: thinking counts against maxOutputTokens, so a cap would cut
+ * the thinking and the function calls first.
+ */
+export const LENGTHS = Object.freeze({
+  short: 'Always answer the reviewer in one or two sentences of text, as well as calling functions: name the sentence you change and say why.',
+  medium: 'Always answer the reviewer in a short paragraph of text (three to five sentences), as well as calling functions: name the sentences you change and say why.',
+  long: 'Always answer the reviewer in text, as well as calling functions: a thorough answer with your reasons, in short paragraphs or a list.',
+});
+export const DEFAULT_LENGTH = 'short';
+const LENGTH_NOTE = 'That length is for your answer to the reviewer; the rewrites keep the length the voice asks for.';
 
 /** What the system instruction says of the voice and the audiences. */
 export const AUDIENCE_RULES = Object.freeze([
@@ -143,7 +159,7 @@ export function createReviewer({
   let exporting = 'idle';
   let status = 'booting';
   let error;
-  let settings = { model: DEFAULT_MODEL, thinking: DEFAULT_THINKING, audienceIDs: [] };
+  let settings = { model: DEFAULT_MODEL, thinking: DEFAULT_THINKING, length: DEFAULT_LENGTH, tools: { ...DEFAULT_TOOLS }, audienceIDs: [] };
   let audiences = [];
   let models = MODELS;
   let hasKey = false;
@@ -170,6 +186,8 @@ export function createReviewer({
         hasKey, rememberKey, model: settings.model,
         models: models.map((m) => ({ id: m.id, label: m.label })),
         thinking: settings.thinking,
+        length: settings.length,
+        tools: { ...settings.tools },
         voice: { instructions: settings.voice || DEFAULT_VOICE, custom: Boolean(settings.voice) },
         audiences: audiences.map((a) => ({ ...a })),
         audienceIDs: [...settings.audienceIDs],
@@ -325,7 +343,8 @@ export function createReviewer({
     },
   };
   const savedSettings = () => ({
-    model: settings.model, thinking: settings.thinking, audienceIDs: settings.audienceIDs, ...(settings.voice ? { voice: settings.voice } : {}),
+    model: settings.model, thinking: settings.thinking, length: settings.length, tools: settings.tools,
+    audienceIDs: settings.audienceIDs, ...(settings.voice ? { voice: settings.voice } : {}),
   });
   const activeAudiences = () => settings.audienceIDs.map((id) => audiences.find((a) => a.id === id)).filter(Boolean);
 
@@ -348,6 +367,8 @@ export function createReviewer({
       context.headings?.length ? `Headings:\n${context.headings.map((h) => `- ${h}`).join('\n')}` : '',
       `Visible text:\n"""\n${String(context.text || '').slice(0, 20000)}\n"""`,
       '',
+      LENGTHS[settings.length] || LENGTHS[DEFAULT_LENGTH],
+      LENGTH_NOTE,
       ...RULES,
       ...AUDIENCE_RULES,
       '',
@@ -371,13 +392,13 @@ export function createReviewer({
         'one sentence, heading or paragraph, never more.');
     }
     const request = {
-      apiKey, fetch, model: settings.model, thinking: settings.thinking, system: intro.filter((l) => l !== null).join('\n'),
+      apiKey, fetch, model: settings.model, thinking: settings.thinking, builtIn: settings.tools, system: intro.filter((l) => l !== null).join('\n'),
       contents: contents(messages, { prompt }),
     };
     const started = Date.now();
     const result = await generate(request);
     const { rewrites, note, audiences: calls } = reading(result);
-    let { text, thoughts } = reading(result);
+    let { text, thoughts, sources } = reading(result);
     if (!text && event === 'chat' && result.calls.length) {
       // Function calls only: their results go back, and the model says in
       // words what it proposed and why. Failing that, the proposals speak.
@@ -385,10 +406,11 @@ export function createReviewer({
         const again = await generate({ ...request, contents: [...request.contents, ...callResults(result)] });
         text = again.text;
         thoughts = again.thoughts || thoughts;
+        sources = [...sources, ...again.sources.filter((x) => !sources.some((y) => y.uri === x.uri))];
       } catch { /* the proposals below */ }
     }
     const extra = {
-      audiences: calls, for: active.map((a) => a.name),
+      audiences: calls, for: active.map((a) => a.name), ...(sources.length ? { sources } : {}),
       ...(thoughts ? { thoughts } : {}), seconds: Math.max(1, Math.round((Date.now() - started) / 1000)),
     };
     for (const r of rewrites) r.for = extra.for;
@@ -410,7 +432,9 @@ export function createReviewer({
   // ---- booting and pages -----------------------------------------------
 
   async function loadSettings() {
-    settings = { model: DEFAULT_MODEL, thinking: DEFAULT_THINKING, audienceIDs: [], ...(await store.settings()) };
+    const stored = await store.settings();
+    settings = { model: DEFAULT_MODEL, thinking: DEFAULT_THINKING, length: DEFAULT_LENGTH, audienceIDs: [], ...stored, tools: { ...DEFAULT_TOOLS, ...stored.tools } };
+    if (!LENGTHS[settings.length]) settings.length = DEFAULT_LENGTH;
     if (!THINKING_LEVELS.includes(settings.thinking)) settings.thinking = DEFAULT_THINKING;
     audiences = (await store.audiences()).sort((a, b) => a.name.localeCompare(b.name));
     settings.audienceIDs = (settings.audienceIDs || []).filter((id) => audiences.some((a) => a.id === id));
@@ -641,8 +665,9 @@ export function createReviewer({
         publish();
       }
     },
-    async 'settings.save'({ apiKey, rememberKey: remember, model: id, thinking, voice, audience, audienceIDs }) {
+    async 'settings.save'({ apiKey, rememberKey: remember, model: id, thinking, length, tools, voice, audience, audienceIDs }) {
       if (thinking !== undefined && !THINKING_LEVELS.includes(thinking)) throw new Error(`Thinking is one of ${THINKING_LEVELS.join(', ')}.`);
+      if (length !== undefined && !LENGTHS[length]) throw new Error(`Length is one of ${Object.keys(LENGTHS).join(', ')}.`);
       let listed = null;
       if (apiKey !== undefined && String(apiKey).trim()) {
         // a key Google refuses is not saved: the user hears it now, not at the first request
@@ -662,6 +687,10 @@ export function createReviewer({
       }
       if (id !== undefined) settings.model = String(id);
       if (thinking !== undefined) settings.thinking = thinking;
+      if (length !== undefined) settings.length = length;
+      if (tools) {
+        for (const [name, on] of Object.entries(tools)) if (name in BUILT_IN_TOOLS) settings.tools = { ...settings.tools, [name]: Boolean(on) };
+      }
       if (voice !== undefined) {
         const text = String(voice ?? '').trim();
         settings.voice = text && text !== DEFAULT_VOICE.trim() ? text : undefined; // empty: the default again

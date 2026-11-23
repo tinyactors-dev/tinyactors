@@ -55,6 +55,25 @@ one-off Python.
   message's `thoughts`, and `seconds` the time the request took. An answer
   cut at `MAX_TOKENS` keeps what it said; one cut before saying anything
   is an error that suggests a lower level.
+- **Answer length** (`settings.length`: short, medium, long; default
+  short) is an instruction for the model's own words in the page chat and
+  an annotation's conversation (short: one or two sentences; medium: a
+  short paragraph; long: a thorough answer with reasons), never for the
+  rewrites, whose length follows the voice. It sets no token cap:
+  thinking counts against `maxOutputTokens` (checked: a cap of 200 at
+  high thinking spent 197 tokens thinking and was cut), so a cap would
+  cut thinking and function calls first; it stays 65536.
+- **Google's built-in tools** (`settings.tools`: `search`, Google Search
+  grounding, off by default; `url`, URL context, the model reads pages a
+  message names, on; `code`, code execution, off) go in every request
+  beside our functions, with `toolConfig.includeServerSideToolInvocations:
+  true`, without which Gemini 4 Hydrogen and 3.8 Flash refuse the
+  combination (400; checked 2026-11-23, both models, each tool alone and
+  all three). A transcription uses none. The web pages an answer was
+  grounded on (`groundingMetadata.groundingChunks`) are its message's
+  `sources`, also when they come with the follow-up after a reply of
+  function calls only (which sends each call's `id` back); the export
+  lists an annotation's sources.
 - **Voice.** A clip is transcribed before it is a message: one
   generateContent request with the audio inline, an instruction to
   transcribe verbatim with no commentary, no tools and thinking `low`, on
@@ -180,6 +199,8 @@ annotation's id.
   settings: {
     hasKey, rememberKey, model, models: [{ id, label }],
     thinking,                              // 'low' | 'medium' | 'high' | 'xhigh'
+    length,                                // 'short' | 'medium' | 'long': the model's own answers
+    tools: { search, url, code },          // Google's built-in tools, each on or off
     voice: { instructions, custom },       // how to write; custom false: the default voice
     audiences: [{ id, name, description, knows?, wants?, tasks?, objections?,
       source? }],                          // who reads; source 'model': defined by the model (define_audience)
@@ -215,6 +236,7 @@ message = {
   annotations?,                            // a page chat's model message: the ids of the annotations its rewrites made
   proposed?,                               // true: the model said nothing, the text lists its proposals
   audiences?: [{ name, action, id? }],     // a model message: its audience calls ('define' | 'use'); id once saved
+  sources?: [{ title, uri }],              // a model message: the web pages it was grounded on (search, URL context)
   thoughts?, seconds?,                     // a model message: the summary of its thinking, and the request's seconds
 }
 ```
@@ -242,7 +264,7 @@ transcript exists; then the message shows, and the conversation goes on
 | `chat.new` | | a new, empty conversation (none when the open one is empty) |
 | `chat.open` | `id` | opens an earlier conversation of this page |
 | `record.start` / `record.stop` | `target` | push-to-talk: the clip is transcribed, and the transcript is the next message for `target`; an empty one is not sent ("Nothing was heard.") |
-| `settings.save` | `apiKey?`, `rememberKey?`, `model?`, `thinking?`, `voice?`, `audience?`, `audienceIDs?` | a new key is checked with models.list first: one Google refuses is not saved ("That key was not accepted by Google."); `voice` is the instructions ('' for the default); `audience` `{id?, name, description, knows?, wants?, tasks?, objections?}` creates or updates one; `audienceIDs` sets the active ones |
+| `settings.save` | `apiKey?`, `rememberKey?`, `model?`, `thinking?`, `length?`, `tools?` (`{search?, url?, code?}`, merged), `voice?`, `audience?`, `audienceIDs?` | a new key is checked with models.list first: one Google refuses is not saved ("That key was not accepted by Google."); `voice` is the instructions ('' for the default); `audience` `{id?, name, description, knows?, wants?, tasks?, objections?}` creates or updates one; `audienceIDs` sets the active ones |
 | `settings.deleteAudience` | `id` | deletes an audience (it stops being active) |
 | `settings.forgetKey` | | |
 | `models.refresh` | | |

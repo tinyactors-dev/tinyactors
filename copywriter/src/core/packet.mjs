@@ -96,7 +96,8 @@ export async function buildPacket({ annotations, pages = {}, title = 'Copy revie
     entries.push(`<copy-change id="item-${n}" observationRef="observation-${n}" anchorRef="anchor-${n}" revisionRef="revision-${n}" operation="replace_text" accepted="true">`
       + `<expected>${escapeText(a.original)}</expected>`
       + `<replacement>${escapeText(kept.text)}</replacement>`
-      + `<rationale>${escapeText([request(a) && `Asked: ${request(a)}`, kept.rationale, writtenFor(a) && `Written for: ${writtenFor(a)}.`].filter(Boolean).join(' ') || '')}</rationale>`
+      + `<rationale>${escapeText([request(a) && `Asked: ${request(a)}`, kept.rationale, writtenFor(a) && `Written for: ${writtenFor(a)}.`,
+        sourcesOf(a).length && `Sources: ${sourcesOf(a).map((x) => `${x.title} <${x.uri}>`).join(', ')}.`].filter(Boolean).join(' ') || '')}</rationale>`
       + `<acceptance>${escapeText(`${a.page} shows the replacement exactly where it showed the expected text, in the same element.`)}</acceptance>`
       + '</copy-change>');
   }
@@ -155,6 +156,7 @@ function changesMarkdown(items, pages, at) {
       if (request(a)) lines.push(`Request: ${request(a)}`, '');
       if (kept.rationale) lines.push(`Why: ${kept.rationale}`, '');
       if (writtenFor(a)) lines.push(`Written for: ${writtenFor(a)}`, '');
+      lines.push(...sourceLines(a));
       lines.push(...anchorLines(a), '');
     }
     for (const a of items.notes.filter((c) => c.page === url)) {
@@ -162,12 +164,21 @@ function changesMarkdown(items, pages, at) {
       lines.push(`### Open item ${n}`, '', 'Text:', '', fence(a.original), '');
       if (request(a)) lines.push(`Request: ${request(a)}`, '');
       if (writtenFor(a)) lines.push(`Written for: ${writtenFor(a)}`, '');
+      lines.push(...sourceLines(a));
       for (const p of proposed(a)) lines.push(`Proposed${p.own ? ' (by the reviewer)' : ''}:`, '', fence(p.text), '', ...(p.rationale && !p.own ? [`Why: ${p.rationale}`, ''] : []));
       lines.push(...anchorLines(a), '');
     }
   }
   return lines.join('\n');
 }
+
+// The web pages an annotation's replies were grounded on, once each.
+function sourcesOf(a) {
+  const all = [];
+  for (const m of a.messages || []) for (const x of m.sources || []) if (!all.some((y) => y.uri === x.uri)) all.push(x);
+  return all;
+}
+const sourceLines = (a) => (sourcesOf(a).length ? ['Sources:', ...sourcesOf(a).map((x, i) => `${i + 1}. [${x.title}](${x.uri})`), ''] : []);
 
 // The audiences an annotation's rewrites were written for, as a list of names.
 const writtenFor = (a) => (a.audiences || []).join(', ');

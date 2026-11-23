@@ -59,6 +59,17 @@ export const FUNCTIONS = Object.freeze([
   },
 ]);
 
+/**
+ * Google's built-in tools a reviewer can turn on, by setting:
+ * search (Google Search grounding), url (URL context: the model reads the
+ * pages a message names) and code (code execution). Defaults: url only.
+ * With our functions in the same request they need
+ * `toolConfig.includeServerSideToolInvocations` (checked 2026-11-23 on
+ * Gemini 4 Hydrogen and 3.8 Flash: without it, 400).
+ */
+export const BUILT_IN_TOOLS = Object.freeze({ search: 'googleSearch', url: 'urlContext', code: 'codeExecution' });
+export const DEFAULT_TOOLS = Object.freeze({ search: false, url: true, code: false });
+
 /** The thinking levels a reviewer can pick; the default is 'high'. */
 export const THINKING_LEVELS = Object.freeze(['low', 'medium', 'high', 'xhigh']);
 export const DEFAULT_THINKING = 'high';
@@ -156,9 +167,15 @@ export function parse(body) {
       continue;
     }
     if (typeof part.text === 'string') texts.push(part.text);
-    if (part.functionCall) calls.push({ name: part.functionCall.name, args: part.functionCall.args || {} });
+    if (part.functionCall) calls.push({ name: part.functionCall.name, args: part.functionCall.args || {}, ...(part.functionCall.id ? { id: part.functionCall.id } : {}) });
   }
   const text = texts.join('').trim();
+  // the web pages the answer was grounded on (Google Search, URL context), once each
+  const sources = [];
+  for (const chunk of candidate.groundingMetadata?.groundingChunks || []) {
+    const web = chunk.web || chunk.retrievedContext;
+    if (web?.uri && !sources.some((x) => x.uri === web.uri)) sources.push({ title: String(web.title || web.uri), uri: String(web.uri) });
+  }
   const cut = candidate.finishReason === 'MAX_TOKENS';
   if (cut && !text && calls.length === 0) {
     throw new GeminiError('Gemini used its whole output budget thinking and gave no answer: try again, or a lower thinking level in Settings.');
@@ -166,7 +183,7 @@ export function parse(body) {
   // the parts as given (thought signatures included), to send back with the calls' results
   return {
     text, calls, parts: candidate.content?.parts || [],
-    thoughts: thoughts.join('\n\n').trim(), ...(cut ? { cut: true } : {}),
+    thoughts: thoughts.join('\n\n').trim(), sources, ...(cut ? { cut: true } : {}),
   };
 }
 
@@ -178,7 +195,7 @@ export function parse(body) {
 export function callResults({ parts, calls }) {
   return [
     { role: 'model', parts },
-    { role: 'user', parts: calls.map((c) => ({ functionResponse: { name: c.name, response: { result: CALL_RESULTS[c.name] || 'Done.' } } })) },
+    { role: 'user', parts: calls.map((c) => ({ functionResponse: { name: c.name, ...(c.id ? { id: c.id } : {}), response: { result: CALL_RESULTS[c.name] || 'Done.' } } })) },
   ];
 }
 
@@ -197,13 +214,16 @@ const CALL_RESULTS = Object.freeze({
  */
 export async function generate({
   apiKey, model, system, contents, fetch = globalThis.fetch,
-  thinking = DEFAULT_THINKING, includeThoughts = true, tools = FUNCTIONS,
+  thinking = DEFAULT_THINKING, includeThoughts = true, tools = FUNCTIONS, builtIn = {},
 }) {
   if (!apiKey) throw new GeminiError('No Gemini key: add yours in Settings.');
+  const servers = Object.entries(BUILT_IN_TOOLS).filter(([name]) => builtIn[name]).map(([, tool]) => ({ [tool]: {} }));
+  const all = [...(tools.length ? [{ functionDeclarations: tools }] : []), ...servers];
   const request = {
     systemInstruction: { parts: [{ text: system }] },
     contents,
-    ...(tools.length ? { tools: [{ functionDeclarations: tools }] } : {}),
+    ...(all.length ? { tools: all } : {}),
+    ...(servers.length && tools.length ? { toolConfig: { includeServerSideToolInvocations: true } } : {}),
     generationConfig: { maxOutputTokens: MAX_OUTPUT_TOKENS, thinkingConfig: thinkingConfig(model, thinking, { includeThoughts }) },
   };
   let response;
@@ -226,7 +246,7 @@ export async function generate({
     } catch { /* not JSON */ }
     // A model the table does not know refuses the level: once more at 'high'.
     if (response.status === 400 && /thinking level/i.test(detail) && thinking !== 'high') {
-      return generate({ apiKey, model, system, contents, fetch, thinking: 'high', includeThoughts, tools });
+      return generate({ apiKey, model, system, contents, fetch, thinking: 'high', includeThoughts, tools, builtIn });
     }
     throw new GeminiError(explain(response.status, detail, reason), { status: response.status });
   }
@@ -241,7 +261,7 @@ export async function generate({
  * as `{action: 'use', names}`) and the thought summary. Calls of other
  * names, or with the wrong types, are dropped.
  */
-export function reading({ text, calls, thoughts = '' }) {
+export function reading({ text, calls, thoughts = '', sources = [] }) {
   const rewrites = [];
   const audiences = [];
   let note = null;
@@ -262,7 +282,7 @@ export function reading({ text, calls, thoughts = '' }) {
       audiences.push({ action: 'use', names: a.names.map((n) => clean(n, 80)).filter(Boolean) });
     }
   }
-  return { text, rewrites, note, audiences, thoughts };
+  return { text, rewrites, note, audiences, thoughts, sources };
 }
 
 /** What the transcription asks of the model. */

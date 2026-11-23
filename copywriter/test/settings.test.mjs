@@ -51,7 +51,9 @@ test('settings: the key saved and forgotten, the model, the voice edited and res
   s = reviewer.getState().settings;
   assert.equal(s.model, 'gemini-4-carbon');
   assert.deepEqual(s.voice, { instructions: 'Use five words.', custom: true });
-  assert.deepEqual(await store.settings(), { model: 'gemini-4-carbon', thinking: 'high', audienceIDs: [], voice: 'Use five words.' });
+  assert.deepEqual(await store.settings(), {
+    model: 'gemini-4-carbon', thinking: 'high', length: 'short', tools: { search: false, url: true, code: false }, audienceIDs: [], voice: 'Use five words.',
+  });
 
   page.select('Read the guide');
   await reviewer.dispatch({ type: 'annotate', note: 'x' });
@@ -161,7 +163,7 @@ test('gemini: contents merge turns, a reply\'s text and calls are read, bad call
     ['set_note', { note: 'Vague.' }],
     ['delete_page', {}],
   ])));
-  assert.deepEqual(read, { text: 'Done.', rewrites: [{ original_text: 'Old', replacement: 'New', rationale: 'why' }], note: 'Vague.', audiences: [], thoughts: '' });
+  assert.deepEqual(read, { text: 'Done.', rewrites: [{ original_text: 'Old', replacement: 'New', rationale: 'why' }], note: 'Vague.', audiences: [], thoughts: '', sources: [] });
   assert.throws(() => parse({ promptFeedback: { blockReason: 'SAFETY' } }), /blocked the request \(SAFETY\)/);
 });
 

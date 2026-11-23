@@ -449,3 +449,100 @@ test('conversations: while the model answers, the conversation stays open', asyn
   assert.deepEqual(reviewer.getState().chat.messages, []);
   reviewer.close();
 });
+
+// A Gemini reply grounded on web pages.
+const grounded = (text, calls, pages) => {
+  const body = geminiReply(text, calls);
+  body.candidates[0].groundingMetadata = {
+    webSearchQueries: ['actor runtimes'],
+    groundingChunks: [...pages.map(([title, uri]) => ({ web: { title, uri } })), { web: { title: pages[0][0], uri: pages[0][1] } }],
+  };
+  return body;
+};
+
+test('length: the model\'s answers are short by default, longer on request; the rewrites keep the voice', async () => {
+  const store = createMemoryStore();
+  const fetch = fakeFetch(geminiReply('a'), geminiReply('b'));
+  const { reviewer } = await setup({ fetch, store });
+  assert.equal(reviewer.getState().settings.length, 'short');
+  await reviewer.dispatch({ type: 'chat', text: 'One' });
+  let system = fetch.requests[0].body.systemInstruction.parts[0].text;
+  assert.match(system, /answer the reviewer in one or two sentences/);
+  assert.match(system, /the rewrites keep the length the voice asks for/);
+  assert.equal(fetch.requests[0].body.generationConfig.maxOutputTokens, 65536, 'no cap: thinking counts against it');
+  await reviewer.dispatch({ type: 'settings.save', length: 'long' });
+  await reviewer.dispatch({ type: 'chat', text: 'Two' });
+  system = fetch.requests[1].body.systemInstruction.parts[0].text;
+  assert.match(system, /a thorough answer with your reasons/);
+  assert.doesNotMatch(system, /answer the reviewer in one or two sentences/);
+  assert.equal((await store.settings()).length, 'long');
+  await assert.rejects(reviewer.dispatch({ type: 'settings.save', length: 'epic' }), /Length is one of short, medium, long/);
+  reviewer.close();
+});
+
+test('built-in tools: URL context by default, search and code on request, beside the functions; none in a transcription', async () => {
+  const fetch = fakeFetch(geminiReply('a'), geminiReply('b'), geminiReply('c'), geminiReply('heard'), geminiReply('d'));
+  const { reviewer, store } = await setup({ fetch, recorder: fakeRecorder() });
+  assert.deepEqual(reviewer.getState().settings.tools, { search: false, url: true, code: false });
+  await reviewer.dispatch({ type: 'chat', text: 'One' });
+  let body = fetch.requests[0].body;
+  assert.deepEqual(body.tools.slice(1), [{ urlContext: {} }]);
+  assert.equal(body.tools[0].functionDeclarations[0].name, 'propose_rewrite');
+  assert.deepEqual(body.toolConfig, { includeServerSideToolInvocations: true });
+
+  await reviewer.dispatch({ type: 'settings.save', tools: { search: true, code: true } });
+  await reviewer.dispatch({ type: 'chat', text: 'Two' });
+  body = fetch.requests[1].body;
+  assert.deepEqual(body.tools.slice(1), [{ googleSearch: {} }, { urlContext: {} }, { codeExecution: {} }]);
+  assert.deepEqual((await store.settings()).tools, { search: true, url: true, code: true });
+
+  await reviewer.dispatch({ type: 'settings.save', tools: { search: false, url: false, code: false, other: true } });
+  await reviewer.dispatch({ type: 'chat', text: 'Three' });
+  body = fetch.requests[2].body;
+  assert.equal(body.tools.length, 1, 'the functions only');
+  assert.equal(body.toolConfig, undefined);
+  assert.deepEqual(reviewer.getState().settings.tools, { search: false, url: false, code: false });
+
+  await reviewer.dispatch({ type: 'settings.save', tools: { search: true } });
+  await reviewer.dispatch({ type: 'record.start', target: 'page' });
+  await reviewer.dispatch({ type: 'record.stop' });
+  assert.equal(fetch.requests[3].body.tools, undefined, 'a transcription uses no tool');
+  reviewer.close();
+});
+
+test('grounded answers keep their sources: on the page chat\'s message, an annotation\'s, the follow-up\'s, and in the export', async () => {
+  const fetch = fakeFetch(
+    grounded('Akka calls itself a platform; Orleans a framework.', [], [['akka.io', 'https://example.com/akka'], ['learn.microsoft.com', 'https://example.com/orleans']]),
+    geminiReply('', [['propose_rewrite', { replacement: 'Run actors in your program', rationale: 'r' }]]),
+    grounded('Akka leads with what it runs.', [], [['akka.io', 'https://example.com/akka']]),
+  );
+  const { reviewer, page, clipboard } = await setup({ fetch });
+  await reviewer.dispatch({ type: 'chat', text: 'How do other actor runtimes describe themselves? Use search.' });
+  assert.deepEqual(reviewer.getState().chat.messages.at(-1).sources, [
+    { title: 'akka.io', uri: 'https://example.com/akka' }, { title: 'learn.microsoft.com', uri: 'https://example.com/orleans' },
+  ], 'once each');
+
+  page.select('Build better products');
+  const id = await reviewer.dispatch({ type: 'annotate', note: 'Compare with Akka' });
+  await reviewer.dispatch({ type: 'ask', id, text: 'And now?' });
+  const a = find(reviewer, id);
+  assert.deepEqual(a.messages.at(-1).sources, [{ title: 'akka.io', uri: 'https://example.com/akka' }]);
+  await reviewer.dispatch({ type: 'preview', id, suggestionID: 's1' });
+  await reviewer.dispatch({ type: 'keep', id });
+  await reviewer.dispatch({ type: 'export', to: 'clipboard' });
+  assert.match(clipboard[0], /Sources:\n1\. \[akka\.io\]\(https:\/\/example\.com\/akka\)/);
+  reviewer.close();
+});
+
+test('grounded: a page chat reply of calls only takes the sources of its follow-up, with each call\'s id', async () => {
+  const calls = geminiReply('', [['propose_rewrite', { original_text: 'Actors are cheap', replacement: 'An actor costs 287 bytes', rationale: 'r' }]]);
+  calls.candidates[0].content.parts[0].functionCall.id = 'call-1';
+  const fetch = fakeFetch(calls, grounded('Akka gives numbers; so should we.', [], [['akka.io', 'https://example.com/akka']]));
+  const { reviewer } = await setup({ fetch });
+  await reviewer.dispatch({ type: 'chat', text: 'Compare with Akka' });
+  const reply = reviewer.getState().chat.messages.at(-1);
+  assert.equal(reply.text, 'Akka gives numbers; so should we.');
+  assert.deepEqual(reply.sources, [{ title: 'akka.io', uri: 'https://example.com/akka' }]);
+  assert.equal(fetch.requests[1].body.contents.at(-1).parts[0].functionResponse.id, 'call-1');
+  reviewer.close();
+});
