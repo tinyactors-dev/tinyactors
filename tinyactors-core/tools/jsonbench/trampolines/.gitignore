@@ -1,0 +1,9 @@
+# build outputs of the trampoline spikes
+.build/
+build/
+.gradle/
+.kotlin/
+bin/
+*.so
+*.class
+*.jar
