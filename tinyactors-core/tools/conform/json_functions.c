@@ -12,6 +12,37 @@
 #include <stdio.h>
 #include <string.h>
 
+
+/* The functions below write their result with a ta_cbor_writer; the
+ * adapter runs one over the room the datamodel lends (call->result). */
+typedef struct writer_call {
+    ta_bytes arguments;
+    ta_cbor_writer *result;
+    ta_string_view message;
+} writer_call;
+
+typedef ta_status (*writer_function)(writer_call *call);
+
+typedef struct writer_entry {
+    const char *name;
+    writer_function function;
+} writer_entry;
+
+static ta_status writer_adapter(ta_json_call *call) {
+    const writer_entry *entry = (const writer_entry *)call->context;
+    ta_cbor_writer writer;
+    ta_cbor_writer_init(&writer, (ta_buffer){call->result->pointer, call->result->capacity, 0}, NULL);
+    writer_call inner = {call->arguments, &writer, {NULL, 0}};
+    ta_status status = entry->function(&inner);
+    call->message = inner.message;
+    if (status != TA_OK) return status;
+    ta_bytes out;
+    status = ta_cbor_writer_bytes(&writer, &out);
+    if (status != TA_OK) return status;
+    call->result->length = out.length;
+    return TA_OK;
+}
+
 typedef struct fv {
     const uint8_t *p;
     uint32_t n;
@@ -48,7 +79,7 @@ static uint32_t size_of(fv v) {
 }
 
 /* The call's arguments, split. */
-static int arguments(ta_json_call *call, fv *out, uint32_t want) {
+static int arguments(writer_call *call, fv *out, uint32_t want) {
     fv all = {call->arguments.pointer, (uint32_t)call->arguments.length};
     unsigned major;
     uint64_t count;
@@ -163,26 +194,26 @@ static int equal(fv a, fv b) {
     return 0;
 }
 
-static ta_status give_bool(ta_json_call *call, int b) {
+static ta_status give_bool(writer_call *call, int b) {
     ta_cbor_write_simple(call->result, b ? TA_CBOR_TRUE : TA_CBOR_FALSE);
     return TA_OK;
 }
 
-static ta_status refuse(ta_json_call *call, const char *why) {
+static ta_status refuse(writer_call *call, const char *why) {
     call->message = (ta_string_view){why, (uint32_t)strlen(why)};
     return TA_ERROR_INVALID;
 }
 
-static ta_status f_equal(ta_json_call *c) {
+static ta_status f_equal(writer_call *c) {
     fv a[2];
     return arguments(c, a, 2) ? give_bool(c, equal(a[0], a[1])) : TA_ERROR_INVALID;
 }
-static ta_status f_ne(ta_json_call *c) {
+static ta_status f_ne(writer_call *c) {
     fv a[2];
     return arguments(c, a, 2) ? give_bool(c, !equal(a[0], a[1])) : TA_ERROR_INVALID;
 }
 
-static int compare(ta_json_call *c, int *out) {
+static int compare(writer_call *c, int *out) {
     fv a[2];
     if (!arguments(c, a, 2)) return 0;
     double x, y;
@@ -195,31 +226,31 @@ static int compare(ta_json_call *c, int *out) {
     refuse(c, "compare: two numbers or two strings");
     return 0;
 }
-static ta_status f_lt(ta_json_call *c) { int r; return compare(c, &r) ? give_bool(c, r < 0) : TA_ERROR_INVALID; }
-static ta_status f_le(ta_json_call *c) { int r; return compare(c, &r) ? give_bool(c, r <= 0) : TA_ERROR_INVALID; }
-static ta_status f_gt(ta_json_call *c) { int r; return compare(c, &r) ? give_bool(c, r > 0) : TA_ERROR_INVALID; }
-static ta_status f_ge(ta_json_call *c) { int r; return compare(c, &r) ? give_bool(c, r >= 0) : TA_ERROR_INVALID; }
+static ta_status f_lt(writer_call *c) { int r; return compare(c, &r) ? give_bool(c, r < 0) : TA_ERROR_INVALID; }
+static ta_status f_le(writer_call *c) { int r; return compare(c, &r) ? give_bool(c, r <= 0) : TA_ERROR_INVALID; }
+static ta_status f_gt(writer_call *c) { int r; return compare(c, &r) ? give_bool(c, r > 0) : TA_ERROR_INVALID; }
+static ta_status f_ge(writer_call *c) { int r; return compare(c, &r) ? give_bool(c, r >= 0) : TA_ERROR_INVALID; }
 
-static ta_status f_and(ta_json_call *c) {
+static ta_status f_and(writer_call *c) {
     fv a[2];
     int x, y;
     if (!arguments(c, a, 2) || !boolean(a[0], &x) || !boolean(a[1], &y)) return refuse(c, "and: two booleans");
     return give_bool(c, x && y);
 }
-static ta_status f_or(ta_json_call *c) {
+static ta_status f_or(writer_call *c) {
     fv a[2];
     int x, y;
     if (!arguments(c, a, 2) || !boolean(a[0], &x) || !boolean(a[1], &y)) return refuse(c, "or: two booleans");
     return give_bool(c, x || y);
 }
-static ta_status f_not(ta_json_call *c) {
+static ta_status f_not(writer_call *c) {
     fv a[1];
     int x;
     if (!arguments(c, a, 1) || !boolean(a[0], &x)) return refuse(c, "not: a boolean");
     return give_bool(c, !x);
 }
 
-static ta_status f_add(ta_json_call *c) {
+static ta_status f_add(writer_call *c) {
     fv a[2];
     double x, y;
     if (!arguments(c, a, 2) || !number(a[0], &x) || !number(a[1], &y)) return refuse(c, "add: two numbers");
@@ -232,7 +263,7 @@ static ta_status f_add(ta_json_call *c) {
     return TA_OK;
 }
 
-static ta_status f_concat(ta_json_call *c) {
+static ta_status f_concat(writer_call *c) {
     fv a[2];
     ta_string_view s, t;
     if (!arguments(c, a, 2) || !text(a[0], &s) || !text(a[1], &t)) return refuse(c, "concat: two strings");
@@ -244,20 +275,20 @@ static ta_status f_concat(ta_json_call *c) {
     return TA_OK;
 }
 
-static ta_status f_is_defined(ta_json_call *c) {
+static ta_status f_is_defined(writer_call *c) {
     fv a[1];
     if (!arguments(c, a, 1)) return TA_ERROR_INVALID;
     return give_bool(c, !(a[0].n == 1 && a[0].p[0] == 0xF7));
 }
 
-static ta_status f_has(ta_json_call *c) {
+static ta_status f_has(writer_call *c) {
     fv a[2], v;
     ta_string_view key;
     if (!arguments(c, a, 2) || !text(a[1], &key)) return refuse(c, "has: a map and a key");
     return give_bool(c, map_get(a[0], key, &v));
 }
 
-static ta_status f_length(ta_json_call *c) {
+static ta_status f_length(writer_call *c) {
     fv a[1];
     unsigned major;
     uint64_t count;
@@ -293,7 +324,7 @@ static void write_item(ta_cbor_writer *w, fv v) {
     }
 }
 
-static ta_status f_append(ta_json_call *c) {
+static ta_status f_append(writer_call *c) {
     fv a[2];
     unsigned major;
     uint64_t count;
@@ -310,7 +341,7 @@ static ta_status f_append(ta_json_call *c) {
     return TA_OK;
 }
 
-static ta_status f_text(ta_json_call *c) {
+static ta_status f_text(writer_call *c) {
     fv a[1];
     ta_string_view s;
     if (!arguments(c, a, 1)) return TA_ERROR_INVALID;
@@ -325,14 +356,14 @@ static ta_status f_text(ta_json_call *c) {
     return TA_OK;
 }
 
-static ta_status f_starts_with(ta_json_call *c) {
+static ta_status f_starts_with(writer_call *c) {
     fv a[2];
     ta_string_view s, t;
     if (!arguments(c, a, 2) || !text(a[0], &s) || !text(a[1], &t)) return refuse(c, "startsWith: two strings");
     return give_bool(c, t.length <= s.length && !memcmp(s.pointer, t.pointer, t.length));
 }
 
-static ta_status f_contains(ta_json_call *c) {
+static ta_status f_contains(writer_call *c) {
     fv a[2];
     ta_string_view s, t;
     if (!arguments(c, a, 2) || !text(a[0], &s) || !text(a[1], &t)) return refuse(c, "contains: two strings");
@@ -342,10 +373,7 @@ static ta_status f_contains(ta_json_call *c) {
 }
 
 ta_status conform_json_functions(ta_datamodel_json *json) {
-    static const struct {
-        const char *name;
-        ta_json_function function;
-    } table[] = {{"eq", f_equal},         {"ne", f_ne},         {"lt", f_lt},         {"le", f_le},
+    static const writer_entry table[] = {{"eq", f_equal},         {"ne", f_ne},         {"lt", f_lt},         {"le", f_le},
                  {"gt", f_gt},         {"ge", f_ge},         {"and", f_and},       {"or", f_or},
                  {"not", f_not},       {"add", f_add},       {"concat", f_concat}, {"isDefined", f_is_defined},
                  {"has", f_has},       {"length", f_length}, {"append", f_append}, {"text", f_text},
@@ -355,7 +383,8 @@ ta_status conform_json_functions(ta_datamodel_json *json) {
         memset(&entry, 0, sizeof entry);
         entry.size = sizeof entry;
         entry.name = (ta_string_view){table[i].name, (uint32_t)strlen(table[i].name)};
-        entry.function = table[i].function;
+        entry.function = writer_adapter;
+        entry.context = (void *)&table[i];
         ta_status status = ta_datamodel_json_register(json, &entry);
         if (status != TA_OK) return status;
     }

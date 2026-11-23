@@ -38,6 +38,37 @@ static void count_free(void *context, void *p, size_t size) {
 
 /* ---- the json functions ------------------------------------------------------------------ */
 
+
+/* The functions below write their result with a ta_cbor_writer; the
+ * adapter runs one over the room the datamodel lends (call->result). */
+typedef struct writer_call {
+    ta_bytes arguments;
+    ta_cbor_writer *result;
+    ta_string_view message;
+} writer_call;
+
+typedef ta_status (*writer_function)(writer_call *call);
+
+typedef struct writer_entry {
+    const char *name;
+    writer_function function;
+} writer_entry;
+
+static ta_status writer_adapter(ta_json_call *call) {
+    const writer_entry *entry = (const writer_entry *)call->context;
+    ta_cbor_writer writer;
+    ta_cbor_writer_init(&writer, (ta_buffer){call->result->pointer, call->result->capacity, 0}, NULL);
+    writer_call inner = {call->arguments, &writer, {NULL, 0}};
+    ta_status status = entry->function(&inner);
+    call->message = inner.message;
+    if (status != TA_OK) return status;
+    ta_bytes out;
+    status = ta_cbor_writer_bytes(&writer, &out);
+    if (status != TA_OK) return status;
+    call->result->length = out.length;
+    return TA_OK;
+}
+
 typedef struct span {
     const uint8_t *p;
     uint32_t n;
@@ -108,7 +139,7 @@ static int64_t price(ta_string_view sku) {
     return -1;
 }
 
-static int arguments(ta_json_call *call, span *out, uint32_t want) {
+static int arguments(writer_call *call, span *out, uint32_t want) {
     ta_cbor_reader r;
     ta_cbor_item it;
     ta_cbor_reader_init(&r, call->arguments);
@@ -117,7 +148,7 @@ static int arguments(ta_json_call *call, span *out, uint32_t want) {
     return 1;
 }
 
-static ta_status f_known_item(ta_json_call *call) {
+static ta_status f_known_item(writer_call *call) {
     span a[1];
     ta_string_view sku;
     uint64_t qty;
@@ -127,7 +158,7 @@ static ta_status f_known_item(ta_json_call *call) {
     return TA_OK;
 }
 
-static ta_status f_add_item(ta_json_call *call) {
+static ta_status f_add_item(writer_call *call) {
     span a[2];
     ta_string_view sku;
     uint64_t qty;
@@ -148,7 +179,23 @@ static ta_status f_add_item(ta_json_call *call) {
     return TA_OK;
 }
 
-static ta_status f_has_items(ta_json_call *call) {
+/* newItem(add): the one item to append, its price from the catalog */
+static ta_status f_new_item(writer_call *call) {
+    span a[1];
+    ta_string_view sku;
+    uint64_t qty;
+    if (!arguments(call, a, 1) || !read_add(a[0], &sku, &qty)) return TA_ERROR_INVALID;
+    ta_cbor_write_map(call->result, 3);
+    ta_cbor_write_text(call->result, ta_string("sku"));
+    ta_cbor_write_text(call->result, sku);
+    ta_cbor_write_text(call->result, ta_string("qty"));
+    ta_cbor_write_uint(call->result, qty);
+    ta_cbor_write_text(call->result, ta_string("cents"));
+    ta_cbor_write_uint(call->result, (uint64_t)price(sku));
+    return TA_OK;
+}
+
+static ta_status f_has_items(writer_call *call) {
     span a[1];
     ta_cbor_reader r;
     ta_cbor_item it;
@@ -159,7 +206,7 @@ static ta_status f_has_items(ta_json_call *call) {
     return TA_OK;
 }
 
-static ta_status f_add(ta_json_call *call) {
+static ta_status f_add(writer_call *call) {
     span a[2];
     ta_cbor_item x, y;
     ta_cbor_reader r;
@@ -173,7 +220,7 @@ static ta_status f_add(ta_json_call *call) {
     return TA_OK;
 }
 
-static ta_status f_yes(ta_json_call *call) {
+static ta_status f_yes(writer_call *call) {
     ta_cbor_write_simple(call->result, TA_CBOR_TRUE);
     return TA_OK;
 }
@@ -201,6 +248,24 @@ static const char JS_ORDER[] =
     "<transition event='address'><assign location='address.country' expr='_event.data.country'/></transition>"
     "<transition event='check' cond='items.length &gt; 0'><assign location='checks' expr='checks + 1'/></transition>"
     "<transition event='guard' cond='true'/>"
+    "</state></scxml>";
+
+/* Appending: `add` passes the whole array through a function and back,
+ * `append` names only the new item and writes it at the array's length. */
+static const char JSON_APPEND[] =
+    "<scxml xmlns='http://www.w3.org/2005/07/scxml' version='1.0' datamodel='json' name='cart' initial='open'>"
+    "<datamodel><data id='items' expr='[]'/></datamodel><state id='open'>"
+    "<transition event='add' cond='knownItem(_event.data)'><assign location='items' expr='addItem(items, _event.data)'/></transition>"
+    "<transition event='append' cond='knownItem(_event.data)'><assign location='items[length(items)]' expr='newItem(_event.data)'/></transition>"
+    "</state></scxml>";
+
+static const char JS_APPEND[] =
+    "<scxml xmlns='http://www.w3.org/2005/07/scxml' version='1.0' datamodel='ecmascript' name='cart' initial='open'>"
+    "<datamodel><data id='items' expr='[]'/></datamodel><state id='open'>"
+    "<transition event='add' cond=\"(_event.data.sku === 'tea' || _event.data.sku === 'mug') &amp;&amp; _event.data.qty &gt;= 1 &amp;&amp; _event.data.qty &lt;= 99\">"
+    "<assign location='items' expr=\"items.concat([{sku: _event.data.sku, qty: _event.data.qty, cents: _event.data.sku === 'tea' ? 450 : 1200}])\"/></transition>"
+    "<transition event='append' cond=\"(_event.data.sku === 'tea' || _event.data.sku === 'mug') &amp;&amp; _event.data.qty &gt;= 1 &amp;&amp; _event.data.qty &lt;= 99\">"
+    "<assign location='items[items.length]' expr=\"({sku: _event.data.sku, qty: _event.data.qty, cents: _event.data.sku === 'tea' ? 450 : 1200})\"/></transition>"
     "</state></scxml>";
 
 /* A chart whose document carries `pad`, a string of `size` bytes. */
@@ -256,6 +321,8 @@ static void run_idle(ta_host *host) {
     }
 }
 
+static uint32_t trust_results; /* TA_DATAMODEL_JSON_TRUST_RESULTS, for a run without the check */
+
 static void bench_open(bench *b, int json, const char *chart_text) {
     memset(b, 0, sizeof *b);
     b->json = json;
@@ -265,17 +332,18 @@ static void bench_open(bench *b, int json, const char *chart_text) {
         memset(&config, 0, sizeof config);
         config.size = sizeof config;
         config.allocator = ta_runtime_malloc();
+        config.flags = trust_results;
         if (ta_datamodel_json_new(&config, &b->json_datamodel) != TA_OK) exit(1);
-        static const struct {
-            const char *name;
-            ta_json_function f;
-        } fs[] = {{"knownItem", f_known_item}, {"addItem", f_add_item}, {"hasItems", f_has_items}, {"add", f_add}, {"yes", f_yes}};
-        for (size_t i = 0; i < sizeof fs / sizeof fs[0]; i++) {
+        static const writer_entry functions[] = {{"knownItem", f_known_item}, {"addItem", f_add_item},
+                                                 {"newItem", f_new_item},     {"hasItems", f_has_items},
+                                                 {"add", f_add},              {"yes", f_yes}};
+        for (size_t i = 0; i < sizeof functions / sizeof functions[0]; i++) {
             ta_json_function_entry e;
             memset(&e, 0, sizeof e);
             e.size = sizeof e;
-            e.name = (ta_string_view){fs[i].name, (uint32_t)strlen(fs[i].name)};
-            e.function = fs[i].f;
+            e.name = (ta_string_view){functions[i].name, (uint32_t)strlen(functions[i].name)};
+            e.function = writer_adapter;
+            e.context = (void *)&functions[i];
             ta_datamodel_json_register(b->json_datamodel, &e);
         }
         b->binding = ta_datamodel_json_binding(b->json_datamodel);
@@ -427,9 +495,41 @@ static void blob(int json, size_t size, uint32_t events) {
     free(chart);
 }
 
+/* ns per event as each of 64 actors' arrays grows to `items`, by `event` */
+static double grow(int json, const char *event, uint32_t items) {
+    bench b;
+    bench_open(&b, json, json ? JSON_APPEND : JS_APPEND);
+    uint32_t actors = 64;
+    uint64_t *sessions = spawn_all(&b, "cart", actors);
+    unsigned char room[64];
+    uint64_t start = ta_runtime_now_ns();
+    for (uint32_t k = 0; k < items; k++) {
+        for (uint32_t i = 0; i < actors; i++) send(&b, sessions[i], event, add_data(room, sizeof room, k % 2 ? "mug" : "tea", 1 + k % 9));
+        run_idle(b.host);
+    }
+    double ns = (double)(ta_runtime_now_ns() - start) / ((double)items * actors);
+    free(sessions);
+    bench_close(&b);
+    return ns;
+}
+
 int main(int argc, char **argv) {
     uint32_t actors = argc > 1 ? (uint32_t)atoi(argv[1]) : 10000;
     uint32_t events = argc > 2 ? (uint32_t)atoi(argv[2]) : 200000;
+    if (argc > 3 && !strcmp(argv[3], "append")) { /* the append comparison only */
+        uint32_t sizes[] = {10, 50, 200};
+        for (size_t i = 0; i < 3; i++) {
+            trust_results = 0;
+            double add_checked = grow(1, "add", sizes[i]), append_checked = grow(1, "append", sizes[i]);
+            trust_results = TA_DATAMODEL_JSON_TRUST_RESULTS;
+            double add_trusted = grow(1, "add", sizes[i]), append_trusted = grow(1, "append", sizes[i]);
+            double js_add = grow(0, "add", sizes[i]), js_append = grow(0, "append", sizes[i]);
+            printf("to %3u items, ns/event: json addItem %.0f (trusted %.0f), json items[length(items)] %.0f (trusted %.0f); "
+                   "quickjs concat %.0f, items[items.length] %.0f\n",
+                   sizes[i], add_checked, add_trusted, append_checked, append_trusted, js_add, js_append);
+        }
+        return 0;
+    }
     for (int json = 1; json >= 0; json--) order(json, actors, events);
     size_t sizes[] = {64, 1024, 16384, 60000};
     for (size_t i = 0; i < sizeof sizes / sizeof sizes[0]; i++)

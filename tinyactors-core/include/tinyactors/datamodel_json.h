@@ -25,7 +25,8 @@ typedef struct ta_json_call {
     uint32_t argument_count;
     void *context;          /* the function's own, as registered */
     ta_bytes arguments;     /* one CBOR array of the arguments, valid during the call */
-    ta_cbor_writer *result; /* write exactly one item */
+    ta_buffer *result;      /* lent: write one encoded item into it and set its length;
+                               TA_ERROR_NO_MEMORY with length the room it needs */
     ta_string_view message; /* a failing function sets it; the datamodel copies it */
 } ta_json_call;
 
@@ -43,10 +44,15 @@ typedef struct ta_json_function_entry {
 typedef struct ta_datamodel_json_config {
     uint32_t size;
     uint32_t max_document_bytes; /* 0: the default */
+    uint32_t flags;              /* TA_DATAMODEL_JSON_TRUST_RESULTS */
+    uint32_t pad;
     ta_allocator allocator;
 } ta_datamodel_json_config;
 
 #define TA_DATAMODEL_JSON_MAX_DOCUMENT_BYTES_DEFAULT (64u * 1024u)
+/* Take a function's result as the binding wrote it, without the check
+ * against the value table (a spike's measurement switch). */
+#define TA_DATAMODEL_JSON_TRUST_RESULTS 1u
 
 TA_API void ta_datamodel_json_config_normalize(ta_datamodel_json_config *config);
 TA_API ta_status ta_datamodel_json_new(const ta_datamodel_json_config *config, ta_datamodel_json **out);

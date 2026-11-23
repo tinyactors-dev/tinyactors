@@ -231,7 +231,7 @@ typedef struct jfunction {
     void *context;
 } jfunction;
 
-enum { N_ERROR = 1, N_LITERAL, N_PATH, N_CALL, N_IN };
+enum { N_ERROR = 1, N_LITERAL, N_PATH, N_CALL, N_IN, N_LENGTH };
 enum { R_VARIABLE = 1, R_EVENT, R_SESSIONID, R_NAME, R_IOPROCESSORS };
 enum { S_KEY = 1, S_POSITION, S_PATH };
 
@@ -283,7 +283,7 @@ typedef struct jloop {
 
 struct ta_datamodel_json {
     jmem memory;
-    uint32_t max_document_bytes;
+    uint32_t max_document_bytes, flags;
     jfunction *functions;
     uint32_t function_count, function_capacity;
     ta_table sessions, payloads, loops;
@@ -663,7 +663,9 @@ static uint32_t path_rest(jparser *p, jnode node) {
                 uint32_t inner = expression(p);
                 p->depth--;
                 if (inner == NIL) return NIL;
-                if (node_at(c, inner)->kind != N_PATH) return fail(p, "an index is a position, a string or a path"), NIL;
+                uint8_t kind = node_at(c, inner)->kind;
+                if (kind != N_PATH && kind != N_CALL && kind != N_LENGTH)
+                    return fail(p, "an index is a position, a string, a path or a call"), NIL;
                 segment_list[count++] = (jsegment){S_PATH, inner, 0};
             }
             skip_space(p);
@@ -742,6 +744,10 @@ static uint32_t expression(jparser *p) {
         p->depth--;
         ta_string_view chart_name = ta_image_chart_name(c->image, c->chart);
         uint32_t f = find_function(p->datamodel, chart_name, w);
+        if (f == NIL && view_equal(w, "length", 6)) { /* built in: an array's items, a map's pairs, a text's bytes */
+            if (count != 1) return fail(p, "length takes one value"), NIL;
+            return add_node(c, (jnode){N_LENGTH, 0, 1, args[0], 0, 0});
+        }
         if (f == NIL) return fail(p, "no function registered under that name"), NIL;
         uint32_t first = (uint32_t)(c->arguments.n / sizeof(uint32_t));
         jb_put(&c->arguments, args, count * sizeof(uint32_t));
@@ -881,6 +887,21 @@ static int path_root(jeval *e, const jnode *node, jv *out) {
     return 0;
 }
 
+/* One well-formed item of the value table: definite lengths, UTF-8 text,
+ * no tag but 32, no simple value but false, true, null and undefined.
+ * (Shortest heads and duplicate keys are not checked in the spike.) */
+static int result_in_table(ta_bytes bytes) {
+    ta_cbor_reader reader;
+    ta_cbor_item item;
+    ta_cbor_reader_init(&reader, bytes);
+    int32_t got;
+    while ((got = ta_cbor_read(&reader, &item)) == 1) {
+        if (item.kind == TA_CBOR_TAG && item.value != TA_CBOR_TAG_URI) return 0;
+        if (item.kind == TA_CBOR_SIMPLE && (item.value < TA_CBOR_FALSE || item.value > TA_CBOR_UNDEFINED)) return 0;
+    }
+    return got == 0;
+}
+
 static int call_function(jeval *e, const jnode *node, jv *out) {
     ta_datamodel_json *datamodel = e->datamodel;
     jchart *c = e->s->chart;
@@ -897,19 +918,25 @@ static int call_function(jeval *e, const jnode *node, jv *out) {
     }
     if (args.failed) return jb_free(&args), eval_error(e, "out of memory", none_view());
     jfunction *f = &datamodel->functions[node->a];
-    ta_cbor_writer w;
-    ta_cbor_writer_init(&w, (ta_buffer){datamodel->room, datamodel->max_document_bytes, 0}, 0);
-    ta_json_call call = {sizeof call, node->count, f->context, {args.p, args.n}, &w, {0, 0}};
+    ta_buffer room = {datamodel->room, datamodel->max_document_bytes, 0};
+    ta_json_call call = {sizeof call, node->count, f->context, {args.p, args.n}, &room, {0, 0}};
     ta_status status = f->function(&call);
     e->fuel += 1 + args.n / 64;
     jb_free(&args);
-    ta_bytes result;
+    if (status == TA_ERROR_NO_MEMORY) {
+        set_message(datamodel, "the function's result passes the document's limit: ", f->name);
+        datamodel->reason = TA_DATAMODEL_FAILURE_MEMORY;
+        return 0;
+    }
     if (status != TA_OK) {
         if (call.message.length) return eval_error(e, "", call.message);
         return eval_error(e, "the function failed: ", f->name);
     }
-    if (ta_cbor_writer_bytes(&w, &result) != TA_OK || !result.length)
-        return eval_error(e, "the function wrote no single value: ", f->name);
+    if (!room.length || room.length > room.capacity) return eval_error(e, "the function wrote no value: ", f->name);
+    ta_bytes result = {room.pointer, room.length};
+    if (!(datamodel->flags & TA_DATAMODEL_JSON_TRUST_RESULTS) && !result_in_table(result))
+        return eval_error(e, "the function's result is not one value of the table: ", f->name);
+    e->fuel += result.length / 64;
     uint8_t *copy = (uint8_t *)jalloc(&datamodel->memory, result.length);
     if (!copy || e->temporary_count == sizeof e->temporaries / sizeof e->temporaries[0])
         return jfree(&datamodel->memory, copy), eval_error(e, "out of memory", none_view());
@@ -932,6 +959,24 @@ static int eval_node(jeval *e, uint32_t index, jv *out) {
         return 1;
     }
     case N_CALL: return call_function(e, node, out);
+    case N_LENGTH: {
+        jv v;
+        jhead h;
+        if (!eval_node(e, node->a, &v)) return 0;
+        if (!read_head(v, &h) || (h.major != 2 && h.major != 3 && h.major != 4 && h.major != 5))
+            return eval_error(e, "length of something with no length", none_view());
+        jbuf b;
+        jb_init(&b, &e->datamodel->memory);
+        put_head(&b, 0, h.value);
+        uint8_t *copy = b.failed ? 0 : (uint8_t *)jalloc(&e->datamodel->memory, b.n);
+        if (!copy || e->temporary_count == sizeof e->temporaries / sizeof e->temporaries[0])
+            return jb_free(&b), jfree(&e->datamodel->memory, copy), eval_error(e, "out of memory", none_view());
+        ta_memcpy(copy, b.p, b.n);
+        *out = (jv){copy, (uint32_t)b.n};
+        e->temporaries[e->temporary_count++] = copy;
+        jb_free(&b);
+        return 1;
+    }
     case N_PATH: {
         jv v;
         if (!path_root(e, node, &v)) return 0;
@@ -1868,6 +1913,7 @@ ta_status ta_datamodel_json_new(const ta_datamodel_json_config *config_, ta_data
     ta_memset(datamodel, 0, sizeof *datamodel);
     datamodel->memory = m;
     datamodel->max_document_bytes = config.max_document_bytes;
+    datamodel->flags = config.flags;
     datamodel->room = (uint8_t *)jalloc(&datamodel->memory, config.max_document_bytes);
     if (!datamodel->room) return jfree(&datamodel->memory, datamodel), TA_ERROR_NO_MEMORY;
     ta_table_config sessions = {sizeof sessions, sizeof(jsession), &datamodel->memory.allocator};
