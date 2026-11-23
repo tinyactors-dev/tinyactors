@@ -48,23 +48,23 @@ static void jfree(jmem *m, void *q) {
 typedef struct jbuf {
     jmem *m;
     uint8_t *p;
-    size_t n, cap;
+    size_t n, capacity;
     int failed;
 } jbuf;
 
 static void jb_init(jbuf *b, jmem *m) {
     b->m = m;
     b->p = 0;
-    b->n = b->cap = 0;
+    b->n = b->capacity = 0;
     b->failed = 0;
 }
 
 static int jb_reserve(jbuf *b, size_t more) {
     if (b->failed) return 0;
-    if (b->n + more <= b->cap) return 1;
-    size_t cap = b->cap ? b->cap * 2 : 64;
-    while (cap < b->n + more) cap *= 2;
-    uint8_t *q = (uint8_t *)jalloc(b->m, cap);
+    if (b->n + more <= b->capacity) return 1;
+    size_t capacity = b->capacity ? b->capacity * 2 : 64;
+    while (capacity < b->n + more) capacity *= 2;
+    uint8_t *q = (uint8_t *)jalloc(b->m, capacity);
     if (!q) {
         b->failed = 1;
         return 0;
@@ -72,7 +72,7 @@ static int jb_reserve(jbuf *b, size_t more) {
     if (b->n) ta_memcpy(q, b->p, b->n);
     jfree(b->m, b->p);
     b->p = q;
-    b->cap = cap;
+    b->capacity = capacity;
     return 1;
 }
 
@@ -87,7 +87,7 @@ static void jb_byte(jbuf *b, uint8_t c) { jb_put(b, &c, 1); }
 static void jb_free(jbuf *b) {
     jfree(b->m, b->p);
     b->p = 0;
-    b->n = b->cap = 0;
+    b->n = b->capacity = 0;
 }
 
 /* ---- CBOR heads, over canonical bytes ----------------------------------------------------- */
@@ -183,7 +183,7 @@ static int is_text(jv v, ta_string_view *out) {
 
 static int simple_is(jv v, unsigned s) { return v.n == 1 && v.p[0] == (0xE0 | s); }
 
-static int view_eq(ta_string_view a, const char *p, uint32_t n) {
+static int view_equal(ta_string_view a, const char *p, uint32_t n) {
     return a.length == n && ta_memcmp(a.pointer, p, n) == 0;
 }
 
@@ -196,14 +196,14 @@ static int map_find(jv v, ta_string_view key, jv *out) {
         jv k = item((jv){v.p + at, v.n - at});
         if (!k.n) return 0;
         at += k.n;
-        jv val = item((jv){v.p + at, v.n - at});
-        if (!val.n) return 0;
+        jv value_item = item((jv){v.p + at, v.n - at});
+        if (!value_item.n) return 0;
         ta_string_view kt;
-        if (is_text(k, &kt) && view_eq(key, kt.pointer, kt.length)) {
-            *out = val;
+        if (is_text(k, &kt) && view_equal(key, kt.pointer, kt.length)) {
+            *out = value_item;
             return 1;
         }
-        at += val.n;
+        at += value_item.n;
     }
     return 0;
 }
@@ -294,15 +294,15 @@ struct ta_datamodel_json {
     uint32_t message_length, reason;
 };
 
-static void set_message(ta_datamodel_json *dm, const char *text, ta_string_view detail) {
+static void set_message(ta_datamodel_json *datamodel, const char *text, ta_string_view detail) {
     uint32_t n = 0;
     while (text[n] && n < 200) {
-        dm->message[n] = text[n];
+        datamodel->message[n] = text[n];
         n++;
     }
-    for (uint32_t i = 0; i < detail.length && n < sizeof dm->message; i++) dm->message[n++] = detail.pointer[i];
-    dm->message_length = n;
-    dm->reason = TA_DATAMODEL_FAILURE_EXCEPTION;
+    for (uint32_t i = 0; i < detail.length && n < sizeof datamodel->message; i++) datamodel->message[n++] = detail.pointer[i];
+    datamodel->message_length = n;
+    datamodel->reason = TA_DATAMODEL_FAILURE_EXCEPTION;
 }
 
 static ta_string_view none_view(void) { return (ta_string_view){"", 0}; }
@@ -310,7 +310,7 @@ static ta_string_view none_view(void) { return (ta_string_view){"", 0}; }
 /* ---- parsing ----------------------------------------------------------------------------- */
 
 typedef struct jparser {
-    ta_datamodel_json *dm;
+    ta_datamodel_json *datamodel;
     jchart *chart;
     const char *s;
     uint32_t i, n, depth;
@@ -327,7 +327,7 @@ static uint32_t add_node(jchart *c, jnode node) {
     return i;
 }
 
-static void ws(jparser *p) {
+static void skip_space(jparser *p) {
     while (p->i < p->n && (p->s[p->i] == ' ' || p->s[p->i] == '\t' || p->s[p->i] == '\n' || p->s[p->i] == '\r'))
         p->i++;
 }
@@ -523,13 +523,13 @@ static int number(jparser *p, jbuf *out) {
 /* A literal into out as CBOR. */
 static int literal(jparser *p, jbuf *out) {
     if (++p->depth > 63) return fail(p, "a literal nested too deep");
-    ws(p);
+    skip_space(p);
     if (p->i >= p->n) return fail(p, "a value expected");
     char c = p->s[p->i];
     int ok = 1;
     if (c == '"' || c == '\'') {
         jbuf text;
-        jb_init(&text, &p->dm->memory);
+        jb_init(&text, &p->datamodel->memory);
         ok = string_text(p, &text);
         if (ok) put_text(out, text.p, text.n);
         jb_free(&text);
@@ -538,26 +538,26 @@ static int literal(jparser *p, jbuf *out) {
     else if (c == '[' || c == '{') {
         p->i++;
         jbuf items;
-        jb_init(&items, &p->dm->memory);
+        jb_init(&items, &p->datamodel->memory);
         uint64_t count = 0;
-        ws(p);
+        skip_space(p);
         char close = c == '[' ? ']' : '}';
         if (p->i < p->n && p->s[p->i] == close)
             p->i++;
         else
             for (;;) {
                 if (c == '{') {
-                    ws(p);
+                    skip_space(p);
                     if (p->i >= p->n || (p->s[p->i] != '"' && p->s[p->i] != '\'')) {
                         ok = fail(p, "a map key must be a string");
                         break;
                     }
                     jbuf key;
-                    jb_init(&key, &p->dm->memory);
+                    jb_init(&key, &p->datamodel->memory);
                     ok = string_text(p, &key);
                     if (ok) put_text(&items, key.p, key.n);
                     jb_free(&key);
-                    ws(p);
+                    skip_space(p);
                     if (!ok || p->i >= p->n || p->s[p->i++] != ':') {
                         ok = fail(p, "':' expected");
                         break;
@@ -565,7 +565,7 @@ static int literal(jparser *p, jbuf *out) {
                 }
                 if (!(ok = literal(p, &items))) break;
                 count++;
-                ws(p);
+                skip_space(p);
                 if (p->i < p->n && p->s[p->i] == ',') {
                     p->i++;
                     continue;
@@ -584,10 +584,10 @@ static int literal(jparser *p, jbuf *out) {
         jb_free(&items);
     } else {
         ta_string_view w = name(p);
-        if (view_eq(w, "true", 4)) jb_byte(out, 0xF5);
-        else if (view_eq(w, "false", 5)) jb_byte(out, 0xF4);
-        else if (view_eq(w, "null", 4)) jb_byte(out, 0xF6);
-        else if (view_eq(w, "undefined", 9)) jb_byte(out, 0xF7);
+        if (view_equal(w, "true", 4)) jb_byte(out, 0xF5);
+        else if (view_equal(w, "false", 5)) jb_byte(out, 0xF4);
+        else if (view_equal(w, "null", 4)) jb_byte(out, 0xF6);
+        else if (view_equal(w, "undefined", 9)) jb_byte(out, 0xF7);
         else ok = fail(p, "a literal expected");
     }
     p->depth--;
@@ -606,17 +606,17 @@ static const ta_string_view reserved[] = {{"true", 4}, {"false", 5}, {"null", 4}
 
 static int is_reserved(ta_string_view v) {
     for (unsigned i = 0; i < sizeof reserved / sizeof reserved[0]; i++)
-        if (view_eq(v, reserved[i].pointer, reserved[i].length)) return 1;
+        if (view_equal(v, reserved[i].pointer, reserved[i].length)) return 1;
     return v.length && v.pointer[0] == '_';
 }
 
 /* The function registered for the chart under name, else for every chart. */
-static uint32_t find_function(ta_datamodel_json *dm, ta_string_view chart, ta_string_view fname) {
+static uint32_t find_function(ta_datamodel_json *datamodel, ta_string_view chart, ta_string_view fname) {
     uint32_t general = NIL;
-    for (uint32_t i = 0; i < dm->function_count; i++) {
-        jfunction *f = &dm->functions[i];
-        if (!view_eq(fname, f->name.pointer, f->name.length)) continue;
-        if (f->chart.length && view_eq(chart, f->chart.pointer, f->chart.length)) return i;
+    for (uint32_t i = 0; i < datamodel->function_count; i++) {
+        jfunction *f = &datamodel->functions[i];
+        if (!view_equal(fname, f->name.pointer, f->name.length)) continue;
+        if (f->chart.length && view_equal(chart, f->chart.pointer, f->chart.length)) return i;
         if (!f->chart.length) general = i;
     }
     return general;
@@ -624,30 +624,30 @@ static uint32_t find_function(ta_datamodel_json *dm, ta_string_view chart, ta_st
 
 static uint32_t path_rest(jparser *p, jnode node) {
     jchart *c = p->chart;
-    jsegment segs[64];
+    jsegment segment_list[64];
     uint32_t count = 0;
     for (;;) {
-        ws(p);
+        skip_space(p);
         if (p->i >= p->n) break;
-        char ch = p->s[p->i];
-        if (ch == '.') {
+        char character = p->s[p->i];
+        if (character == '.') {
             p->i++;
-            ws(p);
+            skip_space(p);
             ta_string_view k = name(p);
             if (!k.length) return fail(p, "a name after '.'"), NIL;
             if (count == 64) return fail(p, "a path too long"), NIL;
-            segs[count++] = (jsegment){S_KEY, copy_string(c, k), k.length};
-        } else if (ch == '[') {
+            segment_list[count++] = (jsegment){S_KEY, copy_string(c, k), k.length};
+        } else if (character == '[') {
             p->i++;
-            ws(p);
+            skip_space(p);
             if (count == 64) return fail(p, "a path too long"), NIL;
             if (p->i < p->n && (p->s[p->i] == '"' || p->s[p->i] == '\'')) {
                 jbuf key;
-                jb_init(&key, &p->dm->memory);
+                jb_init(&key, &p->datamodel->memory);
                 int ok = string_text(p, &key);
                 uint32_t at = (uint32_t)c->strings.n;
                 if (ok) jb_put(&c->strings, key.p, key.n);
-                segs[count++] = (jsegment){S_KEY, at, (uint32_t)key.n};
+                segment_list[count++] = (jsegment){S_KEY, at, (uint32_t)key.n};
                 jb_free(&key);
                 if (!ok) return NIL;
             } else if (p->i < p->n && is_digit(p->s[p->i])) {
@@ -657,32 +657,32 @@ static uint32_t path_rest(jparser *p, jnode node) {
                     v = v * 10 + (uint64_t)(p->s[p->i++] - '0');
                     if (v > 0xFFFFFFFFu) return fail(p, "a position past 2^32 - 1"), NIL;
                 }
-                segs[count++] = (jsegment){S_POSITION, (uint32_t)v, 0};
+                segment_list[count++] = (jsegment){S_POSITION, (uint32_t)v, 0};
             } else {
                 if (++p->depth > MAX_NEST) return fail(p, "a path nested too deep"), NIL;
                 uint32_t inner = expression(p);
                 p->depth--;
                 if (inner == NIL) return NIL;
                 if (node_at(c, inner)->kind != N_PATH) return fail(p, "an index is a position, a string or a path"), NIL;
-                segs[count++] = (jsegment){S_PATH, inner, 0};
+                segment_list[count++] = (jsegment){S_PATH, inner, 0};
             }
-            ws(p);
+            skip_space(p);
             if (p->i >= p->n || p->s[p->i++] != ']') return fail(p, "']' expected"), NIL;
         } else
             break;
     }
     node.count = (uint16_t)count;
     node.c = (uint32_t)(c->segments.n / sizeof(jsegment));
-    jb_put(&c->segments, segs, count * sizeof(jsegment));
+    jb_put(&c->segments, segment_list, count * sizeof(jsegment));
     return add_node(c, node);
 }
 
 static uint32_t expression(jparser *p) {
     jchart *c = p->chart;
-    ws(p);
+    skip_space(p);
     if (p->i >= p->n) return fail(p, "an expression expected"), NIL;
-    char ch = p->s[p->i];
-    if (ch == '"' || ch == '\'' || ch == '-' || is_digit(ch) || ch == '[' || ch == '{') {
+    char character = p->s[p->i];
+    if (character == '"' || character == '\'' || character == '-' || is_digit(character) || character == '[' || character == '{') {
         uint32_t at = (uint32_t)c->literals.n;
         if (!literal(p, &c->literals)) return NIL;
         return add_node(c, (jnode){N_LITERAL, 0, 0, at, (uint32_t)c->literals.n - at, 0});
@@ -690,26 +690,26 @@ static uint32_t expression(jparser *p) {
     uint32_t save = p->i;
     ta_string_view w = name(p);
     if (!w.length) return fail(p, "an expression expected"), NIL;
-    if (view_eq(w, "true", 4) || view_eq(w, "false", 5) || view_eq(w, "null", 4) || view_eq(w, "undefined", 9)) {
+    if (view_equal(w, "true", 4) || view_equal(w, "false", 5) || view_equal(w, "null", 4) || view_equal(w, "undefined", 9)) {
         p->i = save;
         uint32_t at = (uint32_t)c->literals.n;
         if (!literal(p, &c->literals)) return NIL;
         return add_node(c, (jnode){N_LITERAL, 0, 0, at, (uint32_t)c->literals.n - at, 0});
     }
-    ws(p);
+    skip_space(p);
     int call = p->i < p->n && p->s[p->i] == '(';
-    if (view_eq(w, "In", 2)) {
+    if (view_equal(w, "In", 2)) {
         if (!call) return fail(p, "In is reserved"), NIL;
         p->i++;
-        ws(p);
+        skip_space(p);
         if (p->i >= p->n || (p->s[p->i] != '"' && p->s[p->i] != '\'')) return fail(p, "In takes a state's id"), NIL;
         jbuf id;
-        jb_init(&id, &p->dm->memory);
+        jb_init(&id, &p->datamodel->memory);
         int ok = string_text(p, &id);
         uint32_t state = ok ? ta_image_state_by_name(c->image, c->chart, (ta_string_view){(const char *)id.p, (uint32_t)id.n}) : NIL;
         jb_free(&id);
         if (!ok) return NIL;
-        ws(p);
+        skip_space(p);
         if (p->i >= p->n || p->s[p->i++] != ')') return fail(p, "')' expected"), NIL;
         if (state == NIL) return fail(p, "In() of a state the chart lacks"), NIL;
         return add_node(c, (jnode){N_IN, 0, 0, state, 0, 0});
@@ -719,7 +719,7 @@ static uint32_t expression(jparser *p) {
         p->i++;
         if (++p->depth > MAX_NEST) return fail(p, "calls nested too deep"), NIL;
         uint32_t args[32], count = 0;
-        ws(p);
+        skip_space(p);
         if (p->i < p->n && p->s[p->i] == ')')
             p->i++;
         else
@@ -728,7 +728,7 @@ static uint32_t expression(jparser *p) {
                 if (a == NIL) return NIL;
                 if (count == 32) return fail(p, "too many arguments"), NIL;
                 args[count++] = a;
-                ws(p);
+                skip_space(p);
                 if (p->i < p->n && p->s[p->i] == ',') {
                     p->i++;
                     continue;
@@ -741,24 +741,24 @@ static uint32_t expression(jparser *p) {
             }
         p->depth--;
         ta_string_view chart_name = ta_image_chart_name(c->image, c->chart);
-        uint32_t f = find_function(p->dm, chart_name, w);
+        uint32_t f = find_function(p->datamodel, chart_name, w);
         if (f == NIL) return fail(p, "no function registered under that name"), NIL;
         uint32_t first = (uint32_t)(c->arguments.n / sizeof(uint32_t));
         jb_put(&c->arguments, args, count * sizeof(uint32_t));
         return add_node(c, (jnode){N_CALL, 0, (uint16_t)count, f, 0, first});
     }
     uint8_t root = R_VARIABLE;
-    if (view_eq(w, "_event", 6)) root = R_EVENT;
-    else if (view_eq(w, "_sessionid", 10)) root = R_SESSIONID;
-    else if (view_eq(w, "_name", 5)) root = R_NAME;
-    else if (view_eq(w, "_ioprocessors", 13)) root = R_IOPROCESSORS;
+    if (view_equal(w, "_event", 6)) root = R_EVENT;
+    else if (view_equal(w, "_sessionid", 10)) root = R_SESSIONID;
+    else if (view_equal(w, "_name", 5)) root = R_NAME;
+    else if (view_equal(w, "_ioprocessors", 13)) root = R_IOPROCESSORS;
     else if (is_reserved(w)) return fail(p, "a reserved name"), NIL;
     return path_rest(p, (jnode){N_PATH, root, 0, copy_string(c, w), w.length, 0});
 }
 
 /* An expression's node, or an N_ERROR node with the parse error. */
-static uint32_t parse_expression(ta_datamodel_json *dm, jchart *c, ta_expression_info *info) {
-    jparser p = {dm, c, info->source.pointer, 0, info->source.length, 0, 0};
+static uint32_t parse_expression(ta_datamodel_json *datamodel, jchart *c, ta_expression_info *info) {
+    jparser p = {datamodel, c, info->source.pointer, 0, info->source.length, 0, 0};
     uint32_t node;
     if (info->kind == TA_EXPRESSION_CONTENT) { /* content is a literal, or else text */
         uint32_t at = (uint32_t)c->literals.n;
@@ -767,7 +767,7 @@ static uint32_t parse_expression(ta_datamodel_json *dm, jchart *c, ta_expression
     } else
         node = expression(&p);
     if (node != NIL) {
-        ws(&p);
+        skip_space(&p);
         if (p.i != p.n) node = NIL, fail(&p, "text after the expression");
     }
     if (node != NIL && info->kind == TA_EXPRESSION_LOCATION && node_at(c, node)->kind != N_PATH)
@@ -776,17 +776,17 @@ static uint32_t parse_expression(ta_datamodel_json *dm, jchart *c, ta_expression
         /* content that is not a literal is its text, whitespace normalized */
         uint32_t at = (uint32_t)c->literals.n;
         jbuf text;
-        jb_init(&text, &dm->memory);
+        jb_init(&text, &datamodel->memory);
         int space = 0;
         for (uint32_t i = 0; i < info->source.length; i++) {
-            char ch = info->source.pointer[i];
-            if (ch == ' ' || ch == '\t' || ch == '\n' || ch == '\r') {
+            char character = info->source.pointer[i];
+            if (character == ' ' || character == '\t' || character == '\n' || character == '\r') {
                 space = text.n > 0;
                 continue;
             }
             if (space) jb_byte(&text, ' ');
             space = 0;
-            jb_byte(&text, (uint8_t)ch);
+            jb_byte(&text, (uint8_t)character);
         }
         if (text.n && text.p[0] == '<') {
             jb_free(&text);
@@ -808,7 +808,7 @@ static uint32_t parse_expression(ta_datamodel_json *dm, jchart *c, ta_expression
 /* ---- evaluation ------------------------------------------------------------------------ */
 
 typedef struct jeval {
-    ta_datamodel_json *dm;
+    ta_datamodel_json *datamodel;
     jsession *s;
     ta_datamodel_environment *environment;
     void *temporaries[MAX_NEST * 2 + 4];
@@ -817,7 +817,7 @@ typedef struct jeval {
 } jeval;
 
 static void eval_end(jeval *e) {
-    for (uint32_t i = 0; i < e->temporary_count; i++) jfree(&e->dm->memory, e->temporaries[i]);
+    for (uint32_t i = 0; i < e->temporary_count; i++) jfree(&e->datamodel->memory, e->temporaries[i]);
     e->temporary_count = 0;
     uint64_t fuel = e->fuel + e->s->pending_fuel;
     e->fuel = 0;
@@ -829,23 +829,23 @@ static void eval_end(jeval *e) {
 }
 
 static int eval_error(jeval *e, const char *why, ta_string_view detail) {
-    set_message(e->dm, why, detail);
+    set_message(e->datamodel, why, detail);
     return 0;
 }
 
 static int eval_node(jeval *e, uint32_t index, jv *out);
 
-static int step(jeval *e, const jsegment *seg, jv *value) {
+static int step(jeval *e, const jsegment *segment, jv *value) {
     jchart *c = e->s->chart;
-    if (seg->kind == S_KEY) {
-        ta_string_view key = {(const char *)c->strings.p + seg->a, seg->b};
+    if (segment->kind == S_KEY) {
+        ta_string_view key = {(const char *)c->strings.p + segment->a, segment->b};
         if (!map_find(*value, key, value)) return eval_error(e, "no key ", key);
         return 1;
     }
-    uint64_t position = seg->a;
-    if (seg->kind == S_PATH) {
+    uint64_t position = segment->a;
+    if (segment->kind == S_PATH) {
         jv index;
-        if (!eval_node(e, seg->a, &index)) return 0;
+        if (!eval_node(e, segment->a, &index)) return 0;
         ta_string_view key;
         jhead h;
         if (is_text(index, &key)) {
@@ -882,10 +882,10 @@ static int path_root(jeval *e, const jnode *node, jv *out) {
 }
 
 static int call_function(jeval *e, const jnode *node, jv *out) {
-    ta_datamodel_json *dm = e->dm;
+    ta_datamodel_json *datamodel = e->datamodel;
     jchart *c = e->s->chart;
     jbuf args;
-    jb_init(&args, &dm->memory);
+    jb_init(&args, &datamodel->memory);
     put_head(&args, 4, node->count);
     for (uint32_t i = 0; i < node->count; i++) {
         jv a;
@@ -896,9 +896,9 @@ static int call_function(jeval *e, const jnode *node, jv *out) {
         jb_put(&args, a.p, a.n);
     }
     if (args.failed) return jb_free(&args), eval_error(e, "out of memory", none_view());
-    jfunction *f = &dm->functions[node->a];
+    jfunction *f = &datamodel->functions[node->a];
     ta_cbor_writer w;
-    ta_cbor_writer_init(&w, (ta_buffer){dm->room, dm->max_document_bytes, 0}, 0);
+    ta_cbor_writer_init(&w, (ta_buffer){datamodel->room, datamodel->max_document_bytes, 0}, 0);
     ta_json_call call = {sizeof call, node->count, f->context, {args.p, args.n}, &w, {0, 0}};
     ta_status status = f->function(&call);
     e->fuel += 1 + args.n / 64;
@@ -910,9 +910,9 @@ static int call_function(jeval *e, const jnode *node, jv *out) {
     }
     if (ta_cbor_writer_bytes(&w, &result) != TA_OK || !result.length)
         return eval_error(e, "the function wrote no single value: ", f->name);
-    uint8_t *copy = (uint8_t *)jalloc(&dm->memory, result.length);
+    uint8_t *copy = (uint8_t *)jalloc(&datamodel->memory, result.length);
     if (!copy || e->temporary_count == sizeof e->temporaries / sizeof e->temporaries[0])
-        return jfree(&dm->memory, copy), eval_error(e, "out of memory", none_view());
+        return jfree(&datamodel->memory, copy), eval_error(e, "out of memory", none_view());
     ta_memcpy(copy, result.pointer, result.length);
     e->temporaries[e->temporary_count++] = copy;
     *out = (jv){copy, (uint32_t)result.length};
@@ -962,21 +962,21 @@ static int write_path(jeval *e, uint32_t path_node, jv value, int add_root) {
     if (node->kind == N_ERROR) return eval_node(e, path_node, &value);
     if (node->kind != N_PATH) return eval_error(e, "a location must be a path", none_view());
     if (node->root != R_VARIABLE) return eval_error(e, "only a variable can be written", none_view());
-    jv doc = {s->document, s->document_length};
+    jv whole = {s->document, s->document_length};
     /* the container whose child changes, and the child's range */
-    jv container = doc;
+    jv container = whole;
     uint32_t start = 0, end = 0, found;
     ta_string_view key = {(const char *)c->strings.p + node->a, node->b};
     jsegment root_segment = {S_KEY, node->a, node->b};
     const jsegment *last = &root_segment;
     for (uint32_t i = 0; i <= node->count; i++) {
-        const jsegment *seg = i == 0 ? &root_segment : segment_at(c, node->c + i - 1);
+        const jsegment *segment = i == 0 ? &root_segment : segment_at(c, node->c + i - 1);
         if (i == node->count) {
-            last = seg;
+            last = segment;
             break;
         }
         jv next = container;
-        if (!step(e, seg, &next)) return 0;
+        if (!step(e, segment, &next)) return 0;
         container = next;
     }
     /* find the last step's child in container */
@@ -994,7 +994,7 @@ static int write_path(jeval *e, uint32_t path_node, jv value, int add_root) {
         last = &resolved;
     } else if (last->kind == S_KEY && last != &root_segment)
         key = (ta_string_view){(const char *)c->strings.p + last->a, last->b};
-    uint32_t base = (uint32_t)(container.p - doc.p);
+    uint32_t base = (uint32_t)(container.p - whole.p);
     uint32_t container_size = item_size(container);
     found = 0;
     if (last->kind == S_KEY) {
@@ -1004,7 +1004,7 @@ static int write_path(jeval *e, uint32_t path_node, jv value, int add_root) {
             jv k = item((jv){container.p + at, container.n - at});
             jv v = item((jv){container.p + at + k.n, container.n - at - k.n});
             ta_string_view kt;
-            if (is_text(k, &kt) && view_eq(key, kt.pointer, kt.length)) {
+            if (is_text(k, &kt) && view_equal(key, kt.pointer, kt.length)) {
                 start = base + at + k.n;
                 end = start + v.n;
                 found = 1;
@@ -1018,38 +1018,38 @@ static int write_path(jeval *e, uint32_t path_node, jv value, int add_root) {
         if (position < h.value) {
             jv v;
             array_at(container, position, &v);
-            start = (uint32_t)(v.p - doc.p);
+            start = (uint32_t)(v.p - whole.p);
             end = start + v.n;
             found = 1;
         } else if (position != h.value)
             return eval_error(e, "a position past the array's end", none_view());
     }
     jbuf out;
-    jb_init(&out, &e->dm->memory);
+    jb_init(&out, &e->datamodel->memory);
     if (found) {
-        jb_put(&out, doc.p, start);
+        jb_put(&out, whole.p, start);
         jb_put(&out, value.p, value.n);
-        jb_put(&out, doc.p + end, doc.n - end);
+        jb_put(&out, whole.p + end, whole.n - end);
     } else {
         uint32_t tail = base + container_size;
-        jb_put(&out, doc.p, base);
+        jb_put(&out, whole.p, base);
         put_head(&out, h.major, h.value + 1);
-        jb_put(&out, doc.p + base + h.length, tail - base - h.length);
+        jb_put(&out, whole.p + base + h.length, tail - base - h.length);
         if (last->kind == S_KEY) put_text(&out, key.pointer, key.length);
         jb_put(&out, value.p, value.n);
-        jb_put(&out, doc.p + tail, doc.n - tail);
+        jb_put(&out, whole.p + tail, whole.n - tail);
     }
-    if (out.failed || out.n > e->dm->max_document_bytes) {
+    if (out.failed || out.n > e->datamodel->max_document_bytes) {
         jb_free(&out);
-        set_message(e->dm, "the document would pass its limit", none_view());
-        e->dm->reason = TA_DATAMODEL_FAILURE_MEMORY;
+        set_message(e->datamodel, "the document would pass its limit", none_view());
+        e->datamodel->reason = TA_DATAMODEL_FAILURE_MEMORY;
         return 0;
     }
     e->fuel += out.n / 64;
-    uint8_t *bytes = (uint8_t *)jalloc(&e->dm->memory, out.n);
+    uint8_t *bytes = (uint8_t *)jalloc(&e->datamodel->memory, out.n);
     if (!bytes) return jb_free(&out), eval_error(e, "out of memory", none_view());
     ta_memcpy(bytes, out.p, out.n);
-    jfree(&e->dm->memory, s->document);
+    jfree(&e->datamodel->memory, s->document);
     s->document = bytes;
     s->document_length = (uint32_t)out.n;
     jb_free(&out);
@@ -1059,12 +1059,12 @@ static int write_path(jeval *e, uint32_t path_node, jv value, int add_root) {
 /* ---- canonical input ------------------------------------------------------------------- */
 
 /* bytes, checked against the value table, written canonically into out. */
-static ta_status canonical(ta_datamodel_json *dm, ta_bytes bytes, jbuf *out) {
+static ta_status canonical(ta_datamodel_json *datamodel, ta_bytes bytes, jbuf *out) {
     ta_cbor_reader r;
     ta_cbor_item it;
     ta_cbor_reader_init(&r, bytes);
     ta_cbor_writer w;
-    ta_cbor_writer_init(&w, (ta_buffer){0, 0, 0}, &dm->memory.allocator);
+    ta_cbor_writer_init(&w, (ta_buffer){0, 0, 0}, &datamodel->memory.allocator);
     int32_t got;
     while ((got = ta_cbor_read(&r, &it)) == 1) {
         switch (it.kind) {
@@ -1107,12 +1107,12 @@ static ta_status canonical(ta_datamodel_json *dm, ta_bytes bytes, jbuf *out) {
 
 /* ---- payloads -------------------------------------------------------------------------- */
 
-static ta_payload payload_new(ta_datamodel_json *dm, const void *bytes, size_t length) {
+static ta_payload payload_new(ta_datamodel_json *datamodel, const void *bytes, size_t length) {
     uint64_t handle;
-    uint8_t *copy = (uint8_t *)jalloc(&dm->memory, length);
+    uint8_t *copy = (uint8_t *)jalloc(&datamodel->memory, length);
     if (!copy) return 0;
-    jpayload *row = (jpayload *)ta_table_add(&dm->payloads, &handle);
-    if (!row) return jfree(&dm->memory, copy), 0;
+    jpayload *row = (jpayload *)ta_table_add(&datamodel->payloads, &handle);
+    if (!row) return jfree(&datamodel->memory, copy), 0;
     ta_memcpy(copy, bytes, length);
     row->references = 1;
     row->length = (uint32_t)length;
@@ -1126,11 +1126,11 @@ static void j_retain(void *d, ta_payload p) {
 }
 
 static void j_release(void *d, ta_payload p) {
-    ta_datamodel_json *dm = (ta_datamodel_json *)d;
-    jpayload *row = (jpayload *)ta_table_get(&dm->payloads, p);
+    ta_datamodel_json *datamodel = (ta_datamodel_json *)d;
+    jpayload *row = (jpayload *)ta_table_get(&datamodel->payloads, p);
     if (!row || --row->references) return;
-    jfree(&dm->memory, row->bytes);
-    ta_table_remove(&dm->payloads, p);
+    jfree(&datamodel->memory, row->bytes);
+    ta_table_remove(&datamodel->payloads, p);
 }
 
 /* ---- the vtable ------------------------------------------------------------------------ */
@@ -1140,22 +1140,22 @@ static jsession *session_of(const ta_datamodel_call *call) {
 }
 
 static ta_status j_attach(void *d, const ta_datamodel_chart *chart, void **context) {
-    ta_datamodel_json *dm = (ta_datamodel_json *)d;
-    jchart *c = (jchart *)jalloc(&dm->memory, sizeof *c);
+    ta_datamodel_json *datamodel = (ta_datamodel_json *)d;
+    jchart *c = (jchart *)jalloc(&datamodel->memory, sizeof *c);
     if (!c) return TA_ERROR_NO_MEMORY;
     ta_memset(c, 0, sizeof *c);
     c->image = chart->image;
     c->chart = chart->chart;
     c->segment = chart->segment;
-    c->next = dm->charts;
-    dm->charts = c;
-    jb_init(&c->nodes, &dm->memory);
-    jb_init(&c->segments, &dm->memory);
-    jb_init(&c->arguments, &dm->memory);
-    jb_init(&c->strings, &dm->memory);
-    jb_init(&c->literals, &dm->memory);
+    c->next = datamodel->charts;
+    datamodel->charts = c;
+    jb_init(&c->nodes, &datamodel->memory);
+    jb_init(&c->segments, &datamodel->memory);
+    jb_init(&c->arguments, &datamodel->memory);
+    jb_init(&c->strings, &datamodel->memory);
+    jb_init(&c->literals, &datamodel->memory);
     c->expression_count = ta_image_expression_count(chart->image, chart->chart);
-    c->expression_node = (uint32_t *)jalloc(&dm->memory, sizeof(uint32_t) * (c->expression_count + 1));
+    c->expression_node = (uint32_t *)jalloc(&datamodel->memory, sizeof(uint32_t) * (c->expression_count + 1));
     if (!c->expression_node) return TA_ERROR_NO_MEMORY;
     for (uint32_t x = 0; x < c->expression_count; x++) {
         ta_expression_info info;
@@ -1168,10 +1168,10 @@ static ta_status j_attach(void *d, const ta_datamodel_chart *chart, void **conte
             c->expression_node[x] = add_node(c, (jnode){N_ERROR, 0, 0, copy_string(c, why), why.length, 0});
             continue;
         }
-        c->expression_node[x] = parse_expression(dm, c, &info);
+        c->expression_node[x] = parse_expression(datamodel, c, &info);
     }
     c->data_count = ta_image_data_count(chart->image, chart->chart);
-    c->data_node = (uint32_t *)jalloc(&dm->memory, sizeof(uint32_t) * (c->data_count + 1));
+    c->data_node = (uint32_t *)jalloc(&datamodel->memory, sizeof(uint32_t) * (c->data_count + 1));
     if (!c->data_node) return TA_ERROR_NO_MEMORY;
     for (uint32_t i = 0; i < c->data_count; i++) {
         ta_data_info info;
@@ -1185,10 +1185,10 @@ static ta_status j_attach(void *d, const ta_datamodel_chart *chart, void **conte
 }
 
 static void j_detach(void *d, void *context) {
-    ta_datamodel_json *dm = (ta_datamodel_json *)d;
+    ta_datamodel_json *datamodel = (ta_datamodel_json *)d;
     jchart *c = (jchart *)context;
     if (!c) return;
-    for (jchart **at = &dm->charts; *at; at = &(*at)->next)
+    for (jchart **at = &datamodel->charts; *at; at = &(*at)->next)
         if (*at == c) {
             *at = c->next;
             break;
@@ -1198,22 +1198,22 @@ static void j_detach(void *d, void *context) {
     jb_free(&c->arguments);
     jb_free(&c->strings);
     jb_free(&c->literals);
-    jfree(&dm->memory, c->expression_node);
-    jfree(&dm->memory, c->data_node);
-    jfree(&dm->memory, c);
+    jfree(&datamodel->memory, c->expression_node);
+    jfree(&datamodel->memory, c->data_node);
+    jfree(&datamodel->memory, c);
 }
 
-static uint8_t *bytes_of(ta_datamodel_json *dm, jbuf *b, uint32_t *length) {
-    uint8_t *copy = b->failed ? 0 : (uint8_t *)jalloc(&dm->memory, b->n);
+static uint8_t *bytes_of(ta_datamodel_json *datamodel, jbuf *b, uint32_t *length) {
+    uint8_t *copy = b->failed ? 0 : (uint8_t *)jalloc(&datamodel->memory, b->n);
     if (copy) ta_memcpy(copy, b->p, b->n);
     *length = (uint32_t)b->n;
     jb_free(b);
     return copy;
 }
 
-static int system_of(ta_datamodel_json *dm, jsession *s, const ta_datamodel_system_variables *v) {
+static int system_of(ta_datamodel_json *datamodel, jsession *s, const ta_datamodel_system_variables *v) {
     jbuf b;
-    jb_init(&b, &dm->memory);
+    jb_init(&b, &datamodel->memory);
     put_head(&b, 4, 3);
     put_text(&b, v->sessionid.pointer, v->sessionid.length);
     put_text(&b, v->name.pointer, v->name.length);
@@ -1238,18 +1238,18 @@ static int system_of(ta_datamodel_json *dm, jsession *s, const ta_datamodel_syst
             }
         }
     }
-    s->system = bytes_of(dm, &b, &s->system_length);
+    s->system = bytes_of(datamodel, &b, &s->system_length);
     return s->system != 0;
 }
 
 /* A document of every declared variable, each from `from` when it has it, else undefined. */
-static int document_of(ta_datamodel_json *dm, jsession *s, jv from) {
+static int document_of(ta_datamodel_json *datamodel, jsession *s, jv from) {
     jchart *c = s->chart;
     jbuf b;
-    jb_init(&b, &dm->memory);
+    jb_init(&b, &datamodel->memory);
     uint32_t n = ta_image_data_count(c->image, c->chart), count = 0;
     jbuf items;
-    jb_init(&items, &dm->memory);
+    jb_init(&items, &datamodel->memory);
     for (uint32_t i = 0; i < n; i++) {
         ta_data_info info;
         ta_image_data(c->image, (ta_chart_item){c->chart, i}, &info);
@@ -1273,31 +1273,31 @@ static int document_of(ta_datamodel_json *dm, jsession *s, jv from) {
     put_head(&b, 5, count);
     jb_put(&b, items.p, items.n);
     jb_free(&items);
-    jfree(&dm->memory, s->document);
-    s->document = bytes_of(dm, &b, &s->document_length);
+    jfree(&datamodel->memory, s->document);
+    s->document = bytes_of(datamodel, &b, &s->document_length);
     return s->document != 0;
 }
 
-static ta_status session_new(ta_datamodel_json *dm, const ta_datamodel_start *start, uint64_t *out, jsession **made) {
-    jsession *s = (jsession *)ta_table_add(&dm->sessions, out);
+static ta_status session_new(ta_datamodel_json *datamodel, const ta_datamodel_start *start, uint64_t *out, jsession **made) {
+    jsession *s = (jsession *)ta_table_add(&datamodel->sessions, out);
     if (!s) return TA_ERROR_NO_MEMORY;
     s->chart = (jchart *)start->chart_context;
-    if (!system_of(dm, s, start->system_variables)) return TA_ERROR_NO_MEMORY;
+    if (!system_of(datamodel, s, start->system_variables)) return TA_ERROR_NO_MEMORY;
     *made = s;
     return TA_OK;
 }
 
 static ta_status j_create(void *d, const ta_datamodel_start *start, uint64_t *out) {
-    ta_datamodel_json *dm = (ta_datamodel_json *)d;
+    ta_datamodel_json *datamodel = (ta_datamodel_json *)d;
     jsession *s;
-    ta_status status = session_new(dm, start, out, &s);
+    ta_status status = session_new(datamodel, start, out, &s);
     if (status != TA_OK) return status;
-    if (!document_of(dm, s, (jv){0, 0})) return TA_ERROR_NO_MEMORY;
+    if (!document_of(datamodel, s, (jv){0, 0})) return TA_ERROR_NO_MEMORY;
     if (start->init) {
-        jpayload *row = (jpayload *)ta_table_get(&dm->payloads, start->init);
+        jpayload *row = (jpayload *)ta_table_get(&datamodel->payloads, start->init);
         jhead h;
         if (row && read_head((jv){row->bytes, row->length}, &h) && h.major == 5) {
-            s->init = (uint8_t *)jalloc(&dm->memory, row->length);
+            s->init = (uint8_t *)jalloc(&datamodel->memory, row->length);
             if (s->init) ta_memcpy(s->init, row->bytes, row->length), s->init_length = row->length;
         }
         j_release(d, start->init);
@@ -1306,15 +1306,15 @@ static ta_status j_create(void *d, const ta_datamodel_start *start, uint64_t *ou
 }
 
 static void j_destroy(const ta_datamodel_call *call) {
-    ta_datamodel_json *dm = (ta_datamodel_json *)call->datamodel;
+    ta_datamodel_json *datamodel = (ta_datamodel_json *)call->datamodel;
     jsession *s = session_of(call);
     if (!s) return;
-    jfree(&dm->memory, s->document);
-    jfree(&dm->memory, s->event);
-    jfree(&dm->memory, s->system);
-    jfree(&dm->memory, s->init);
-    jfree(&dm->memory, s->kept);
-    ta_table_remove(&dm->sessions, call->instance);
+    jfree(&datamodel->memory, s->document);
+    jfree(&datamodel->memory, s->event);
+    jfree(&datamodel->memory, s->system);
+    jfree(&datamodel->memory, s->init);
+    jfree(&datamodel->memory, s->kept);
+    ta_table_remove(&datamodel->sessions, call->instance);
 }
 
 #define EVAL_BEGIN(call)                                                                                     \
@@ -1342,12 +1342,12 @@ static ta_status j_init_data(const ta_datamodel_call *call, uint32_t declaration
 }
 
 static ta_status j_bind_event(const ta_datamodel_call *call, const ta_event_view *view) {
-    ta_datamodel_json *dm = (ta_datamodel_json *)call->datamodel;
+    ta_datamodel_json *datamodel = (ta_datamodel_json *)call->datamodel;
     jsession *s = session_of(call);
     if (!s) return TA_ERROR_INVALID;
     static const char *const types[] = {"platform", "internal", "external"};
     jbuf b;
-    jb_init(&b, &dm->memory);
+    jb_init(&b, &datamodel->memory);
     put_head(&b, 5, 8);
 #define TEXT_FIELD(key, view_field)                                                                   \
     put_text(&b, key, sizeof key - 1);                                                                \
@@ -1362,12 +1362,12 @@ static ta_status j_bind_event(const ta_datamodel_call *call, const ta_event_view
     TEXT_FIELD("raw", view->raw);
 #undef TEXT_FIELD
     put_text(&b, "data", 4);
-    jpayload *row = view->data ? (jpayload *)ta_table_get(&dm->payloads, view->data) : 0;
+    jpayload *row = view->data ? (jpayload *)ta_table_get(&datamodel->payloads, view->data) : 0;
     if (row) jb_put(&b, row->bytes, row->length); /* spike: copied, not referenced */
     else jb_byte(&b, 0xF7);
-    jfree(&dm->memory, s->event);
-    s->event = bytes_of(dm, &b, &s->event_length); /* NULL on failure: unbound */
-    jfree(&dm->memory, s->kept);                    /* the first event: no migrate asked */
+    jfree(&datamodel->memory, s->event);
+    s->event = bytes_of(datamodel, &b, &s->event_length); /* NULL on failure: unbound */
+    jfree(&datamodel->memory, s->kept);                    /* the first event: no migrate asked */
     s->kept = 0;
     return s->event ? TA_OK : TA_ERROR_NO_MEMORY;
 }
@@ -1382,11 +1382,11 @@ static ta_status j_condition(const ta_datamodel_call *call, ta_expression x, int
     return done(&e, 1);
 }
 
-static ta_status out_text(ta_datamodel_json *dm, ta_string_view text, ta_string_view *out) {
-    dm->out.n = 0;
-    jb_put(&dm->out, text.pointer, text.length);
-    if (dm->out.failed) return TA_ERROR_NO_MEMORY;
-    *out = (ta_string_view){(const char *)dm->out.p, text.length};
+static ta_status out_text(ta_datamodel_json *datamodel, ta_string_view text, ta_string_view *out) {
+    datamodel->out.n = 0;
+    jb_put(&datamodel->out, text.pointer, text.length);
+    if (datamodel->out.failed) return TA_ERROR_NO_MEMORY;
+    *out = (ta_string_view){(const char *)datamodel->out.p, text.length};
     return TA_OK;
 }
 
@@ -1396,7 +1396,7 @@ static ta_status j_string(const ta_datamodel_call *call, ta_expression x, ta_str
     ta_string_view text;
     if (!eval_expression(&e, x, &v)) return done(&e, 0);
     if (!is_text(v, &text)) return eval_error(&e, "text expected", none_view()), done(&e, 0);
-    ta_status status = out_text(e.dm, text, out);
+    ta_status status = out_text(e.datamodel, text, out);
     eval_end(&e);
     return status;
 }
@@ -1412,7 +1412,7 @@ static ta_status j_assign(const ta_datamodel_call *call, ta_expression location,
 static ta_status j_assign_string(const ta_datamodel_call *call, ta_expression location, ta_string_view value) {
     EVAL_BEGIN(call);
     jbuf b;
-    jb_init(&b, &e.dm->memory);
+    jb_init(&b, &e.datamodel->memory);
     put_text(&b, value.pointer, value.length);
     int ok = !b.failed && location < s->chart->expression_count &&
              write_path(&e, s->chart->expression_node[location], (jv){b.p, (uint32_t)b.n}, 0);
@@ -1434,14 +1434,14 @@ static ta_status j_log(const ta_datamodel_call *call, ta_expression x, ta_string
     if (!eval_expression(&e, x, &v)) return done(&e, 0);
     ta_status status;
     if (is_text(v, &text))
-        status = out_text(e.dm, text, out);
+        status = out_text(e.datamodel, text, out);
     else {
-        ta_datamodel_json *dm = e.dm;
+        ta_datamodel_json *datamodel = e.datamodel;
         for (;;) {
-            ta_buffer b = {dm->out.p, dm->out.cap, 0};
+            ta_buffer b = {datamodel->out.p, datamodel->out.capacity, 0};
             status = ta_cbor_diagnostic((ta_bytes){v.p, v.n}, &b);
-            if (status == TA_ERROR_NO_MEMORY && jb_reserve(&dm->out, b.length)) continue;
-            if (status == TA_OK) *out = (ta_string_view){(const char *)dm->out.p, (uint32_t)b.length};
+            if (status == TA_ERROR_NO_MEMORY && jb_reserve(&datamodel->out, b.length)) continue;
+            if (status == TA_OK) *out = (ta_string_view){(const char *)datamodel->out.p, (uint32_t)b.length};
             break;
         }
     }
@@ -1455,8 +1455,8 @@ static ta_status j_foreach_begin(const ta_datamodel_call *call, ta_expression ar
     jhead h;
     if (!eval_expression(&e, array, &v)) return done(&e, 0);
     if (!read_head(v, &h) || h.major != 4) return eval_error(&e, "<foreach> needs an array", none_view()), done(&e, 0);
-    jloop *row = (jloop *)ta_table_add(&e.dm->loops, &loop->iter);
-    uint8_t *copy = (uint8_t *)jalloc(&e.dm->memory, v.n); /* spike: copied */
+    jloop *row = (jloop *)ta_table_add(&e.datamodel->loops, &loop->iter);
+    uint8_t *copy = (uint8_t *)jalloc(&e.datamodel->memory, v.n); /* spike: copied */
     if (!row || !copy) return done(&e, 0);
     ta_memcpy(copy, v.p, v.n);
     row->bytes = copy;
@@ -1468,7 +1468,7 @@ static ta_status j_foreach_begin(const ta_datamodel_call *call, ta_expression ar
 
 static ta_status j_foreach_item(const ta_datamodel_call *call, const ta_datamodel_loop *loop) {
     EVAL_BEGIN(call);
-    jloop *row = (jloop *)ta_table_get(&e.dm->loops, loop->iter);
+    jloop *row = (jloop *)ta_table_get(&e.datamodel->loops, loop->iter);
     jv v;
     if (!row || !array_at((jv){row->bytes, row->length}, loop->i, &v)) return done(&e, 0);
     if (loop->item >= s->chart->expression_count || !write_path(&e, s->chart->expression_node[loop->item], v, 1))
@@ -1476,7 +1476,7 @@ static ta_status j_foreach_item(const ta_datamodel_call *call, const ta_datamode
     if (loop->index != TA_NIL) {
         uint8_t number[9];
         jbuf b;
-        jb_init(&b, &e.dm->memory);
+        jb_init(&b, &e.datamodel->memory);
         put_head(&b, 0, loop->i);
         uint32_t n = (uint32_t)b.n;
         ta_memcpy(number, b.p, n);
@@ -1487,11 +1487,11 @@ static ta_status j_foreach_item(const ta_datamodel_call *call, const ta_datamode
 }
 
 static void j_foreach_end(const ta_datamodel_call *call, const ta_datamodel_loop *loop) {
-    ta_datamodel_json *dm = (ta_datamodel_json *)call->datamodel;
-    jloop *row = (jloop *)ta_table_get(&dm->loops, loop->iter);
+    ta_datamodel_json *datamodel = (ta_datamodel_json *)call->datamodel;
+    jloop *row = (jloop *)ta_table_get(&datamodel->loops, loop->iter);
     if (!row) return;
-    jfree(&dm->memory, row->bytes);
-    ta_table_remove(&dm->loops, loop->iter);
+    jfree(&datamodel->memory, row->bytes);
+    ta_table_remove(&datamodel->loops, loop->iter);
 }
 
 static ta_string_view path_name(jchart *c, uint32_t node_index) {
@@ -1509,7 +1509,7 @@ static ta_status j_capture(const ta_datamodel_call *call, const ta_datamodel_cap
     jv v;
     if (spec->content != TA_NIL) {
         if (!eval_expression(&e, spec->content, &v)) return done(&e, 0);
-        *out = payload_new(e.dm, v.p, v.n);
+        *out = payload_new(e.datamodel, v.p, v.n);
         return done(&e, *out != 0);
     }
     /* names and values, a later name replacing an earlier one */
@@ -1530,19 +1530,19 @@ static ta_status j_capture(const ta_datamodel_call *call, const ta_datamodel_cap
             if (!eval_expression(&e, spec->params[2 * k + 1], &v)) return done(&e, 0);
         }
         uint32_t j = 0;
-        while (j < count && !view_eq(names[j], key.pointer, key.length)) j++;
+        while (j < count && !view_equal(names[j], key.pointer, key.length)) j++;
         names[j] = key;
         values[j] = v;
         if (j == count) count++;
     }
     jbuf b;
-    jb_init(&b, &e.dm->memory);
+    jb_init(&b, &e.datamodel->memory);
     put_head(&b, 5, count);
     for (uint32_t i = 0; i < count; i++) {
         put_text(&b, names[i].pointer, names[i].length);
         jb_put(&b, values[i].p, values[i].n);
     }
-    *out = b.failed ? 0 : payload_new(e.dm, b.p, b.n);
+    *out = b.failed ? 0 : payload_new(e.datamodel, b.p, b.n);
     jb_free(&b);
     return done(&e, *out != 0);
 }
@@ -1554,22 +1554,22 @@ static ta_status j_custom(const ta_datamodel_call *call, uint32_t definition) {
 }
 
 static ta_status j_serialize(const ta_datamodel_call *call, ta_bytes *out) {
-    ta_datamodel_json *dm = (ta_datamodel_json *)call->datamodel;
+    ta_datamodel_json *datamodel = (ta_datamodel_json *)call->datamodel;
     jsession *s = session_of(call);
     if (!s) return TA_ERROR_INVALID;
-    dm->out.n = 0;
-    put_head(&dm->out, 5, 2);
-    put_text(&dm->out, "vars", 4);
-    put_head(&dm->out, 2, s->document_length);
-    jb_put(&dm->out, s->document, s->document_length);
-    put_text(&dm->out, "event", 5);
+    datamodel->out.n = 0;
+    put_head(&datamodel->out, 5, 2);
+    put_text(&datamodel->out, "vars", 4);
+    put_head(&datamodel->out, 2, s->document_length);
+    jb_put(&datamodel->out, s->document, s->document_length);
+    put_text(&datamodel->out, "event", 5);
     if (s->event) {
-        put_head(&dm->out, 2, s->event_length);
-        jb_put(&dm->out, s->event, s->event_length);
+        put_head(&datamodel->out, 2, s->event_length);
+        jb_put(&datamodel->out, s->event, s->event_length);
     } else
-        jb_byte(&dm->out, 0xF6);
-    if (dm->out.failed) return TA_ERROR_NO_MEMORY;
-    *out = (ta_bytes){dm->out.p, dm->out.n};
+        jb_byte(&datamodel->out, 0xF6);
+    if (datamodel->out.failed) return TA_ERROR_NO_MEMORY;
+    *out = (ta_bytes){datamodel->out.p, datamodel->out.n};
     return TA_OK;
 }
 
@@ -1583,19 +1583,19 @@ static int blob_field(jv blob, const char *key, jv *out) {
 }
 
 static ta_status j_deserialize(void *d, const ta_datamodel_start *start, uint64_t *out) {
-    ta_datamodel_json *dm = (ta_datamodel_json *)d;
+    ta_datamodel_json *datamodel = (ta_datamodel_json *)d;
     jv blob = {(const uint8_t *)start->state.pointer, (uint32_t)start->state.length}, vars, event;
     if (!blob_field(blob, "vars", &vars)) return TA_ERROR_INVALID;
     jsession *s;
-    ta_status status = session_new(dm, start, out, &s);
+    ta_status status = session_new(datamodel, start, out, &s);
     if (status != TA_OK) return status;
-    if (!document_of(dm, s, vars)) return TA_ERROR_NO_MEMORY;
-    s->kept = (uint8_t *)jalloc(&dm->memory, vars.n);
+    if (!document_of(datamodel, s, vars)) return TA_ERROR_NO_MEMORY;
+    s->kept = (uint8_t *)jalloc(&datamodel->memory, vars.n);
     if (!s->kept) return TA_ERROR_NO_MEMORY;
     ta_memcpy(s->kept, vars.p, vars.n);
     s->kept_length = vars.n;
     if (blob_field(blob, "event", &event)) {
-        s->event = (uint8_t *)jalloc(&dm->memory, event.n);
+        s->event = (uint8_t *)jalloc(&datamodel->memory, event.n);
         if (!s->event) return TA_ERROR_NO_MEMORY;
         ta_memcpy(s->event, event.p, event.n);
         s->event_length = event.n;
@@ -1604,12 +1604,12 @@ static ta_status j_deserialize(void *d, const ta_datamodel_start *start, uint64_
 }
 
 static ta_status j_migrate(const ta_datamodel_call *call, ta_payload *bindings) {
-    ta_datamodel_json *dm = (ta_datamodel_json *)call->datamodel;
+    ta_datamodel_json *datamodel = (ta_datamodel_json *)call->datamodel;
     jsession *s = session_of(call);
     *bindings = 0;
     if (!s || !s->kept) return TA_OK;
-    *bindings = payload_new(dm, s->kept, s->kept_length);
-    jfree(&dm->memory, s->kept);
+    *bindings = payload_new(datamodel, s->kept, s->kept_length);
+    jfree(&datamodel->memory, s->kept);
     s->kept = 0;
     return *bindings ? TA_OK : TA_ERROR_NO_MEMORY;
 }
@@ -1622,12 +1622,12 @@ static ta_status j_to_wire(void *d, ta_payload p, ta_bytes *out) {
 }
 
 static ta_status j_from_wire(void *d, ta_bytes cbor, ta_payload *out) {
-    ta_datamodel_json *dm = (ta_datamodel_json *)d;
+    ta_datamodel_json *datamodel = (ta_datamodel_json *)d;
     jbuf b;
-    jb_init(&b, &dm->memory);
-    ta_status status = canonical(dm, cbor, &b);
+    jb_init(&b, &datamodel->memory);
+    ta_status status = canonical(datamodel, cbor, &b);
     if (status == TA_OK) {
-        *out = payload_new(dm, b.p, b.n);
+        *out = payload_new(datamodel, b.p, b.n);
         if (!*out) status = TA_ERROR_NO_MEMORY;
     }
     jb_free(&b);
@@ -1635,20 +1635,20 @@ static ta_status j_from_wire(void *d, ta_bytes cbor, ta_payload *out) {
 }
 
 static ta_status j_variable(const ta_datamodel_call *call, ta_string_view name_, ta_payload *out) {
-    ta_datamodel_json *dm = (ta_datamodel_json *)call->datamodel;
+    ta_datamodel_json *datamodel = (ta_datamodel_json *)call->datamodel;
     jsession *s = session_of(call);
     jv v;
     *out = 0;
     if (!s || !map_find((jv){s->document, s->document_length}, name_, &v)) return TA_ERROR_INVALID;
     if (simple_is(v, TA_CBOR_UNDEFINED)) return TA_OK;
-    *out = payload_new(dm, v.p, v.n);
+    *out = payload_new(datamodel, v.p, v.n);
     return *out ? TA_OK : TA_ERROR_NO_MEMORY;
 }
 
 static ta_status j_failure(const ta_datamodel_call *call, ta_datamodel_failure *out) {
-    ta_datamodel_json *dm = (ta_datamodel_json *)call->datamodel;
-    out->reason = dm->reason;
-    out->message = (ta_string_view){dm->message, dm->message_length};
+    ta_datamodel_json *datamodel = (ta_datamodel_json *)call->datamodel;
+    out->reason = datamodel->reason;
+    out->message = (ta_string_view){datamodel->message, datamodel->message_length};
     return TA_OK;
 }
 
@@ -1711,20 +1711,20 @@ static int put_namespace(jbuf *b, const ta_table *table) {
     return 1;
 }
 
-ta_status ta_datamodel_json_snapshot(ta_datamodel_json *dm, ta_buffer *out) {
+ta_status ta_datamodel_json_snapshot(ta_datamodel_json *datamodel, ta_buffer *out) {
     jbuf b;
-    jb_init(&b, &dm->memory);
+    jb_init(&b, &datamodel->memory);
     put_head(&b, 4, 6);
-    if (!put_namespace(&b, &dm->sessions) || !put_namespace(&b, &dm->payloads) || !put_namespace(&b, &dm->loops))
+    if (!put_namespace(&b, &datamodel->sessions) || !put_namespace(&b, &datamodel->payloads) || !put_namespace(&b, &datamodel->loops))
         return jb_free(&b), TA_ERROR_NO_MEMORY;
     uint32_t count = 0;
-    for (uint32_t slot = 0; slot < dm->sessions.capacity; slot++) count += ta_table_at(&dm->sessions, slot) != 0;
+    for (uint32_t slot = 0; slot < datamodel->sessions.capacity; slot++) count += ta_table_at(&datamodel->sessions, slot) != 0;
     put_head(&b, 4, count);
-    for (uint32_t slot = 0; slot < dm->sessions.capacity; slot++) {
-        jsession *x = (jsession *)ta_table_at(&dm->sessions, slot);
+    for (uint32_t slot = 0; slot < datamodel->sessions.capacity; slot++) {
+        jsession *x = (jsession *)ta_table_at(&datamodel->sessions, slot);
         if (!x) continue;
         put_head(&b, 4, 9);
-        put_head(&b, 0, ta_table_handle(&dm->sessions, slot));
+        put_head(&b, 0, ta_table_handle(&datamodel->sessions, slot));
         put_head(&b, 0, x->chart->segment);
         put_head(&b, 0, x->chart->chart);
         put_bytes_or_null(&b, x->document, x->document_length);
@@ -1735,24 +1735,24 @@ ta_status ta_datamodel_json_snapshot(ta_datamodel_json *dm, ta_buffer *out) {
         put_head(&b, 0, x->pending_fuel);
     }
     count = 0;
-    for (uint32_t slot = 0; slot < dm->payloads.capacity; slot++) count += ta_table_at(&dm->payloads, slot) != 0;
+    for (uint32_t slot = 0; slot < datamodel->payloads.capacity; slot++) count += ta_table_at(&datamodel->payloads, slot) != 0;
     put_head(&b, 4, count);
-    for (uint32_t slot = 0; slot < dm->payloads.capacity; slot++) {
-        jpayload *x = (jpayload *)ta_table_at(&dm->payloads, slot);
+    for (uint32_t slot = 0; slot < datamodel->payloads.capacity; slot++) {
+        jpayload *x = (jpayload *)ta_table_at(&datamodel->payloads, slot);
         if (!x) continue;
         put_head(&b, 4, 3);
-        put_head(&b, 0, ta_table_handle(&dm->payloads, slot));
+        put_head(&b, 0, ta_table_handle(&datamodel->payloads, slot));
         put_head(&b, 0, x->references);
         put_bytes_or_null(&b, x->bytes, x->length);
     }
     count = 0;
-    for (uint32_t slot = 0; slot < dm->loops.capacity; slot++) count += ta_table_at(&dm->loops, slot) != 0;
+    for (uint32_t slot = 0; slot < datamodel->loops.capacity; slot++) count += ta_table_at(&datamodel->loops, slot) != 0;
     put_head(&b, 4, count);
-    for (uint32_t slot = 0; slot < dm->loops.capacity; slot++) {
-        jloop *x = (jloop *)ta_table_at(&dm->loops, slot);
+    for (uint32_t slot = 0; slot < datamodel->loops.capacity; slot++) {
+        jloop *x = (jloop *)ta_table_at(&datamodel->loops, slot);
         if (!x) continue;
         put_head(&b, 4, 2);
-        put_head(&b, 0, ta_table_handle(&dm->loops, slot));
+        put_head(&b, 0, ta_table_handle(&datamodel->loops, slot));
         put_bytes_or_null(&b, x->bytes, x->length);
     }
     if (b.failed) return jb_free(&b), TA_ERROR_NO_MEMORY;
@@ -1785,7 +1785,7 @@ static uint64_t read_open(jread *r, unsigned major) {
 }
 
 /* A byte string's copy, or NULL for null. */
-static uint8_t *read_copy(ta_datamodel_json *dm, jread *r, uint32_t *length) {
+static uint8_t *read_copy(ta_datamodel_json *datamodel, jread *r, uint32_t *length) {
     jhead h;
     *length = 0;
     if (r->bad || !read_head(r->rest, &h)) return r->bad = 1, (uint8_t *)0;
@@ -1794,7 +1794,7 @@ static uint8_t *read_copy(ta_datamodel_json *dm, jread *r, uint32_t *length) {
         return 0;
     }
     if (h.major != 2 || h.length + h.value > r->rest.n) return r->bad = 1, (uint8_t *)0;
-    uint8_t *copy = (uint8_t *)jalloc(&dm->memory, h.value);
+    uint8_t *copy = (uint8_t *)jalloc(&datamodel->memory, h.value);
     if (!copy) return r->bad = 1, (uint8_t *)0;
     ta_memcpy(copy, r->rest.p + h.length, h.value);
     *length = (uint32_t)h.value;
@@ -1802,53 +1802,53 @@ static uint8_t *read_copy(ta_datamodel_json *dm, jread *r, uint32_t *length) {
     return copy;
 }
 
-static ta_status read_namespace(ta_datamodel_json *dm, jread *r, ta_table *table) {
+static ta_status read_namespace(ta_datamodel_json *datamodel, jread *r, ta_table *table) {
     uint32_t n;
-    uint8_t *bytes = read_copy(dm, r, &n);
+    uint8_t *bytes = read_copy(datamodel, r, &n);
     if (!bytes) return TA_ERROR_INVALID;
     ta_status status = ta_table_restore(table, (ta_bytes){bytes, n});
-    jfree(&dm->memory, bytes);
+    jfree(&datamodel->memory, bytes);
     return status;
 }
 
-ta_status ta_datamodel_json_restore(ta_datamodel_json *dm, ta_bytes state) {
+ta_status ta_datamodel_json_restore(ta_datamodel_json *datamodel, ta_bytes state) {
     jread r = {{(const uint8_t *)state.pointer, (uint32_t)state.length}, 0};
     if (read_open(&r, 4) != 6) return TA_ERROR_INVALID;
     ta_status status;
-    if ((status = read_namespace(dm, &r, &dm->sessions)) != TA_OK) return status;
-    if ((status = read_namespace(dm, &r, &dm->payloads)) != TA_OK) return status;
-    if ((status = read_namespace(dm, &r, &dm->loops)) != TA_OK) return status;
+    if ((status = read_namespace(datamodel, &r, &datamodel->sessions)) != TA_OK) return status;
+    if ((status = read_namespace(datamodel, &r, &datamodel->payloads)) != TA_OK) return status;
+    if ((status = read_namespace(datamodel, &r, &datamodel->loops)) != TA_OK) return status;
     uint64_t count = read_open(&r, 4);
     for (uint64_t i = 0; i < count && !r.bad; i++) {
         read_open(&r, 4);
         uint64_t handle = read_number(&r);
         uint32_t segment = (uint32_t)read_number(&r), chart = (uint32_t)read_number(&r);
-        jsession *x = (jsession *)ta_table_get(&dm->sessions, handle);
-        jchart *c = dm->charts;
+        jsession *x = (jsession *)ta_table_get(&datamodel->sessions, handle);
+        jchart *c = datamodel->charts;
         while (c && (c->segment != segment || c->chart != chart)) c = c->next;
         if (!x || !c) return TA_ERROR_INVALID;
         x->chart = c;
-        x->document = read_copy(dm, &r, &x->document_length);
-        x->event = read_copy(dm, &r, &x->event_length);
-        x->system = read_copy(dm, &r, &x->system_length);
-        x->init = read_copy(dm, &r, &x->init_length);
-        x->kept = read_copy(dm, &r, &x->kept_length);
+        x->document = read_copy(datamodel, &r, &x->document_length);
+        x->event = read_copy(datamodel, &r, &x->event_length);
+        x->system = read_copy(datamodel, &r, &x->system_length);
+        x->init = read_copy(datamodel, &r, &x->init_length);
+        x->kept = read_copy(datamodel, &r, &x->kept_length);
         x->pending_fuel = (uint32_t)read_number(&r);
     }
     count = read_open(&r, 4);
     for (uint64_t i = 0; i < count && !r.bad; i++) {
         read_open(&r, 4);
-        jpayload *x = (jpayload *)ta_table_get(&dm->payloads, read_number(&r));
+        jpayload *x = (jpayload *)ta_table_get(&datamodel->payloads, read_number(&r));
         if (!x) return TA_ERROR_INVALID;
         x->references = (uint32_t)read_number(&r);
-        x->bytes = read_copy(dm, &r, &x->length);
+        x->bytes = read_copy(datamodel, &r, &x->length);
     }
     count = read_open(&r, 4);
     for (uint64_t i = 0; i < count && !r.bad; i++) {
         read_open(&r, 4);
-        jloop *x = (jloop *)ta_table_get(&dm->loops, read_number(&r));
+        jloop *x = (jloop *)ta_table_get(&datamodel->loops, read_number(&r));
         if (!x) return TA_ERROR_INVALID;
-        x->bytes = read_copy(dm, &r, &x->length);
+        x->bytes = read_copy(datamodel, &r, &x->length);
     }
     return r.bad ? TA_ERROR_INVALID : TA_OK;
 }
@@ -1863,21 +1863,21 @@ ta_status ta_datamodel_json_new(const ta_datamodel_json_config *config_, ta_data
     ta_datamodel_json_config config = *config_;
     ta_datamodel_json_config_normalize(&config);
     jmem m = {config.allocator, 0};
-    ta_datamodel_json *dm = (ta_datamodel_json *)jalloc(&m, sizeof *dm);
-    if (!dm) return TA_ERROR_NO_MEMORY;
-    ta_memset(dm, 0, sizeof *dm);
-    dm->memory = m;
-    dm->max_document_bytes = config.max_document_bytes;
-    dm->room = (uint8_t *)jalloc(&dm->memory, config.max_document_bytes);
-    if (!dm->room) return jfree(&dm->memory, dm), TA_ERROR_NO_MEMORY;
-    ta_table_config sessions = {sizeof sessions, sizeof(jsession), &dm->memory.allocator};
-    ta_table_config payloads = {sizeof payloads, sizeof(jpayload), &dm->memory.allocator};
-    ta_table_config loops = {sizeof loops, sizeof(jloop), &dm->memory.allocator};
-    ta_table_init(&dm->sessions, &sessions);
-    ta_table_init(&dm->payloads, &payloads);
-    ta_table_init(&dm->loops, &loops);
-    jb_init(&dm->out, &dm->memory);
-    *out = dm;
+    ta_datamodel_json *datamodel = (ta_datamodel_json *)jalloc(&m, sizeof *datamodel);
+    if (!datamodel) return TA_ERROR_NO_MEMORY;
+    ta_memset(datamodel, 0, sizeof *datamodel);
+    datamodel->memory = m;
+    datamodel->max_document_bytes = config.max_document_bytes;
+    datamodel->room = (uint8_t *)jalloc(&datamodel->memory, config.max_document_bytes);
+    if (!datamodel->room) return jfree(&datamodel->memory, datamodel), TA_ERROR_NO_MEMORY;
+    ta_table_config sessions = {sizeof sessions, sizeof(jsession), &datamodel->memory.allocator};
+    ta_table_config payloads = {sizeof payloads, sizeof(jpayload), &datamodel->memory.allocator};
+    ta_table_config loops = {sizeof loops, sizeof(jloop), &datamodel->memory.allocator};
+    ta_table_init(&datamodel->sessions, &sessions);
+    ta_table_init(&datamodel->payloads, &payloads);
+    ta_table_init(&datamodel->loops, &loops);
+    jb_init(&datamodel->out, &datamodel->memory);
+    *out = datamodel;
     return TA_OK;
 }
 
@@ -1887,70 +1887,70 @@ static ta_string_view copy_view(jmem *m, ta_string_view v) {
     return (ta_string_view){p, p ? v.length : 0};
 }
 
-ta_status ta_datamodel_json_register(ta_datamodel_json *dm, const ta_json_function_entry *entry) {
+ta_status ta_datamodel_json_register(ta_datamodel_json *datamodel, const ta_json_function_entry *entry) {
     if (!entry->name.length || is_reserved(entry->name) || !entry->function) return TA_ERROR_INVALID;
-    for (uint32_t i = 0; i < dm->function_count; i++)
-        if (view_eq(entry->name, dm->functions[i].name.pointer, dm->functions[i].name.length) &&
-            view_eq(entry->chart, dm->functions[i].chart.pointer, dm->functions[i].chart.length))
+    for (uint32_t i = 0; i < datamodel->function_count; i++)
+        if (view_equal(entry->name, datamodel->functions[i].name.pointer, datamodel->functions[i].name.length) &&
+            view_equal(entry->chart, datamodel->functions[i].chart.pointer, datamodel->functions[i].chart.length))
             return TA_ERROR_INVALID;
-    if (dm->function_count == dm->function_capacity) {
-        uint32_t cap = dm->function_capacity ? dm->function_capacity * 2 : 16;
-        jfunction *f = (jfunction *)jalloc(&dm->memory, sizeof(jfunction) * cap);
+    if (datamodel->function_count == datamodel->function_capacity) {
+        uint32_t capacity = datamodel->function_capacity ? datamodel->function_capacity * 2 : 16;
+        jfunction *f = (jfunction *)jalloc(&datamodel->memory, sizeof(jfunction) * capacity);
         if (!f) return TA_ERROR_NO_MEMORY;
-        if (dm->function_count) ta_memcpy(f, dm->functions, sizeof(jfunction) * dm->function_count);
-        jfree(&dm->memory, dm->functions);
-        dm->functions = f;
-        dm->function_capacity = cap;
+        if (datamodel->function_count) ta_memcpy(f, datamodel->functions, sizeof(jfunction) * datamodel->function_count);
+        jfree(&datamodel->memory, datamodel->functions);
+        datamodel->functions = f;
+        datamodel->function_capacity = capacity;
     }
-    jfunction *f = &dm->functions[dm->function_count++];
-    f->name = copy_view(&dm->memory, entry->name);
-    f->chart = entry->chart.length ? copy_view(&dm->memory, entry->chart) : none_view();
+    jfunction *f = &datamodel->functions[datamodel->function_count++];
+    f->name = copy_view(&datamodel->memory, entry->name);
+    f->chart = entry->chart.length ? copy_view(&datamodel->memory, entry->chart) : none_view();
     f->function = entry->function;
     f->context = entry->context;
     return TA_OK;
 }
 
-ta_datamodel_binding ta_datamodel_json_binding(ta_datamodel_json *dm) {
-    ta_datamodel_binding binding = {&json_vtable, dm};
+ta_datamodel_binding ta_datamodel_json_binding(ta_datamodel_json *datamodel) {
+    ta_datamodel_binding binding = {&json_vtable, datamodel};
     return binding;
 }
 
-size_t ta_datamodel_json_bytes(const ta_datamodel_json *dm) {
+size_t ta_datamodel_json_bytes(const ta_datamodel_json *datamodel) {
     /* the tables allocate through the raw allocator: rows and a slot's metadata */
-    return dm->memory.bytes + (size_t)dm->sessions.capacity * (dm->sessions.row_size + 8) +
-           (size_t)dm->payloads.capacity * (dm->payloads.row_size + 8) +
-           (size_t)dm->loops.capacity * (dm->loops.row_size + 8);
+    return datamodel->memory.bytes + (size_t)datamodel->sessions.capacity * (datamodel->sessions.row_size + 8) +
+           (size_t)datamodel->payloads.capacity * (datamodel->payloads.row_size + 8) +
+           (size_t)datamodel->loops.capacity * (datamodel->loops.row_size + 8);
 }
 
-void ta_datamodel_json_free(ta_datamodel_json *dm) {
-    if (!dm) return;
-    for (uint32_t slot = 0; slot < dm->sessions.capacity; slot++) {
-        jsession *s = (jsession *)ta_table_at(&dm->sessions, slot);
+void ta_datamodel_json_free(ta_datamodel_json *datamodel) {
+    if (!datamodel) return;
+    for (uint32_t slot = 0; slot < datamodel->sessions.capacity; slot++) {
+        jsession *s = (jsession *)ta_table_at(&datamodel->sessions, slot);
         if (!s) continue;
-        jfree(&dm->memory, s->document);
-        jfree(&dm->memory, s->event);
-        jfree(&dm->memory, s->system);
-        jfree(&dm->memory, s->init);
-        jfree(&dm->memory, s->kept);
+        jfree(&datamodel->memory, s->document);
+        jfree(&datamodel->memory, s->event);
+        jfree(&datamodel->memory, s->system);
+        jfree(&datamodel->memory, s->init);
+        jfree(&datamodel->memory, s->kept);
     }
-    for (uint32_t slot = 0; slot < dm->payloads.capacity; slot++) {
-        jpayload *p = (jpayload *)ta_table_at(&dm->payloads, slot);
-        if (p) jfree(&dm->memory, p->bytes);
+    for (uint32_t slot = 0; slot < datamodel->payloads.capacity; slot++) {
+        jpayload *p = (jpayload *)ta_table_at(&datamodel->payloads, slot);
+        if (p) jfree(&datamodel->memory, p->bytes);
     }
-    for (uint32_t slot = 0; slot < dm->loops.capacity; slot++) {
-        jloop *l = (jloop *)ta_table_at(&dm->loops, slot);
-        if (l) jfree(&dm->memory, l->bytes);
+    for (uint32_t slot = 0; slot < datamodel->loops.capacity; slot++) {
+        jloop *l = (jloop *)ta_table_at(&datamodel->loops, slot);
+        if (l) jfree(&datamodel->memory, l->bytes);
     }
-    ta_table_free(&dm->sessions);
-    ta_table_free(&dm->payloads);
-    ta_table_free(&dm->loops);
-    for (uint32_t i = 0; i < dm->function_count; i++) {
-        jfree(&dm->memory, (void *)dm->functions[i].name.pointer);
-        if (dm->functions[i].chart.length) jfree(&dm->memory, (void *)dm->functions[i].chart.pointer);
+    ta_table_free(&datamodel->sessions);
+    ta_table_free(&datamodel->payloads);
+    ta_table_free(&datamodel->loops);
+    for (uint32_t i = 0; i < datamodel->function_count; i++) {
+        jfree(&datamodel->memory, (void *)datamodel->functions[i].name.pointer);
+        if (datamodel->functions[i].chart.length) jfree(&datamodel->memory, (void *)datamodel->functions[i].chart.pointer);
     }
-    jfree(&dm->memory, dm->functions);
-    jb_free(&dm->out);
-    jfree(&dm->memory, dm->room);
-    jmem m = dm->memory;
-    jfree(&m, dm);
+    jfree(&datamodel->memory, datamodel->functions);
+    jb_free(&datamodel->out);
+    jfree(&datamodel->memory, datamodel->room);
+    jmem m = datamodel->memory;
+    jfree(&m, datamodel);
 }

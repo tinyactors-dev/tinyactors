@@ -225,14 +225,14 @@ typedef struct bench {
     int json;
     counter host_bytes;
     ta_allocator allocator;
-    ta_datamodel_json *json_dm;
-    ta_datamodel_ecmascript *js_dm;
+    ta_datamodel_json *json_datamodel;
+    ta_datamodel_ecmascript *js_datamodel;
     ta_datamodel_binding binding;
     ta_host *host;
 } bench;
 
 static size_t datamodel_bytes(bench *b) {
-    return b->json ? ta_datamodel_json_bytes(b->json_dm) : ta_datamodel_ecmascript_heap_bytes(b->js_dm);
+    return b->json ? ta_datamodel_json_bytes(b->json_datamodel) : ta_datamodel_ecmascript_heap_bytes(b->js_datamodel);
 }
 
 static size_t total_bytes(bench *b) { return b->host_bytes.live + datamodel_bytes(b); }
@@ -265,7 +265,7 @@ static void bench_open(bench *b, int json, const char *chart_text) {
         memset(&config, 0, sizeof config);
         config.size = sizeof config;
         config.allocator = ta_runtime_malloc();
-        if (ta_datamodel_json_new(&config, &b->json_dm) != TA_OK) exit(1);
+        if (ta_datamodel_json_new(&config, &b->json_datamodel) != TA_OK) exit(1);
         static const struct {
             const char *name;
             ta_json_function f;
@@ -276,15 +276,15 @@ static void bench_open(bench *b, int json, const char *chart_text) {
             e.size = sizeof e;
             e.name = (ta_string_view){fs[i].name, (uint32_t)strlen(fs[i].name)};
             e.function = fs[i].f;
-            ta_datamodel_json_register(b->json_dm, &e);
+            ta_datamodel_json_register(b->json_datamodel, &e);
         }
-        b->binding = ta_datamodel_json_binding(b->json_dm);
+        b->binding = ta_datamodel_json_binding(b->json_datamodel);
     } else {
         ta_datamodel_ecmascript_config config;
         memset(&config, 0, sizeof config);
         config.size = sizeof config;
-        b->js_dm = ta_datamodel_ecmascript_new(&config);
-        b->binding = ta_datamodel_ecmascript_binding(b->js_dm);
+        b->js_datamodel = ta_datamodel_ecmascript_new(&config);
+        b->binding = ta_datamodel_ecmascript_binding(b->js_datamodel);
     }
     unsigned char room[256];
     ta_cbor_writer w;
@@ -317,8 +317,8 @@ static void bench_open(bench *b, int json, const char *chart_text) {
 
 static void bench_close(bench *b) {
     ta_host_free(b->host);
-    if (b->json) ta_datamodel_json_free(b->json_dm);
-    else ta_datamodel_ecmascript_free(b->js_dm);
+    if (b->json) ta_datamodel_json_free(b->json_datamodel);
+    else ta_datamodel_ecmascript_free(b->js_datamodel);
 }
 
 static uint64_t *spawn_all(bench *b, const char *chart, uint32_t n) {
@@ -389,9 +389,9 @@ static void order(int json, uint32_t actors, uint32_t events) {
     bench b;
     bench_open(&b, json, json ? JSON_ORDER : JS_ORDER);
     run_idle(b.host);
-    size_t before = total_bytes(&b), dm_before = datamodel_bytes(&b);
+    size_t before = total_bytes(&b), datamodel_before = datamodel_bytes(&b);
     uint64_t *sessions = spawn_all(&b, "order", actors);
-    size_t idle = total_bytes(&b), dm_idle = datamodel_bytes(&b);
+    size_t idle = total_bytes(&b), datamodel_idle = datamodel_bytes(&b);
     unsigned char room[64];
     uint64_t start = ta_runtime_now_ns();
     for (uint32_t i = 0; i < actors; i++) {
@@ -402,12 +402,12 @@ static void order(int json, uint32_t actors, uint32_t events) {
     }
     run_idle(b.host);
     double per_order_event = (double)(ta_runtime_now_ns() - start) / (3.0 * actors);
-    size_t after = total_bytes(&b), dm_after = datamodel_bytes(&b);
+    size_t after = total_bytes(&b), datamodel_after = datamodel_bytes(&b);
     double guard = time_events(&b, sessions, actors, events, "guard");
     double check = time_events(&b, sessions, actors, events, "check");
     printf("%-8s actors %u: bytes/actor idle %.0f (datamodel %.0f), after the order's 3 events %.0f (datamodel %.0f)\n",
-           json ? "json" : "quickjs", actors, (double)(idle - before) / actors, (double)(dm_idle - dm_before) / actors,
-           (double)(after - before) / actors, (double)(dm_after - dm_before) / actors);
+           json ? "json" : "quickjs", actors, (double)(idle - before) / actors, (double)(datamodel_idle - datamodel_before) / actors,
+           (double)(after - before) / actors, (double)(datamodel_after - datamodel_before) / actors);
     printf("%-8s ns/event: order's add/address %.0f, a guard alone %.0f, a guard and an assignment %.0f\n",
            json ? "json" : "quickjs", per_order_event, guard, check);
     free(sessions);

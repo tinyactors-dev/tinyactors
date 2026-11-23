@@ -173,7 +173,7 @@ static ta_status refuse(ta_json_call *call, const char *why) {
     return TA_ERROR_INVALID;
 }
 
-static ta_status f_eq(ta_json_call *c) {
+static ta_status f_equal(ta_json_call *c) {
     fv a[2];
     return arguments(c, a, 2) ? give_bool(c, equal(a[0], a[1])) : TA_ERROR_INVALID;
 }
@@ -345,7 +345,7 @@ ta_status conform_json_functions(ta_datamodel_json *json) {
     static const struct {
         const char *name;
         ta_json_function function;
-    } table[] = {{"eq", f_eq},         {"ne", f_ne},         {"lt", f_lt},         {"le", f_le},
+    } table[] = {{"eq", f_equal},         {"ne", f_ne},         {"lt", f_lt},         {"le", f_le},
                  {"gt", f_gt},         {"ge", f_ge},         {"and", f_and},       {"or", f_or},
                  {"not", f_not},       {"add", f_add},       {"concat", f_concat}, {"isDefined", f_is_defined},
                  {"has", f_has},       {"length", f_length}, {"append", f_append}, {"text", f_text},
