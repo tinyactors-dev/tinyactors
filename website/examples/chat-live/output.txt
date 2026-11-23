@@ -2,17 +2,20 @@
 forager sees scout as offline
 scout's screen got: nothing
 scout went offline on forager's screen 3 times
--- step 7, scout in the tunnel
+-- step 8, scout in the tunnel
 forager sees scout as active
 scout's screen got: scout, are you there? | the sugar is by the oak
 scout went offline on forager's screen once
--- step 5, migrated live to step 7 and back
+-- step 5, migrated live to step 8 and back
 on step 5 queen sees typing: nobody
-to step 7: 9 migrated, 0 failed
-on step 7 queen sees typing: scout
+to step 8: 9 migrated, 0 failed
+on step 8 queen sees typing: scout
 back to step 5, scout reconnecting: 9 migrated, 0 failed
 scout is "offline"; queen's screen shows scout as active
 -- forager's screen loses half of what reaches it
 scout's screen got: one | two | three | four | five | six
 forager's screen got: three | four | five
 lost on the way: 3
+-- a late joiner, on each version
+step 5: nurse's screen got: bring a friend; scout's: sugar by the oak | bring a friend | bring a friend
+step 8: nurse's screen got: sugar by the oak | bring a friend; scout's: sugar by the oak | bring a friend

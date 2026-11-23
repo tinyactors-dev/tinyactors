@@ -1,10 +1,10 @@
 # The live chat
 
-The chat tutorial's charts of steps 5 and 7 (`charts/step-5` and
-`charts/step-7`, copies of `examples/chat/5-hibernation/charts` and
-`examples/chat/7-reconnect/charts`, which `mise run test` checks byte for
+The chat tutorial's charts of steps 5 and 8 (`charts/step-5` and
+`charts/step-8`, copies of `examples/chat/5-hibernation/charts` and
+`examples/chat/8-history/charts`, which `mise run test` checks byte for
 byte) running in the reader's browser on `@tinyactors/wasm`, at the top of
-https://www.tinyactors.dev/chat/. The page starts on step 7.
+https://www.tinyactors.dev/chat/. The page starts on step 8.
 
 - `chat.mjs` is what it does: the workspace (The Hill), two rooms and six people (an ant colony's
   castes: queen, scout, forager, nurse, guard, drone) on a
@@ -29,7 +29,7 @@ https://www.tinyactors.dev/chat/. The page starts on step 7.
   whose menu signs you in or out and switches the person you are; a
   sidebar with the rooms and the people (your screen); and the room with
   each message's simulated time, who else is typing under the composer,
-  and a "Connecting…" banner while your connection is lost on step 7 (on
+  and a "Connecting…" banner while your connection is lost on step 8 (on
   step 5 you are signed out). The Debugger button in the top bar opens a
   pane with the clock's controls and three tabs: Experiments (the charts'
   version, the scenarios, and per person a lost connection and the
@@ -45,5 +45,9 @@ store, its state is in its blob, so the page shows what the workspace
 last told another person online about you.
 
 On step 5 the page shows no typing indicator: those charts send none,
-and after a switch from step 7 they never send the `typing.stopped` that
-would clear one step 7 started.
+and a switch to them clears the indicators, since they never send the
+`typing.stopped` that would end one step 8 started.
+
+Step 8's join brings the room's last 50 posts, numbered: a screen adds
+those it lacks, shown as "earlier" since they reached it with no time of
+their own, and shows each numbered post once.

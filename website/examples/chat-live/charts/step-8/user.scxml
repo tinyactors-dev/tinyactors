@@ -8,7 +8,9 @@
      after the last notice.
      A lost connection is not yet offline: the user reconnects within 30
      seconds without the others seeing a change, and gets the messages
-     that came meanwhile. -->
+     that came meanwhile.
+     Joining a room shows its history: the posts it kept, each numbered,
+     so a screen shows a post once. -->
 <scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0"
        datamodel="ecmascript" name="user" initial="offline">
   <datamodel>
@@ -34,6 +36,7 @@
       <foreach array="held" item="message">
         <send type="chat:client" event="message">
           <param name="to" expr="name"/>
+          <param name="seq" expr="message.seq"/>
           <param name="room" expr="message.room"/>
           <param name="from" expr="message.from"/>
           <param name="text" expr="message.text"/>
@@ -109,6 +112,7 @@
       <send type="chat:client" event="joined">
         <param name="to" expr="name"/>
         <param name="room" expr="_event.data.room"/>
+        <param name="history" expr="_event.data.history"/>
       </send>
     </transition>
     <transition event="error.communication" cond="_event.sendid === 'join'">
@@ -151,6 +155,7 @@
       </if>
       <send type="chat:client" event="message">
         <param name="to" expr="name"/>
+        <param name="seq" expr="_event.data.seq"/>
         <param name="room" expr="_event.data.room"/>
         <param name="from" expr="_event.data.from"/>
         <param name="text" expr="_event.data.text"/>
@@ -188,7 +193,7 @@
     <transition event="disconnect" target="offline"/>
     <transition event="grace.over" target="offline"/>
     <transition event="message">
-      <assign location="held" expr="held.concat([{ room: _event.data.room, from: _event.data.from, text: _event.data.text }])"/>
+      <assign location="held" expr="held.concat([{ seq: _event.data.seq, room: _event.data.room, from: _event.data.from, text: _event.data.text }])"/>
     </transition>
   </state>
 </scxml>

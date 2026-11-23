@@ -1,7 +1,7 @@
 // The team chat of the tutorial (examples/chat), finished: a workspace
 // that makes rooms, users who come and go, and a store that keeps idle
-// actors out of memory, on step 7's charts (typing, a grace period for a
-// lost connection) or step 5's (neither). It takes the tinyactors package
+// actors out of memory, on step 8's charts (typing, a grace period for a
+// lost connection, a room's history) or step 5's (none of them). It takes the tinyactors package
 // as an argument, so the same code runs in Node.js (main.mjs, against
 // output.txt) and in the reader's browser (page.mjs, on @tinyactors/wasm).
 //
@@ -23,9 +23,11 @@ export const ROOMS = ['general', 'random'];
 export const RESIDENT = 4; // actors the host keeps in memory at rest
 /** The versions of the charts the chat runs: the tutorial's steps. */
 export const VERSIONS = {
-  5: 'Step 5: no typing indicator; a lost connection is offline at once',
-  7: 'Step 7: typing indicators; a lost connection has 30 seconds to come back',
+  5: 'Step 5: no typing indicator; a lost connection is offline at once; a late joiner sees no history',
+  8: 'Step 8: typing indicators; a lost connection has 30 seconds to come back; a late joiner sees the history',
 };
+/** The newest version: what steps 6 to 8 added is there. */
+export const LATEST = 8;
 const KEEP = 200; // the newest messages a screen keeps, and entries the log keeps
 
 /** The scripted experiments, each a list of [seconds from its start, what happens]. */
@@ -73,11 +75,11 @@ function generator(seed) {
 
 /**
  * The workspace, its rooms and PEOPLE, on a host with a simulated clock.
- * `versions` maps 5 and 7 to that step's charts (file name to text);
+ * `versions` maps 5 and 8 to that step's charts (file name to text);
  * `version` is the one it starts on. Every action waits for the host to
  * settle, one at a time, and then calls `onChange`.
  */
-export async function createChat(tinyactors, { versions, version = 7, seed = 1, onChange = () => {} } = {}) {
+export async function createChat(tinyactors, { versions, version = LATEST, seed = 1, onChange = () => {} } = {}) {
   const { compileCharts, Host, SimulatedClock, Spawner } = tinyactors;
   const store = new Store();
   const clock = new SimulatedClock();
@@ -109,13 +111,26 @@ export async function createChat(tinyactors, { versions, version = 7, seed = 1, 
   const show = (event, data) => {
     const target = screen(data.to);
     if (event === 'message') {
-      target.messages.push({ room: data.room, from: data.from, text: data.text, at: now() });
+      // step 8 numbers each post: a screen shows one once (it came with a join's history too)
+      if (data.seq !== undefined && target.messages.some((m) => m.room === data.room && m.seq === data.seq)) return;
+      target.messages.push({ room: data.room, seq: data.seq, from: data.from, text: data.text, at: now() });
       if (target.messages.length > KEEP) target.messages.shift();
     } else if (event === 'roster') target.roster = { ...data.roster };
     else if (event === 'roster.update') target.roster = { ...target.roster, [data.user]: data.status };
     else if (event === 'typing') target.typing = { ...target.typing, [data.room]: [...new Set([...(target.typing[data.room] ?? []), data.user])] };
     else if (event === 'typing.stopped') target.typing = { ...target.typing, [data.room]: (target.typing[data.room] ?? []).filter((user) => user !== data.user) };
-    else if (event === 'joined') { if (!target.rooms.includes(data.room)) target.rooms = [...target.rooms, data.room]; }
+    else if (event === 'joined') {
+      if (!target.rooms.includes(data.room)) target.rooms = [...target.rooms, data.room];
+      // step 8's join brings the room's kept posts: those the screen lacks, before its newer ones, with no time of their own
+      const missing = (data.history ?? []).filter((post) => !target.messages.some((m) => m.room === data.room && m.seq === post.seq));
+      if (missing.length > 0) {
+        const others = target.messages.filter((m) => m.room !== data.room);
+        const here = target.messages.filter((m) => m.room === data.room);
+        const merged = [...missing.map((post) => ({ room: data.room, seq: post.seq, from: post.from, text: post.text, at: null })), ...here]
+          .sort((a, b) => (a.seq ?? Infinity) - (b.seq ?? Infinity));
+        target.messages = [...others, ...merged].slice(-KEEP);
+      }
+    }
     else if (event === 'error') target.notices.push(data.reason);
   };
   const describe = (event, data) => {
@@ -124,7 +139,7 @@ export async function createChat(tinyactors, { versions, version = 7, seed = 1, 
     if (event === 'typing') return `${data.user} is typing in #${data.room}`;
     if (event === 'typing.stopped') return `${data.user} stopped typing in #${data.room}`;
     if (event === 'roster') return 'the whole roster';
-    if (event === 'joined') return `joined #${data.room}`;
+    if (event === 'joined') return `joined #${data.room}${data.history?.length ? `, with ${data.history.length} earlier posts` : ''}`;
     return `${event}${data.reason ? `: ${data.reason}` : ''}`;
   };
   const client = {
@@ -216,8 +231,8 @@ export async function createChat(tinyactors, { versions, version = 7, seed = 1, 
     now,
     connect: (name) => act(() => tell(name, 'connect')),
     disconnect: (name) => act(() => tell(name, 'disconnect')),
-    /** Typing: on step 7 the room hears of it; on both the user's away timer starts again. */
-    typing: (name, room) => act(() => tell(name, current === 7 ? 'typing' : 'activity', current === 7 ? { room } : undefined)),
+    /** Typing: on step 8 the room hears of it; on both the user's away timer starts again. */
+    typing: (name, room) => act(() => tell(name, current === LATEST ? 'typing' : 'activity', current === LATEST ? { room } : undefined)),
     join: (name, room) => act(() => tell(name, 'join', { room })),
     post: (name, room, text) => act(() => tell(name, 'post', { room, text })),
     /** Asks the workspace for a room: answers [event, data], room.created or room.refused. */
@@ -232,12 +247,12 @@ export async function createChat(tinyactors, { versions, version = 7, seed = 1, 
 
     // ---- experiments
     /**
-     * `name`'s connection drops, and comes back `seconds` later. Step 7's
+     * `name`'s connection drops, and comes back `seconds` later. Step 8's
      * charts get `connection.lost`; step 5's know only `disconnect`, so an
      * application on them can say nothing else.
      */
     loseConnection: (name, seconds) => act(() => {
-      tell(name, current === 7 ? 'connection.lost' : 'disconnect');
+      tell(name, current === LATEST ? 'connection.lost' : 'disconnect');
       later(seconds, `${name} reconnects`, () => tell(name, 'connect'));
     }),
     /** Faults between the charts and `name`'s screen: a share of deliveries dropped, and a delay in seconds. */
@@ -286,6 +301,8 @@ export async function createChat(tinyactors, { versions, version = 7, seed = 1, 
       }
       migrating = null;
       current = step;
+      // step 5 sends no typing.stopped: indicators from before the switch would stay
+      if (step !== LATEST) for (const target of screens.values()) target.typing = {};
       note('version', `moved to ${VERSIONS[step].split(':')[0]}: ${result?.migrated ?? 0} actors migrated, ${result?.failed?.length ?? 0} failed`);
       return result;
     }),
@@ -324,11 +341,11 @@ export async function createChat(tinyactors, { versions, version = 7, seed = 1, 
   // send at once, without queueing behind the action that runs them.
   const direct = {
     loseConnection: (name, seconds) => {
-      tell(name, current === 7 ? 'connection.lost' : 'disconnect');
+      tell(name, current === LATEST ? 'connection.lost' : 'disconnect');
       later(seconds, `${name} reconnects`, () => tell(name, 'connect'));
     },
     post: (name, room, text) => tell(name, 'post', { room, text }),
-    typing: (name, room) => tell(name, current === 7 ? 'typing' : 'activity', current === 7 ? { room } : undefined),
+    typing: (name, room) => tell(name, current === LATEST ? 'typing' : 'activity', current === LATEST ? { room } : undefined),
   };
   return chat;
 }

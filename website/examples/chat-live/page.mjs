@@ -1,5 +1,5 @@
 // The live chat's page: the tutorial's charts (charts/step-5 and
-// charts/step-7) on @tinyactors/wasm in this tab, behind a chat window laid out as team
+// charts/step-8) on @tinyactors/wasm in this tab, behind a chat window laid out as team
 // chat clients are: a top bar with search, a rail of tabs with your avatar
 // at its foot (its menu signs you in or out and switches the person you
 // are), the rooms and people in a sidebar, and the room with its messages
@@ -10,7 +10,7 @@
 // by a live migration, scripted scenarios, lost connections and faulty
 // screens); any actor's chart lit in the states its host reports
 // (components/live-chart.mjs); and the log of what happened.
-import { createChat, PEOPLE, SCENARIOS, VERSIONS, WORKSPACE } from './chat.mjs';
+import { createChat, LATEST, PEOPLE, SCENARIOS, VERSIONS, WORKSPACE } from './chat.mjs';
 import { liveChart, statePath } from '/assets/components/live-chart.mjs';
 
 const CHARTS = ['workspace.scxml', 'room.scxml', 'user.scxml'];
@@ -143,7 +143,7 @@ export async function mount(root) {
   let query = ''; // the search, lowercased
   let part = 'experiments'; // the debugger's tab
   let migrating = false; // a version switch is under way
-  const chat = await createChat(tinyactors, { versions: texts, version: 7, onChange: () => render() });
+  const chat = await createChat(tinyactors, { versions: texts, version: LATEST, onChange: () => render() });
   // The people already talking: scout and forager in general, scout's find.
   await chat.connect('scout');
   await chat.connect('forager');
@@ -475,7 +475,7 @@ export async function mount(root) {
   // Your actor's state value. While it is in the store (its state is in
   // its blob), what the workspace last told another person online about
   // you; with nobody online to tell, the last state read. A lost
-  // connection on step 7 shows no change to the others, so while the
+  // connection on the newest charts shows no change to the others, so while the
   // agenda still holds your reconnect, the last state read stands.
   const known = new Map();
   function yours(self) {
@@ -564,7 +564,8 @@ export async function mount(root) {
         : 'No messages on your screen yet.';
     messages.replaceChildren(...(here.length ? here.map((message, index) => {
       const before = here[index - 1];
-      const stamp = el('time', { class: 'chatlive__at' }, clock(message.at));
+      // a post from a room's history (step 8's join) came with no time of its own
+      const stamp = el('time', { class: 'chatlive__at' }, message.at === null ? 'earlier' : clock(message.at));
       const body = el('p', { class: 'chatlive__body' }, ...marked(message.text, query));
       if (before && before.from === message.from && message.at - before.at < GROUP) {
         return el('li', { class: 'chatlive__message chatlive__message--more' }, stamp, body);
@@ -586,8 +587,8 @@ export async function mount(root) {
     signedOut.hidden = connected;
     join.textContent = `Join #${room}`;
     text.placeholder = reconnecting ? 'Connecting…' : `Message #${room}`;
-    // step 5's charts send no typing notices, and no typing.stopped for those step 7 sent before a switch
-    const typers = connected && chat.version() === 7 ? (screen.typing[room] ?? []).filter((name) => name !== you) : [];
+    // step 5's charts send no typing notices, and no typing.stopped for those the newest sent before a switch
+    const typers = connected && chat.version() === LATEST ? (screen.typing[room] ?? []).filter((name) => name !== you) : [];
     typingLine.textContent = typers.length === 0 ? ''
       : typers.length === 1 ? `${typers[0]} is typing…`
         : typers.length === 2 ? `${typers[0]} and ${typers[1]} are typing…`

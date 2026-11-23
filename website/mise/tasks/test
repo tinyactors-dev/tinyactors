@@ -177,10 +177,10 @@ end
 puts "website: the examples install @tinyactors/wasm #{newest}, the version the site shows"
 
 # 4c. The live chat runs the tutorial's charts: its charts/step-5 and
-#     charts/step-7 are copies of steps 5 and 7, byte for byte, so the page
+#     charts/step-8 are copies of steps 5 and 8, byte for byte, so the page
 #     runs what the tutorial built.
 names = ->(dir) { dir.glob('*.scxml').map { |file| file.basename.to_s }.sort }
-{ 'step-5' => '5-hibernation', 'step-7' => '7-reconnect' }.each do |copy, step|
+{ 'step-5' => '5-hibernation', 'step-8' => '8-history' }.each do |copy, step|
   live = Website::EXAMPLES.join('chat-live/charts', copy)
   tutorial = Website::EXAMPLES.join('chat', step, 'charts')
   if names.call(live) != names.call(tutorial)
@@ -192,7 +192,7 @@ names = ->(dir) { dir.glob('*.scxml').map { |file| file.basename.to_s }.sort }
     failures << "examples/chat-live/charts/#{copy}/#{name}: differs from examples/chat/#{step}/charts/#{name}: copy it again"
   end
 end
-puts "website: the live chat's charts are the tutorial's steps 5 and 7"
+puts "website: the live chat's charts are the tutorial's steps 5 and 8"
 
 # 5. The guides' examples a page transcludes: in each <example>, a
 #    javascript <code src="...md" section fence> is run in examples/guides
