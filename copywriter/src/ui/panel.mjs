@@ -1150,7 +1150,6 @@ export function mountPanel(root, reviewer, { layout = 'sidebar', onTall = null }
         !r ? 'Not read yet' : r.state === 'reading' ? 'Reading the page' : r.state === 'failed' ? '' : ago(r.at)),
       r?.state === 'reading' && h('span', { class: 'cw-elapsed', 'data-since': String(new Date(r.at ?? Date.now()).getTime()), 'aria-hidden': 'true' },
         `${Math.max(0, Math.round((Date.now() - new Date(r.at ?? Date.now()).getTime()) / 1000))} s`),
-      r?.state === 'reading' && dots(),
       h('span', { class: 'cw-grow' }),
       hasKey && iconButton(MessageCircle, `Talk to ${a.name}`, { 'data-action': 'talk', onclick: () => talkTo(a.id) }),
       hasKey && r?.state !== 'reading' && iconButton(r ? RefreshCw : ScanEye, r ? 'Read again' : `Read as ${a.name}`, {

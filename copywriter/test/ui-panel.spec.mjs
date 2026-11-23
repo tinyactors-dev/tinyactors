@@ -763,3 +763,30 @@ test('an audience update shows word by word: only the removed words struck, the 
   assert.deepEqual(errors, []);
   await page.close();
 });
+
+test('on a phone, a swipe moves the side-by-side row a card at a time', async () => {
+  const { page, panel, errors } = await open('layout=sheet', { viewport: { width: 412, height: 800 }, hasTouch: true, isMobile: true });
+  await page.evaluate(() => reviewer.dispatch({ type: 'settings.save', audienceIDs: ['lead', 'student'] }));
+  await panel.locator('.cw-row[data-id=a4]').click();
+  await page.evaluate(() => reviewer.dispatch({ type: 'ask', id: 'a4', text: 'For each reader' }));
+  const row = panel.locator('.cw-cards--compare');
+  await row.waitFor();
+  await row.scrollIntoViewIfNeeded();
+  const box = await row.boundingBox();
+  const cdp = await page.context().newCDPSession(page);
+  const y = Math.round(box.y + Math.min(box.height / 2, 30));
+  let x = Math.round(box.width * 0.8);
+  await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x, y }] });
+  for (let i = 0; i < 12; i++) {
+    x -= 22;
+    await cdp.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [{ x, y }] });
+    await new Promise((resolve) => setTimeout(resolve, 16));
+  }
+  await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+  await until(async () => {
+    const { left, second } = await row.evaluate((n) => ({ left: n.scrollLeft, second: n.children[1].offsetLeft - parseFloat(getComputedStyle(n).scrollPaddingLeft) }));
+    return Math.abs(left - second) < 2;
+  });
+  assert.deepEqual(errors, []);
+  await page.close();
+});
