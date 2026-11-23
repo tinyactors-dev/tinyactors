@@ -71,6 +71,10 @@ module Core
     # The "staticjs" data model over it: a spike beside the json one.
     Layer.new(name: 'datamodel_staticjs', uses: %w[image base staticjs], freestanding: true,
               sources: %w[src/datamodel_staticjs/datamodel_staticjs.c]),
+    # A data model whose expressions the application's language compiled
+    # ahead of time (tools/precompile): a spike, on a branch.
+    Layer.new(name: 'datamodel_precompiled', uses: %w[image base], freestanding: true,
+              sources: %w[src/datamodel_precompiled/datamodel_precompiled.c]),
     # The tests' data model (tests/support), linked by the test programs only.
     Layer.new(name: 'test_datamodel', uses: %w[image], libraries: %w[-lm], sources: %w[tests/support/datamodel_test.c])
   ].to_h { |layer| [layer.name, layer] }.freeze
@@ -244,6 +248,10 @@ module Core
     # (tools/jsonbench; a spike for docs/proposals/json-datamodel.md).
     Program.new(name: 'json-bench', uses: %w[host runtime compile datamodel_json datamodel_staticjs] + ECMASCRIPT,
                 sources: %w[tools/jsonbench/bench.c], defines: {}),
+    # A chart's expression table as JSON, for the generators of
+    # tools/precompile (a spike: Swift, Kotlin and Go code from a chart).
+    Program.new(name: 'ta-precompile-table', uses: %w[runtime compile datamodel_precompiled],
+                sources: %w[tools/precompile/table.c], defines: {}),
     # The torture chamber's host (tools/torture/README.md).
     Program.new(name: 'torture-bench', uses: %w[host runtime compile otlp] + ECMASCRIPT,
                 sources: %w[bench.c net.c loop.c].map { |s| "tools/torture/#{s}" },

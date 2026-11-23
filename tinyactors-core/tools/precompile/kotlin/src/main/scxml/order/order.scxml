@@ -1,0 +1,34 @@
+<?xml version="1.0"?>
+<!-- An order, in Kotlin: every expression is Kotlin, compiled with the app. -->
+<scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0" datamodel="kotlin" name="order" initial="open">
+  <datamodel>
+    <data id="items" expr="emptyList&lt;Item&gt;()"/>
+    <data id="address" expr="Address()"/>
+    <data id="total" expr="0"/>
+    <data id="line" expr="Item()"/>
+  </datamodel>
+  <state id="open">
+    <transition event="add" cond="catalog.knows(_event.data)">
+      <assign location="items" expr="items + catalog.item(_event.data)"/>
+      <log label="added" expr='"${items.size} items"'/>
+    </transition>
+    <transition event="add">
+      <log label="refused" expr='"no such item: ${_event.data}"'/>
+    </transition>
+    <transition event="address">
+      <assign location="address.country" expr='_event.data["country"]'/>
+    </transition>
+    <transition event="place" cond="items.isNotEmpty() &amp;&amp; address.country.isNotEmpty()" target="placed">
+      <foreach array="items" item="line">
+        <assign location="total" expr="total + line.cents * line.quantity"/>
+      </foreach>
+    </transition>
+  </state>
+  <final id="placed">
+    <donedata>
+      <param name="items" expr="items"/>
+      <param name="total" expr="total"/>
+      <param name="country" expr="address.country"/>
+    </donedata>
+  </final>
+</scxml>
