@@ -196,8 +196,14 @@ export async function mount(root) {
   let query = ''; // the search, lowercased
   let part = 'experiments'; // the debugger's tab
   let migrating = false; // a version switch is under way
-  // the messages of each room or direct message you have seen, by "you\nroom": more is unread
+  // the newest message of each room or direct message you have seen, by "you\nroom": a newer one is
+  // unread (a screen keeps a conversation's latest messages only, so counting them would stop at the cap)
   const seen = new Map();
+  /** Whether `name`'s newest message on your screen came after the one you saw last there; never for the open one. */
+  const unreadOn = (screen, name) => {
+    const last = screen.messages.findLast((message) => message.room === name);
+    return name !== room && Boolean(last) && last !== seen.get(`${you}\n${name}`);
+  };
   const chat = await createChat(tinyactors, { versions: texts, version: LATEST, onChange: () => render() });
   // The people already talking: scout and forager in general, scout's find.
   await chat.connect('scout');
@@ -633,6 +639,13 @@ export async function mount(root) {
     else openCard(pill);
   });
   messages.addEventListener('scroll', () => placeCard());
+  // a conversation's earlier posts, read from the store; the view keeps its place below them
+  const loadEarlier = el('button', { type: 'button', class: 'chatlive__earlier-button' }, 'Load earlier messages');
+  let fromEnd; // the distance from the end the next draw keeps, after earlier posts went in above
+  loadEarlier.addEventListener('click', async () => {
+    fromEnd = messages.scrollHeight - messages.scrollTop;
+    if (await chat.loadEarlier(you, room) === 0) fromEnd = undefined;
+  });
   // ---- a person's card, opened from an @mention as a client's is: their avatar, name and
   // presence as your screen knows them, and "Message", which opens your direct message with them
   const cardAvatar = el('span', {});
@@ -1124,8 +1137,7 @@ export async function mount(root) {
     keyed(dmList, dms.map(dmKey), (key) => personButton(key.split('\n')[1],
       () => openRoom(key.split('\n')[0])), (node, key) => {
       const each = dms.find((one) => dmKey(one) === key);
-      const count = screen.messages.filter((message) => message.room === each.room).length;
-      const unread = each.room !== room && count > (seen.get(`${you}\n${each.room}`) ?? 0);
+      const unread = unreadOn(screen, each.room);
       const state = each.with === you ? yourStatus : STATUS[roster[each.with]] ?? 'unknown';
       drawPerson(node.firstChild, each.with, state, !query && each.room === room, unread ? ' chatlive__person--unread' : '');
       setText(node.firstChild.lastChild, `${state === 'unknown' ? '' : LABEL[state].toLowerCase()}${unread ? ', unread messages' : ''}`);
@@ -1167,6 +1179,8 @@ export async function mount(root) {
     // the conversation's beginning, above its first post, as a client shows it: only where the
     // store's numbers say the oldest post shown is the first (step 5's posts have none)
     const beginning = !query && chat.version() === LATEST && Boolean(dm || joined || preview) && (!inRoom.length || inRoom[0].seq === 1);
+    // a screen keeps a conversation's latest posts: where older ones are in the store, a button reads them
+    const earlier = !query && !preview && chat.version() === LATEST && Boolean(dm || joined) && inRoom[0]?.seq > 1;
     const empty = query ? `No messages on your screen match “${searched}”.`
       : !joined && connected && !preview ? `Step ${chat.version()}’s charts keep no history. Join #${room} to see its new messages.`
         : !joined && !inRoom.length ? `You have not joined #${room}.`
@@ -1175,9 +1189,11 @@ export async function mount(root) {
     // header, time, the search's highlight or its mention of you changes
     const rows = new Map(here.map((message, index) => [keyOf(message), [message, here[index - 1]]]));
     const notice = screen.notices.at(-1);
-    const keys = [...(beginning ? ['beginning'] : []), ...(here.length ? rows.keys() : beginning ? [] : ['empty']), ...(notice ? ['notice'] : [])];
-    const ROW = { empty: 'chatlive__empty', notice: 'chatlive__notice', beginning: 'chatlive__beginning' };
-    keyed(messages, keys, (key) => el('li', { class: ROW[key] ?? 'chatlive__message' }), (node, key) => {
+    const keys = [...(beginning ? ['beginning'] : []), ...(earlier ? ['earlier'] : []), ...(here.length ? rows.keys() : beginning ? [] : ['empty']), ...(notice ? ['notice'] : [])];
+    const ROW = { empty: 'chatlive__empty', notice: 'chatlive__notice', beginning: 'chatlive__beginning', earlier: 'chatlive__earlier' };
+    const focusEarlier = document.activeElement === loadEarlier;
+    keyed(messages, keys, (key) => key === 'earlier' ? el('li', { class: ROW.earlier }, loadEarlier) : el('li', { class: ROW[key] ?? 'chatlive__message' }), (node, key) => {
+      if (key === 'earlier') return;
       if (key === 'empty') return setText(node, empty);
       if (key === 'beginning') return drawBeginning(node, dm, room);
       if (key === 'notice') return setText(node, notice);
@@ -1204,11 +1220,16 @@ export async function mount(root) {
       closeCard(false);
       if (inside) roomTitle.focus();
     }
-    if (scrollTo !== undefined) {
+    if (fromEnd !== undefined) {
+      messages.scrollTop = messages.scrollHeight - fromEnd; // earlier posts above: what you read stays in place
+      fromEnd = undefined;
+    } else if (scrollTo !== undefined) {
       messages.scrollTop = scrollTo ?? messages.scrollHeight; // a person's view brought back where they left it
       scrollTo = undefined;
     } else if (atBottom) messages.scrollTop = messages.scrollHeight;
-    if (!query) seen.set(`${you}\n${room}`, inRoom.length); // what is on screen now is read
+    // the button gone (post 1 is on screen): focus goes to the conversation's title
+    if (focusEarlier && !earlier) roomTitle.focus();
+    if (!query && !preview) seen.set(`${you}\n${room}`, inRoom.at(-1)); // what is on screen now is read
     // the live region says each message new to this screen and room, not those there when you came
     const view = `${you}\n${room}`;
     const fresh = inRoom.filter((message) => !announced.has(keyOf(message)));
@@ -1255,7 +1276,7 @@ export async function mount(root) {
     const read = readOf(you);
     // a conversation on screen is read (on a phone, only while it shows)
     if (!query && main.getClientRects().length) for (const message of inRoom) read.add(message);
-    const unreadIn = (each) => each.room !== room && screen.messages.filter((message) => message.room === each.room).length > (seen.get(`${you}\n${each.room}`) ?? 0);
+    const unreadIn = (each) => unreadOn(screen, each.room);
     const badge = (key, n, what) => {
       const mark = railTabs[key].querySelector('.chatlive__badge');
       mark.hidden = !n;

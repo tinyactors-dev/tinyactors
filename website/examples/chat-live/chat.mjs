@@ -33,7 +33,10 @@ export const VERSIONS = {
 };
 /** The newest version: what steps 6 to 9 added is there. */
 export const LATEST = 9;
-const KEEP = 200; // the newest messages a screen keeps, and entries the log keeps
+// The newest messages a screen keeps of each conversation, and entries the log keeps. Per
+// conversation, so one busy channel cannot push another's posts off the screen; four times what
+// a join reads from the store (history.read), so a screen holds what it read and what came since.
+const KEEP = 200;
 
 /** The scripted experiments, each a list of [seconds from its start, what happens]. */
 export const SCENARIOS = {
@@ -114,9 +117,15 @@ export async function createChat(tinyactors, { versions, version = LATEST, seed 
   const screen = (user) => {
     let found = screens.get(user);
     // newest: room -> the newest post number the screen has of it (step 9's), from a join on;
-    // dms: the direct messages the charts told it of, { room, with, opened } (opened: by this person)
-    if (!found) screens.set(user, (found = { rooms: [], messages: [], newest: {}, roster: {}, typing: {}, notices: [], dms: [] }));
+    // dms: the direct messages the charts told it of, { room, with, opened } (opened: by this person);
+    // limits: room -> the messages of it the screen keeps, KEEP until the person loads earlier ones
+    if (!found) screens.set(user, (found = { rooms: [], messages: [], newest: {}, limits: {}, roster: {}, typing: {}, notices: [], dms: [] }));
     return found;
+  };
+  /** Drops the oldest messages of `room` from a screen past what it keeps of that room. */
+  const trim = (target, room) => {
+    let over = target.messages.filter((m) => m.room === room).length - (target.limits[room] ?? KEEP);
+    if (over > 0) target.messages = target.messages.filter((m) => m.room !== room || over-- <= 0);
   };
   /**
    * Adds to `user`'s screen the posts of `room` it lacks, in the store's
@@ -134,7 +143,8 @@ export async function createChat(tinyactors, { versions, version = LATEST, seed 
       const index = here.findIndex((m) => m.seq !== undefined && m.seq > post.seq);
       here.splice(index < 0 ? here.length : index, 0, { room, seq: post.seq, from: post.from, text: post.text, at: post.at });
     }
-    target.messages = [...others, ...here].slice(-KEEP);
+    target.messages = [...others, ...here];
+    trim(target, room);
     return missing;
   };
   /** Reads from the store the posts of `room` numbered after `after` and before `before` that `user`'s screen lacks. */
@@ -180,7 +190,7 @@ export async function createChat(tinyactors, { versions, version = LATEST, seed 
       // step 9's posts carry the time the store recorded, so one held or delayed on the way shows
       // when it was posted; step 5's are not stored and carry none: the screen shows when it came
       target.messages.push({ room: data.room, seq: data.seq, from: data.from, text: data.text, at: data.at ?? now() });
-      if (target.messages.length > KEEP) target.messages.shift();
+      trim(target, data.room);
     } else if (event === 'roster') target.roster = { ...data.roster };
     else if (event === 'roster.update') target.roster = { ...target.roster, [data.user]: data.status };
     else if (event === 'typing') target.typing = { ...target.typing, [data.room]: [...new Set([...(target.typing[data.room] ?? []), data.user])] };
@@ -256,9 +266,9 @@ export async function createChat(tinyactors, { versions, version = LATEST, seed 
       note('data', `${where(room)}'s history stores post ${seq} from ${from}`);
       send.answer('appended', { seq, at, room, from, text });
     },
-    /** The latest `limit` posts of `room`. */
-    read(room, limit = 50) {
-      return (this.posts.get(room) ?? []).slice(-limit);
+    /** The latest `limit` posts of `room` numbered before `before`. */
+    read(room, limit = 50, before = Infinity) {
+      return (this.posts.get(room) ?? []).filter((post) => post.seq < before).slice(-limit);
     },
   };
 
@@ -412,6 +422,23 @@ export async function createChat(tinyactors, { versions, version = LATEST, seed 
         .filter((dm) => dm.opened || dm.last)
         .sort((a, b) => (b.last?.at ?? -1) - (a.last?.at ?? -1));
     },
+    /**
+     * `name`'s screen reads from the store the posts of `room` before the
+     * oldest numbered one it shows, as a client loads history when you
+     * scroll up, and keeps them beside the newest. Answers how many it
+     * added: none on step 5, whose charts store no posts, or at post 1.
+     */
+    loadEarlier: (name, room) => act(() => {
+      if (current !== LATEST) return 0;
+      const target = screen(name);
+      const oldest = target.messages.find((m) => m.room === room && m.seq !== undefined)?.seq;
+      if (!oldest || oldest <= 1) return 0;
+      const posts = history.read(room, 50, oldest);
+      target.limits[room] = Math.max(KEEP, target.messages.filter((m) => m.room === room).length + posts.length);
+      const added = fill(name, room, posts);
+      if (added.length > 0) note('data', `${name}'s screen reads earlier posts of ${where(room)} from the store: ${added[0].seq} to ${added.at(-1).seq}`);
+      return added.length;
+    }),
     /**
      * The latest posts of channel `room` as the store holds them, for a
      * screen that has not joined it: each { room, seq, from, text, at }.

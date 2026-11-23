@@ -201,3 +201,19 @@ await returning.post('queen', queens, 'are you there?');
 await returning.advance(20_000); // scout's connection comes back
 console.log(`scout is back: the screen shows queen as ${returning.screen('scout').roster.queen}; scout's DMs: ${returning.directMessages('scout').map((each) => `${each.with}, last: ${each.last?.text}`).join('; ') || 'none'}`);
 returning.close();
+
+console.log('-- step 9: forager posts 205 times in #random; #general and a DM keep their posts');
+const busy = await createChat(tinyactors, { versions });
+for (const name of ['scout', 'forager']) await busy.connect(name);
+for (const name of ['scout', 'forager']) await busy.join(name, 'general');
+await busy.join('forager', 'random');
+await busy.post('scout', 'general', 'Found sugar by the old oak. Who can carry?');
+const pair = await busy.openDM('scout', 'forager');
+await busy.post('scout', pair, 'meet at the oak');
+for (let count = 1; count <= 205; count++) await busy.post('forager', 'random', `crumb ${count}`);
+const shown = (name, where) => busy.screen(name).messages.filter((m) => m.room === where);
+const span = (posts) => `${posts.length} posts, ${posts[0].seq} to ${posts.at(-1).seq}`;
+console.log(`forager's screen: #random ${span(shown('forager', 'random'))}; #general: ${shown('forager', 'general').map((m) => m.text).join(' | ')}; the DM: ${shown('forager', pair).map((m) => m.text).join(' | ')}`);
+console.log(`scout's #general: ${shown('scout', 'general').map((m) => m.text).join(' | ')}; forager's DMs: ${busy.directMessages('forager').map((each) => `${each.with}, last: ${each.last?.text}`).join('; ')}`);
+console.log(`forager loads earlier messages of #random: ${await busy.loadEarlier('forager', 'random')} added, now ${span(shown('forager', 'random'))}; again: ${await busy.loadEarlier('forager', 'random')} added`);
+busy.close();

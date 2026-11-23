@@ -50,3 +50,7 @@ to step 5: 9 migrated; scout opens a DM with forager: none, these charts have no
 back on step 9: queen tries to join it: not a member; queen's screen holds: nothing; forager's screen in the DM: sugar by the oak | on my way | back on step 9
 -- step 9: scout loses the connection for 20 s; meanwhile queen signs in and opens a DM with scout
 scout is back: the screen shows queen as active; scout's DMs: queen, last: are you there?
+-- step 9: forager posts 205 times in #random; #general and a DM keep their posts
+forager's screen: #random 200 posts, 6 to 205; #general: Found sugar by the old oak. Who can carry?; the DM: meet at the oak
+scout's #general: Found sugar by the old oak. Who can carry?; forager's DMs: scout, last: meet at the oak
+forager loads earlier messages of #random: 5 added, now 205 posts, 1 to 205; again: 0 added

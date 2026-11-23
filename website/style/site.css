@@ -766,6 +766,10 @@ ta-tabs { display: block; }
 .chatlive__begin-title { margin: 0; overflow-wrap: anywhere; font: 900 22px/1.3 "Lato", -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; color: var(--cl-fg); }
 .chatlive__begin-title .chatlive__hash { font-weight: 400; margin-right: 3px; }
 .chatlive__begin-text { margin: 4px 0 0; line-height: 22px; color: var(--cl-muted); overflow-wrap: anywhere; }
+/* above a conversation whose older posts the screen let go: a button that reads them from the store */
+.chatlive__earlier { display: flex; justify-content: center; padding: 8px 20px 12px; }
+.chatlive__earlier-button { height: 32px; padding: 0 14px; border: 1px solid var(--cl-line); border-radius: 6px; background: var(--cl-pane); color: var(--cl-fg); font-weight: 700 !important; cursor: pointer; }
+.chatlive__earlier-button:hover { background: var(--cl-hover); }
 .chatlive__avatar--begin { width: 72px; height: 72px; margin-bottom: 12px; border-radius: 12px; font-size: 36px; }
 .chatlive__foot { flex: none; padding: 0 20px 2px; }
 .chatlive__typing { min-height: 18px; margin: 2px 0 0 2px; font-size: 12px; line-height: 18px; color: var(--cl-muted); }
