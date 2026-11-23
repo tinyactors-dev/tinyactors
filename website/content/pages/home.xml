@@ -20,9 +20,9 @@
 
   <section id="actors">
     <heading>Write each actor's behavior as one chart</heading>
-    <p>Each statechart runs as an actor: it keeps its own data and handles one event at a time.</p>
-    <p>An Erlang or Akka actor runs any code you give it. A tinyactors actor runs a chart, with every state and transition written down.</p>
-    <p>This payment charges a card and retries every 30 seconds until it is paid or has charged three times:</p>
+    <p>A statechart is a composable state machine of states, events and transitions. Because it isolates effects as events, your code can simulate runs in tests.</p>
+    <p>A tinyactors actor runs a chart instead of arbitrary code like Erlang or Akka, keeping behavior readable and easy to verify.</p>
+    <p>This payment chart isolates each charge as an event, so your code can simulate the flow without waiting. It retries every 30 seconds in states and transitions until it is paid or has charged three times:</p>
     <code src="../../examples/simulate/payment.scxml" lines="4-15" language="scxml" file="payment.scxml"/>
   </section>
 
