@@ -66,11 +66,13 @@ parameters, decoded by the language's own serialization.
   - core: one layer (a parser of the expression grammar, path reads and
     writes over CBOR, payload rows, the vtable entries); size
     **unverified**;
-  - per actor: a session row and its document (an order with two items is
-    74 bytes of CBOR (Appendix A); quickjs's scope is about 0.5 KB,
-    `tinyactors-core/docs/architecture.md:844`);
+  - per actor: core's record, a session row and its document (Appendix
+    A's order is 74 bytes of CBOR); against a quickjs session, measured at
+    891 B resident beside core's 287 B record (`tinyactors-napi/AGENTS.md`,
+    "Measured cost per session"), the whole is **unverified** until built;
   - per assignment: the session's document copied once with the new value
-    in place (its size, bounded by the datamodel's limit);
+    in place (its size, bounded by the datamodel's limit), and charged as
+    fuel by the bytes copied ("Fuel");
   - per function call: its arguments written as one CBOR array, the
     function's decoding of them, its result read back;
   - per event on other datamodels: nothing.
@@ -111,6 +113,18 @@ them, because core hands them to a datamodel and a chart needs them:
 Integers are exact to 64 bits, beyond JSON's usual 2^53, as the value
 table keeps them.
 
+> Every value the datamodel stores is in one canonical form: definite
+> lengths, each head and float in its shortest form, keys in the order
+> written, no key twice, no tag but 32, no simple value but `false`,
+> `true`, `null` and `undefined`.
+
+Bytes from outside (`from_wire`, `payload_deserialize`, a function's
+result) are checked against the value table
+([protocol.md](../../tinyactors-core/docs/protocol.md#values)), refused
+with a key twice, and rewritten into that form when they are not in it,
+since core's decoder accepts any integer width and does not look for
+duplicate keys (`include/tinyactors/cbor.h:63-66`).
+
 ## The session document
 
 A session's variables are one JSON object, stored as one CBOR map. Its
@@ -118,25 +132,29 @@ keys are the chart's `<data>` ids, in document order.
 
 - **Every `<data>` is a key from `create` on,** holding `undefined` until
   its initialization (SCXML 5.2.2, early or late binding as the chart
-  says). A spawn's or an invoke's params that name a `<data>` id set it
+  says). A `<foreach>` may add a key (below); every key of the document is
+  a variable, for paths, hibernation and migration alike. A spawn's or an invoke's params that name a `<data>` id set it
   instead of the `<data>`'s own value; params naming anything else are
   ignored.
-- **The document is stored as written:** definite lengths, each head in
-  its shortest form, keys in the order they were added, as
-  `ta_cbor_writer` writes them (`include/tinyactors/cbor.h`).
+- **The document is canonical,** as every stored value is ("Values"), so
+  a path write never meets a key twice.
 - **A document is immutable once stored.** An assignment writes a new one
   and releases the old; a `<foreach>` keeps a reference on the document it
   iterates, which is the shallow copy SCXML 4.6 asks for at no cost.
 - **Limits.** A document MUST NOT nest deeper than `TA_CBOR_DEPTH_MAX`
   (64) and MUST NOT exceed the datamodel's `max_document_bytes`. A write
-  that would break either is `error.execution`, and the document stays as
-  it was.
+  that would break either is `error.execution` with the reason `memory`
+  (`TA_DATAMODEL_FAILURE_MEMORY`), and the document stays as it was. The
+  same limit bounds every value the datamodel builds: a capture, a call's
+  arguments, a function's result.
 
 The system variables are not in the document. `_sessionid` and `_name`
 are copied into the session's row at `create` (core's views of them live
 only during that call, `include/tinyactors/datamodel.h:69-70`), and
 `_ioprocessors` is kept once per chart when every session's processors
-match the first's, as the Python binding keeps it.
+match the first's text, as the Node binding's template does
+(`tinyactors-napi/AGENTS.md`, "The system variables cost a session
+little until read").
 
 ## Expressions
 
@@ -146,34 +164,57 @@ between tokens:
 
 ```abnf
 expression = path / literal / call / in-call
-call       = name "(" [ expression *( "," expression ) ] ")"
-in-call    = "In(" string ")"
+call       = function "(" [ expression *( "," expression ) ] ")"
+in-call    = %s"In" "(" string ")"
 
 path       = root *segment
-root       = name / "_event" / "_sessionid" / "_name" / "_ioprocessors"
+root       = variable / %s"_event" / %s"_sessionid" / %s"_name"
+           / %s"_ioprocessors"
 segment    = "." name / "[" index "]"
-index      = 1*DIGIT / string / path
+index      = position / string / path
+position   = "0" / %x31-39 *DIGIT
 
-literal    = number / string / "true" / "false" / "null" / "undefined"
-           / array / map
+literal    = number / string / %s"true" / %s"false" / %s"null"
+           / %s"undefined" / array / map
 array      = "[" [ literal *( "," literal ) ] "]"
 map        = "{" [ string ":" literal *( "," string ":" literal ) ] "}"
-number     = [ "-" ] int [ frac ] [ exp ]          ; as JSON, RFC 8259
-string     = DQUOTE *dchar DQUOTE / "'" *schar "'" ; JSON's escapes in both
+number     = [ "-" ] int [ frac ] [ exp ]     ; int, frac, exp: RFC 8259, section 6
+string     = DQUOTE *dchar DQUOTE / "'" *schar "'"
+dchar      = unescaped-but-dquote / "'" / escape
+schar      = unescaped-but-squote / DQUOTE / escape
+escape     = "\" ( DQUOTE / "'" / "\" / "/" / %s"b" / %s"f" / %s"n"
+           / %s"r" / %s"t" / %s"u" 4HEXDIG )
+           ; unescaped-but-*: RFC 8259's unescaped, less the quote
+
 name       = ( ALPHA / "_" ) *( ALPHA / DIGIT / "_" / "-" )
+variable   = name                         ; not a reserved word
+function   = name                         ; not a reserved word
 ```
 
+Every quoted string in the grammar is case-sensitive (RFC 7405's `%s`).
+The reserved words are `true`, `false`, `null`, `undefined`, `In` and
+every name that starts with `_`; a `<data id>` or a registered function
+that uses one is refused, so a token is a literal, a call or a path by
+its first word alone. A map key that is not a name is reached with a
+string index: `_ioprocessors["http://www.w3.org/TR/scxml/#SCXMLEventProcessor"].location`.
+Nesting is bounded: calls and path indices to 16 levels, literals to 64.
+
+
 The datamodel parses every expression of a chart once, at
-`chart_attach`, and refuses the attach when one does not parse, names a
-function nobody registered, or names a variable the chart does not
-declare. SCXML lets a processor reject such a document when it loads it
-(5.9.4); the error names the chart, the expression's line and column, and
-what was wrong (`ta_datamodel_json_last_error`).
+`chart_attach`, and refuses the attach only when one does not parse or
+calls a function nobody registered for the chart. SCXML lets a processor
+reject a document whose expressions are syntactically ill-formed when it
+loads it (5.9.4), and a call of an unknown function is the same mistake
+found by the same pass. The error names the chart, the expression's line
+and column, and what was wrong (`ta_datamodel_json_last_error`). A path
+to a variable the chart does not declare is not refused at attach: it is
+`error.execution` when it is evaluated, as W3C 286 and 311 require.
 
 - **No operators.** `hp <= 1` is `weak(hp)`, a function (decision 2).
-- **Calls nest,** to a depth of 16: `total(addItem(items, _event.data))`.
-  Every call is evaluated innermost first, left to right, and an
-  evaluation stops at the first failure.
+- **Calls nest:** `total(addItem(items, _event.data))`. Every call is
+  evaluated innermost first, left to right, and an evaluation stops at the
+  first failure. The evaluation's stack (a writer per level of nesting) is
+  the datamodel's memory, made once, never the C stack.
 - **Literals are constant.** An array or map literal holds literals only;
   a value built from paths is built by a function or by `<param>`s.
 - **A decimal literal** is read exactly or refused at attach: the layer
@@ -184,18 +225,20 @@ what was wrong (`ta_datamodel_json_last_error`).
 
 ### Reading a path
 
-A path's root is a declared variable, `_event`, or a system variable.
-Each segment steps into a map by key (`.name`, `["text"]`) or into an
-array by position (`[2]`, or a path whose value is an integer).
+A path's root is a variable, `_event`, or a system variable. Each segment
+steps into a map by key (`.name`, `["text"]`) or into an array by
+position (`[2]`). A path index steps by its value: text is a key, an
+integer from 0 to 2^32 - 1 a position, anything else `error.execution`.
 
-- **A step that finds nothing is `error.execution`:** a key the map lacks,
-  a position past the array's end, a step into a value that is neither.
+- **A step that finds nothing is `error.execution`:** a root the document
+  lacks, a key the map lacks, a position past the array's end, a step into
+  a value that is neither.
   There is no `undefined` from a missing key, so a misspelt key in event
   data fails where it is read.
 - **`_event`** is a map of `name`, `type`, `sendid`, `origin`,
-  `origintype`, `invokeid` (text, absent fields as empty text) and `data`
-  (the event's payload). Paths into `_event.data` read the payload's
-  bytes in place.
+  `origintype`, `invokeid`, `raw` (text, absent fields as empty text) and
+  `data` (the event's payload, `undefined` when it has none). Paths into
+  `_event.data` read the payload's bytes in place.
 - **`_ioprocessors.<type>.location`** is the session's address for that
   processor (SCXML 5.10; W3C 325, 326, 329, 346 and 569 read it).
 
@@ -212,8 +255,8 @@ array by position (`[2]`, or a path whose value is an integer).
   sets a map's key, adding it when absent, or an array's position: one
   inside the array replaces, one equal to its length appends, any other
   is `error.execution`.
-- A root of `_event` or a system variable is refused at attach when the
-  path is static, and is `error.execution` otherwise.
+- A write to a root the document lacks, to `_event` or to a system
+  variable is `error.execution`, and changes nothing (W3C 286, 311, 329).
 
 ### Where each form goes
 
@@ -221,20 +264,23 @@ array by position (`[2]`, or a path whose value is an integer).
 |---|---|---|
 | `cond` | any expression | `true` or `false`; any other value is `error.execution` (no truthiness) |
 | `<data expr>`, `<assign expr>`, `<param expr>`, `<content expr>`, `<donedata>` | any expression | the value |
-| `<data>`, `<assign>`, `<content>` with child text (`TA_EXPRESSION_CONTENT`) | a literal, as text | the literal's value; XML children refuse the attach |
+| `<data>`, `<assign>`, `<content>` with child text (`TA_EXPRESSION_CONTENT`) | text | the literal's value when the text is one; otherwise the text, its whitespace normalized, as a string (as SCXML's ECMAScript data model does with content that is not JSON); XML children refuse the attach |
 | `eventexpr`, `targetexpr`, `typeexpr`, `srcexpr`, `delayexpr`, `sendidexpr`, `docexpr` | any expression | text; an address gives its text; any other value is `error.execution` |
 | `<log expr>` | any expression | text as it is; any other value in CBOR diagnostic notation (`ta_cbor_diagnostic`, `cbor.h:89`) |
-| `<foreach array>` | a path | an array, iterated over the document or payload it was read from |
+| `<foreach array>` | any expression | an array, iterated over the document, payload or result it was read from, by reference |
 | `namelist` | paths to variables | a map of each variable's name to its value |
 | a trace's value (`TA_CAPTURE_VALUE`) | a path | the value; a failure leaves it out of the record |
 | `<script>` | refused at attach (decision 1) | |
+| the vtable's `custom` | | `TA_ERROR_UNSUPPORTED`, which core makes `error.execution` |
 
 ## Functions
 
 A function takes values and returns one value. The application registers
-it under a name before the image whose charts call it is added, and
-implements it in its own language. Every call of a chart reaches exactly
-one registered function by that name.
+it under a name, for every chart or for the charts it names, before the
+image whose charts call it is added, and implements it in its own
+language. Every call of a chart reaches exactly one function registered
+for that chart under that name, so a chart from one source cannot call a
+function meant for another's.
 
 > A function MUST NOT keep state between calls, call the host, or change
 > anything but its result.
@@ -273,12 +319,27 @@ typedef ta_status (*ta_json_function)(ta_json_call *call);
   status, or a result that is not exactly one item of the value table, is
   `error.execution`, with `message` as the event's `{"reason",
   "message"}` data (`src/core/core.c:211-240`).
-- **Fuel.** Core charges after each datamodel call already
-  (`src/core/core.c:89-92`); the datamodel charges one more unit for each
-  function call, and nothing for paths and literals. A function must end:
-  no fuel stops it once called.
 - **The result room** is the datamodel's, grown through its allocator and
-  kept between calls, so a warmed call allocates nothing.
+  kept between calls, so a warmed call allocates nothing. That needs a
+  writer whose grown block its owner can keep, which `ta_cbor_writer` does
+  not offer today (its fields are private, `cbor.h:142`): a small addition
+  to `cbor.h`.
+
+### Fuel
+
+Core charges one unit per instruction of executable content
+(`src/core/core.c:1307`) and burns what a datamodel reports
+(`ta_datamodel_environment_charge`, `core.c:89-92`); it charges nothing
+for a datamodel's work otherwise. So this datamodel reports its own:
+
+- one unit per function call, and one per 64 bytes it reads, writes or
+  copies (a path walked, a document rewritten, an argument array built);
+- in the entries core calls with no environment (`foreach_item`,
+  `assign_string`, `core.c:1450-1471`), the fuel is kept and reported at
+  the next call that has one, so an `<assign>` inside a `<foreach>` pays
+  for every document it copies.
+
+A function must end: no fuel stops it once called.
 
 ### What a binding writes
 
@@ -290,7 +351,7 @@ Each language uses the serialization it already has:
 | | Arguments and result | Failure |
 |---|---|---|
 | **Swift** | `Decodable` parameters and an `Encodable` result, one decoder over the arguments array | `throws` |
-| **Kotlin** | `kotlinx.serialization`, reified parameter and result types | an exception |
+| **Kotlin** | `kotlinx.serialization`, reified parameter and result types, one overload per arity, as Go's helpers | an exception |
 | **Go** | a CBOR library's struct tags (`fxamacker/cbor`), one helper per arity (`Func1`, `Func2`, ...) since Go generics have no variadic form | a returned `error` |
 | **C** | `ta_cbor_reader` and `ta_cbor_writer` directly | a status and `message` |
 | **wasm** | a side module's C function in the core's table, or a JavaScript function through an import | a status, or a thrown exception |
@@ -310,28 +371,44 @@ allocator. Session documents are blocks of the same kind.
   are; **`from_wire`, `payload_deserialize`** check the bytes against the
   value table (well-formed, at most 64 deep) and keep them. Nothing is
   converted.
-- **`bind_event`** keeps a reference on the event's payload, its type,
-  core's ids of its name, invoke and origintype (`name_id`,
-  `invoke_slot`, `origintype_id`, `datamodel.h:41-50`), and copies its
-  sendid and origin, whose text lives only during the call
-  (`datamodel.h:35-37`). The datamodel sets
+- **`bind_event`** keeps a reference on the event's payload, its type and
+  core's id of its origintype (`origintype_id`, `datamodel.h:44-51`), and
+  copies the text that lives only during the call (`datamodel.h:35-37`):
+  its sendid, origin and `raw`, its name unless `name_id` gives the same
+  text (a name the image lacks has no exact id, `event_pool.c:143-151`),
+  and its invokeid unless it is the text kept for its `invoke_slot` (an id
+  generated per execution differs, `datamodel.h:45-47`). The datamodel sets
   `TA_DATAMODEL_EVENT_DETACHABLE`; `detach_event` drops nothing, so
   `_event` stays bound until the next event (SCXML 5.10).
+- **A `<foreach>`** is a row of the loop table: a reference on the array's
+  block, the position, and the `item` and `index` paths; `foreach_end`
+  removes it. A loop can stay open across a yield in a microstep
+  (`core.c:121-128`, `:1440-1448`), so loops are in snapshots.
 
 ## Hibernation, migration, snapshots, inspection
 
 - **`serialize`** writes `{"vars": <the session document>, "event": [...]
   | null}`, the form the other datamodels write; the document is copied in
-  as it is. **`deserialize`** keeps the variables the chart declares and
-  adds the ones it declares that the blob lacks, as `undefined`.
-- **`migrate`** answers the old document as one payload, without the
-  variables the new chart does not declare; core initializes the new
-  chart's added `<data>` and raises `error.platform.upgrade` with it
-  (`datamodel.h:214-221`).
+  as it is.
+- **`deserialize`** makes the session's document from the blob's: the
+  variables the chart declares, and `undefined` for those it declares
+  that the blob lacks. It keeps the blob's whole document beside it, since
+  core calls `migrate` right after `deserialize` when the blob was written
+  for an older version (`src/system/hibernate.c:1095`,
+  `core.c:2235-2245`), as the Python binding keeps the old bindings in
+  `row->extra`.
+- **`migrate`** answers that kept document, unchanged, as one payload: the
+  old chart's variables, which core gives `error.platform.upgrade` as its
+  data after initializing the new chart's added `<data>`
+  (`datamodel.h:214-221`). The kept document is dropped then, or at the
+  first event when `migrate` is not called (a wake).
 - **`variable`** (`actor.context`) answers a variable's value as a new
   payload; `undefined` answers no payload, as the vtable asks.
 - **A snapshot** writes the tables' handle namespaces (`ta_table_snapshot`)
-  and every row, documents and payloads as their bytes.
+  and every row: sessions with their documents and `_event`, payloads as
+  their bytes, loops with their position, and each session's chart by its
+  attachment's segment and index (`ta_datamodel_chart.segment`), since two
+  segments may run one image.
 
 ## The interface in core
 
@@ -347,13 +424,14 @@ typedef struct ta_json_function_entry {
     uint32_t size;
     uint32_t pad;
     ta_string_view name;
+    ta_string_view chart;          /* the chart it serves; empty: every chart */
     ta_json_function function;
     void *context;
 } ta_json_function_entry;
 
 typedef struct ta_datamodel_json_config {
     uint32_t size;
-    uint32_t max_document_bytes;   /* 0: the default (decision 4) */
+    uint32_t max_document_bytes;   /* 0: the default, set by ta_datamodel_json_config_normalize (decision 4) */
     ta_allocator allocator;        /* documents, payloads, rows, the result room */
 } ta_datamodel_json_config;
 
@@ -368,8 +446,8 @@ TA_API ta_status ta_datamodel_json_snapshot(ta_datamodel_json *datamodel, ta_buf
 TA_API ta_status ta_datamodel_json_restore(ta_datamodel_json *datamodel, ta_bytes state);
 ```
 
-- **`ta_datamodel_json_register`** copies the name; a name registered twice
-  is `TA_ERROR_INVALID`. The function and its context MUST stay valid until
+- **`ta_datamodel_json_register`** copies the names; a name registered
+  twice for one chart, or a reserved word, is `TA_ERROR_INVALID`. The function and its context MUST stay valid until
   `ta_datamodel_json_free`. Registering after an image's charts attached
   affects only charts attached later.
 - A host passes the binding beside its other datamodels
@@ -384,7 +462,9 @@ TA_API ta_status ta_datamodel_json_restore(ta_datamodel_json *datamodel, ta_byte
 | a function and its context | the application | before registering | after `ta_datamodel_json_free`, which follows `ta_host_free` |
 | a chart's parsed expressions | the chart's row | `chart_attach` | `chart_detach` |
 | a session document | its block, by reference | `create`, an assignment, `deserialize` | the next assignment, or `destroy`, and the last `<foreach>` over it |
-| `_event`: a payload reference, ids, sendid, origin | the session's row | `bind_event` | the next `bind_event`, or `destroy` |
+| `_event`: a payload reference, ids, copied text | the session's row | `bind_event` | the next `bind_event`, or `destroy` |
+| an old document kept for `migrate` | the session's row | `deserialize` | `migrate`, or the first event |
+| a `<foreach>` | the loop table, with a reference on its array's block | `foreach_begin` | `foreach_end` |
 | a payload | the payload table | `capture`, `from_wire`, `payload_deserialize` | `release` to 0 |
 | a call's `arguments` | the datamodel | before the call | the call's return |
 | a call's `message` | the function | the call | the call's return (the datamodel copies it) |
@@ -407,31 +487,36 @@ list (XML content, every test of the ECMAScript data model) are
 - **A failed attach leaks the charts attached before it,** in three
   places: `attach_charts` (`src/system/system.c:243-259`), the trace rules
   after it (`:386-388`) and the restore path (`:1267-1268`). This
-  datamodel refuses an attach for every unknown function or variable, so
-  the leak needs fixing first, with a test of each.
+  datamodel refuses an attach for every syntax error and unknown function,
+  so the leak needs fixing first, with a test of each.
 - **Payloads cross between datamodels unchecked.** The event view's data
   is the event's payload whatever its datamodel
   (`src/core/event_pool.c:177`), as are invoke params
   (`src/system/route.c:296`) and done.invoke data (`route.c:831`), against
   ADR 0009's decision 7. Core should convert at the crossing (`to_wire` on
   one side, `from_wire` on the other); for a payload of this datamodel the
-  first is its bytes. Until then a host running these charts beside
-  quickjs charts MUST NOT let data cross between them.
+  first is its bytes. Until then only a host with this datamodel alone is
+  safe: the host cannot keep a chart from sending to a chart on another
+  datamodel, so a payload handle of one would be read as the other's.
 
 ## Security considerations
 
-- **A chart on this datamodel is safe to run from an untrusted source**
-  as far as the datamodel goes: an expression has no loop and no
-  recursion, so it ends in time bounded by its length and the documents'
-  limits, and it reaches nothing but the session's document, the event,
-  the system variables and the registered functions. Whether a chart can
-  harm the application is a question about those functions.
+- **A chart from an untrusted source** can run on this datamodel under
+  three conditions: the host runs no other datamodel until core converts
+  payloads between datamodels ("Open in core"); the functions registered
+  for that chart are safe for any input; and the host's fuel bounds what
+  its runs cost. An expression has no loop and no recursion, every value
+  it builds is bounded by `max_document_bytes`, and the datamodel charges
+  fuel for the bytes it moves ("Fuel"), so a chart's evaluations cost
+  what its fuel allows. It reaches nothing but its document, the event,
+  the system variables and the functions registered for it.
 - **Event data is untrusted input** to a function: it arrives from other
   actors and other systems. A binding's decoding refuses a value of the
   wrong shape (`error.execution`); a function validates the rest.
-- **Memory** is bounded per session by `max_document_bytes`; an
-  application that spawns without bound is bounded by the host's limits,
-  not by this datamodel.
+- **Memory:** `max_document_bytes` bounds each value this datamodel
+  builds, not a session. The events queued for a session and the payloads
+  of its delayed sends are bounded by the host's pools, not by this
+  datamodel.
 
 ## Decisions for the maintainer
 
@@ -447,6 +532,31 @@ list (XML content, every test of the ECMAScript data model) are
 5. **A callback in a public header.** `tinyactors-core/AGENTS.md` allows
    "no callbacks except the datamodel vtable". Accept `ta_json_function` as
    a datamodel's?
+6. **Where expressions are parsed:** at `chart_attach`, as here; or by the
+   compiler, which runs hosted and could read decimals with the C
+   library's correctly rounded `strtod` and report every error as a
+   compile diagnostic at its line, writing the parsed form into the
+   image's datamodel section (`ta_image_ahead_of_time_section`,
+   `image.h:123`, which no compiler writes today). Function names would
+   still be checked at attach.
+
+## Review
+
+An adversarial review (2026-11-23) changed: `deserialize` keeps the old
+document for `migrate`, which had nothing left to answer; the attach
+refuses syntax errors and unknown functions only, since W3C 286, 311 and
+329 expect `error.execution` at run time for writes to undeclared
+variables and system variables; fuel is charged by the bytes moved,
+deferred from entries with no environment; arguments, results and
+captures are bounded; functions are registered per chart; the security
+claim names its conditions; `_event` copies its name and invokeid when
+core's ids do not give the text, and gains `raw`; stored values are
+canonical, with duplicate keys refused; nesting of path indices and
+literals is bounded and the evaluation stack is the datamodel's memory;
+the grammar is case-sensitive with reserved words, defined escapes and
+string indices; loops are rows and in snapshots; the per-actor comparison
+uses measured numbers; the Go example registers `shipsTo`; decision 6
+(parsing in the compiler) is new.
 
 ## Appendix A: an order, end to end
 
@@ -457,7 +567,7 @@ The chart:
        datamodel="json" name="order" initial="open">
   <datamodel>
     <data id="items" expr="[]"/>
-    <data id="address" expr="{}"/>
+    <data id="address" expr="{&quot;country&quot;: &quot;&quot;}"/>
   </datamodel>
   <state id="open">
     <transition event="add" cond="knownItem(_event.data)">
@@ -556,6 +666,9 @@ func register(fns *ta.Functions) {
 		return append(items, Item{SKU: add.SKU, Qty: add.Qty, Cents: cents}), nil
 	})
 	ta.Func1(fns, "hasItems", func(items []Item) (bool, error) { return len(items) > 0, nil })
+	ta.Func1(fns, "shipsTo", func(country string) (bool, error) {
+		return country == "DE" || country == "FR" || country == "NL", nil
+	})
 	ta.Func1(fns, "total", func(items []Item) (int64, error) {
 		var sum int64
 		for _, it := range items {
@@ -580,7 +693,7 @@ static ta_status has_items(ta_json_call *call) {
         call->message = (ta_string_view){"hasItems: an array expected", 27};
         return TA_ERROR_INVALID;
     }
-    ta_cbor_write_simple(call->result, item.count > 0 ? 21 : 20);  /* true, false */
+    ta_cbor_write_simple(call->result, item.count > 0 ? TA_CBOR_TRUE : TA_CBOR_FALSE);
     return TA_OK;
 }
 ```
