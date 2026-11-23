@@ -288,6 +288,19 @@ export async function mount(root) {
   const composer = el('form', { class: 'chatlive__composer' }, text, send);
   const typingLine = el('p', { class: 'chatlive__typing', 'aria-live': 'polite' });
   let typed = -Infinity; // the simulated time of the last typing notice sent
+  // one draft per person and room, as Slack keeps one per conversation
+  const drafts = new Map();
+  let drafted = `${you}\n${room}`; // whose draft the composer holds
+  function swapDraft() {
+    const key = `${you}\n${room}`;
+    if (key === drafted) return;
+    if (text.value) drafts.set(drafted, text.value);
+    else drafts.delete(drafted);
+    drafted = key;
+    text.value = drafts.get(key) ?? '';
+    send.classList.toggle('chatlive__send--ready', text.value.trim() !== '');
+    typed = -Infinity; // the new person's first key tells the room, as usual
+  }
   text.addEventListener('input', () => {
     send.classList.toggle('chatlive__send--ready', text.value.trim() !== '');
     if (!selfState?.online || chat.now() - typed < TYPED) return; // the chart throttles too: one notice to the room per 3 s
@@ -534,6 +547,7 @@ export async function mount(root) {
   }
 
   async function draw() {
+    swapDraft();
     const screen = chat.screen(you);
     const showActors = !debug.hidden && part === 'actors';
     const [actors, stats, self, shown] = await Promise.all([chat.actors(), showActors ? chat.stats() : null, chat.state(`user.${you}`),
