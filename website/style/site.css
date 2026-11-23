@@ -459,13 +459,19 @@ ta-tabs { display: block; }
 .trace__events { margin: 0; padding: 0; list-style: none; display: grid; gap: var(--space-1); font: var(--type-code); color: var(--fg-2); }
 .trace__events strong { color: var(--fg-1); font-weight: var(--fw-medium); }
 
+/* The header's links need about 815px in one row (the wordmark, the
+   gap, the links and the page's padding): narrower, they move into the
+   menu (the ant button, with presence), as on a phone. */
+@media (max-width: 860px) {
+  .site-nav { display: none; }
+  .site-menu { display: inline-flex; }
+  .site-menu__links:popover-open { display: flex; }
+}
+
 /* ---------------------------------------------------- phones */
 
 @media (max-width: 720px) {
   .wrap { padding: 0 var(--space-4); }
-  .site-nav { display: none; }
-  .site-menu { display: inline-flex; }
-  .site-menu__links:popover-open { display: flex; }
   .hero { padding-top: var(--space-4); }
   .hero__body { padding: var(--space-10) var(--space-5) var(--space-8); }
   .hero__headline { font: var(--type-h1); font-size: 40px; letter-spacing: var(--tracking-display); }
@@ -612,6 +618,7 @@ ta-tabs { display: block; }
 .chatlive__room-link { all: unset; box-sizing: border-box; display: flex; align-items: center; gap: 0; width: calc(100% - 16px); height: 28px; margin: 0 8px;
   padding: 0 8px 0 19px; border-radius: 6px; cursor: pointer; color: var(--cl-side-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .chatlive__room-link .chatlive__hash { width: 21px; flex: none; font-size: 16px; }
+.chatlive__room-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .chatlive__room-link--joined { color: var(--cl-side-fg); }
 .chatlive__room-link:hover { background: var(--cl-side-hover); }
 .chatlive__room-link[aria-current="true"] { background: var(--cl-side-current); color: var(--cl-side-strong); font-weight: 700; }
@@ -638,7 +645,8 @@ ta-tabs { display: block; }
 .chatlive__app--debug .chatlive__pane { grid-template-columns: minmax(0, 1fr) 360px; }
 .chatlive__room, .chatlive__debug { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
 .chatlive__bar-title { display: flex; align-items: center; gap: 8px; flex: none; height: 49px; box-sizing: border-box; padding: 0 20px; border-bottom: 1px solid var(--cl-line); }
-.chatlive__title { margin: 0; font: 900 18px/1.2 "Lato", -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; color: var(--cl-fg); }
+.chatlive__title { min-width: 0; margin: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis;
+  font: 900 18px/1.2 "Lato", -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; color: var(--cl-fg); }
 .chatlive__title .chatlive__hash { font-weight: 400; margin-right: 3px; }
 .chatlive__back { display: none; }
 .chatlive__messages { flex: 1; min-height: 0; overflow-y: auto; padding: 12px 0 8px; }
@@ -647,6 +655,9 @@ ta-tabs { display: block; }
 .chatlive__message > .chatlive__avatar { grid-row: span 2; }
 .chatlive__line { margin: 0; display: flex; align-items: baseline; gap: 8px; line-height: 22px; }
 .chatlive__from { font-weight: 900; color: var(--cl-fg); }
+.chatlive__in { min-width: 0; padding: 0; border: 0; background: none; cursor: pointer; overflow: hidden; white-space: nowrap; text-overflow: ellipsis;
+  font-size: 12px !important; color: var(--cl-link) !important; }
+.chatlive__in:hover { text-decoration: underline; }
 .chatlive__at { font-size: 12px; color: var(--cl-muted); font-variant-numeric: tabular-nums; }
 .chatlive__body { margin: 0; line-height: 22px; overflow-wrap: anywhere; }
 .chatlive__body mark { background: var(--cl-mark); color: inherit; border-radius: 2px; }
@@ -749,17 +760,21 @@ ta-tabs { display: block; }
 .chatlive__actor .chatlive__dot { background: var(--cl-active); }
 .chatlive__actor--stored .chatlive__dot { background: transparent; box-shadow: inset 0 0 0 1.5px var(--cl-muted); }
 .chatlive__actor code, .chatlive__state code { padding: 0; border: 0; background: none; font: 13px/1 var(--font-mono); color: var(--cl-fg); }
-.chatlive__where { margin-left: auto; font-size: 13px; color: var(--cl-muted); }
+.chatlive__actor .chatlive__dot { flex: none; }
+.chatlive__actor code { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.chatlive__where { flex: none; margin-left: auto; font-size: 13px; color: var(--cl-muted); white-space: nowrap; }
 .chatlive__chart { flex: none; height: 380px; margin: 0 20px; overflow: hidden; display: flex; justify-content: center; border: 1px solid var(--cl-line); border-radius: 8px; background: var(--cl-chart); }
 .chatlive__chart scxml-view[hidden] { display: none; }
 .chatlive__state { margin: 8px 20px 0; font-size: 13px; color: var(--cl-muted); min-height: 1.6em; }
 
-/* Narrower: a slimmer sidebar, and the debugger over the room's right. */
+/* Narrower: a slimmer sidebar, and the debugger under the channel, the
+   window growing to the screen's height under the site's header, so
+   both stay in view. */
 @media (max-width: 1000px) {
   .chatlive__app { grid-template-columns: 74px 220px minmax(0, 1fr); }
-  .chatlive__pane { position: relative; }
-  .chatlive__app--debug .chatlive__pane { grid-template-columns: minmax(0, 1fr); }
-  .chatlive__debug { position: absolute; top: 0; right: 0; bottom: 0; z-index: 2; width: min(360px, 100%); box-shadow: -4px 0 12px rgba(0, 0, 0, .12); }
+  .chatlive__app--debug { height: clamp(640px, calc(100svh - 96px), 1000px); }
+  .chatlive__app--debug .chatlive__pane { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(240px, 1fr) minmax(0, 1.2fr); }
+  .chatlive__debug { border-left: 0; border-top: 1px solid var(--cl-line); }
 }
 /* A phone: the tabs and your avatar in a bar at the bottom, the channel
    list or the channel in between (the back button and Home switch them),
@@ -772,9 +787,10 @@ ta-tabs { display: block; }
   .chatlive__top-button { padding: 0; width: 28px; justify-content: center; }
   .chatlive__top-button { top: 8px; right: 6px; }
   .chatlive__search { width: 100%; }
-  .chatlive__rail { flex-direction: row; justify-content: space-around; align-items: center; gap: 0; padding: 0; }
+  /* the bar ends short of the right edge, where the site's ant button floats */
+  .chatlive__rail { flex-direction: row; justify-content: space-around; align-items: center; gap: 0; padding: 0 60px 0 0; }
   .chatlive__tile { display: none; }
-  .chatlive__tab { width: 56px; }
+  .chatlive__tab { flex: 0 1 56px; min-width: 44px; }
   .chatlive__tab-icon { width: 32px; height: 28px; }
   .chatlive__me { margin: 0; }
   .chatlive__avatar--rail { width: 32px; height: 32px; }
@@ -782,8 +798,8 @@ ta-tabs { display: block; }
   .chatlive__app[data-view="room"] .chatlive__sidebar, .chatlive__app[data-view="list"] .chatlive__pane { display: none; }
   .chatlive__pane { position: static; }
   .chatlive__back { display: grid; place-items: center; width: 28px; height: 28px; margin-left: -8px; padding: 0; border: 0; border-radius: 6px; background: none; cursor: pointer; }
-  .chatlive__debug { inset: 44px 4px 4px; width: auto; border: 0; border-radius: 8px; box-shadow: var(--cl-shadow); }
-  .chatlive__app--debug[data-view] .chatlive__pane { display: grid; }
+  .chatlive__debug { position: absolute; inset: 44px 4px 4px; z-index: 2; width: auto; border: 0; border-radius: 8px; box-shadow: var(--cl-shadow); }
+  .chatlive__app--debug[data-view] .chatlive__pane { display: grid; grid-template-rows: minmax(0, 1fr); }
   .chatlive__menu { left: auto; right: 8px; bottom: 64px; }
   .chatlive__bar-title, .chatlive__foot, .chatlive__message, .chatlive__empty, .chatlive__notice { padding-left: 12px; padding-right: 12px; }
   .chatlive__foot { padding-bottom: 2px; }

@@ -168,9 +168,19 @@ export async function mount(root) {
   const app = el('div', { class: 'chatlive__app', 'data-view': 'room' });
 
   // ---- the top bar: search, and the debugger's switch
-  const search = el('input', { type: 'search', class: 'chatlive__search-field', placeholder: `Search ${WORKSPACE}`, 'aria-label': 'Search this channel', maxlength: '80' });
-  search.addEventListener('input', () => { query = search.value.trim().toLowerCase(); render(); });
-  search.addEventListener('keydown', (event) => { if (event.key === 'Escape' && search.value) { search.value = ''; query = ''; render(); } });
+  const search = el('input', { type: 'search', class: 'chatlive__search-field', placeholder: `Search ${WORKSPACE}`, 'aria-label': `Search ${WORKSPACE}`, maxlength: '80' });
+  search.addEventListener('input', () => { query = search.value.trim().toLowerCase(); app.dataset.view = 'room'; render(); });
+  search.addEventListener('keydown', (event) => { if (event.key === 'Escape' && search.value) { clearSearch(); render(); } });
+  function clearSearch() {
+    search.value = '';
+    query = '';
+  }
+  // a result's channel, which opens it
+  const channelLink = (name) => {
+    const link = el('button', { type: 'button', class: 'chatlive__in', title: `Open #${name}` }, `#${name}`);
+    link.addEventListener('click', () => { room = name; app.dataset.view = 'room'; clearSearch(); render(); });
+    return link;
+  };
   const debugToggle = el('button', { type: 'button', class: 'chatlive__top-button', 'aria-label': 'Debugger', 'aria-pressed': 'false', title: 'Debugger and experiments' },
     icon('bug'), el('span', { class: 'chatlive__top-label' }, 'Debugger'));
   debugToggle.addEventListener('click', () => openDebugger(debugToggle.getAttribute('aria-pressed') !== 'true'));
@@ -316,8 +326,8 @@ export async function mount(root) {
     typed = -Infinity;
     chat.post(you, room, words);
   });
-  const main = el('section', { class: 'chatlive__room', 'aria-label': 'Channel' }, el('header', { class: 'chatlive__bar-title' }, back, roomTitle), banner, messages, arrived,
-    el('div', { class: 'chatlive__foot' }, composer, join, signedOut, typingLine));
+  const foot = el('div', { class: 'chatlive__foot' }, composer, join, signedOut, typingLine);
+  const main = el('section', { class: 'chatlive__room', 'aria-label': 'Channel' }, el('header', { class: 'chatlive__bar-title' }, back, roomTitle), banner, messages, arrived, foot);
 
   // ---- the debugger: the clock, then its parts behind tabs
   const play = el('button', { type: 'button', class: 'chatlive__control' });
@@ -580,9 +590,10 @@ export async function mount(root) {
     // the sidebar
     const rooms = actors.filter((actor) => actor.chart === 'room').map((actor) => actor.name.slice(5));
     keyed(roomList, rooms, (name) => {
-      const button = el('button', { type: 'button', class: 'chatlive__room-link' },
-        el('span', { class: 'chatlive__hash', 'aria-hidden': 'true' }, '#'), name);
-      button.addEventListener('click', () => { room = name; app.dataset.view = 'room'; render(); });
+      // a long name ends in an ellipsis, the whole of it in the title
+      const button = el('button', { type: 'button', class: 'chatlive__room-link', title: `#${name}` },
+        el('span', { class: 'chatlive__hash', 'aria-hidden': 'true' }, '#'), el('span', { class: 'chatlive__room-name' }, name));
+      button.addEventListener('click', () => { room = name; app.dataset.view = 'room'; clearSearch(); render(); });
       return el('li', {}, button);
     }, (node, name) => {
       const button = node.firstChild;
@@ -601,15 +612,20 @@ export async function mount(root) {
 
     // the room
     const joined = screen.rooms.includes(room);
-    if (roomTitle.dataset.room !== room) {
-      roomTitle.dataset.room = room;
-      roomTitle.replaceChildren(el('span', { class: 'chatlive__hash', 'aria-hidden': 'true' }, '#'), room);
+    // a search looks through every channel on your screen, as a client searches its workspace
+    const searched = search.value.trim();
+    const heading = query ? `search\n${searched}` : `room\n${room}`;
+    if (roomTitle.dataset.heading !== heading) {
+      roomTitle.dataset.heading = heading;
+      if (query) roomTitle.replaceChildren(`Results for “${searched}”`);
+      else roomTitle.replaceChildren(el('span', { class: 'chatlive__hash', 'aria-hidden': 'true' }, '#'), room);
+      roomTitle.title = query ? `Results for “${searched}”` : `#${room}`;
     }
     const inRoom = screen.messages.filter((message) => message.room === room);
-    const here = query ? inRoom.filter((message) => message.text.toLowerCase().includes(query)) : inRoom;
+    const here = query ? screen.messages.filter((message) => message.text.toLowerCase().includes(query)) : inRoom;
     const atBottom = messages.scrollHeight - messages.scrollTop - messages.clientHeight < 40;
-    const empty = !joined && !inRoom.length ? `You have not joined #${room}.`
-      : query && inRoom.length ? `No messages in #${room} match “${search.value.trim()}”.`
+    const empty = query ? `No messages on your screen match “${searched}”.`
+      : !joined && !inRoom.length ? `You have not joined #${room}.`
         : 'No messages on your screen yet.';
     // one row per message, kept while the message stays on the screen; rebuilt only when its
     // header, time or the search's highlight changes
@@ -620,7 +636,8 @@ export async function mount(root) {
       if (key === 'empty') return setText(node, empty);
       if (key === 'notice') return setText(node, notice);
       const [message, before] = rows.get(key);
-      const more = Boolean(before && before.from === message.from && Math.abs(message.at - before.at) < GROUP);
+      // search results stand alone, each labelled with its channel
+      const more = Boolean(!query && before && before.from === message.from && Math.abs(message.at - before.at) < GROUP);
       const drawn = `${more}\n${message.at}\n${query}`;
       if (node.drawn === drawn) return;
       node.drawn = drawn;
@@ -629,7 +646,8 @@ export async function mount(root) {
       const body = el('p', { class: 'chatlive__body' }, ...marked(message.text, query));
       node.className = more ? 'chatlive__message chatlive__message--more' : 'chatlive__message';
       if (more) node.replaceChildren(stamp, body);
-      else node.replaceChildren(avatar(message.from, 'large'), el('p', { class: 'chatlive__line' }, el('span', { class: 'chatlive__from' }, message.from), stamp), body);
+      else node.replaceChildren(avatar(message.from, 'large'), el('p', { class: 'chatlive__line' }, el('span', { class: 'chatlive__from' }, message.from), stamp,
+        ...(query ? [channelLink(message.room)] : [])), body);
     });
     if (atBottom) messages.scrollTop = messages.scrollHeight;
     // the live region says each message new to this screen and room, not those there when you came
@@ -645,6 +663,7 @@ export async function mount(root) {
       setText(arrived, fresh.filter((message) => message.from !== you).map((message) => `${message.from}: ${message.text}`).join('\n'));
     }
     banner.hidden = !reconnecting;
+    foot.hidden = Boolean(query); // a list of results has no composer
     const connected = Boolean(selfState);
     composer.hidden = !(connected && joined);
     composer.classList.toggle('chatlive__composer--off', reconnecting);
@@ -704,13 +723,13 @@ export async function mount(root) {
         logList.replaceChildren(...(entries.length ? entries.map((entry) => el('li', { class: `chatlive__entry chatlive__entry--${entry.kind}` },
           el('time', { class: 'chatlive__at' }, clock(entry.at)), el('span', { class: 'chatlive__kind' }, KINDS[entry.kind] ?? entry.kind),
           el('span', { class: 'chatlive__entry-text' }, entry.text)))
-          : [el('li', { class: 'chatlive__empty' }, 'Nothing yet. Post a message or run a scenario.')]));
+          : [el('li', { class: 'chatlive__empty' }, kind ? `No ${KINDS[kind]} entries yet.` : 'Nothing yet. Post a message or run a scenario.')]));
       }
     } else if (part === 'actors') {
       setText(memory, `${stats.actors} actors · ${stats.inMemory} in memory · ${stats.stored} in the store`);
       keyed(actorList, actors.map((actor) => actor.name), (name) => {
         const button = el('button', { type: 'button', class: 'chatlive__actor' },
-          el('span', { class: 'chatlive__dot', 'aria-hidden': 'true' }), el('code', {}, name), el('span', { class: 'chatlive__where' }));
+          el('span', { class: 'chatlive__dot', 'aria-hidden': 'true' }), el('code', { title: name }, name), el('span', { class: 'chatlive__where' }));
         button.addEventListener('click', () => inspect(name));
         return el('li', {}, button);
       }, (node, name) => {
