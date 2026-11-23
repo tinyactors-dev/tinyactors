@@ -1,0 +1,478 @@
+<?xml version='1.0' encoding='UTF-8'?>
+<io-contracts xmlns="urn:tinyactors:visual-review:io-contracts:1" xmlns:m="urn:tinyactors:visual-review:io:1" version="1.5.0" messageNamespace="urn:tinyactors:visual-review:io:1" messageSchema="io-messages.xsd">
+  <processor id="IOP-AUTH" type="review.auth" host="optional-server">
+    <purpose>Optional V3 shared/team authentication only; never required to start V1 review.</purpose>
+    <operation id="IO-AUTH" action="authorize" requestElement="AuthorizeRequest" resultElement="AuthorizeResult" errorElement="Fault" actorRef="ACT-SESSION" mode="external-write" retry="never" maxAttempts="1" timeoutMs="10000">
+      <precondition>Verify exact allowlisted origin, one-use OIDC return code, project membership and CSRF binding</precondition>
+      <sideEffect>Exchange code; issue 10-minute origin/project scoped access token in response only; do not persist bearer token</sideEffect>
+      <failureHandling>Reject; UI remains unauthenticated; no actor state transition</failureHandling>
+      <resultEvent>EV-AUTH</resultEvent>
+      <faultCode>INVALID_INPUT</faultCode>
+      <faultCode>UNAUTHORIZED</faultCode>
+      <faultCode>ORIGIN_DENIED</faultCode>
+      <faultCode>CODE_REPLAYED</faultCode>
+      <faultCode>UNAVAILABLE</faultCode><flowRef>FL-001</flowRef>
+      <flowRef>FL-002</flowRef>
+      <requirementRef>REQ-001</requirementRef>
+      <requirementRef>REQ-003</requirementRef>
+      <requirementRef>REQ-059</requirementRef>
+      <apiRef>API-001</apiRef>
+      <notes>No model-provided script or markup is ever executed. Correlate requestId and actorId; validate XML before processor effects.</notes>
+    </operation>
+  </processor>
+  <processor id="IOP-DOM" type="review.dom" host="browser">
+    <purpose>Observe target nodes and apply only reversible deterministic DOM modifications</purpose>
+    <operation id="IO-DOM-HOVER" action="hover" requestElement="HoverRequest" resultElement="HoverResult" errorElement="Fault" actorRef="ACT-SELECTION" mode="read" retry="never" maxAttempts="1" timeoutMs="10000">
+      <precondition>Selection mode active; reject private or [data-review-ignore] nodes</precondition>
+      <sideEffect>Return sanitized tag, visible text and rectangle; do not persist hover data</sideEffect>
+      <failureHandling>Ignore ineligible targets; keep current hover unchanged</failureHandling>
+      <resultEvent>EV-DOM-HOVERED</resultEvent>
+      <faultCode>INVALID_INPUT</faultCode>
+      <faultCode>PRIVATE_TARGET</faultCode>
+      <faultCode>TARGET_MISSING</faultCode>
+      <flowRef>FL-004</flowRef>
+      <flowRef>FL-028</flowRef>
+      <requirementRef>REQ-013</requirementRef>
+      <requirementRef>REQ-025</requirementRef>
+      <notes>No model-provided script or markup is ever executed. Correlate requestId and actorId; validate XML before processor effects.</notes>
+    </operation>
+    <operation id="IO-DOM-ANCHOR" action="anchor" requestElement="AnchorRequest" resultElement="AnchorResult" errorElement="Fault" actorRef="ACT-SELECTION" mode="read" retry="never" maxAttempts="1" timeoutMs="10000">
+      <precondition>Unique eligible DOM target; verified origin and page fingerprint</precondition>
+      <sideEffect>Build stable target locator, text digest and geometry; emit anchor ID; never expose protected fields</sideEffect>
+      <failureHandling>Reject ambiguous/missing or protected target; prompt retargeting</failureHandling>
+      <resultEvent>EV-DOM-ANCHORED</resultEvent>
+      <faultCode>INVALID_INPUT</faultCode>
+      <faultCode>PRIVATE_TARGET</faultCode>
+      <faultCode>TARGET_MISSING</faultCode>
+      <faultCode>AMBIGUOUS_TARGET</faultCode>
+      <flowRef>FL-004</flowRef>
+      <flowRef>FL-005</flowRef>
+      <flowRef>FL-013</flowRef>
+      <requirementRef>REQ-013</requirementRef>
+      <requirementRef>REQ-014</requirementRef>
+      <requirementRef>REQ-016</requirementRef>
+      <notes>No model-provided script or markup is ever executed. Correlate requestId and actorId; validate XML before processor effects.</notes>
+    </operation>
+    <operation id="IO-DOM-REGION" action="region" requestElement="RegionRequest" resultElement="RegionResult" errorElement="Fault" actorRef="ACT-SELECTION" mode="read" retry="never" maxAttempts="1" timeoutMs="10000">
+      <precondition>Rectangle intersects eligible rendered text targets within current document</precondition>
+      <sideEffect>Return ordered anchor references and region geometry; avoid private child nodes</sideEffect>
+      <failureHandling>Region stays unselected; preserve prior selection</failureHandling>
+      <resultEvent>EV-DOM-REGION-SELECTED</resultEvent>
+      <faultCode>INVALID_INPUT</faultCode>
+      <faultCode>PRIVATE_TARGET</faultCode>
+      <faultCode>TARGET_MISSING</faultCode>
+      <flowRef>FL-009</flowRef>
+      <requirementRef>REQ-015</requirementRef>
+      <requirementRef>REQ-023</requirementRef>
+      <notes>No model-provided script or markup is ever executed. Correlate requestId and actorId; validate XML before processor effects.</notes>
+    </operation>
+    <operation id="IO-DOM-PREVIEW" action="preview" requestElement="PatchApplyRequest" resultElement="PatchApplyResult" errorElement="Fault" actorRef="ACT-PATCH" mode="local-write" retry="never" maxAttempts="1" timeoutMs="10000">
+      <precondition>Validate only replace_text; match page fingerprint, unique locator, text SHA-256 and expected revision</precondition>
+      <sideEffect>Save original text; set only text node content; record preview ID and applied hash; never set innerHTML</sideEffect>
+      <failureHandling>Leave DOM unchanged; if target changed emit patch.invalidated; never guess alternative target</failureHandling>
+      <resultEvent>EV-APPLIED</resultEvent>
+      <faultEvent>EV-INVALID</faultEvent>
+      <faultCode>INVALID_INPUT</faultCode>
+      <faultCode>PRECONDITION_FAILED</faultCode>
+      <faultCode>TARGET_MISSING</faultCode>
+      <faultCode>AMBIGUOUS_TARGET</faultCode>
+      <faultCode>PRIVATE_TARGET</faultCode>
+      <flowRef>FL-012</flowRef>
+      <flowRef>FL-013</flowRef>
+      <flowRef>FL-032</flowRef>
+      <requirementRef>REQ-037</requirementRef>
+      <requirementRef>REQ-038</requirementRef>
+      <requirementRef>REQ-039</requirementRef>
+      <requirementRef>REQ-042</requirementRef>
+      <notes>No model-provided script or markup is ever executed. Correlate requestId and actorId; validate XML before processor effects.</notes>
+    </operation>
+    <operation id="IO-DOM-REVERT" action="revert" requestElement="PatchRevertRequest" resultElement="PatchRevertResult" errorElement="Fault" actorRef="ACT-PATCH" mode="local-write" retry="never" maxAttempts="1" timeoutMs="10000">
+      <precondition>Preview was created in this page instance and still owns the target; reject overwriting a user edit</precondition>
+      <sideEffect>Restore captured original text, remove preview registry entry; emit patch.revert only after verified restoration</sideEffect>
+      <failureHandling>Keep preview marked unresolved and surface manual restore; do not overwrite divergent current text</failureHandling>
+      <resultEvent>EV-PATCH-REVERTED</resultEvent>
+      <faultCode>INVALID_INPUT</faultCode>
+      <faultCode>PRECONDITION_FAILED</faultCode>
+      <faultCode>TARGET_MISSING</faultCode>
+      <flowRef>FL-014</flowRef>
+      <requirementRef>REQ-038</requirementRef>
+      <requirementRef>REQ-040</requirementRef>
+      <notes>No model-provided script or markup is ever executed. Correlate requestId and actorId; validate XML before processor effects.</notes>
+    </operation>
+    <operation id="IO-DOM-INSPECT" action="inspect" requestElement="PageInspectRequest" resultElement="PageInspectResult" errorElement="Fault" actorRef="ACT-SELECTION" mode="read" retry="never" maxAttempts="1" timeoutMs="10000">
+      <precondition>Only approved, sanitized DOM descendants on current allowed publication origin; enforce maxNodes and deny private elements</precondition>
+      <sideEffect>Collect visible text, hashes and anchors; return immutable bounded snippets; never expose document secrets</sideEffect>
+      <failureHandling>Return typed fault for missing/ambiguous target; no page mutation</failureHandling>
+      <faultCode>INVALID_INPUT</faultCode>
+      <faultCode>PRIVATE_TARGET</faultCode>
+      <faultCode>TARGET_MISSING</faultCode>
+      <faultCode>AMBIGUOUS_TARGET</faultCode>
+      <flowRef>FL-004</flowRef>
+      <flowRef>FL-008</flowRef>
+      <flowRef>FL-035</flowRef>
+      <requirementRef>REQ-013</requirementRef>
+      <requirementRef>REQ-021</requirementRef>
+      <requirementRef>REQ-071</requirementRef>
+      <notes>No model-provided script or markup is ever executed. Correlate requestId and actorId; validate XML before processor effects.</notes>
+    </operation>
+  </processor>
+  <processor id="IOP-VOICE" type="review.voice" host="browser">
+    <purpose>Operate Gemini Live and microphone within active voice state lifetime</purpose>
+    <operation id="IO-VOICE-CONNECT" action="connect" requestElement="VoiceConnectRequest" resultElement="VoiceConnectResult" errorElement="Fault" actorRef="ACT-VOICE" mode="external-write" retry="never" maxAttempts="1" timeoutMs="10000">
+      <precondition>Explicit voice gesture, microphone grant, trusted extension key handle; optional ephemeral token only when a broker is configured</precondition>
+      <sideEffect>Establish Live session using extension-owned user key, stream in-memory microphone frames directly to Google; model wire types stay native</sideEffect>
+      <failureHandling>Close failed socket, drop token; preserve finalized transcripts and microphone selection; provide typed fallback</failureHandling>
+      <resultEvent>EV-LIVE-READY</resultEvent>
+      <faultEvent>EV-VOICE-FAIL</faultEvent>
+      <faultCode>PERMISSION_DENIED</faultCode>
+      <faultCode>EXPIRED_TOKEN</faultCode>
+      <faultCode>UNAVAILABLE</faultCode>
+      <faultCode>DEVICE_FAILURE</faultCode>
+      <flowRef>FL-006</flowRef>
+      <flowRef>FL-026</flowRef>
+      <requirementRef>REQ-019</requirementRef>
+      <requirementRef>REQ-020</requirementRef>
+      <requirementRef>REQ-026</requirementRef>
+      <requirementRef>REQ-030</requirementRef>
+      <notes>No model-provided script or markup is ever executed. Correlate requestId and actorId; validate XML before processor effects.</notes>
+    </operation>
+    <operation id="IO-VOICE-STOP" action="stop" requestElement="VoiceStopRequest" resultElement="VoiceStopResult" errorElement="Fault" actorRef="ACT-VOICE" mode="local-write" retry="safe-idempotent" maxAttempts="2" timeoutMs="10000">
+      <precondition>Owned connection ID; allow repeat calls</precondition>
+      <sideEffect>Close Live socket and clear transport audio buffers; microphone actor independently releases any MediaStreamTrack</sideEffect>
+      <failureHandling>Close socket in finally; request mic release separately when stopping dictation</failureHandling>
+      <resultEvent>EV-STOPPED</resultEvent>
+      <faultCode>INVALID_INPUT</faultCode>
+      <faultCode>DEVICE_FAILURE</faultCode>
+      <flowRef>FL-006</flowRef>
+      <flowRef>FL-034</flowRef>
+      <requirementRef>REQ-019</requirementRef>
+      <requirementRef>REQ-063</requirementRef>
+      <notes>No model-provided script or markup is ever executed. Correlate requestId and actorId; validate XML before processor effects.</notes>
+    </operation>
+    <operation id="IO-VOICE-TRANSCRIPT" action="receiveTranscript" requestElement="TranscriptRequest" resultElement="TranscriptResult" errorElement="Fault" actorRef="ACT-COMMENT" mode="read" retry="never" maxAttempts="1" timeoutMs="10000">
+      <precondition>Frame originates from active, authenticated Live connection and has monotonically increasing sequence</precondition>
+      <sideEffect>Emit bounded transcript text with final/partial marker and anchor references; never persist raw audio</sideEffect>
+      <failureHandling>Drop malformed or duplicate frame and preserve accepted final transcript</failureHandling>
+      <resultEvent>EV-TRANSCRIPT-SAVED</resultEvent>
+      <faultCode>INVALID_INPUT</faultCode>
+      <faultCode>STALE_FRAME</faultCode>
+      <faultCode>UNAUTHORIZED</faultCode>
+      <flowRef>FL-006</flowRef>
+      <requirementRef>REQ-019</requirementRef>
+      <requirementRef>REQ-027</requirementRef>
+      <requirementRef>REQ-036</requirementRef>
+      <notes>No model-provided script or markup is ever executed. Correlate requestId and actorId; validate XML before processor effects.</notes>
+    </operation>
+  </processor>
+  <processor id="IOP-CAPTURE" type="review.capture" host="browser">
+    <purpose>Construct safe DOM and screenshot context for Gemini without privileged tab capture</purpose>
+    <operation id="IO-CAPTURE" action="capture" requestElement="CaptureRequest" resultElement="CaptureResult" errorElement="Fault" actorRef="ACT-COMMENT" mode="read" retry="never" maxAttempts="1" timeoutMs="10000">
+      <precondition>Explicit image consent, redact private nodes, respect media and cross-origin restrictions</precondition>
+      <sideEffect>Produce approximate DOM render or reference to manually uploaded capture; label provenance and redactions; never promise pixel-perfect screenshot</sideEffect>
+      <failureHandling>Record reason and offer manual image attachment; retain text-only critique</failureHandling>
+      <resultEvent>EV-IMAGE</resultEvent>
+      <faultCode>INVALID_INPUT</faultCode>
+      <faultCode>PERMISSION_DENIED</faultCode>
+      <faultCode>UNSUPPORTED_CAPTURE</faultCode>
+      <faultCode>PRIVATE_TARGET</faultCode>
+      <flowRef>FL-008</flowRef>
+      <flowRef>FL-033</flowRef>
+      <flowRef>FL-028</flowRef>
+      <requirementRef>REQ-021</requirementRef>
+      <requirementRef>REQ-022</requirementRef>
+      <requirementRef>REQ-025</requirementRef>
+      <requirementRef>REQ-026</requirementRef>
+      <notes>No model-provided script or markup is ever executed. Correlate requestId and actorId; validate XML before processor effects.</notes>
+    </operation>
+  </processor>
+  <processor id="IOP-GEMINI" type="review.gemini" host="browser">
+    <purpose>V1 local browser processor; server adapter optional in team mode. Issue short-lived Live tokens and validate structured Gemini copy suggestions</purpose>
+    <operation id="IO-LIVE-TOKEN" action="mintLiveToken" requestElement="LiveTokenRequest" resultElement="LiveTokenResult" errorElement="Fault" actorRef="ACT-VOICE" mode="external-write" retry="safe-idempotent" maxAttempts="2" timeoutMs="10000">
+      <precondition>Authenticated editor; workspace quotas, allowed project and active session; primary GEMINI_API_KEY server-only</precondition>
+      <sideEffect>Use Google API key to mint one-use model-restricted ephemeral token; return token only over authenticated TLS, cache-control no-store</sideEffect>
+      <failureHandling>Return safe error; no fallback that exposes primary API key</failureHandling>
+      <faultCode>UNAUTHORIZED</faultCode>
+      <faultCode>RATE_LIMITED</faultCode>
+      <faultCode>QUOTA_EXCEEDED</faultCode>
+      <faultCode>UNAVAILABLE</faultCode>
+      <flowRef>FL-006</flowRef>
+      <flowRef>FL-024</flowRef>
+      <flowRef>FL-027</flowRef>
+      <requirementRef>REQ-029</requirementRef>
+      <requirementRef>REQ-030</requirementRef>
+      <requirementRef>REQ-035</requirementRef>
+      <apiRef>API-008</apiRef>
+      <notes>No model-provided script or markup is ever executed. Correlate requestId and actorId; validate XML before processor effects.</notes>
+    </operation>
+    <operation id="IO-GENERATE" action="generate" requestElement="GenerateRequest" resultElement="GenerateResult" errorElement="Fault" actorRef="ACT-SUGGESTION" mode="external-write" retry="bounded-transient" maxAttempts="3" timeoutMs="10000">
+      <precondition>A trusted extension context holds a valid user-provided Gemini key handle; context is sanitized and budget permits request</precondition>
+      <sideEffect>Direct HTTPS request from extension to Gemini. No self-hosted application server or Gemini proxy; credentials remain outside content-script messages.</sideEffect>
+      <failureHandling>Retry bounded transient 429/5xx with jitter; never return invalid model text as executable patch</failureHandling>
+      <resultEvent>EV-SUGGEST-READY</resultEvent>
+      <faultEvent>EV-SUGGEST-ERROR</faultEvent>
+      <faultCode>INVALID_INPUT</faultCode>
+      <faultCode>SCHEMA_REJECTED</faultCode>
+      <faultCode>QUOTA_EXCEEDED</faultCode>
+      <faultCode>RATE_LIMITED</faultCode>
+      <faultCode>UNAVAILABLE</faultCode>
+      <flowRef>FL-010</flowRef>
+      <flowRef>FL-012</flowRef>
+      <flowRef>FL-027</flowRef>
+      <flowRef>FL-028</flowRef>
+      <requirementRef>REQ-031</requirementRef>
+      <requirementRef>REQ-032</requirementRef>
+      <requirementRef>REQ-034</requirementRef>
+      <requirementRef>REQ-035</requirementRef>
+      <requirementRef>REQ-036</requirementRef>
+      <requirementRef>REQ-037</requirementRef>
+      <notes>No model-provided script or markup is ever executed. Correlate requestId and actorId; validate XML before processor effects.</notes>
+    </operation>
+  </processor>
+  <processor id="IOP-SESSION" type="review.session" host="browser">
+    <purpose>V1 local browser processor; server adapter optional in team mode. Maintain authoritative sessions and observations with optimistic concurrency</purpose>
+    <operation id="IO-SESSION-RESUME" action="resume" requestElement="ResumeRequest" resultElement="ResumeResult" errorElement="Fault" actorRef="ACT-SESSION" mode="read" retry="never" maxAttempts="1" timeoutMs="10000">
+      <precondition>Local session exists in IndexedDB; versioned actor snapshot is compatible</precondition>
+      <sideEffect>Rehydrate local TinyActors state and annotation list; no server event cursor or authentication needed</sideEffect>
+      <failureHandling>Do not restore untrusted local snapshot without server reconciliation</failureHandling>
+      <resultEvent>EV-REVIEW-RESUMED</resultEvent>
+      <faultCode>UNAUTHORIZED</faultCode>
+      <faultCode>NOT_FOUND</faultCode>
+      <faultCode>VERSION_CONFLICT</faultCode>
+      <flowRef>FL-016</flowRef>
+      <flowRef>FL-017</flowRef>
+      <requirementRef>REQ-011</requirementRef>
+      <requirementRef>REQ-055</requirementRef>
+      <requirementRef>REQ-057</requirementRef>
+      <requirementRef>REQ-069</requirementRef>
+      <notes>No model-provided script or markup is ever executed. Correlate requestId and actorId; validate XML before processor effects.</notes>
+    </operation>
+    <operation id="IO-SAVE-OBS" action="saveObservation" requestElement="SaveObservationRequest" resultElement="SaveObservationResult" errorElement="Fault" actorRef="ACT-COMMENT" mode="external-write" retry="safe-idempotent" maxAttempts="3" timeoutMs="10000">
+      <precondition>Local observation identifier is unique; protected inputs have been filtered</precondition>
+      <sideEffect>Persist final text and target provenance to IndexedDB, never audio chunks</sideEffect>
+      <failureHandling>Return 409 conflict or typed fault, retain browser outbox; do not duplicate clientEventId</failureHandling>
+      <resultEvent>EV-OBSERVATION</resultEvent>
+      <faultCode>INVALID_INPUT</faultCode>
+      <faultCode>UNAUTHORIZED</faultCode>
+      <faultCode>VERSION_CONFLICT</faultCode>
+      <faultCode>QUOTA_EXCEEDED</faultCode>
+      <flowRef>FL-006</flowRef>
+      <flowRef>FL-007</flowRef>
+      <flowRef>FL-008</flowRef>
+      <flowRef>FL-016</flowRef>
+      <flowRef>FL-017</flowRef>
+      <requirementRef>REQ-018</requirementRef>
+      <requirementRef>REQ-021</requirementRef>
+      <requirementRef>REQ-053</requirementRef>
+      <requirementRef>REQ-057</requirementRef>
+      <notes>No model-provided script or markup is ever executed. Correlate requestId and actorId; validate XML before processor effects.</notes>
+    </operation>
+  </processor>
+  <processor id="IOP-PACKET" type="review.packet" host="browser">
+    <purpose>V1 local browser processor; server adapter optional in team mode. Compile immutable XML work packets and bind explicit review approval to a digest</purpose>
+    <operation id="IO-PACKET-COMPILE" action="compile" requestElement="CompileRequest" resultElement="CompileResult" errorElement="Fault" actorRef="ACT-PACKET" mode="local-write" retry="safe-idempotent" maxAttempts="2" timeoutMs="10000">
+      <precondition>At least one kept copy revision or open annotation exists; all used references resolve against the local review snapshot</precondition>
+      <sideEffect>Compile immutable canonical XML in browser; no packet approval. Accepted revisions carry per-item decision; include open design tasks.</sideEffect>
+      <failureHandling>Reject broken references without touching annotations; do not claim a packet is approved by a separate reviewer</failureHandling>
+      <resultEvent>EV-PACKET</resultEvent>
+      <faultCode>INVALID_INPUT</faultCode>
+      <faultCode>VERSION_CONFLICT</faultCode>
+      <faultCode>SCHEMA_REJECTED</faultCode>
+      <faultCode>NOT_FOUND</faultCode>
+      <flowRef>FL-018</flowRef>
+      <flowRef>FL-021</flowRef>
+      <requirementRef>REQ-043</requirementRef>
+      <requirementRef>REQ-044</requirementRef>
+      <requirementRef>REQ-045</requirementRef>
+      <requirementRef>REQ-047</requirementRef>
+      <requirementRef>REQ-068</requirementRef>
+      <notes>No model-provided script or markup is ever executed. Correlate requestId and actorId; validate XML before processor effects.</notes>
+    </operation>
+    <operation id="IO-PACKET-EXPORT" action="export" requestElement="PacketExportRequest" resultElement="PacketExportResult" errorElement="Fault" actorRef="ACT-PACKET" mode="local-write" retry="never" maxAttempts="1" timeoutMs="12000"><precondition>Canonical packet has at least one item, digest valid, optional attachments explicitly opted in</precondition><sideEffect>Produce ZIP locally using browser Blob and download bridge; include work-packet.xml, work-packet.xsd, instructions.md, pages.xml and selected assets; no server call</sideEffect><failureHandling>No partial downloaded archive claimed; preserve current annotations and let editor retry</failureHandling><resultEvent>EV-PACKET-EXPORTED</resultEvent><faultCode>INVALID_INPUT</faultCode><faultCode>SCHEMA_REJECTED</faultCode><faultCode>UNAVAILABLE</faultCode><flowRef>FL-021</flowRef><flowRef>FL-046</flowRef><requirementRef>REQ-048</requirementRef><requirementRef>REQ-096</requirementRef><notes>Typed XML request/result; never include provider key, raw microphone frames or unconsented captures.</notes></operation></processor>
+  <processor id="IOP-HANDOFF" type="review.handoff" host="browser">
+    <purpose>V1 local browser processor; server adapter optional in team mode. Submit approved work packets to authorized coding agents without merging or deploying</purpose>
+    <operation id="IO-HANDOFF" action="submit" requestElement="HandoffRequest" resultElement="HandoffResult" errorElement="Fault" actorRef="ACT-HANDOFF" mode="external-write" retry="provider-dedupe-required" maxAttempts="3" timeoutMs="10000">
+      <precondition>Optional coding-agent adapter configured and user explicitly requested Send; digest and destination valid</precondition>
+      <sideEffect>Call configured external agent adapter with idempotent packet digest; not required for download-only V1</sideEffect>
+      <failureHandling>Retain pending idempotency key; retry only if provider supports dedupe or lookup-by-key</failureHandling>
+      <resultEvent>EV-HANDOFF-OK</resultEvent>
+      <faultEvent>EV-HANDOFF-FAIL</faultEvent>
+      <faultCode>UNAUTHORIZED</faultCode>
+      <faultCode>PRECONDITION_FAILED</faultCode>
+      <faultCode>PROVIDER_FAILURE</faultCode>
+      <faultCode>UNAVAILABLE</faultCode>
+      <flowRef>FL-020</flowRef>
+      <flowRef>FL-022</flowRef>
+      <requirementRef>REQ-049</requirementRef>
+      <requirementRef>REQ-050</requirementRef>
+      <requirementRef>REQ-051</requirementRef>
+      <requirementRef>REQ-065</requirementRef>
+      <apiRef>API-013</apiRef>
+      <notes>No model-provided script or markup is ever executed. Correlate requestId and actorId; validate XML before processor effects.</notes>
+    </operation>
+  </processor>
+  <processor id="IOP-CACHE" type="review.cache" host="browser">
+    <purpose>Persist TinyActors snapshots and idempotent outbox in IndexedDB</purpose>
+    <operation id="IO-SNAPSHOT-SAVE" action="snapshot" requestElement="SnapshotSaveRequest" resultElement="SnapshotSaveResult" errorElement="Fault" actorRef="ACT-SESSION" mode="local-write" retry="never" maxAttempts="1" timeoutMs="10000">
+      <precondition>Snapshot belongs to authenticated active project; exclude credentials and raw audio</precondition>
+      <sideEffect>Write TinyActors snapshot bytes plus version and sha256 into IndexedDB; atomically replace cached pointer</sideEffect>
+      <failureHandling>Continue live session and show storage warning; never imply server persistence</failureHandling>
+      <faultCode>INVALID_INPUT</faultCode>
+      <faultCode>STORAGE_FULL</faultCode>
+      <faultCode>UNAVAILABLE</faultCode>
+      <flowRef>FL-016</flowRef>
+      <requirementRef>REQ-055</requirementRef>
+      <requirementRef>REQ-011</requirementRef>
+      <notes>No model-provided script or markup is ever executed. Correlate requestId and actorId; validate XML before processor effects.</notes>
+    </operation>
+    <operation id="IO-SNAPSHOT-LOAD" action="restore" requestElement="SnapshotLoadRequest" resultElement="SnapshotLoadResult" errorElement="Fault" actorRef="ACT-SESSION" mode="read" retry="never" maxAttempts="1" timeoutMs="10000">
+      <precondition>Cache namespace matches user/project; digest and actor-schema version valid</precondition>
+      <sideEffect>Read snapshot and unacknowledged outbox IDs; ALWAYS call server resume before promoting to authoritative UI state</sideEffect>
+      <failureHandling>Discard unsafe cache; start clean reconciliation from server</failureHandling>
+      <faultCode>NOT_FOUND</faultCode>
+      <faultCode>SCHEMA_REJECTED</faultCode>
+      <faultCode>UNAVAILABLE</faultCode>
+      <flowRef>FL-016</flowRef>
+      <requirementRef>REQ-055</requirementRef>
+      <requirementRef>REQ-011</requirementRef>
+      <notes>No model-provided script or markup is ever executed. Correlate requestId and actorId; validate XML before processor effects.</notes>
+    </operation>
+  </processor>
+  <processor id="IOP-CONTEXT" type="review.context" host="browser">
+    <purpose>V1 local browser processor; server adapter optional in team mode. Manage versioned audience/persona context and serve source-attributed safe excerpts</purpose>
+    <operation id="IO-CONTEXT-READ" action="read" requestElement="ContextGetRequest" resultElement="ContextGetResult" errorElement="Fault" actorRef="ACT-CONTEXT" mode="read" retry="never" maxAttempts="1" timeoutMs="10000">
+      <precondition>Authorize workspace/project; resolve pinned manifest; redact sensitive text and obey tool-scope limits</precondition>
+      <sideEffect>Return provenance-labeled excerpts, persona revision and digest without changing storage</sideEffect>
+      <failureHandling>Return unauthorized/not-found; never fall back to another tenant</failureHandling>
+      <resultEvent>EV-CONTEXT-READY</resultEvent>
+      <faultCode>UNAUTHORIZED</faultCode>
+      <faultCode>NOT_FOUND</faultCode>
+      <faultCode>INVALID_INPUT</faultCode>
+      <flowRef>FL-039</flowRef>
+      <flowRef>FL-040</flowRef>
+      <flowRef>FL-035</flowRef>
+      <requirementRef>REQ-077</requirementRef>
+      <requirementRef>REQ-080</requirementRef>
+      <requirementRef>REQ-088</requirementRef>
+      <notes>No model-provided script or markup is ever executed. Correlate requestId and actorId; validate XML before processor effects.</notes>
+    </operation>
+    <operation id="IO-CONTEXT-BIND" action="bind" requestElement="ContextBindRequest" resultElement="ContextBindResult" errorElement="Fault" actorRef="ACT-CONTEXT" mode="external-write" retry="never" maxAttempts="1" timeoutMs="10000">
+      <precondition>Editor authorization, existing persona revision and expectedVersion match</precondition>
+      <sideEffect>Persist new immutable context binding and deterministic digest for future model turns only</sideEffect>
+      <failureHandling>Keep old binding and return conflict; no retroactive change to approved patches</failureHandling>
+      <resultEvent>EV-CONTEXT-SAVED</resultEvent>
+      <faultCode>UNAUTHORIZED</faultCode>
+      <faultCode>VERSION_CONFLICT</faultCode>
+      <faultCode>INVALID_INPUT</faultCode>
+      <flowRef>FL-039</flowRef>
+      <requirementRef>REQ-077</requirementRef>
+      <requirementRef>REQ-078</requirementRef>
+      <notes>No model-provided script or markup is ever executed. Correlate requestId and actorId; validate XML before processor effects.</notes>
+    </operation>
+    <operation id="IO-PERSONA-SAVE" action="savePersona" requestElement="PersonaSaveRequest" resultElement="PersonaSaveResult" errorElement="Fault" actorRef="ACT-CONTEXT" mode="external-write" retry="never" maxAttempts="1" timeoutMs="10000">
+      <precondition>Owner authorization and valid persona attributes; apply optimistic version check</precondition>
+      <sideEffect>Append immutable persona revision; update active revision pointer transactionally</sideEffect>
+      <failureHandling>Return conflict or validation error; no partial revision</failureHandling>
+      <resultEvent>EV-CONTEXT-SAVED</resultEvent>
+      <faultCode>UNAUTHORIZED</faultCode>
+      <faultCode>VERSION_CONFLICT</faultCode>
+      <faultCode>INVALID_INPUT</faultCode>
+      <flowRef>FL-038</flowRef>
+      <requirementRef>REQ-076</requirementRef>
+      <requirementRef>REQ-088</requirementRef>
+      <notes>No model-provided script or markup is ever executed. Correlate requestId and actorId; validate XML before processor effects.</notes>
+    </operation>
+    <operation id="IO-CONTEXT-ADD" action="attachEvidence" requestElement="ContextSourceRequest" resultElement="ContextSourceResult" errorElement="Fault" actorRef="ACT-CONTEXT" mode="external-write" retry="never" maxAttempts="1" timeoutMs="10000">
+      <precondition>Authorized project; size/type/redaction checks; uploaded content treated as evidence, never instructions</precondition>
+      <sideEffect>Save sanitized source with kind, trust label, SHA-256 and immutable revision</sideEffect>
+      <failureHandling>Reject unsafe source without changing the active context</failureHandling>
+      <resultEvent>EV-CONTEXT-SAVED</resultEvent>
+      <faultCode>UNAUTHORIZED</faultCode>
+      <faultCode>INVALID_INPUT</faultCode>
+      <faultCode>QUOTA_EXCEEDED</faultCode>
+      <flowRef>FL-040</flowRef>
+      <requirementRef>REQ-079</requirementRef>
+      <requirementRef>REQ-088</requirementRef>
+      <notes>No model-provided script or markup is ever executed. Correlate requestId and actorId; validate XML before processor effects.</notes>
+    </operation>
+  </processor>
+  <processor id="IOP-DIALOG" type="review.dialog" host="browser">
+    <purpose>V1 local browser processor; server adapter optional in team mode. Persist provenance for native user/model turns and replies; do not invent Gemini response types</purpose>
+    <operation id="IO-DIALOG-TURN" action="recordTurn" requestElement="TurnRecordRequest" resultElement="TurnRecordResult" errorElement="Fault" actorRef="ACT-DIALOG" mode="external-write" retry="safe-idempotent" maxAttempts="2" timeoutMs="10000">
+      <precondition>Authenticated session, valid observation and manifest; transcript must be finalized or explicitly marked provisional</precondition>
+      <sideEffect>Journal original native Gemini turn IDs and role with source, context digest, and idempotency ID; no raw audio stored</sideEffect>
+      <failureHandling>Reject stale/duplicate turn and keep conversation open; never assert an unanswered question resolved</failureHandling>
+      <faultCode>UNAUTHORIZED</faultCode>
+      <faultCode>VERSION_CONFLICT</faultCode>
+      <faultCode>INVALID_INPUT</faultCode>
+      <flowRef>FL-035</flowRef>
+      <flowRef>FL-036</flowRef>
+      <flowRef>FL-037</flowRef>
+      <requirementRef>REQ-071</requirementRef>
+      <requirementRef>REQ-072</requirementRef>
+      <requirementRef>REQ-073</requirementRef>
+      <requirementRef>REQ-089</requirementRef>
+      <notes>No model-provided script or markup is ever executed. Correlate requestId and actorId; validate XML before processor effects.</notes>
+    </operation>
+  </processor>
+  <processor id="IOP-MIC" type="review.microphone" host="browser">
+    <purpose>Own and release browser MediaStream tracks; unsolicited track ended and devicechange become TinyActors events</purpose>
+    <operation id="IO-MIC-LIST" action="list" requestElement="MicrophoneListRequest" resultElement="MicrophoneListResult" errorElement="Fault" actorRef="ACT-MIC" mode="read" retry="never" maxAttempts="1" timeoutMs="10000">
+      <precondition>Secure context; enumerateDevices only within permission/browser constraints; do not assume labels or IDs are stable</precondition>
+      <sideEffect>Return scoped ephemeral device references, default selection and capability limitations</sideEffect>
+      <failureHandling>Offer browser default and typed input; no permission-reprompt loop</failureHandling>
+      <resultEvent>EV-MIC-LISTED</resultEvent>
+      <faultCode>PERMISSION_DENIED</faultCode>
+      <faultCode>UNAVAILABLE</faultCode>
+      <faultCode>DEVICE_FAILURE</faultCode>
+      <flowRef>FL-041</flowRef>
+      <requirementRef>REQ-081</requirementRef>
+      <requirementRef>REQ-090</requirementRef>
+      <notes>No model-provided script or markup is ever executed. Correlate requestId and actorId; validate XML before processor effects.</notes>
+    </operation>
+    <operation id="IO-MIC-ACQUIRE" action="acquire" requestElement="MicrophoneAcquireRequest" resultElement="MicrophoneAcquireResult" errorElement="Fault" actorRef="ACT-MIC" mode="local-write" retry="never" maxAttempts="1" timeoutMs="10000">
+      <precondition>Explicit user activation or previously authorized opt-in failover; requested device available; one active owned track</precondition>
+      <sideEffect>Call getUserMedia; return tab-local opaque track handle; monitor ended/devicechange; release previous track only after new track succeeds</sideEffect>
+      <failureHandling>Stop partial tracks; leave actor paused; show retry/select/typing actions</failureHandling>
+      <resultEvent>EV-MIC-ACQUIRED</resultEvent>
+      <faultCode>PERMISSION_DENIED</faultCode>
+      <faultCode>DEVICE_FAILURE</faultCode>
+      <faultCode>UNAVAILABLE</faultCode>
+      <flowRef>FL-041</flowRef>
+      <flowRef>FL-042</flowRef>
+      <requirementRef>REQ-081</requirementRef>
+      <requirementRef>REQ-082</requirementRef>
+      <requirementRef>REQ-085</requirementRef>
+      <notes>No model-provided script or markup is ever executed. Correlate requestId and actorId; validate XML before processor effects.</notes>
+    </operation>
+    <operation id="IO-MIC-RELEASE" action="release" requestElement="MicrophoneReleaseRequest" resultElement="MicrophoneReleaseResult" errorElement="Fault" actorRef="ACT-MIC" mode="local-write" retry="safe-idempotent" maxAttempts="2" timeoutMs="10000">
+      <precondition>Track handle owned by current actor; idempotent release</precondition>
+      <sideEffect>Stop track, detach listeners and clear audio buffers; do not close Gemini Live unless requested separately</sideEffect>
+      <failureHandling>Force cleanup in finally and emit safe failure detail</failureHandling>
+      <resultEvent>EV-MIC-RELEASED</resultEvent>
+      <faultCode>INVALID_INPUT</faultCode>
+      <faultCode>DEVICE_FAILURE</faultCode>
+      <flowRef>FL-043</flowRef>
+      <requirementRef>REQ-083</requirementRef>
+      <requirementRef>REQ-084</requirementRef>
+      <notes>No model-provided script or markup is ever executed. Correlate requestId and actorId; validate XML before processor effects.</notes>
+    </operation>
+  </processor>
+  <processor id="IOP-PROPOSAL" type="review.proposal" host="browser">
+    <purpose>V1 local browser processor; server adapter optional in team mode. Validate and persist Gemini propose_copy_patch tool calls WITHOUT applying DOM changes</purpose>
+    <operation id="IO-PROPOSAL-SAVE" action="save" requestElement="ProposalSaveRequest" resultElement="ProposalSaveResult" errorElement="Fault" actorRef="ACT-SUGGESTION" mode="external-write" retry="safe-idempotent" maxAttempts="2" timeoutMs="10000">
+      <precondition>Validated Gemini function call ID; authorized target+context; expected hash and replacement text shape; operation is replace_text</precondition>
+      <sideEffect>Persist validated proposed text and source function call in local IndexedDB; do not apply it until Keep/Preview action</sideEffect>
+      <failureHandling>Reject invalid call; return tool response with safe failure; no preview implicitly applied</failureHandling>
+      <resultEvent>EV-SUGGEST-READY</resultEvent>
+      <faultCode>UNAUTHORIZED</faultCode>
+      <faultCode>INVALID_INPUT</faultCode>
+      <faultCode>PRECONDITION_FAILED</faultCode>
+      <faultCode>VERSION_CONFLICT</faultCode>
+      <flowRef>FL-012</flowRef>
+      <flowRef>FL-013</flowRef>
+      <requirementRef>REQ-037</requirementRef>
+      <requirementRef>REQ-038</requirementRef>
+      <notes>No model-provided script or markup is ever executed. Correlate requestId and actorId; validate XML before processor effects.</notes>
+    </operation>
+  <operation id="IO-REVISION-SAVE" action="recordDecision" requestElement="RevisionDecisionRequest" resultElement="RevisionDecisionResult" errorElement="Fault" actorRef="ACT-PATCH" mode="local-write" retry="never" maxAttempts="1" timeoutMs="10000"><precondition>Proposal and anchor exist; expected revision and SHA-256 match current persisted state; actor owns session; decision is keep, undo or dismiss</precondition><sideEffect>Append immutable per-item decision event and atomically update materialized revision in IndexedDB; only report success after transaction completes; no packet-level approval</sideEffect><failureHandling>On quota or version conflict leave prior decision unchanged, display error and allow retry; never show Keep success before persistence</failureHandling><resultEvent>EV-REVISION-SAVED</resultEvent><faultCode>INVALID_INPUT</faultCode><faultCode>NOT_FOUND</faultCode><faultCode>VERSION_CONFLICT</faultCode><faultCode>STORAGE_FULL</faultCode><flowRef>FL-014</flowRef><flowRef>FL-045</flowRef><requirementRef>REQ-040</requirementRef><requirementRef>REQ-094</requirementRef><requirementRef>REQ-095</requirementRef><notes>Critical v1.5 persistence boundary for Keep/Undo/Dismiss; patch preview remains a separate reversible local DOM effect.</notes></operation></processor>
+<processor id="IOP-CREDENTIAL" type="review.credentials" host="browser"><purpose>Extension-owned secret vault. UI hands raw key directly to a private memory vault; TinyActors sees opaque handle only. No key in XML, IDB, content scripts or exports.</purpose><operation id="IO-CRED-TEST" action="test" requestElement="CredentialTestRequest" resultElement="CredentialTestResult" errorElement="Fault" actorRef="ACT-SESSION" mode="external-write" retry="never" maxAttempts="1" timeoutMs="12000"><precondition>Opaque handle maps to session-only Gemini key in trusted extension context</precondition><sideEffect>Send smallest appropriate provider test request via extension; return model availability; do not return or persist key</sideEffect><failureHandling>On permission, quota or provider failures keep annotations working offline; erase invalid temporary handle if requested</failureHandling><resultEvent>EV-KEY-READY</resultEvent><faultCode>INVALID_INPUT</faultCode><faultCode>UNAVAILABLE</faultCode><faultCode>UNAUTHORIZED</faultCode><flowRef>FL-024</flowRef><flowRef>FL-048</flowRef><requirementRef>REQ-092</requirementRef><requirementRef>REQ-093</requirementRef><notes>Typed XML request/result; never include provider key, raw microphone frames or unconsented captures.</notes></operation><operation id="IO-CRED-FORGET" action="forget" requestElement="CredentialForgetRequest" resultElement="CredentialForgetResult" errorElement="Fault" actorRef="ACT-SESSION" mode="local-write" retry="never" maxAttempts="1" timeoutMs="12000"><precondition>Handle belongs to current trusted extension vault</precondition><sideEffect>Drop in-memory / session key and optional encrypted blob, invalidate credential handle</sideEffect><failureHandling>No remote provider revocation implied; guide user to delete compromised key in AI Studio</failureHandling><faultCode>INVALID_INPUT</faultCode><faultCode>NOT_FOUND</faultCode><flowRef>FL-048</flowRef><requirementRef>REQ-093</requirementRef><requirementRef>REQ-101</requirementRef><notes>Typed XML request/result; never include provider key, raw microphone frames or unconsented captures.</notes></operation></processor></io-contracts>

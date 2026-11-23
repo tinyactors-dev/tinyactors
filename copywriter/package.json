@@ -1,0 +1,14 @@
+{
+  "name": "tinyactors-copywriter",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Improve a website's copy in place: select text, ask Gemini, preview, keep, export a work packet. A Chrome extension and an embedded widget on @tinyactors/wasm.",
+  "dependencies": {
+    "@tinyactors/wasm": "0.4.0",
+    "lucide": "1.78.0"
+  },
+  "devDependencies": {
+    "esbuild": "0.28.2"
+  }
+}

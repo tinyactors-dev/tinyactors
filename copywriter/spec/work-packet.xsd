@@ -1,0 +1,42 @@
+<?xml version='1.0' encoding='UTF-8'?>
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+  <xs:simpleType name="sha"><xs:restriction base="xs:string"><xs:pattern value="[0-9a-f]{64}"/></xs:restriction></xs:simpleType>
+  <xs:complexType name="page"><xs:attribute name="id" type="xs:ID" use="required"/><xs:attribute name="url" type="xs:anyURI" use="required"/><xs:attribute name="fingerprint" type="sha" use="required"/><xs:attribute name="locale" type="xs:language" use="required"/></xs:complexType>
+  <xs:complexType name="anchor"><xs:attribute name="id" type="xs:ID" use="required"/><xs:attribute name="pageRef" type="xs:IDREF" use="required"/><xs:attribute name="selector" type="xs:string" use="required"/><xs:attribute name="domPath" type="xs:string" use="required"/><xs:attribute name="textSha256" type="sha" use="required"/><xs:attribute name="textQuote" type="xs:string" use="required"/></xs:complexType>
+  <xs:complexType name="observation"><xs:sequence><xs:element name="text" type="xs:string"/></xs:sequence><xs:attribute name="id" type="xs:ID" use="required"/><xs:attribute name="authorRef" type="xs:string" use="required"/><xs:attribute name="anchorRef" type="xs:IDREF" use="required"/><xs:attribute name="source" type="xs:string" use="required"/><xs:attribute name="recordedAt" type="xs:dateTime" use="required"/></xs:complexType>
+  <xs:complexType name="revision"><xs:attribute name="id" type="xs:ID" use="required"/><xs:attribute name="patchId" type="xs:string" use="required"/><xs:attribute name="anchorRef" type="xs:IDREF" use="required"/><xs:attribute name="observationRef" type="xs:IDREF" use="required"/><xs:attribute name="accepted" type="xs:string" use="required" fixed="true"/><xs:attribute name="expectedSha256" type="sha" use="required"/><xs:attribute name="replacementSha256" type="sha" use="required"/></xs:complexType>
+  <xs:complexType name="asset"><xs:attribute name="id" type="xs:ID" use="required"/><xs:attribute name="mediaType" type="xs:string" use="required"/><xs:attribute name="sha256" type="sha" use="required"/><xs:attribute name="uri" type="xs:anyURI" use="required"/><xs:attribute name="captureMethod" type="xs:string" use="required"/><xs:attribute name="consent" type="xs:string" use="required"/></xs:complexType>
+  <xs:complexType name="copyChange"><xs:sequence><xs:element name="expected" type="xs:string"/><xs:element name="replacement" type="xs:string"/><xs:element name="rationale" type="xs:string"/><xs:element name="acceptance" type="xs:string"/></xs:sequence><xs:attribute name="id" type="xs:ID" use="required"/><xs:attribute name="observationRef" type="xs:IDREF" use="required"/><xs:attribute name="anchorRef" type="xs:IDREF" use="required"/><xs:attribute name="revisionRef" type="xs:IDREF" use="required"/><xs:attribute name="operation" use="required" fixed="replace_text" type="xs:string"/><xs:attribute name="accepted" use="required" fixed="true" type="xs:string"/></xs:complexType>
+  <xs:complexType name="designTask"><xs:sequence><xs:element name="summary" type="xs:string"/><xs:element name="instructions" type="xs:string"/><xs:element name="acceptance" type="xs:string"/></xs:sequence><xs:attribute name="id" type="xs:ID" use="required"/><xs:attribute name="observationRef" type="xs:IDREF" use="required"/><xs:attribute name="assetRef" type="xs:IDREF" use="optional"/><xs:attribute name="status" type="xs:string" use="required" fixed="open"/></xs:complexType>
+  <xs:element name="work-packet">
+    <xs:complexType><xs:sequence><xs:element name="title" type="xs:string"/>
+      <xs:element name="payload"><xs:complexType><xs:sequence>
+        <xs:element name="sources"><xs:complexType><xs:sequence>
+          <xs:element name="page" type="page" minOccurs="1" maxOccurs="unbounded"/>
+          <xs:element name="anchor" type="anchor" minOccurs="1" maxOccurs="unbounded"/>
+          <xs:element name="observation" type="observation" minOccurs="1" maxOccurs="unbounded"/>
+          <xs:element name="revision" type="revision" minOccurs="0" maxOccurs="unbounded"/>
+          <xs:element name="asset" type="asset" minOccurs="0" maxOccurs="unbounded"/>
+        </xs:sequence></xs:complexType></xs:element>
+        <xs:element name="items"><xs:complexType><xs:choice minOccurs="1" maxOccurs="unbounded"><xs:element name="copy-change" type="copyChange"/><xs:element name="design-task" type="designTask"/></xs:choice></xs:complexType></xs:element>
+      </xs:sequence></xs:complexType></xs:element>
+      <xs:element name="handoff" minOccurs="0"><xs:complexType><xs:attribute name="status" type="xs:string" use="required"/><xs:attribute name="integration" type="xs:string" use="required"/></xs:complexType></xs:element>
+    </xs:sequence>
+    <xs:attribute name="id" type="xs:ID" use="required"/><xs:attribute name="version" type="xs:positiveInteger" use="required"/><xs:attribute name="projectId" type="xs:string" use="required"/><xs:attribute name="sessionId" type="xs:string" use="required"/><xs:attribute name="status" type="xs:string" use="required"/><xs:attribute name="payloadDigest" type="sha" use="required"/>
+    </xs:complexType>
+    <xs:key name="pageKey"><xs:selector xpath="payload/sources/page"/><xs:field xpath="@id"/></xs:key>
+    <xs:key name="anchorKey"><xs:selector xpath="payload/sources/anchor"/><xs:field xpath="@id"/></xs:key>
+    <xs:key name="observationKey"><xs:selector xpath="payload/sources/observation"/><xs:field xpath="@id"/></xs:key>
+    <xs:key name="revisionKey"><xs:selector xpath="payload/sources/revision"/><xs:field xpath="@id"/></xs:key>
+    <xs:key name="assetKey"><xs:selector xpath="payload/sources/asset"/><xs:field xpath="@id"/></xs:key>
+    <xs:keyref name="anchorPageRef" refer="pageKey"><xs:selector xpath="payload/sources/anchor"/><xs:field xpath="@pageRef"/></xs:keyref>
+    <xs:keyref name="observationAnchorRef" refer="anchorKey"><xs:selector xpath="payload/sources/observation"/><xs:field xpath="@anchorRef"/></xs:keyref>
+    <xs:keyref name="revisionAnchorRef" refer="anchorKey"><xs:selector xpath="payload/sources/revision"/><xs:field xpath="@anchorRef"/></xs:keyref>
+    <xs:keyref name="revisionObservationRef" refer="observationKey"><xs:selector xpath="payload/sources/revision"/><xs:field xpath="@observationRef"/></xs:keyref>
+    <xs:keyref name="copyRevisionRef" refer="revisionKey"><xs:selector xpath="payload/items/copy-change"/><xs:field xpath="@revisionRef"/></xs:keyref>
+    <xs:keyref name="copyAnchorRef" refer="anchorKey"><xs:selector xpath="payload/items/copy-change"/><xs:field xpath="@anchorRef"/></xs:keyref>
+    <xs:keyref name="copyObservationRef" refer="observationKey"><xs:selector xpath="payload/items/copy-change"/><xs:field xpath="@observationRef"/></xs:keyref>
+    <xs:keyref name="designObservationRef" refer="observationKey"><xs:selector xpath="payload/items/design-task"/><xs:field xpath="@observationRef"/></xs:keyref>
+    <xs:keyref name="designAssetRef" refer="assetKey"><xs:selector xpath="payload/items/design-task"/><xs:field xpath="@assetRef"/></xs:keyref>
+  </xs:element>
+</xs:schema>

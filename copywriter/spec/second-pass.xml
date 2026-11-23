@@ -1,0 +1,179 @@
+<?xml version='1.0' encoding='UTF-8'?>
+<audit xmlns="urn:tinyactors:visual-review:audit:1" version="1.6.0" status="normative" scope="chrome-extension-v1">
+  <purpose>Second-pass implementation ambiguity closure; each item binds a product flow and typed operation to a definite policy, negative behavior, and executable acceptance criterion. Later deployment modes remain explicitly non-V1.</purpose>
+  <decision id="A01" severity="blocker" category="lifecycle" title="Actor host location" flowRef="FL-044" operationRef="IO-SNAPSHOT-LOAD" status="resolved">
+    <rule>Exactly one TinyActors WASM host runs in a dedicated Worker owned by the side panel. The content script and MV3 service worker contain no actor interpreter. Host receives only versioned, validated messages.</rule>
+    <failure>When the side panel closes, tear down the host and all live resources; persist domain events first and reconstruct on reopen.</failure>
+    <test>Close the side panel mid-review and reopen: one host starts, no duplicate events or dangling media tracks.</test>
+  </decision>
+  <decision id="A02" severity="blocker" category="chrome" title="Activation and temporary permission" flowRef="FL-044" operationRef="IO-DOM-ANCHOR" status="resolved">
+    <rule>A toolbar action click activates the top-frame script using activeTab and scripting; only http(s) top-level pages are eligible in V1. Grant is per tab, not per origin. Restricted chrome://, file://, Chrome Web Store and PDF pages are unsupported.</rule>
+    <failure>If injection fails or authority is lost, show Reactivate and disable DOM actions; never silently request all_urls.</failure>
+    <test>Open two tabs, activate one, navigate it, and confirm mutation in the other or without renewed permission fails.</test>
+  </decision>
+  <decision id="A03" severity="blocker" category="transport" title="Cross-context envelopes" flowRef="FL-003" operationRef="IO-DOM-PREVIEW" status="resolved">
+    <rule>Every inter-context request carries hostKind (extension|embedded), schemaVersion, messageId, correlationId, sessionId, actorId, operationId, kind and typed payload. Page-scoped DOM and capture requests require documentNonce for both hosts; Chrome extension also requires tabId, whereas embedded must not send tabId. Global settings requests need neither. Replies match host and document identities.</rule>
+    <failure>Timeout and worker restart yield a typed transport fault; late results must reconcile DOM effects before final decision, never silently imply success.</failure>
+    <test>Inject duplicate, stale, wrong-tab and wrong-document messages: no second mutation or cross-tab leakage.</test>
+  </decision>
+  <decision id="A04" severity="blocker" category="transport" title="Idempotent durable decisions" flowRef="FL-045" operationRef="IO-REVISION-SAVE" status="resolved">
+    <rule>Keep, Undo and Dismiss are immutable decision events. A single IndexedDB transaction checks expectedRevision, writes event and materialized current decision, then returns revision.saved. messageId is the transaction idempotency key.</rule>
+    <failure>On storage full, transaction abort or VERSION_CONFLICT keep previous decision and show retry/fix. Never display Kept on click before acknowledged commit.</failure>
+    <test>Replay the same decision request twice and force transaction abort: exactly one event, correct visible status.</test>
+  </decision>
+  <decision id="A05" severity="major" category="storage" title="Authoritative persistence" flowRef="FL-016" operationRef="IO-SNAPSHOT-LOAD" status="resolved">
+    <rule>IndexedDB domain records and event log are authoritative; TinyActors snapshots are reconstructible acceleration only. Events have monotonically increasing per-session sequence and schemaVersion; migrations preserve old data until atomic success.</rule>
+    <failure>If snapshot corrupt, restore from events. If events corrupt, disable mutation, offer raw local backup and readable recovery error; never discard annotations silently.</failure>
+    <test>Corrupt snapshot only, then corrupt one event: first case reconstructs; second refuses mutation and preserves bytes.</test>
+  </decision>
+  <decision id="A06" severity="blocker" category="security" title="Gemini key storage" flowRef="FL-048" operationRef="IO-CRED-TEST" status="resolved">
+    <rule>BYOK key is entered in extension settings, resolved only by trusted extension page adapters and held in chrome.storage.session (memory-backed, trusted contexts) while browser session exists. V1 has no durable Remember key. Do not put the key in the actor datamodel, IndexedDB, content script or ZIP.</rule>
+    <failure>Forget removes chrome.storage.session entry, closes Live connection and invalidates opaque handles. Browser restart requires re-entry. Key use is a trusted-client security tradeoff; no claim of server-grade protection.</failure>
+    <test>Close/reopen panel retains key within one browser session; restart Chrome loses it; grep packets and IDB for key bytes.</test>
+  </decision>
+  <decision id="A07" severity="blocker" category="provider" title="Provider transport and fallback" flowRef="FL-024" operationRef="IO-GENERATE" status="resolved">
+    <rule>Text and structured generation use HTTPS from trusted extension context. Voice uses Gemini Live from that context only when provider supports configured model and credentials; native Gemini responses/tool calls remain native on the wire. The provider host is allowlisted, no proxy service.</rule>
+    <failure>On unsupported Live model, WebSocket failure, quota or invalid key, typed annotation and export remain available. Do not repeatedly reconnect without user action.</failure>
+    <test>With disabled network, typed critique and ZIP export work; provider call shows actionable error.</test>
+  </decision>
+  <decision id="A08" severity="major" category="provider" title="Model selection and capability probe" flowRef="FL-012" operationRef="IO-GENERATE" status="resolved">
+    <rule>Default selected model is a configurable provider identifier, not hardcoded into SCXML. On key test, verify text-generation capability separately from Live voice capability; show provider-returned model errors without silently replacing the configured model.</rule>
+    <failure>Unavailable model blocks only the affected AI feature; preserve original critique and let user change model in Settings.</failure>
+    <test>Use key with no Live capability: text proposal remains available and voice UI states unsupported.</test>
+  </decision>
+  <decision id="A09" severity="blocker" category="privacy" title="Audio retention and disclosure" flowRef="FL-006" operationRef="IO-VOICE-CONNECT" status="resolved">
+    <rule>Audio frames/PCM are kept only in transient memory while recording and sent to Google for processing; never persist or export raw audio, streams, partial transcripts, or browser device IDs. Persist only finalized user-approved speech text.</rule>
+    <failure>On stop, user interrupt, device ended, permission revoked, socket close or panel unload, close streams/sockets and discard pending audio; warn that Google independently processes transmitted data.</failure>
+    <test>Inspect IDB/export/network instrumentation after disconnect: no audio bytes persisted; tracks stop.</test>
+  </decision>
+  <decision id="A10" severity="major" category="audio" title="Multiple input devices" flowRef="FL-041" operationRef="IO-MIC-LIST" status="resolved">
+    <rule>List labels only after browser grants microphone permission. Default uses deviceId default; explicit user choice is an ephemeral preference in trusted UI. Devicechange reenumerates, but does not auto-select a different physical microphone.</rule>
+    <failure>If selected device disappears, enter lost state; stop sending audio; show Change microphone and Type instead. Do not automatically restart capture with unknown input.</failure>
+    <test>Unplug a selected USB mic while another exists: clear lost state only after explicit new selection.</test>
+  </decision>
+  <decision id="A11" severity="major" category="audio" title="Revocation, focus and interruption" flowRef="FL-043" operationRef="IO-MIC-RELEASE" status="resolved">
+    <rule>The microphone actor owns MediaStream track listeners, permissions change polling on resume, explicit Stop, and Live interruption. Blur, panel shutdown and tab switch end recording in V1; committed observations remain available.</rule>
+    <failure>Missing permission or ended track cannot produce silent recording UI; mark stopped and offer typed input, without loops of getUserMedia prompts.</failure>
+    <test>Revoke browser microphone permission during dictation; UI switches to stopped within the next event tick.</test>
+  </decision>
+  <decision id="A12" severity="blocker" category="dom" title="DOM target eligibility" flowRef="FL-004" operationRef="IO-DOM-ANCHOR" status="resolved">
+    <rule>V1 selectable mutations are limited to visible text nodes in the accessible top-frame DOM, excluding password/sensitive inputs, contenteditable regions, cross-origin frames, canvas, SVG text, script/style and extension UI.</rule>
+    <failure>Ineligible target can still produce a region-level design observation if safe, but never a text replacement. No model-generated HTML, CSS or JavaScript may execute.</failure>
+    <test>Try selecting password, contenteditable, canvas, hidden node and ordinary H1: only H1 receives patch controls.</test>
+  </decision>
+  <decision id="A13" severity="blocker" category="dom" title="DOM anchor identity" flowRef="FL-013" operationRef="IO-DOM-PREVIEW" status="resolved">
+    <rule>Anchors include page URL without fragment or token-bearing query, text SHA-256, CSS selector, structural path, nearby text digest, viewport and CSS-pixel rect with scroll and DPR. Preview requires a unique node matching the stored original hash in the same document nonce.</rule>
+    <failure>A selector that matches zero/multiple nodes or the wrong hash produces STALE_TARGET with no mutation. Never guess a new selector or silently replace text after navigation.</failure>
+    <test>Duplicate selectors and changed text both leave DOM byte-for-byte unchanged.</test>
+  </decision>
+  <decision id="A14" severity="blocker" category="dom" title="Patch and rollback atomicity" flowRef="FL-014" operationRef="IO-DOM-REVERT" status="resolved">
+    <rule>DOM preview changes only a specific text node using textContent semantics, preserves its original value and reads back the applied hash. Revert checks the applied hash before restoring; Keep persists a decision, not a source-code edit.</rule>
+    <failure>React rerender, target removal or hash mismatch invalidates the preview; keep stored revision/observation but do not force reapply or clobber page-author changes.</failure>
+    <test>Preview/undo an H1, then rerender it externally: no duplicate patch and no destructive rollback.</test>
+  </decision>
+  <decision id="A15" severity="major" category="dom" title="Multi-tab and navigation boundaries" flowRef="FL-015" operationRef="IO-SESSION-RESUME" status="resolved">
+    <rule>A review session is keyed by stable sessionId and source page identity; each active document gets a fresh documentNonce. Switching tabs suspends DOM operations for old tab and changes focused list context; saved annotations are retained per page.</rule>
+    <failure>Do not apply or revert a DOM patch to a different document after reload, even if URL and selector match. Require an explicit new preview on resumed page.</failure>
+    <test>Open same URL in two tabs; switch/reload; stale preview does not mutate the new document.</test>
+  </decision>
+  <decision id="A16" severity="blocker" category="privacy" title="Context minimization" flowRef="FL-028" operationRef="IO-DOM-INSPECT" status="resolved">
+    <rule>Send only selected target, nearby relevant text, user-supplied context and explicitly requested evidence. Strip URL tokens, hidden/private field values, forms, script/style, cookies, auth headers and arbitrary full outerHTML. Page content is untrusted task data, not a system instruction.</rule>
+    <failure>If sanitization cannot classify a region, omit it rather than sending raw DOM. No site content crosses into model tool policy or grants new capabilities.</failure>
+    <test>Fixture page with malicious prompt, hidden password and tokenized URL: provider payload omits secrets and does not execute instructions.</test>
+  </decision>
+  <decision id="A17" severity="blocker" category="privacy" title="Screenshot privacy gate" flowRef="FL-049" operationRef="IO-CAPTURE" status="resolved">
+    <rule>Capture is user initiated and visible-tab only. Before sending/attaching, display an explicit preview and confirmation; redact reliably identifiable sensitive fields. If cross-origin frames or sensitive pixels cannot be verified, disable automatic provider upload and offer manual attachment with warning.</rule>
+    <failure>Failure to mask reliably is fail-closed: do not transmit image. Do not assume Chrome captureVisibleTab omits third-party/private content.</failure>
+    <test>Capture page containing password and third-party iframe: no unsanitized image reaches provider or exported packet.</test>
+  </decision>
+  <decision id="A18" severity="major" category="privacy" title="Evidence and context attachment" flowRef="FL-040" operationRef="IO-CONTEXT-ADD" status="resolved">
+    <rule>Only user-confirmed images and uploaded context documents may persist locally or enter the work packet. Record MIME, byte length, SHA-256, source and consent timestamp; enforce 10 MiB per image and 50 MiB per session evidence budget.</rule>
+    <failure>On quota or invalid format, reject attachment without deleting prior observations. Revocation removes bytes from IndexedDB and excludes from subsequent packets.</failure>
+    <test>Attach 11 MiB image, then normal image, then remove: reject first and export omits removed image.</test>
+  </decision>
+  <decision id="A19" severity="major" category="context" title="Persona and brief provenance" flowRef="FL-038" operationRef="IO-CONTEXT-BIND" status="resolved">
+    <rule>Personas, product briefs and brand constraints are versioned local entities. Each suggestion records exact context revision IDs and digest used; switching persona affects only subsequent suggestions.</rule>
+    <failure>A deleted or revised persona does not rewrite existing accepted copy. Reopening old suggestion shows historical context reference or a missing-context warning.</failure>
+    <test>Generate with persona A, switch to B and reopen A suggestion: unchanged text and original context digest.</test>
+  </decision>
+  <decision id="A20" severity="blocker" category="models" title="Model calls and native tools" flowRef="FL-011" operationRef="IO-PROPOSAL-SAVE" status="resolved">
+    <rule>Only declared Gemini function calls (generated from model-tools.xml) are dispatched; schemas are validated before host-only args are injected. Native function call IDs correlate to native function responses, separately from TinyActors operation request IDs.</rule>
+    <failure>Unknown tool, malformed schema, excess parallel calls or arbitrary code instruction receives structured tool failure; no DOM effect. Limit concurrent generation to 2 per review session.</failure>
+    <test>Send undeclared tool and wrong-typed patch args: no effect, returned tool fault.</test>
+  </decision>
+  <decision id="A21" severity="major" category="models" title="Clarification is dialogue" flowRef="FL-011" operationRef="IO-DIALOG-TURN" status="resolved">
+    <rule>Gemini may ask an ordinary audio/text question without creating special Clarification DTO. User may answer, skip, push back, type or select another element. Only finalized dialogue turns persist; unanswered questions do not lock the review.</rule>
+    <failure>If Live drops mid-question, restore text composer with last finalized utterance and allow user to continue or discard.</failure>
+    <test>During clarification switch to another annotation and later resume; no lost earlier observation.</test>
+  </decision>
+  <decision id="A22" severity="blocker" category="export" title="Export semantics" flowRef="FL-021" operationRef="IO-PACKET-COMPILE" status="resolved">
+    <rule>The downloaded packet freezes a consistent local session revision and contains kept copy edits, unresolved design notes, DOM locators/coordinates, original and replacement text, context digests, accepted evidence and actionable acceptance criteria. Never require packet-wide approval.</rule>
+    <failure>If a revision changes during compile, retry snapshot once or display conflict. Never export half the old and half the new state.</failure>
+    <test>Make edit while export begins: packet validates to one coherent revision, with no double inclusion.</test>
+  </decision>
+  <decision id="A23" severity="blocker" category="export" title="Framework-neutral packet" flowRef="FL-046" operationRef="IO-PACKET-EXPORT" status="resolved">
+    <rule>Only implementation-spec ZIP includes TinyActors/SCXML/I/O contracts. Reviewer-generated packet has no actor state, runtime reference, framework instructions, credentials, raw audio or hidden page content. ZIP includes work-packet.xml, its XSD, safe README and opt-in evidence files.</rule>
+    <failure>Export with no kept changes and one unresolved note is valid. Unsafe filenames/path traversals are rejected; packet must validate against work-packet.xsd and integrity hashes.</failure>
+    <test>Scan ZIP recursively for TinyActors, API key and PCM; verify all listed evidence digests and XSD references.</test>
+  </decision>
+  <decision id="A24" severity="major" category="export" title="Local-only delivery" flowRef="FL-046" operationRef="IO-PACKET-EXPORT" status="resolved">
+    <rule>V1 saves archive to user-selected download location through extension-owned Blob/download bridge; no server and no remote coding agent API. Re-export is idempotent from immutable snapshot but creates a new local file name when conflict.</rule>
+    <failure>PacketExportResult.deliveryInitiatedAt confirms only that Chrome accepted a downloads.download request or the embedded widget invoked the browser download link; it never claims disk completion. Chrome may track downloads.onChanged and surface a later completion notification. Embedded browsers cannot reliably observe download completion; cancellation preserves the review and retry remains available.</failure>
+    <test>Deny Downloads permission or cancel save: annotations survive, next attempt succeeds.</test>
+  </decision>
+  <decision id="A25" severity="major" category="ui" title="Interaction hierarchy" flowRef="FL-045" operationRef="IO-SAVE-OBS" status="resolved">
+    <rule>One column side panel: compact header and page identity; small scrollable annotation list; one selected detail with before/after, Preview and Keep; fixed composer at bottom; single prominent Download packet. Persona, key Settings and technical Explorer are secondary.</rule>
+    <failure>With no selected annotation, show useful empty instruction, not a blank diff. Error states offer one actionable remediation rather than several equal CTA buttons.</failure>
+    <test>At 360x600 and 420x900 no horizontal scroll; selected proposal and controls reachable by keyboard.</test>
+  </decision>
+  <decision id="A26" severity="major" category="ui" title="Accessibility and focus" flowRef="FL-031" operationRef="IO-DOM-HOVER" status="resolved">
+    <rule>Visible focus, semantic buttons, roving focus for annotation list, announcement of preview/keep status, Escape cancels selection, no color-only statuses. Minimum pointer target 36x36 CSS px desktop; prefer 44x44 on touch; honor reduced motion.</rule>
+    <failure>Screen reader must distinguish source text and replacement text; Escape closes sheets and restores focus to opener.</failure>
+    <test>Run keyboard-only and axe checks; all reviewer actions are reachable without a mouse.</test>
+  </decision>
+  <decision id="A27" severity="major" category="types" title="Schema authority and generation" flowRef="FL-012" operationRef="IO-GENERATE" status="resolved">
+    <rule>io-messages.xsd, io-processors.xml and model-tools.xml are the canonical contracts. Generated TS/JSON Schema DTOs use decoded XML with @-prefixed attributes; runtime validation MUST additionally check semantic rules (hash matches, allowed DOM operations, actor permission, correct page). Provider audio/tool messages stay native.</rule>
+    <failure>If XSD expressivity exceeds derived JSON Schema or generator lacks support for a construct, fail the build rather than silently widen the runtime schema. Never use TypeScript types as runtime validation.</failure>
+    <test>Mutate required field, enum, SHA-256 length and unexpected property: all rejected by gateway or semantic validators.</test>
+  </decision>
+  <decision id="A28" severity="blocker" category="privacy" title="No untrusted executable content" flowRef="FL-012" operationRef="IO-DOM-PREVIEW" status="resolved">
+    <rule>Extension bundles all JS, SCXML charts and WASM locally; MV3 CSP disallows remote scripts and arbitrary eval. I/O processor adapters are the only effect capabilities. Text patches are never interpreted as HTML, CSS or JS.</rule>
+    <failure>If Gemini returns &lt;script&gt;, onerror attributes or event-handler markup, treat content as literal text or reject under content policy; never parse it as DOM markup.</failure>
+    <test>A malicious model response cannot execute script or access extension secrets.</test>
+  </decision>
+  <decision id="A29" severity="major" category="availability" title="Provider outage and offline mode" flowRef="FL-050" operationRef="IO-SAVE-OBS" status="resolved">
+    <rule>The extension starts without Gemini key or network. Local selection, typing, review list, Keep of existing proposals, context, and ZIP export work offline; generation/voice show disabled reason.</rule>
+    <failure>Do not queue raw speech for later upload or auto-submit stale critiques after connectivity returns.</failure>
+    <test>Disable network, restart browser, export: data intact and no network retry storm.</test>
+  </decision>
+  <decision id="A30" severity="major" category="portability" title="Future embedded adapter" flowRef="FL-047" operationRef="IO-DOM-INSPECT" status="resolved">
+    <rule>V2 uses the same actor charts, generated contracts and component hierarchy. Platform-specific adapters implement DOM, permissions, screenshot, credential transport and download; browser code MUST NOT call chrome.* from domain/statechart modules.</rule>
+    <failure>An embedded widget has no privileged arbitrary screenshot API or safely hidden BYOK secret. Mark unsupported ops explicitly and offer manual image upload or optional credential broker, rather than fake parity.</failure>
+    <test>Run adapter contract suite with fake Chrome and embedded host; unsupported features return typed UNAVAILABLE.</test>
+  </decision>
+  <decision id="A31" severity="major" category="build" title="Reference code versus normative sources" flowRef="FL-044" operationRef="IO-SNAPSHOT-LOAD" status="resolved">
+    <rule>Normative sources are system.xml, deployment.xml, implementation.xml, second-pass.xml, io-processors.xml, io-messages.xsd, model-tools.xml and statecharts. widget-mock.html and explorer.html are demonstrations, not executable extension source.</rule>
+    <failure>Any conflict is a build failure until resolved. Do not treat an HTML simulation or the example work packet as a working runtime.</failure>
+    <test>Clean checkout runs make all; generated files compare cleanly and all XML/XSD/reference links validate.</test>
+  </decision>
+  <decision id="A32" severity="major" category="testing" title="Deterministic acceptance harness" flowRef="FL-027" operationRef="IO-GENERATE" status="resolved">
+    <rule>Use a fake provider and fake Chrome adapters for reproducible tests; a real Chromium MV3 integration smoke test is a separate release gate. Test at least one positive and one failure case for every supported I/O operation, plus actor snapshots and duplicate delivery.</rule>
+    <failure>API key for live integration smoke tests is supplied at runtime and never part of repository or CI logs. Without it, provider smoke is SKIPPED, not PASS.</failure>
+    <test>Run fake provider/DOM fixtures with no network, then gated real-browser smoke. Report each test as pass/fail/skip.</test>
+  </decision>
+  <decision id="A33" severity="major" category="performance" title="Bounded resources" flowRef="FL-008" operationRef="IO-CAPTURE" status="resolved">
+    <rule>At most one microphone stream, one Live socket, two generation calls and three outstanding DOM operations per review session. Screenshot temporary buffers capped at 10 MiB each; pending requests have 15 s default timeout, model generation 60 s, export 30 s.</rule>
+    <failure>If limits reached, return BUSY/UNAVAILABLE without losing user text. Cancel obsolete generation on review change; discard late results whose session revision has advanced.</failure>
+    <test>Flood 100 calls and trigger provider timeout: bounded heap and no duplicate DOM mutation.</test>
+  </decision>
+  <decision id="A34" severity="major" category="integrity" title="Retention and deletion" flowRef="FL-025" operationRef="IO-CRED-FORGET" status="resolved">
+    <rule>Clear review deletes all per-session IDB records, snapshots and image blobs; Forget key separately removes session credential and closes provider sessions; downloaded ZIPs remain user-owned files.</rule>
+    <failure>If deletion transaction aborts, retain records and show error; do not claim deletion. No telemetry or crash reporting of page text, screenshots, token or audio.</failure>
+    <test>Delete review then inspect IDB, restart and export: no resurrected session and no retained opt-in blobs.</test>
+  </decision>
+  <decision id="A35" severity="major" category="internationalization" title="Text encoding and content language" flowRef="FL-013" operationRef="IO-DOM-PREVIEW" status="resolved">
+    <rule>All XML and archives are UTF-8; protect Unicode normalization and line endings in text hashes. V1 UI English; editing preserves author content language unless instructed. Geometry captures document direction/language for RTL content.</rule>
+    <failure>If exact original Unicode code points differ (NFC vs NFD), hash mismatch blocks patch rather than silently normalizing page text.</failure>
+    <test>Test Estonian, Hungarian, Japanese and RTL strings; ZIP round-trips and hash verification succeed.</test>
+  </decision>
+</audit>

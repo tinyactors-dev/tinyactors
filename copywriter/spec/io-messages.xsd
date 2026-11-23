@@ -1,0 +1,766 @@
+<?xml version='1.0' encoding='UTF-8'?>
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:m="urn:tinyactors:visual-review:io:1" targetNamespace="urn:tinyactors:visual-review:io:1" elementFormDefault="qualified" attributeFormDefault="unqualified" version="1.0">
+  <xs:annotation>
+    <xs:documentation>Typed TinyActors I/O payloads. Request/result root elements carry a meta child; secrets are runtime-only and never logged. XSD validates shape, while io-processors.xml specifies authorization, side effects, idempotency and failures.</xs:documentation>
+  </xs:annotation>
+  <xs:simpleType name="RevisionDecisionType"><xs:restriction base="xs:token"><xs:enumeration value="keep"/><xs:enumeration value="undo"/><xs:enumeration value="dismiss"/></xs:restriction></xs:simpleType><xs:simpleType name="TokenType">
+    <xs:restriction base="xs:token">
+      <xs:pattern value="[a-zA-Z0-9][a-zA-Z0-9._:/-]{0,127}"/>
+    </xs:restriction>
+  </xs:simpleType>
+  <xs:simpleType name="NonEmptyString">
+    <xs:restriction base="xs:string">
+      <xs:minLength value="1"/>
+    </xs:restriction>
+  </xs:simpleType>
+  <xs:simpleType name="Sha256Type">
+    <xs:restriction base="xs:string">
+      <xs:pattern value="[0-9a-f]{64}"/>
+    </xs:restriction>
+  </xs:simpleType>
+  <xs:simpleType name="PatchOperationType">
+    <xs:restriction base="xs:token">
+      <xs:enumeration value="replace_text"/>
+    </xs:restriction>
+  </xs:simpleType>
+  <xs:simpleType name="CaptureMethodType">
+    <xs:restriction base="xs:token">
+      <xs:enumeration value="dom-render-approximate"/>
+      <xs:enumeration value="user-upload"/>
+    <xs:enumeration value="chrome-visible-tab"/></xs:restriction>
+  </xs:simpleType>
+  <xs:simpleType name="ModelAliasType">
+    <xs:restriction base="xs:token">
+      <xs:enumeration value="voice-live"/>
+      <xs:enumeration value="draft-fast"/>
+      <xs:enumeration value="review-deep"/>
+    </xs:restriction>
+  </xs:simpleType>
+  <xs:simpleType name="ObservationSourceType">
+    <xs:restriction base="xs:token">
+      <xs:enumeration value="voice"/>
+      <xs:enumeration value="typed"/>
+      <xs:enumeration value="imported"/>
+    </xs:restriction>
+  </xs:simpleType>
+  <xs:simpleType name="HandoffStatusType">
+    <xs:restriction base="xs:token">
+      <xs:enumeration value="queued"/>
+      <xs:enumeration value="delivered"/>
+    </xs:restriction>
+  </xs:simpleType>
+  <xs:simpleType name="RoleType">
+    <xs:restriction base="xs:token">
+      <xs:enumeration value="owner"/>
+      <xs:enumeration value="editor"/>
+      <xs:enumeration value="reviewer"/>
+      <xs:enumeration value="viewer"/>
+    </xs:restriction>
+  </xs:simpleType>
+  <xs:simpleType name="TurnRoleType">
+    <xs:restriction base="xs:token">
+      <xs:enumeration value="user"/>
+      <xs:enumeration value="model"/>
+      <xs:enumeration value="tool"/>
+    </xs:restriction>
+  </xs:simpleType>
+  <xs:simpleType name="FaultCodeType">
+    <xs:restriction base="xs:token">
+      <xs:enumeration value="AMBIGUOUS_TARGET"/>
+      <xs:enumeration value="CODE_REPLAYED"/>
+      <xs:enumeration value="DEVICE_FAILURE"/>
+      <xs:enumeration value="EXPIRED_TOKEN"/>
+      <xs:enumeration value="INVALID_INPUT"/>
+      <xs:enumeration value="NOT_FOUND"/>
+      <xs:enumeration value="ORIGIN_DENIED"/>
+      <xs:enumeration value="PERMISSION_DENIED"/>
+      <xs:enumeration value="PRECONDITION_FAILED"/>
+      <xs:enumeration value="PRIVATE_TARGET"/>
+      <xs:enumeration value="PROVIDER_FAILURE"/>
+      <xs:enumeration value="QUOTA_EXCEEDED"/>
+      <xs:enumeration value="RATE_LIMITED"/>
+      <xs:enumeration value="SCHEMA_REJECTED"/>
+      <xs:enumeration value="STALE_FRAME"/>
+      <xs:enumeration value="STORAGE_FULL"/>
+      <xs:enumeration value="TARGET_MISSING"/>
+      <xs:enumeration value="UNAUTHORIZED"/>
+      <xs:enumeration value="UNAVAILABLE"/>
+      <xs:enumeration value="UNSUPPORTED_CAPTURE"/>
+      <xs:enumeration value="VERSION_CONFLICT"/>
+    </xs:restriction>
+  </xs:simpleType>
+  <xs:complexType name="RectangleType">
+    <xs:sequence>
+      <xs:element name="x" type="xs:decimal"/>
+      <xs:element name="y" type="xs:decimal"/>
+      <xs:element name="width" type="xs:decimal"/>
+      <xs:element name="height" type="xs:decimal"/>
+    </xs:sequence>
+  </xs:complexType>
+  <xs:complexType name="AnchorType">
+    <xs:sequence>
+      <xs:element name="anchorId" type="m:TokenType"/>
+      <xs:element name="pageUrl" type="xs:anyURI"/>
+      <xs:element name="pageFingerprint" type="m:Sha256Type"/>
+      <xs:element name="selector" type="m:NonEmptyString"/>
+      <xs:element name="domPath" type="m:NonEmptyString"/>
+      <xs:element name="tagName" type="m:TokenType"/>
+      <xs:element name="textQuote" type="xs:string"/>
+      <xs:element name="textSha256" type="m:Sha256Type"/>
+      <xs:element name="rect" type="m:RectangleType"/>
+    </xs:sequence>
+  </xs:complexType>
+  <xs:complexType name="AnchorListType">
+    <xs:sequence>
+      <xs:element name="anchor" type="m:AnchorType" maxOccurs="unbounded"/>
+    </xs:sequence>
+  </xs:complexType>
+  <xs:complexType name="RefListType">
+    <xs:sequence>
+      <xs:element name="ref" type="m:TokenType" maxOccurs="unbounded"/>
+    </xs:sequence>
+  </xs:complexType>
+  <xs:complexType name="OptionalRefListType">
+    <xs:sequence>
+      <xs:element name="ref" type="m:TokenType" minOccurs="0" maxOccurs="unbounded"/>
+    </xs:sequence>
+  </xs:complexType>
+  <xs:complexType name="CandidateType">
+    <xs:sequence>
+      <xs:element name="patchId" type="m:TokenType"/>
+      <xs:element name="anchorId" type="m:TokenType"/>
+      <xs:element name="operation" type="m:PatchOperationType"/>
+      <xs:element name="expectedTextSha256" type="m:Sha256Type"/>
+      <xs:element name="expectedText" type="xs:string"/>
+      <xs:element name="replacementText" type="xs:string"/>
+      <xs:element name="rationale" type="m:NonEmptyString"/>
+    </xs:sequence>
+  </xs:complexType>
+  <xs:complexType name="CandidateListType">
+    <xs:sequence>
+      <xs:element name="candidate" type="m:CandidateType" maxOccurs="unbounded"/>
+    </xs:sequence>
+  </xs:complexType>
+  <xs:complexType name="RequestMetaType">
+    <xs:attribute name="requestId" type="m:TokenType" use="required"/>
+    <xs:attribute name="actorId" type="m:TokenType" use="required"/>
+    <xs:attribute name="issuedAt" type="xs:dateTime" use="required"/>
+    <xs:attribute name="projectId" type="m:TokenType" use="optional"/>
+    <xs:attribute name="workspaceId" type="m:TokenType" use="optional"/>
+    <xs:attribute name="sessionId" type="m:TokenType" use="optional"/>
+    <xs:attribute name="correlationId" type="m:TokenType" use="optional"/>
+    <xs:attribute name="idempotencyKey" type="m:TokenType" use="optional"/>
+    <xs:attribute name="expectedVersion" type="xs:nonNegativeInteger" use="optional"/>
+  </xs:complexType>
+  <xs:complexType name="ResultMetaType">
+    <xs:attribute name="requestId" type="m:TokenType" use="required"/>
+    <xs:attribute name="actorId" type="m:TokenType" use="required"/>
+    <xs:attribute name="completedAt" type="xs:dateTime" use="required"/>
+    <xs:attribute name="serverVersion" type="xs:nonNegativeInteger" use="optional"/>
+  </xs:complexType>
+  <xs:complexType name="FaultMetaType">
+    <xs:attribute name="requestId" type="m:TokenType" use="required"/>
+    <xs:attribute name="actorId" type="m:TokenType" use="required"/>
+    <xs:attribute name="operationId" type="m:TokenType" use="required"/>
+    <xs:attribute name="occurredAt" type="xs:dateTime" use="required"/>
+  </xs:complexType>
+  <xs:complexType name="DeviceType">
+    <xs:sequence>
+      <xs:element name="ref" type="m:TokenType"/>
+      <xs:element name="label" type="xs:string"/>
+      <xs:element name="isDefault" type="xs:boolean"/>
+    </xs:sequence>
+  </xs:complexType>
+  <xs:complexType name="DeviceListType">
+    <xs:sequence>
+      <xs:element name="device" type="m:DeviceType" minOccurs="0" maxOccurs="unbounded"/>
+    </xs:sequence>
+  </xs:complexType>
+  <xs:complexType name="ContextExcerptType">
+    <xs:sequence>
+      <xs:element name="sourceRef" type="m:TokenType"/>
+      <xs:element name="revision" type="xs:positiveInteger"/>
+      <xs:element name="kind" type="m:NonEmptyString"/>
+      <xs:element name="digest" type="m:Sha256Type"/>
+      <xs:element name="excerpt" type="xs:string"/>
+    </xs:sequence>
+  </xs:complexType>
+  <xs:complexType name="ContextExcerptListType">
+    <xs:sequence>
+      <xs:element name="context" type="m:ContextExcerptType" minOccurs="0" maxOccurs="unbounded"/>
+    </xs:sequence>
+  </xs:complexType>
+  <xs:complexType name="PageNodeType">
+    <xs:sequence>
+      <xs:element name="anchorId" type="m:TokenType"/>
+      <xs:element name="tagName" type="m:TokenType"/>
+      <xs:element name="text" type="xs:string"/>
+      <xs:element name="textSha256" type="m:Sha256Type"/>
+    </xs:sequence>
+  </xs:complexType>
+  <xs:complexType name="PageNodeListType">
+    <xs:sequence>
+      <xs:element name="node" type="m:PageNodeType" minOccurs="0" maxOccurs="unbounded"/>
+    </xs:sequence>
+  </xs:complexType>
+  <xs:complexType name="AuthorizeRequestType">
+    <xs:sequence>
+      <xs:element name="meta" type="m:RequestMetaType"/>
+      <xs:element name="origin" type="xs:anyURI"/>
+      <xs:element name="projectId" type="m:TokenType"/>
+      <xs:element name="oneTimeCode" type="m:NonEmptyString"/>
+    </xs:sequence>
+  </xs:complexType>
+  <xs:element name="AuthorizeRequest" type="m:AuthorizeRequestType"/>
+  <xs:complexType name="AuthorizeResultType">
+    <xs:sequence>
+      <xs:element name="meta" type="m:ResultMetaType"/>
+      <xs:element name="userId" type="m:TokenType"/>
+      <xs:element name="workspaceId" type="m:TokenType"/>
+      <xs:element name="projectId" type="m:TokenType"/>
+      <xs:element name="role" type="m:RoleType"/>
+      <xs:element name="accessToken" type="m:NonEmptyString"/>
+      <xs:element name="expiresAt" type="xs:dateTime"/>
+    </xs:sequence>
+  </xs:complexType>
+  <xs:element name="AuthorizeResult" type="m:AuthorizeResultType"/>
+  <xs:complexType name="HoverRequestType">
+    <xs:sequence>
+      <xs:element name="meta" type="m:RequestMetaType"/>
+      <xs:element name="pageUrl" type="xs:anyURI"/>
+      <xs:element name="selectorHint" type="m:NonEmptyString"/>
+    </xs:sequence>
+  </xs:complexType>
+  <xs:element name="HoverRequest" type="m:HoverRequestType"/>
+  <xs:complexType name="HoverResultType">
+    <xs:sequence>
+      <xs:element name="meta" type="m:ResultMetaType"/>
+      <xs:element name="tagName" type="m:TokenType"/>
+      <xs:element name="textSummary" type="xs:string"/>
+      <xs:element name="rect" type="m:RectangleType"/>
+    </xs:sequence>
+  </xs:complexType>
+  <xs:element name="HoverResult" type="m:HoverResultType"/>
+  <xs:complexType name="AnchorRequestType">
+    <xs:sequence>
+      <xs:element name="meta" type="m:RequestMetaType"/>
+      <xs:element name="pageUrl" type="xs:anyURI"/>
+      <xs:element name="selectorHint" type="m:NonEmptyString"/>
+      <xs:element name="pageFingerprint" type="m:Sha256Type"/>
+    </xs:sequence>
+  </xs:complexType>
+  <xs:element name="AnchorRequest" type="m:AnchorRequestType"/>
+  <xs:complexType name="AnchorResultType">
+    <xs:sequence>
+      <xs:element name="meta" type="m:ResultMetaType"/>
+      <xs:element name="anchor" type="m:AnchorType"/>
+    </xs:sequence>
+  </xs:complexType>
+  <xs:element name="AnchorResult" type="m:AnchorResultType"/>
+  <xs:complexType name="RegionRequestType">
+    <xs:sequence>
+      <xs:element name="meta" type="m:RequestMetaType"/>
+      <xs:element name="pageUrl" type="xs:anyURI"/>
+      <xs:element name="rect" type="m:RectangleType"/>
+      <xs:element name="pageFingerprint" type="m:Sha256Type"/>
+    </xs:sequence>
+  </xs:complexType>
+  <xs:element name="RegionRequest" type="m:RegionRequestType"/>
+  <xs:complexType name="RegionResultType">
+    <xs:sequence>
+      <xs:element name="meta" type="m:ResultMetaType"/>
+      <xs:element name="anchors" type="m:AnchorListType"/>
+    </xs:sequence>
+  </xs:complexType>
+  <xs:element name="RegionResult" type="m:RegionResultType"/>
+  <xs:complexType name="PatchApplyRequestType">
+    <xs:sequence>
+      <xs:element name="meta" type="m:RequestMetaType"/>
+      <xs:element name="patch" type="m:CandidateType"/>
+      <xs:element name="pageFingerprint" type="m:Sha256Type"/>
+      <xs:element name="clientRevision" type="xs:nonNegativeInteger"/>
+    </xs:sequence>
+  </xs:complexType>
+  <xs:element name="PatchApplyRequest" type="m:PatchApplyRequestType"/>
+  <xs:complexType name="PatchApplyResultType">
+    <xs:sequence>
+      <xs:element name="meta" type="m:ResultMetaType"/>
+      <xs:element name="previewId" type="m:TokenType"/>
+      <xs:element name="patchId" type="m:TokenType"/>
+      <xs:element name="originalTextSha256" type="m:Sha256Type"/>
+      <xs:element name="appliedTextSha256" type="m:Sha256Type"/>
+      <xs:element name="appliedAt" type="xs:dateTime"/>
+    </xs:sequence>
+  </xs:complexType>
+  <xs:element name="PatchApplyResult" type="m:PatchApplyResultType"/>
+  <xs:complexType name="PatchRevertRequestType">
+    <xs:sequence>
+      <xs:element name="meta" type="m:RequestMetaType"/>
+      <xs:element name="previewId" type="m:TokenType"/>
+      <xs:element name="patchId" type="m:TokenType"/>
+      <xs:element name="expectedPreviewSha256" type="m:Sha256Type"/>
+    </xs:sequence>
+  </xs:complexType>
+  <xs:element name="PatchRevertRequest" type="m:PatchRevertRequestType"/>
+  <xs:complexType name="PatchRevertResultType">
+    <xs:sequence>
+      <xs:element name="meta" type="m:ResultMetaType"/>
+      <xs:element name="patchId" type="m:TokenType"/>
+      <xs:element name="restoredSha256" type="m:Sha256Type"/>
+      <xs:element name="restored" type="xs:boolean"/>
+    </xs:sequence>
+  </xs:complexType>
+  <xs:element name="PatchRevertResult" type="m:PatchRevertResultType"/>
+  <xs:complexType name="VoiceConnectRequestType">
+    <xs:sequence>
+      <xs:element name="meta" type="m:RequestMetaType"/>
+      <xs:element name="credentialHandle" type="m:NonEmptyString"/>
+      <xs:element name="gestureConfirmed" type="xs:boolean"/>
+      <xs:element name="consentGranted" type="xs:boolean"/>
+      <xs:element name="locale" type="xs:language"/>
+    </xs:sequence>
+  </xs:complexType>
+  <xs:element name="VoiceConnectRequest" type="m:VoiceConnectRequestType"/>
+  <xs:complexType name="VoiceConnectResultType">
+    <xs:sequence>
+      <xs:element name="meta" type="m:ResultMetaType"/>
+      <xs:element name="connectionId" type="m:TokenType"/>
+      <xs:element name="modelId" type="m:NonEmptyString"/>
+      <xs:element name="connectedAt" type="xs:dateTime"/>
+    </xs:sequence>
+  </xs:complexType>
+  <xs:element name="VoiceConnectResult" type="m:VoiceConnectResultType"/>
+  <xs:complexType name="VoiceStopRequestType">
+    <xs:sequence>
+      <xs:element name="meta" type="m:RequestMetaType"/>
+      <xs:element name="connectionId" type="m:TokenType"/>
+    </xs:sequence>
+  </xs:complexType>
+  <xs:element name="VoiceStopRequest" type="m:VoiceStopRequestType"/>
+  <xs:complexType name="VoiceStopResultType">
+    <xs:sequence>
+      <xs:element name="meta" type="m:ResultMetaType"/>
+      <xs:element name="connectionId" type="m:TokenType"/>
+      <xs:element name="connectionClosed" type="xs:boolean"/>
+      <xs:element name="stoppedAt" type="xs:dateTime"/>
+    </xs:sequence>
+  </xs:complexType>
+  <xs:element name="VoiceStopResult" type="m:VoiceStopResultType"/>
+  <xs:complexType name="TranscriptRequestType">
+    <xs:sequence>
+      <xs:element name="meta" type="m:RequestMetaType"/>
+      <xs:element name="connectionId" type="m:TokenType"/>
+      <xs:element name="sequence" type="xs:nonNegativeInteger"/>
+      <xs:element name="text" type="xs:string"/>
+      <xs:element name="final" type="xs:boolean"/>
+      <xs:element name="anchorRefs" type="m:RefListType" minOccurs="0"/>
+    </xs:sequence>
+  </xs:complexType>
+  <xs:element name="TranscriptRequest" type="m:TranscriptRequestType"/>
+  <xs:complexType name="TranscriptResultType">
+    <xs:sequence>
+      <xs:element name="meta" type="m:ResultMetaType"/>
+      <xs:element name="sequence" type="xs:nonNegativeInteger"/>
+      <xs:element name="text" type="xs:string"/>
+      <xs:element name="final" type="xs:boolean"/>
+      <xs:element name="language" type="xs:language" minOccurs="0"/>
+      <xs:element name="anchorRefs" type="m:RefListType" minOccurs="0"/>
+    </xs:sequence>
+  </xs:complexType>
+  <xs:element name="TranscriptResult" type="m:TranscriptResultType"/>
+  <xs:complexType name="CaptureRequestType">
+    <xs:sequence>
+      <xs:element name="meta" type="m:RequestMetaType"/>
+      <xs:element name="pageUrl" type="xs:anyURI"/>
+      <xs:element name="method" type="m:CaptureMethodType"/>
+      <xs:element name="explicitConsent" type="xs:boolean"/>
+      <xs:element name="anchorRefs" type="m:RefListType" minOccurs="0"/>
+    </xs:sequence>
+  </xs:complexType>
+  <xs:element name="CaptureRequest" type="m:CaptureRequestType"/>
+  <xs:complexType name="CaptureResultType">
+    <xs:sequence>
+      <xs:element name="meta" type="m:ResultMetaType"/>
+      <xs:element name="assetId" type="m:TokenType"/>
+      <xs:element name="sha256" type="m:Sha256Type"/>
+      <xs:element name="method" type="m:CaptureMethodType"/>
+      <xs:element name="approximate" type="xs:boolean"/>
+      <xs:element name="redactedNodes" type="xs:nonNegativeInteger"/>
+    </xs:sequence>
+  </xs:complexType>
+  <xs:element name="CaptureResult" type="m:CaptureResultType"/>
+  <xs:complexType name="LiveTokenRequestType">
+    <xs:sequence>
+      <xs:element name="meta" type="m:RequestMetaType"/>
+      <xs:element name="modelAlias" type="m:ModelAliasType"/>
+      <xs:element name="maxDurationSeconds" type="xs:positiveInteger"/>
+      <xs:element name="origin" type="xs:anyURI"/>
+    </xs:sequence>
+  </xs:complexType>
+  <xs:element name="LiveTokenRequest" type="m:LiveTokenRequestType"/>
+  <xs:complexType name="LiveTokenResultType">
+    <xs:sequence>
+      <xs:element name="meta" type="m:ResultMetaType"/>
+      <xs:element name="ephemeralToken" type="m:NonEmptyString"/>
+      <xs:element name="modelId" type="m:NonEmptyString"/>
+      <xs:element name="expiresAt" type="xs:dateTime"/>
+      <xs:element name="maxUses" type="xs:positiveInteger"/>
+    </xs:sequence>
+  </xs:complexType>
+  <xs:element name="LiveTokenResult" type="m:LiveTokenResultType"/>
+  <xs:complexType name="GenerateRequestType">
+    <xs:sequence>
+      <xs:element name="meta" type="m:RequestMetaType"/>
+      <xs:element name="observationIds" type="m:RefListType"/>
+      <xs:element name="anchorIds" type="m:RefListType"/>
+      <xs:element name="brandRevisionId" type="m:TokenType" minOccurs="0"/>
+      <xs:element name="assetRefs" type="m:RefListType" minOccurs="0"/>
+      <xs:element name="instruction" type="m:NonEmptyString"/>
+      <xs:element name="modelAlias" type="m:ModelAliasType"/>
+      <xs:element name="budgetTokens" type="xs:positiveInteger"/>
+    </xs:sequence>
+  </xs:complexType>
+  <xs:element name="GenerateRequest" type="m:GenerateRequestType"/>
+  <xs:complexType name="GenerateResultType">
+    <xs:sequence>
+      <xs:element name="meta" type="m:ResultMetaType"/>
+      <xs:element name="suggestionId" type="m:TokenType"/>
+      <xs:element name="candidates" type="m:CandidateListType"/>
+      <xs:element name="modelId" type="m:NonEmptyString"/>
+      <xs:element name="inputTokens" type="xs:nonNegativeInteger"/>
+      <xs:element name="outputTokens" type="xs:nonNegativeInteger"/>
+    </xs:sequence>
+  </xs:complexType>
+  <xs:element name="GenerateResult" type="m:GenerateResultType"/>
+  <xs:complexType name="ResumeRequestType">
+    <xs:sequence>
+      <xs:element name="meta" type="m:RequestMetaType"/>
+      <xs:element name="sessionId" type="m:TokenType"/>
+      <xs:element name="afterVersion" type="xs:nonNegativeInteger"/>
+    </xs:sequence>
+  </xs:complexType>
+  <xs:element name="ResumeRequest" type="m:ResumeRequestType"/>
+  <xs:complexType name="ResumeResultType">
+    <xs:sequence>
+      <xs:element name="meta" type="m:ResultMetaType"/>
+      <xs:element name="sessionId" type="m:TokenType"/>
+      <xs:element name="serverVersion" type="xs:nonNegativeInteger"/>
+      <xs:element name="eventCursor" type="m:TokenType"/>
+      <xs:element name="actorSchemaVersion" type="m:NonEmptyString"/>
+    </xs:sequence>
+  </xs:complexType>
+  <xs:element name="ResumeResult" type="m:ResumeResultType"/>
+  <xs:complexType name="SaveObservationRequestType">
+    <xs:sequence>
+      <xs:element name="meta" type="m:RequestMetaType"/>
+      <xs:element name="observationId" type="m:TokenType"/>
+      <xs:element name="clientEventId" type="m:TokenType"/>
+      <xs:element name="text" type="m:NonEmptyString"/>
+      <xs:element name="source" type="m:ObservationSourceType"/>
+      <xs:element name="anchorRefs" type="m:RefListType" minOccurs="0"/>
+      <xs:element name="assetRefs" type="m:RefListType" minOccurs="0"/>
+    </xs:sequence>
+  </xs:complexType>
+  <xs:element name="SaveObservationRequest" type="m:SaveObservationRequestType"/>
+  <xs:complexType name="SaveObservationResultType">
+    <xs:sequence>
+      <xs:element name="meta" type="m:ResultMetaType"/>
+      <xs:element name="observationId" type="m:TokenType"/>
+      <xs:element name="sessionVersion" type="xs:nonNegativeInteger"/>
+      <xs:element name="savedAt" type="xs:dateTime"/>
+    </xs:sequence>
+  </xs:complexType>
+  <xs:element name="SaveObservationResult" type="m:SaveObservationResultType"/>
+  <xs:complexType name="CompileRequestType">
+    <xs:sequence>
+      <xs:element name="meta" type="m:RequestMetaType"/>
+      <xs:element name="sessionId" type="m:TokenType"/>
+      <xs:element name="sessionVersion" type="xs:nonNegativeInteger"/>
+      <xs:element name="approvedRevisionIds" type="m:OptionalRefListType"/>
+    </xs:sequence>
+  </xs:complexType>
+  <xs:element name="CompileRequest" type="m:CompileRequestType"/>
+  <xs:complexType name="CompileResultType">
+    <xs:sequence>
+      <xs:element name="meta" type="m:ResultMetaType"/>
+      <xs:element name="packetId" type="m:TokenType"/>
+      <xs:element name="version" type="xs:positiveInteger"/>
+      <xs:element name="payloadDigest" type="m:Sha256Type"/>
+      <xs:element name="itemCount" type="xs:positiveInteger"/>
+    </xs:sequence>
+  </xs:complexType>
+  <xs:element name="CompileResult" type="m:CompileResultType"/>
+  <xs:complexType name="ApproveRequestType">
+    <xs:sequence>
+      <xs:element name="meta" type="m:RequestMetaType"/>
+      <xs:element name="packetId" type="m:TokenType"/>
+      <xs:element name="payloadDigest" type="m:Sha256Type"/>
+      <xs:element name="expectedPacketVersion" type="xs:positiveInteger"/>
+    </xs:sequence>
+  </xs:complexType>
+  <xs:element name="ApproveRequest" type="m:ApproveRequestType"/>
+  <xs:complexType name="ApproveResultType">
+    <xs:sequence>
+      <xs:element name="meta" type="m:ResultMetaType"/>
+      <xs:element name="approvalId" type="m:TokenType"/>
+      <xs:element name="packetId" type="m:TokenType"/>
+      <xs:element name="payloadDigest" type="m:Sha256Type"/>
+      <xs:element name="approvedAt" type="xs:dateTime"/>
+    </xs:sequence>
+  </xs:complexType>
+  <xs:element name="ApproveResult" type="m:ApproveResultType"/>
+  <xs:complexType name="HandoffRequestType">
+    <xs:sequence>
+      <xs:element name="meta" type="m:RequestMetaType"/>
+      <xs:element name="packetId" type="m:TokenType"/>
+      <xs:element name="payloadDigest" type="m:Sha256Type"/>
+      <xs:element name="integrationId" type="m:TokenType"/>
+      <xs:element name="idempotencyKey" type="m:TokenType"/>
+    </xs:sequence>
+  </xs:complexType>
+  <xs:element name="HandoffRequest" type="m:HandoffRequestType"/>
+  <xs:complexType name="HandoffResultType">
+    <xs:sequence>
+      <xs:element name="meta" type="m:ResultMetaType"/>
+      <xs:element name="handoffId" type="m:TokenType"/>
+      <xs:element name="externalId" type="m:TokenType"/>
+      <xs:element name="externalUrl" type="xs:anyURI"/>
+      <xs:element name="status" type="m:HandoffStatusType"/>
+    </xs:sequence>
+  </xs:complexType>
+  <xs:element name="HandoffResult" type="m:HandoffResultType"/>
+  <xs:complexType name="SnapshotSaveRequestType">
+    <xs:sequence>
+      <xs:element name="meta" type="m:RequestMetaType"/>
+      <xs:element name="actorSchemaVersion" type="m:NonEmptyString"/>
+      <xs:element name="snapshotSha256" type="m:Sha256Type"/>
+      <xs:element name="snapshotBytes" type="xs:base64Binary"/>
+      <xs:element name="serverVersion" type="xs:nonNegativeInteger"/>
+    </xs:sequence>
+  </xs:complexType>
+  <xs:element name="SnapshotSaveRequest" type="m:SnapshotSaveRequestType"/>
+  <xs:complexType name="SnapshotSaveResultType">
+    <xs:sequence>
+      <xs:element name="meta" type="m:ResultMetaType"/>
+      <xs:element name="snapshotSha256" type="m:Sha256Type"/>
+      <xs:element name="writtenAt" type="xs:dateTime"/>
+    </xs:sequence>
+  </xs:complexType>
+  <xs:element name="SnapshotSaveResult" type="m:SnapshotSaveResultType"/>
+  <xs:complexType name="SnapshotLoadRequestType">
+    <xs:sequence>
+      <xs:element name="meta" type="m:RequestMetaType"/>
+      <xs:element name="actorSchemaVersion" type="m:NonEmptyString"/>
+    </xs:sequence>
+  </xs:complexType>
+  <xs:element name="SnapshotLoadRequest" type="m:SnapshotLoadRequestType"/>
+  <xs:complexType name="SnapshotLoadResultType">
+    <xs:sequence>
+      <xs:element name="meta" type="m:ResultMetaType"/>
+      <xs:element name="actorSchemaVersion" type="m:NonEmptyString"/>
+      <xs:element name="snapshotSha256" type="m:Sha256Type"/>
+      <xs:element name="snapshotBytes" type="xs:base64Binary"/>
+      <xs:element name="serverVersion" type="xs:nonNegativeInteger"/>
+    </xs:sequence>
+  </xs:complexType>
+  <xs:element name="SnapshotLoadResult" type="m:SnapshotLoadResultType"/>
+  <xs:complexType name="PageInspectRequestType">
+    <xs:sequence>
+      <xs:element name="meta" type="m:RequestMetaType"/>
+      <xs:element name="anchorId" type="m:TokenType" minOccurs="0"/>
+      <xs:element name="maxNodes" type="xs:positiveInteger"/>
+      <xs:element name="includeGeometry" type="xs:boolean"/>
+    </xs:sequence>
+  </xs:complexType>
+  <xs:element name="PageInspectRequest" type="m:PageInspectRequestType"/>
+  <xs:complexType name="PageInspectResultType">
+    <xs:sequence>
+      <xs:element name="meta" type="m:ResultMetaType"/>
+      <xs:element name="pageFingerprint" type="m:Sha256Type"/>
+      <xs:element name="nodes" type="m:PageNodeListType"/>
+    </xs:sequence>
+  </xs:complexType>
+  <xs:element name="PageInspectResult" type="m:PageInspectResultType"/>
+  <xs:complexType name="ContextGetRequestType">
+    <xs:sequence>
+      <xs:element name="meta" type="m:RequestMetaType"/>
+      <xs:element name="topic" type="m:NonEmptyString"/>
+      <xs:element name="personaRevisionId" type="m:TokenType" minOccurs="0"/>
+      <xs:element name="manifestId" type="m:TokenType" minOccurs="0"/>
+    </xs:sequence>
+  </xs:complexType>
+  <xs:element name="ContextGetRequest" type="m:ContextGetRequestType"/>
+  <xs:complexType name="ContextGetResultType">
+    <xs:sequence>
+      <xs:element name="meta" type="m:ResultMetaType"/>
+      <xs:element name="manifestId" type="m:TokenType"/>
+      <xs:element name="contextDigest" type="m:Sha256Type"/>
+      <xs:element name="excerpts" type="m:ContextExcerptListType"/>
+    </xs:sequence>
+  </xs:complexType>
+  <xs:element name="ContextGetResult" type="m:ContextGetResultType"/>
+  <xs:complexType name="ContextBindRequestType">
+    <xs:sequence>
+      <xs:element name="meta" type="m:RequestMetaType"/>
+      <xs:element name="personaRevisionId" type="m:TokenType"/>
+      <xs:element name="sessionBrief" type="m:NonEmptyString"/>
+      <xs:element name="expectedVersion" type="xs:nonNegativeInteger"/>
+    </xs:sequence>
+  </xs:complexType>
+  <xs:element name="ContextBindRequest" type="m:ContextBindRequestType"/>
+  <xs:complexType name="ContextBindResultType">
+    <xs:sequence>
+      <xs:element name="meta" type="m:ResultMetaType"/>
+      <xs:element name="manifestId" type="m:TokenType"/>
+      <xs:element name="contextDigest" type="m:Sha256Type"/>
+      <xs:element name="version" type="xs:positiveInteger"/>
+    </xs:sequence>
+  </xs:complexType>
+  <xs:element name="ContextBindResult" type="m:ContextBindResultType"/>
+  <xs:complexType name="PersonaSaveRequestType">
+    <xs:sequence>
+      <xs:element name="meta" type="m:RequestMetaType"/>
+      <xs:element name="personaId" type="m:TokenType"/>
+      <xs:element name="name" type="m:NonEmptyString"/>
+      <xs:element name="locale" type="xs:language"/>
+      <xs:element name="roles" type="m:NonEmptyString"/>
+      <xs:element name="motivations" type="m:NonEmptyString"/>
+      <xs:element name="objections" type="m:NonEmptyString"/>
+      <xs:element name="vocabulary" type="m:NonEmptyString"/>
+      <xs:element name="expectedRevision" type="xs:nonNegativeInteger"/>
+    </xs:sequence>
+  </xs:complexType>
+  <xs:element name="PersonaSaveRequest" type="m:PersonaSaveRequestType"/>
+  <xs:complexType name="PersonaSaveResultType">
+    <xs:sequence>
+      <xs:element name="meta" type="m:ResultMetaType"/>
+      <xs:element name="personaRevisionId" type="m:TokenType"/>
+      <xs:element name="revision" type="xs:positiveInteger"/>
+      <xs:element name="savedAt" type="xs:dateTime"/>
+    </xs:sequence>
+  </xs:complexType>
+  <xs:element name="PersonaSaveResult" type="m:PersonaSaveResultType"/>
+  <xs:complexType name="ContextSourceRequestType">
+    <xs:sequence>
+      <xs:element name="meta" type="m:RequestMetaType"/>
+      <xs:element name="kind" type="m:NonEmptyString"/>
+      <xs:element name="title" type="m:NonEmptyString"/>
+      <xs:element name="sanitizedText" type="m:NonEmptyString"/>
+      <xs:element name="contentDigest" type="m:Sha256Type"/>
+      <xs:element name="expectedVersion" type="xs:nonNegativeInteger"/>
+    </xs:sequence>
+  </xs:complexType>
+  <xs:element name="ContextSourceRequest" type="m:ContextSourceRequestType"/>
+  <xs:complexType name="ContextSourceResultType">
+    <xs:sequence>
+      <xs:element name="meta" type="m:ResultMetaType"/>
+      <xs:element name="sourceId" type="m:TokenType"/>
+      <xs:element name="revision" type="xs:positiveInteger"/>
+      <xs:element name="sourceDigest" type="m:Sha256Type"/>
+    </xs:sequence>
+  </xs:complexType>
+  <xs:element name="ContextSourceResult" type="m:ContextSourceResultType"/>
+  <xs:complexType name="TurnRecordRequestType">
+    <xs:sequence>
+      <xs:element name="meta" type="m:RequestMetaType"/>
+      <xs:element name="turnId" type="m:TokenType"/>
+      <xs:element name="observationId" type="m:TokenType"/>
+      <xs:element name="contextManifestId" type="m:TokenType"/>
+      <xs:element name="role" type="m:TurnRoleType"/>
+      <xs:element name="source" type="m:ObservationSourceType"/>
+      <xs:element name="content" type="xs:string"/>
+      <xs:element name="final" type="xs:boolean"/>
+    </xs:sequence>
+  </xs:complexType>
+  <xs:element name="TurnRecordRequest" type="m:TurnRecordRequestType"/>
+  <xs:complexType name="TurnRecordResultType">
+    <xs:sequence>
+      <xs:element name="meta" type="m:ResultMetaType"/>
+      <xs:element name="turnId" type="m:TokenType"/>
+      <xs:element name="revision" type="xs:positiveInteger"/>
+      <xs:element name="savedAt" type="xs:dateTime"/>
+    </xs:sequence>
+  </xs:complexType>
+  <xs:element name="TurnRecordResult" type="m:TurnRecordResultType"/>
+  <xs:complexType name="MicrophoneListRequestType">
+    <xs:sequence>
+      <xs:element name="meta" type="m:RequestMetaType"/>
+      <xs:element name="permissionGranted" type="xs:boolean"/>
+    </xs:sequence>
+  </xs:complexType>
+  <xs:element name="MicrophoneListRequest" type="m:MicrophoneListRequestType"/>
+  <xs:complexType name="MicrophoneListResultType">
+    <xs:sequence>
+      <xs:element name="meta" type="m:ResultMetaType"/>
+      <xs:element name="devices" type="m:DeviceListType"/>
+      <xs:element name="defaultAvailable" type="xs:boolean"/>
+    </xs:sequence>
+  </xs:complexType>
+  <xs:element name="MicrophoneListResult" type="m:MicrophoneListResultType"/>
+  <xs:complexType name="MicrophoneAcquireRequestType">
+    <xs:sequence>
+      <xs:element name="meta" type="m:RequestMetaType"/>
+      <xs:element name="deviceRef" type="m:TokenType"/>
+      <xs:element name="userGestureConfirmed" type="xs:boolean"/>
+      <xs:element name="failoverOptIn" type="xs:boolean"/>
+    </xs:sequence>
+  </xs:complexType>
+  <xs:element name="MicrophoneAcquireRequest" type="m:MicrophoneAcquireRequestType"/>
+  <xs:complexType name="MicrophoneAcquireResultType">
+    <xs:sequence>
+      <xs:element name="meta" type="m:ResultMetaType"/>
+      <xs:element name="trackHandle" type="m:TokenType"/>
+      <xs:element name="deviceRef" type="m:TokenType"/>
+      <xs:element name="acquiredAt" type="xs:dateTime"/>
+    </xs:sequence>
+  </xs:complexType>
+  <xs:element name="MicrophoneAcquireResult" type="m:MicrophoneAcquireResultType"/>
+  <xs:complexType name="MicrophoneReleaseRequestType">
+    <xs:sequence>
+      <xs:element name="meta" type="m:RequestMetaType"/>
+      <xs:element name="trackHandle" type="m:TokenType"/>
+    </xs:sequence>
+  </xs:complexType>
+  <xs:element name="MicrophoneReleaseRequest" type="m:MicrophoneReleaseRequestType"/>
+  <xs:complexType name="MicrophoneReleaseResultType">
+    <xs:sequence>
+      <xs:element name="meta" type="m:ResultMetaType"/>
+      <xs:element name="trackHandle" type="m:TokenType"/>
+      <xs:element name="released" type="xs:boolean"/>
+      <xs:element name="releasedAt" type="xs:dateTime"/>
+    </xs:sequence>
+  </xs:complexType>
+  <xs:element name="MicrophoneReleaseResult" type="m:MicrophoneReleaseResultType"/>
+  <xs:complexType name="ProposalSaveRequestType">
+    <xs:sequence>
+      <xs:element name="meta" type="m:RequestMetaType"/>
+      <xs:element name="geminiCallId" type="m:TokenType"/>
+      <xs:element name="modelCallId" type="m:TokenType"/>
+      <xs:element name="contextManifestId" type="m:TokenType"/>
+      <xs:element name="anchorId" type="m:TokenType"/>
+      <xs:element name="expectedTextSha256" type="m:Sha256Type"/>
+      <xs:element name="replacementText" type="m:NonEmptyString"/>
+      <xs:element name="rationale" type="m:NonEmptyString"/>
+    </xs:sequence>
+  </xs:complexType>
+  <xs:element name="ProposalSaveRequest" type="m:ProposalSaveRequestType"/>
+  <xs:complexType name="ProposalSaveResultType">
+    <xs:sequence>
+      <xs:element name="meta" type="m:ResultMetaType"/>
+      <xs:element name="suggestionId" type="m:TokenType"/>
+      <xs:element name="patchId" type="m:TokenType"/>
+      <xs:element name="state" type="m:NonEmptyString"/>
+    </xs:sequence>
+  </xs:complexType>
+  <xs:element name="ProposalSaveResult" type="m:ProposalSaveResultType"/>
+  <xs:complexType name="FaultType">
+    <xs:sequence>
+      <xs:element name="meta" type="m:FaultMetaType"/>
+      <xs:element name="code" type="m:FaultCodeType"/>
+      <xs:element name="message" type="m:NonEmptyString"/>
+      <xs:element name="retryable" type="xs:boolean"/>
+      <xs:element name="retryAfterMs" type="xs:nonNegativeInteger" minOccurs="0"/>
+    </xs:sequence>
+  </xs:complexType>
+  <xs:element name="Fault" type="m:FaultType"/>
+<xs:complexType name="PacketExportRequestType"><xs:sequence><xs:element name="meta" type="m:RequestMetaType"/><xs:element name="packetId" type="m:TokenType"/><xs:element name="payloadDigest" type="m:Sha256Type"/><xs:element name="includeOptedInImages" type="xs:boolean"/><xs:element name="archiveName" type="m:NonEmptyString"/></xs:sequence></xs:complexType><xs:element name="PacketExportRequest" type="m:PacketExportRequestType"/><xs:complexType name="PacketExportResultType"><xs:sequence><xs:element name="meta" type="m:ResultMetaType"/><xs:element name="archiveName" type="m:NonEmptyString"/><xs:element name="archiveSha256" type="m:Sha256Type"/><xs:element name="fileCount" type="xs:positiveInteger"/><xs:element name="deliveryInitiatedAt" type="xs:dateTime"/></xs:sequence></xs:complexType><xs:element name="PacketExportResult" type="m:PacketExportResultType"/><xs:complexType name="CredentialTestRequestType"><xs:sequence><xs:element name="meta" type="m:RequestMetaType"/><xs:element name="provider" type="m:NonEmptyString"/><xs:element name="credentialHandle" type="m:TokenType"/><xs:element name="modelAlias" type="m:ModelAliasType"/></xs:sequence></xs:complexType><xs:element name="CredentialTestRequest" type="m:CredentialTestRequestType"/><xs:complexType name="CredentialTestResultType"><xs:sequence><xs:element name="meta" type="m:ResultMetaType"/><xs:element name="provider" type="m:NonEmptyString"/><xs:element name="valid" type="xs:boolean"/><xs:element name="modelId" type="m:NonEmptyString"/><xs:element name="testedAt" type="xs:dateTime"/></xs:sequence></xs:complexType><xs:element name="CredentialTestResult" type="m:CredentialTestResultType"/><xs:complexType name="CredentialForgetRequestType"><xs:sequence><xs:element name="meta" type="m:RequestMetaType"/><xs:element name="credentialHandle" type="m:TokenType"/><xs:element name="alsoForgetEncryptedCopy" type="xs:boolean"/></xs:sequence></xs:complexType><xs:element name="CredentialForgetRequest" type="m:CredentialForgetRequestType"/><xs:complexType name="CredentialForgetResultType"><xs:sequence><xs:element name="meta" type="m:ResultMetaType"/><xs:element name="forgotten" type="xs:boolean"/><xs:element name="forgottenAt" type="xs:dateTime"/></xs:sequence></xs:complexType><xs:element name="CredentialForgetResult" type="m:CredentialForgetResultType"/><xs:complexType name="RevisionDecisionRequestType"><xs:sequence><xs:element name="meta" type="m:RequestMetaType"/><xs:element name="proposalId" type="m:TokenType"/><xs:element name="anchorId" type="m:TokenType"/><xs:element name="decision" type="m:RevisionDecisionType"/><xs:element name="expectedRevision" type="xs:nonNegativeInteger"/><xs:element name="expectedTextSha256" type="m:Sha256Type"/></xs:sequence></xs:complexType><xs:element name="RevisionDecisionRequest" type="m:RevisionDecisionRequestType"/><xs:complexType name="RevisionDecisionResultType"><xs:sequence><xs:element name="meta" type="m:ResultMetaType"/><xs:element name="revisionId" type="m:TokenType"/><xs:element name="currentRevision" type="xs:nonNegativeInteger"/><xs:element name="recordedAt" type="xs:dateTime"/></xs:sequence></xs:complexType><xs:element name="RevisionDecisionResult" type="m:RevisionDecisionResultType"/></xs:schema>

@@ -1,0 +1,6 @@
+# The copywriter: a Chrome extension and an embedded widget (AGENTS.md).
+[tools]
+node = "22"
+ruby = "4"
+# sxml reads and validates the XML: the charts, the spec packet, the work packet.
+"github:tinyactors-dev/sxml" = "0.2.0"

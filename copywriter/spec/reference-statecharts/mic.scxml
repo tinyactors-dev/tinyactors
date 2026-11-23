@@ -1,0 +1,31 @@
+<?xml version='1.0' encoding='UTF-8'?>
+<scxml xmlns="http://www.w3.org/2005/07/scxml" xmlns:h="http://www.w3.org/1999/xhtml" version="1.0" name="Microphone" initial="idle"><metadata><h:section id="documentation"><h:h2>Microphone — actor contract</h:h2><h:p><h:strong>Actor invariant: </h:strong>Microphone owns one active selected track and permission lifecycle; preserve final transcripts, pause Live on ended; never auto-switch without explicit prior opt-in.</h:p><h:p><h:strong>Specification: </h:strong>ACT-MIC in <h:a href="../system.xml">system.xml</h:a>. These comments use XHTML namespace h: and are not executable SCXML actions.</h:p><h:h3>I/O contracts invoked by this actor</h:h3><h:ul><h:li><h:a href="../io-processors.xml#IO-MIC-LIST">review.microphone.list</h:a> — MicrophoneListRequest → MicrophoneListResult | Fault; read, never, 10000 ms max. <h:a href="../io-messages.xsd">XSD</h:a>; flows: FL-041; requirements: REQ-081, REQ-090</h:li><h:li><h:a href="../io-processors.xml#IO-MIC-ACQUIRE">review.microphone.acquire</h:a> — MicrophoneAcquireRequest → MicrophoneAcquireResult | Fault; local-write, never, 10000 ms max. <h:a href="../io-messages.xsd">XSD</h:a>; flows: FL-041, FL-042; requirements: REQ-081, REQ-082, REQ-085</h:li><h:li><h:a href="../io-processors.xml#IO-MIC-RELEASE">review.microphone.release</h:a> — MicrophoneReleaseRequest → MicrophoneReleaseResult | Fault; local-write, safe-idempotent, 10000 ms max. <h:a href="../io-messages.xsd">XSD</h:a>; flows: FL-043; requirements: REQ-083, REQ-084</h:li></h:ul></h:section></metadata><state id="idle">
+    <metadata><h:section id="state-idle"><h:h3>State: idle</h:h3><h:ul><h:li><h:code>microphone.list</h:code> → enumerating</h:li></h:ul><h:p>I/O result events are delivered only after the corresponding processor returns a schema-valid result. On fault, apply the operation-specific failureHandling contract, never a silent success transition.</h:p></h:section></metadata><transition event="microphone.list" target="enumerating"/>
+  </state>
+  <state id="enumerating">
+    <metadata><h:section id="state-enumerating"><h:h3>State: enumerating</h:h3><h:ul><h:li><h:code>microphone.listed</h:code> → available<h:a href="../io-processors.xml#IO-MIC-LIST"> [typed result: IO-MIC-LIST]</h:a></h:li><h:li><h:code>microphone.denied</h:code> → denied</h:li></h:ul><h:p>I/O result events are delivered only after the corresponding processor returns a schema-valid result. On fault, apply the operation-specific failureHandling contract, never a silent success transition.</h:p></h:section></metadata><transition event="microphone.listed" target="available"/>
+    <transition event="microphone.denied" target="denied"/>
+  </state>
+  <state id="available">
+    <metadata><h:section id="state-available"><h:h3>State: available</h:h3><h:ul><h:li><h:code>microphone.select</h:code> → acquiring</h:li></h:ul><h:p>I/O result events are delivered only after the corresponding processor returns a schema-valid result. On fault, apply the operation-specific failureHandling contract, never a silent success transition.</h:p></h:section></metadata><transition event="microphone.select" target="acquiring"/>
+  </state>
+  <state id="acquiring">
+    <metadata><h:section id="state-acquiring"><h:h3>State: acquiring</h:h3><h:ul><h:li><h:code>microphone.acquired</h:code> → active<h:a href="../io-processors.xml#IO-MIC-ACQUIRE"> [typed result: IO-MIC-ACQUIRE]</h:a></h:li><h:li><h:code>microphone.denied</h:code> → denied</h:li></h:ul><h:p>I/O result events are delivered only after the corresponding processor returns a schema-valid result. On fault, apply the operation-specific failureHandling contract, never a silent success transition.</h:p></h:section></metadata><transition event="microphone.acquired" target="active"/>
+    <transition event="microphone.denied" target="denied"/>
+  </state>
+  <state id="active">
+    <metadata><h:section id="state-active"><h:h3>State: active</h:h3><h:ul><h:li><h:code>microphone.devices_changed</h:code> → active</h:li><h:li><h:code>microphone.lost</h:code> → lost</h:li><h:li><h:code>microphone.release</h:code> → releasing</h:li></h:ul><h:p>I/O result events are delivered only after the corresponding processor returns a schema-valid result. On fault, apply the operation-specific failureHandling contract, never a silent success transition.</h:p></h:section></metadata><transition event="microphone.devices_changed" target="active"/>
+    <transition event="microphone.lost" target="lost"/>
+    <transition event="microphone.release" target="releasing"/>
+  </state>
+  <state id="lost">
+    <metadata><h:section id="state-lost"><h:h3>State: lost</h:h3><h:ul><h:li><h:code>microphone.retry</h:code> → acquiring</h:li><h:li><h:code>microphone.release</h:code> → releasing</h:li></h:ul><h:p>I/O result events are delivered only after the corresponding processor returns a schema-valid result. On fault, apply the operation-specific failureHandling contract, never a silent success transition.</h:p></h:section></metadata><transition event="microphone.retry" target="acquiring"/>
+    <transition event="microphone.release" target="releasing"/>
+  </state>
+  <state id="denied">
+    <metadata><h:section id="state-denied"><h:h3>State: denied</h:h3><h:ul><h:li><h:code>microphone.retry</h:code> → acquiring</h:li></h:ul><h:p>I/O result events are delivered only after the corresponding processor returns a schema-valid result. On fault, apply the operation-specific failureHandling contract, never a silent success transition.</h:p></h:section></metadata><transition event="microphone.retry" target="acquiring"/>
+  </state>
+  <state id="releasing">
+    <metadata><h:section id="state-releasing"><h:h3>State: releasing</h:h3><h:ul><h:li><h:code>microphone.released</h:code> → idle<h:a href="../io-processors.xml#IO-MIC-RELEASE"> [typed result: IO-MIC-RELEASE]</h:a></h:li></h:ul><h:p>I/O result events are delivered only after the corresponding processor returns a schema-valid result. On fault, apply the operation-specific failureHandling contract, never a silent success transition.</h:p></h:section></metadata><transition event="microphone.released" target="idle"/>
+  </state>
+</scxml>

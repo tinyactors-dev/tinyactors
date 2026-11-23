@@ -1,0 +1,604 @@
+<?xml version='1.0' encoding='UTF-8'?>
+<implementation xmlns="urn:tinyactors:visual-review:implementation:1" version="1.7.0" target="chrome-extension-v1">
+  <scope>
+    <release id="REL-EXT" title="V1 Chrome extension" status="required">
+      <detail>Manifest V3; TinyActors WASM in sidepanel-owned worker; BYOK Gemini; local IndexedDB; screenshots; voice or typed observations; editable previews; work packet download.</detail>
+    </release>
+    <release id="REL-EMBED" title="V2 embedded publication widget" status="later">
+      <detail>Same charts, model tools, domain contracts and UI component hierarchy; different DOM, capture, credential and download adapters. Mobile-first bottom sheet.</detail>
+    </release>
+    <release id="REL-TEAM" title="V3 optional team host" status="later">
+      <detail>Optional one-process self-hosted server with SQLite and local files for identity, shared sessions and dispatch. No external object store.</detail>
+    </release>
+    <release id="REL-NON" title="Explicit V1 exclusions" status="excluded">
+      <detail>No publishing, no remote coding agent invocation, no shared accounts, no server, no cross-origin subframe DOM access, no visual layout CSS edit automation; unresolved design notes export as tasks.</detail>
+    </release>
+  </scope>
+  <runtime>
+    <context id="CTX-PANEL" title="Chrome extension side panel" kind="chrome-extension-page" lifetime="single-owner-ui">
+      <responsibility>Owns visible UI, Gemini API connection, chrome.storage.session-backed browser-session credential vault, microphone MediaStream, IndexedDB, download orchestration and transport to worker. No privileged page DOM access.</responsibility>
+    </context>
+    <context id="CTX-ACTORS" title="TinyActors WASM worker" kind="extension-web-worker" lifetime="single-actor-host">
+      <responsibility>Runs the bundled @tinyactors/wasm host and compiled SCXML charts; all statechart events are deterministic messages, external effects only through adapters. Restartable from persisted domain events.</responsibility>
+    </context>
+    <context id="CTX-CONTENT" title="Content script per top-level document" kind="isolated-content-script" lifetime="per-tab-document">
+      <responsibility>Accesses live DOM, highlights/anchors text, applies/reverts text-node patches, reports page context and page mutations. Never receives Gemini key or microphone frames.</responsibility>
+    </context>
+    <context id="CTX-SW" title="Manifest V3 service worker" kind="extension-service-worker" lifetime="event-driven-ephemeral">
+      <responsibility>Registers onInstalled/onStartup/action handlers synchronously; opens side panel, brokers activeTab/script/capture API when necessary; has no business state or assumption of persistence.</responsibility>
+    </context>
+    <context id="CTX-GEMINI" title="Google Gemini API" kind="external-provider" lifetime="remote">
+      <responsibility>Processes submitted speech/text/screenshots/context; never trusted for authoritative DOM state; may return model text and native function calls.</responsibility>
+    </context>
+    <context id="CTX-IDB" title="Extension IndexedDB" kind="extension-storage" lifetime="durable-local">
+      <responsibility>Versioned session data and optional explicitly attached images; no raw audio, API key, password, token or full-page HTML. Schema upgrades are transactional.</responsibility>
+    </context>
+    <channel id="BUS-UI-ACTOR" source="CTX-PANEL" destination="CTX-ACTORS" protocol="postMessage" boundary="trusted-extension">
+      <policy>Accept only versioned event envelopes; validate type, correlation, and per-session sequence. No key, raw audio or screenshot bytes in actor datamodel.</policy>
+    </channel>
+    <channel id="BUS-DOM" source="CTX-PANEL" destination="CTX-CONTENT" protocol="chrome.tabs.sendMessage" boundary="untrusted-page-boundary">
+      <policy>Target exact active tab and document nonce. Validate operation allowlist; actor ID/correlation required; never eval HTML/script.</policy>
+    </channel>
+    <channel id="BUS-PRIV" source="CTX-PANEL" destination="CTX-SW" protocol="chrome.runtime.sendMessage" boundary="privileged-extension">
+      <policy>Only privileged operations (capture, injection) with per-tab activeTab authority; timeout with typed fault.</policy>
+    </channel>
+    <channel id="BUS-PROVIDER" source="CTX-PANEL" destination="CTX-GEMINI" protocol="HTTPS/WebSocket" boundary="external-provider">
+      <policy>Credential only in extension-owned memory; redact/sanitize before send; no retries for ambiguous side effects; respect model call IDs.</policy>
+    </channel>
+    <channel id="BUS-STORE" source="CTX-PANEL" destination="CTX-IDB" protocol="IndexedDB transactions" boundary="local-storage">
+      <policy>Durable events persist before user-visible success; all updates are version checked, no implicit cloud sync.</policy>
+    </channel>
+    <event-envelope id="MSG-ENVELOPE" schema="reference/event-envelope.schema.json">
+      <field name="schemaVersion" type="integer" required="true">
+        <description>Must equal 1; reject incompatible major versions.</description>
+      </field>
+      <field name="messageId" type="string" required="true">
+        <description>UUIDv4 for dedupe and audit.</description>
+      </field>
+      <field name="correlationId" type="string" required="true">
+        <description>Stable request/reply correlation identifier.</description>
+      </field>
+      <field name="sessionId" type="string" required="true">
+        <description>Logical review session identifier.</description>
+      </field>
+      <field name="hostKind" type="string" required="true"><description>Transport host identity: extension or embedded. Used to choose platform-specific page identity guards; not a Gemini or I/O processor payload.</description></field><field name="tabId" type="integer" required="false">
+        <description>Chrome-only tab ID required for extension page-scoped DOM/capture operations; must be absent in embedded mode.</description>
+      </field>
+      <field name="documentNonce" type="string" required="false">
+        <description>Random host-generated document epoch nonce, required for page-scoped DOM/capture on both extension and embedded. No optional inference from URL alone.</description>
+      </field>
+      <field name="actorId" type="string" required="true">
+        <description>TinyActors actor identity.</description>
+      </field>
+      <field name="operationId" type="string" required="true">
+        <description>Canonical IO-* ID from io-processors.xml.</description>
+      </field>
+      <field name="kind" type="string" required="true">
+        <description>request/result/fault/event.</description>
+      </field>
+      <field name="payload" type="object" required="true">
+        <description>Typed operation payload, validated against generated JSON Schema.</description>
+      </field>
+      <field name="expectedRevision" type="integer" required="false">
+        <description>Optional optimistic concurrency precondition for state mutations.</description>
+      </field>
+    </event-envelope>
+    <invariant id="IN-01">Reject unknown schemaVersion, hostKind, kind, IO ID or reply actor. Page-scoped requests always require documentNonce; extension additionally requires tabId. Embedded requests must not carry Chrome tabId. Global credential/context operations require neither.</invariant>
+    <invariant id="IN-02">Deduplicate messageId within session; for mutating operations persist outcome before acknowledging success.</invariant>
+    <invariant id="IN-03">On navigation, dispose per-document content actor; revoke pending requests, invalidate old DOM previews, retain accepted revisions as historical records.</invariant>
+    <invariant id="IN-04">A timeout produces a typed fault; late successful responses are ignored only after reconciliation of any local mutation.</invariant>
+    <invariant id="IN-05">Gemini FunctionCall IDs are correlated exactly to FunctionResponse; model arguments cannot supply host-only fields.</invariant>
+    <invariant id="IN-06">DOM mutation is committed only after the content script returns the post-write text hash; persist an accepted revision separately from ephemeral preview state.</invariant>
+    <invariant id="IN-07">Never expose key or audio in model-call traces, SCXML datamodel, ZIP packets, console logs or inter-context messages.</invariant>
+    <invariant id="IN-08">A chart loaded from an extension bundle is trusted code; no dynamic chart/script loading from visited pages or model replies.</invariant>
+  </runtime>
+  <platform>
+    <setting key="manifestVersion">3</setting>
+    <setting key="chromeMinimum">116</setting>
+    <setting key="activeTabModel">user-invoked</setting>
+    <setting key="hostPermissions">https://generativelanguage.googleapis.com/*</setting>
+    <setting key="extensionCsp">script-src 'self' 'wasm-unsafe-eval'; object-src 'self'</setting>
+    <setting key="incognito">not-supported-v1</setting>
+    <setting key="iframes">top-frame-only-v1</setting>
+    <policy id="POL-ACTIVATION">User opens panel via action icon; grant activeTab, inject content script on user invocation; restricted URLs enter readonly/unsupported state.</policy>
+    <policy id="POL-PERMISSION">No broad all_urls by default. If temporary host authority expires, request explicit reactivation before DOM or screenshot operation.</policy>
+    <policy id="POL-SNAPSHOT">Persist event log and current domain state on each durable user action, not on service worker shutdown. Rehydrate actor host when side panel reopens.</policy>
+    <policy id="POL-AUDIO">Use getUserMedia() in side panel context, not MV3 worker. Release all tracks when panel closes, session stops, permission changes or device ends.</policy>
+    <policy id="POL-PROVIDER">Gemini HTTPS/Live WebSocket called directly from trusted extension sidepanel in BYOK mode; never via content script.</policy>
+    <policy id="POL-CAPTURE">Use chrome.tabs.captureVisibleTab for active tab with authority; screenshot held in memory and included in packets only on explicit Attach.</policy>
+    <policy id="POL-DOWNLOAD">Generate ZIP as Blob in trusted extension page, use chrome.downloads or anchor download; name deterministically; never ask for server endpoint.</policy>
+    <policy id="POL-CHARTS">Compile XML SCXML charts into one bundled TinyActors image using documented package toolchain; keep XML sources in repository; host dispatchers resolve each declared IO processor.</policy>
+  </platform>
+  <processor-routes>
+    <route operationRef="IO-AUTH" processor="review.auth" action="authorize" destination="none" availability="unsupported">
+      <contract>Not needed for BYOK serverless V1. Typed UNAVAILABLE; available to V3 broker only.</contract>
+    </route>
+    <route operationRef="IO-DOM-HOVER" processor="review.dom" action="hover" destination="CTX-CONTENT" availability="supported">
+      <contract>Only verified top-frame content script may resolve and mutate DOM; no model-generated JS or HTML.</contract>
+    </route>
+    <route operationRef="IO-DOM-ANCHOR" processor="review.dom" action="anchor" destination="CTX-CONTENT" availability="supported">
+      <contract>Only verified top-frame content script may resolve and mutate DOM; no model-generated JS or HTML.</contract>
+    </route>
+    <route operationRef="IO-DOM-REGION" processor="review.dom" action="region" destination="CTX-CONTENT" availability="supported">
+      <contract>Only verified top-frame content script may resolve and mutate DOM; no model-generated JS or HTML.</contract>
+    </route>
+    <route operationRef="IO-DOM-PREVIEW" processor="review.dom" action="preview" destination="CTX-CONTENT" availability="supported">
+      <contract>Only verified top-frame content script may resolve and mutate DOM; no model-generated JS or HTML.</contract>
+    </route>
+    <route operationRef="IO-DOM-REVERT" processor="review.dom" action="revert" destination="CTX-CONTENT" availability="supported">
+      <contract>Only verified top-frame content script may resolve and mutate DOM; no model-generated JS or HTML.</contract>
+    </route>
+    <route operationRef="IO-DOM-INSPECT" processor="review.dom" action="inspect" destination="CTX-CONTENT" availability="supported">
+      <contract>Only verified top-frame content script may resolve and mutate DOM; no model-generated JS or HTML.</contract>
+    </route>
+    <route operationRef="IO-VOICE-CONNECT" processor="review.voice" action="connect" destination="CTX-PANEL" availability="supported">
+      <contract>Own MediaStream in extension page and optionally Gemini Live connection; ephemeral audio only.</contract>
+    </route>
+    <route operationRef="IO-VOICE-STOP" processor="review.voice" action="stop" destination="CTX-PANEL" availability="supported">
+      <contract>Own MediaStream in extension page and optionally Gemini Live connection; ephemeral audio only.</contract>
+    </route>
+    <route operationRef="IO-VOICE-TRANSCRIPT" processor="review.voice" action="receiveTranscript" destination="CTX-PANEL" availability="supported">
+      <contract>Own MediaStream in extension page and optionally Gemini Live connection; ephemeral audio only.</contract>
+    </route>
+    <route operationRef="IO-CAPTURE" processor="review.capture" action="capture" destination="CTX-SW" availability="supported">
+      <contract>Service worker brokers tabs.captureVisibleTab; panel persists only explicitly attached image.</contract>
+    </route>
+    <route operationRef="IO-LIVE-TOKEN" processor="review.gemini" action="mintLiveToken" destination="none" availability="unsupported">
+      <contract>Not needed for BYOK serverless V1. Typed UNAVAILABLE; available to V3 broker only.</contract>
+    </route>
+    <route operationRef="IO-GENERATE" processor="review.gemini" action="generate" destination="CTX-PANEL" availability="supported">
+      <contract>Trusted sidepanel adapter; durable operations use IndexedDB; model calls run in extension context.</contract>
+    </route>
+    <route operationRef="IO-SESSION-RESUME" processor="review.session" action="resume" destination="CTX-PANEL" availability="supported">
+      <contract>Trusted sidepanel adapter; durable operations use IndexedDB; model calls run in extension context.</contract>
+    </route>
+    <route operationRef="IO-SAVE-OBS" processor="review.session" action="saveObservation" destination="CTX-PANEL" availability="supported">
+      <contract>Trusted sidepanel adapter; durable operations use IndexedDB; model calls run in extension context.</contract>
+    </route>
+    <route operationRef="IO-PACKET-COMPILE" processor="review.packet" action="compile" destination="CTX-PANEL" availability="supported">
+      <contract>Trusted sidepanel adapter; durable operations use IndexedDB; model calls run in extension context.</contract>
+    </route>
+    <route operationRef="IO-PACKET-EXPORT" processor="review.packet" action="export" destination="CTX-PANEL" availability="supported">
+      <contract>Trusted sidepanel adapter; durable operations use IndexedDB; model calls run in extension context.</contract>
+    </route>
+    <route operationRef="IO-HANDOFF" processor="review.handoff" action="submit" destination="none" availability="unsupported">
+      <contract>V1 download is the only delivery. Remote submission is V3 optional.</contract>
+    </route>
+    <route operationRef="IO-SNAPSHOT-SAVE" processor="review.cache" action="snapshot" destination="CTX-PANEL" availability="supported">
+      <contract>Trusted sidepanel adapter; durable operations use IndexedDB; model calls run in extension context.</contract>
+    </route>
+    <route operationRef="IO-SNAPSHOT-LOAD" processor="review.cache" action="restore" destination="CTX-PANEL" availability="supported">
+      <contract>Trusted sidepanel adapter; durable operations use IndexedDB; model calls run in extension context.</contract>
+    </route>
+    <route operationRef="IO-CONTEXT-READ" processor="review.context" action="read" destination="CTX-PANEL" availability="supported">
+      <contract>Trusted sidepanel adapter; durable operations use IndexedDB; model calls run in extension context.</contract>
+    </route>
+    <route operationRef="IO-CONTEXT-BIND" processor="review.context" action="bind" destination="CTX-PANEL" availability="supported">
+      <contract>Trusted sidepanel adapter; durable operations use IndexedDB; model calls run in extension context.</contract>
+    </route>
+    <route operationRef="IO-PERSONA-SAVE" processor="review.context" action="savePersona" destination="CTX-PANEL" availability="supported">
+      <contract>Trusted sidepanel adapter; durable operations use IndexedDB; model calls run in extension context.</contract>
+    </route>
+    <route operationRef="IO-CONTEXT-ADD" processor="review.context" action="attachEvidence" destination="CTX-PANEL" availability="supported">
+      <contract>Trusted sidepanel adapter; durable operations use IndexedDB; model calls run in extension context.</contract>
+    </route>
+    <route operationRef="IO-DIALOG-TURN" processor="review.dialog" action="recordTurn" destination="CTX-PANEL" availability="supported">
+      <contract>Trusted sidepanel adapter; durable operations use IndexedDB; model calls run in extension context.</contract>
+    </route>
+    <route operationRef="IO-MIC-LIST" processor="review.microphone" action="list" destination="CTX-PANEL" availability="supported">
+      <contract>Own MediaStream in extension page and optionally Gemini Live connection; ephemeral audio only.</contract>
+    </route>
+    <route operationRef="IO-MIC-ACQUIRE" processor="review.microphone" action="acquire" destination="CTX-PANEL" availability="supported">
+      <contract>Own MediaStream in extension page and optionally Gemini Live connection; ephemeral audio only.</contract>
+    </route>
+    <route operationRef="IO-MIC-RELEASE" processor="review.microphone" action="release" destination="CTX-PANEL" availability="supported">
+      <contract>Own MediaStream in extension page and optionally Gemini Live connection; ephemeral audio only.</contract>
+    </route>
+    <route operationRef="IO-PROPOSAL-SAVE" processor="review.proposal" action="save" destination="CTX-PANEL" availability="supported">
+      <contract>Trusted sidepanel adapter; durable operations use IndexedDB; model calls run in extension context.</contract>
+    </route>
+    <route operationRef="IO-CRED-TEST" processor="review.credentials" action="test" destination="CTX-PANEL" availability="supported">
+      <contract>Key is resolved by extension-only chrome.storage.session-backed vault; never in actor message, content script, IndexedDB or packet.</contract>
+    </route>
+    <route operationRef="IO-CRED-FORGET" processor="review.credentials" action="forget" destination="CTX-PANEL" availability="supported">
+      <contract>Key is resolved by extension-only chrome.storage.session-backed vault; never in actor message, content script, IndexedDB or packet.</contract>
+    </route>
+  <route operationRef="IO-REVISION-SAVE" processor="review.proposal" action="recordDecision" destination="CTX-PANEL" availability="supported"><contract>Commit Keep, Undo, Dismiss as immutable IndexedDB events before UI displays success; revision conflict must not overwrite existing decision.</contract></route></processor-routes>
+  <ui rootComponent="UI-SHELL" density="compact">
+    <component id="UI-SHELL" title="Side panel shell" order="0">
+      <visibility>always</visibility>
+      <behavior>Resizes as native Chrome side panel; single column; clear top/middle/bottom landmarks; no viewport overlay except page highlight.</behavior>
+      <flow-ref ref="FL-001"/>
+    </component>
+    <component id="UI-HEADER" title="Header" order="1" parentRef="UI-SHELL">
+      <visibility>always</visibility>
+      <behavior>Title and single Explore icon; settings is an icon-only button with tooltip and aria-label. No repeated project data.</behavior>
+      <flow-ref ref="FL-001"/>
+    </component>
+    <component id="UI-PAGE" title="Page context" order="2" parentRef="UI-SHELL">
+      <visibility>active tab</visibility>
+      <behavior>Hostname and page title, tiny connection badge, optional persona chip; clicking opens context sheet.</behavior>
+      <flow-ref ref="FL-003"/>
+      <flow-ref ref="FL-038"/>
+    </component>
+    <component id="UI-LIST" title="Annotation list" order="3" parentRef="UI-SHELL">
+      <visibility>review active</visibility>
+      <behavior>Scrollable compact list: one line title, one line excerpt, one status icon. Sorted DOM order by default; active row visibly selected. Show count, filter only on demand.</behavior>
+      <flow-ref ref="FL-004"/>
+      <flow-ref ref="FL-007"/>
+      <flow-ref ref="FL-014"/>
+    </component>
+    <component id="UI-ROW" title="Annotation row" order="1" parentRef="UI-LIST">
+      <visibility>observation exists</visibility>
+      <behavior>Click selects anchor, scrolls page into view and opens details; keyboard arrows move focus without trapping.</behavior>
+      <flow-ref ref="FL-004"/>
+      <flow-ref ref="FL-007"/>
+    </component>
+    <component id="UI-DETAIL" title="Focused detail" order="4" parentRef="UI-SHELL">
+      <visibility>annotation selected</visibility>
+      <behavior>Single expanded item: review note, proposed copy and rationale; no second full page editor; sticky bottom primary action if needed.</behavior>
+      <flow-ref ref="FL-012"/>
+      <flow-ref ref="FL-013"/>
+      <flow-ref ref="FL-014"/>
+    </component>
+    <component id="UI-DIFF" title="Change proposal" order="1" parentRef="UI-DETAIL">
+      <visibility>proposal exists</visibility>
+      <behavior>Plain text before/after, visually distinct; original never replaced in persisted audit; text long enough scrolls without nested overflow.</behavior>
+      <flow-ref ref="FL-012"/>
+      <flow-ref ref="FL-013"/>
+    </component>
+    <component id="UI-PREVIEW" title="Preview toggle" order="2" parentRef="UI-DETAIL">
+      <visibility>valid proposal</visibility>
+      <behavior>Click previews on host page after hash and document validation; second click reverts. Show immediate loading, success or typed error.</behavior>
+      <flow-ref ref="FL-013"/>
+      <flow-ref ref="FL-014"/>
+    </component>
+    <component id="UI-KEEP" title="Keep revision" order="3" parentRef="UI-DETAIL">
+      <visibility>proposal exists</visibility>
+      <behavior>Accept selected revision locally, never automatically publish. Kept item remains editable and undoable; persist before showing success.</behavior>
+      <flow-ref ref="FL-014"/>
+      <flow-ref ref="FL-045"/>
+    </component>
+    <component id="UI-COMPOSER" title="Feedback composer" order="5" parentRef="UI-SHELL">
+      <visibility>review active</visibility>
+      <behavior>Bottom anchored text field, attach/voice icons, send button. Use typed input if microphone unavailable; Enter sends; Shift+Enter newline.</behavior>
+      <flow-ref ref="FL-005"/>
+      <flow-ref ref="FL-006"/>
+      <flow-ref ref="FL-007"/>
+    </component>
+    <component id="UI-VOICE" title="Voice capture" order="1" parentRef="UI-COMPOSER">
+      <visibility>microphone supported</visibility>
+      <behavior>Push-to-talk optional; explicit recording state, selected microphone, input meter and Stop. On loss pause and offer switch/typing.</behavior>
+      <flow-ref ref="FL-006"/>
+      <flow-ref ref="FL-031"/>
+      <flow-ref ref="FL-034"/>
+    </component>
+    <component id="UI-EXPORT" title="Export control" order="6" parentRef="UI-SHELL">
+      <visibility>review active</visibility>
+      <behavior>Single primary action Download packet, accompanied by kept and unresolved counts; no packet-level approval or artificial handoff configuration.</behavior>
+      <flow-ref ref="FL-021"/>
+      <flow-ref ref="FL-046"/>
+    </component>
+    <component id="UI-SETTINGS" title="Settings sheet" order="7" parentRef="UI-SHELL">
+      <visibility>opened</visibility>
+      <behavior>Gemini API key setup/test/forget, microphone choice and privacy; never show key after entry; no password persistence V1.</behavior>
+      <flow-ref ref="FL-024"/>
+      <flow-ref ref="FL-048"/>
+    </component>
+    <component id="UI-CONTEXT" title="Context sheet" order="8" parentRef="UI-SHELL">
+      <visibility>opened</visibility>
+      <behavior>Persona selector, project brief and source snippets, revision badges, no free model instructions in trusted policy layer.</behavior>
+      <flow-ref ref="FL-038"/>
+      <flow-ref ref="FL-039"/>
+      <flow-ref ref="FL-040"/>
+    </component>
+    <component id="UI-EXPLORER" title="Technical Explorer" order="9" parentRef="UI-SHELL">
+      <visibility>opened</visibility>
+      <behavior>Secondary developer view, not default review workspace. Deep-link to actor/IO contract IDs from selected annotation.</behavior>
+      <flow-ref ref="FL-001"/>
+    </component>
+    <component id="UI-EMPTY" title="Empty and error states" order="10" parentRef="UI-SHELL">
+      <visibility>conditional</visibility>
+      <behavior>Separate no-annotations, unsupported page, missing key, offline, missing permission, lost mic, quota, stale target and storage-full messages with next action.</behavior>
+      <flow-ref ref="FL-001"/>
+      <flow-ref ref="FL-024"/>
+      <flow-ref ref="FL-034"/>
+    </component>
+    <token name="color.ink" kind="color" value="#202a39">
+      <usage>Primary text</usage>
+    </token>
+    <token name="color.muted" kind="color" value="#798394">
+      <usage>Secondary text</usage>
+    </token>
+    <token name="color.surface" kind="color" value="#ffffff">
+      <usage>Panel and cards</usage>
+    </token>
+    <token name="color.subtle" kind="color" value="#f6f7f9">
+      <usage>Muted panels</usage>
+    </token>
+    <token name="color.border" kind="color" value="#e6e8ed">
+      <usage>Separators</usage>
+    </token>
+    <token name="color.accent" kind="color" value="#345ce3">
+      <usage>Primary action and focused status</usage>
+    </token>
+    <token name="color.accentBg" kind="color" value="#edf2ff">
+      <usage>Selected item</usage>
+    </token>
+    <token name="color.success" kind="color" value="#16815e">
+      <usage>Kept revision and successful status</usage>
+    </token>
+    <token name="color.successBg" kind="color" value="#e9f7f0">
+      <usage>Accepted highlight</usage>
+    </token>
+    <token name="color.warning" kind="color" value="#986423">
+      <usage>Unresolved or offline</usage>
+    </token>
+    <token name="font.family" kind="font" value="Inter, ui-sans-serif, system-ui, sans-serif">
+      <usage>UI text</usage>
+    </token>
+    <token name="font.base" kind="dimension" value="13px">
+      <usage>Default labels</usage>
+    </token>
+    <token name="font.title" kind="dimension" value="17px">
+      <usage>Section headings</usage>
+    </token>
+    <token name="font.caption" kind="dimension" value="11px">
+      <usage>Metadata and chips</usage>
+    </token>
+    <token name="space.unit" kind="dimension" value="4px">
+      <usage>Spacing base</usage>
+    </token>
+    <token name="panel.preferredWidth" kind="dimension" value="388px">
+      <usage>Mockup width; native side panel user-resizable</usage>
+    </token>
+    <token name="row.minHeight" kind="dimension" value="57px">
+      <usage>Annotation row</usage>
+    </token>
+    <token name="control.minTarget" kind="dimension" value="32px">
+      <usage>Desktop icon control, 44px on embedded touch V2</usage>
+    </token>
+    <token name="radius.sm" kind="dimension" value="9px">
+      <usage>Controls</usage>
+    </token>
+    <token name="radius.card" kind="dimension" value="10px">
+      <usage>Cards</usage>
+    </token>
+    <token name="focus.outline" kind="css" value="3px solid #9db3fd">
+      <usage>Keyboard focus-visible</usage>
+    </token>
+    <token name="list.maxHeight" kind="dimension" value="32vh">
+      <usage>Initial mockup limit; should flex with viewport on production</usage>
+    </token>
+    <token name="motion.duration" kind="dimension" value="120ms">
+      <usage>Non-essential hover/selection transitions; reduced motion disables</usage>
+    </token>
+    <rule id="UX-01">At 360px wide and 600px tall, selected item context, proposal preview/keep, composer and export remain reachable without horizontal scroll.</rule>
+    <rule id="UX-02">Keyboard: Tab visits controls logically, Escape exits capture/overlay/modal, Enter activates selected control, Shift+Enter inserts newline.</rule>
+    <rule id="UX-03">No color-only status. Use icon + status text accessible through label; actual text contrast at least WCAG AA.</rule>
+    <rule id="UX-04">Annotating does not require a model key; generating proposals or voice model requests prompt for key.</rule>
+    <rule id="UX-05">Single active suggestion in detail pane; list provides compact awareness without four competing action areas.</rule>
+    <rule id="UX-06">Failure notifications have a readable cause, retry where safe, and text-input fallback where applicable.</rule>
+    <rule id="UX-07">All overlay/selection visuals are extension-controlled, pointer-transparent unless explicitly selecting, and removed when review inactive.</rule>
+    <rule id="UX-08">Review area has exactly one visually dominant action per stage; model settings, persona and Explorer are secondary.</rule>
+  </ui>
+  <storage schemaVersion="1" engine="IndexedDB" name="tinyactors-review-v1">
+    <store id="ST-SESSION" key="sessionId" retention="until-delete">
+      <fields>projectId,url,createdAt,updatedAt,revision,activePersonaId,status</fields>
+      <rule>Unique sessionId; URL canonicalized without fragments, query stripped of known tokens; no page body persisted.</rule>
+    </store>
+    <store id="ST-PAGE" key="pageId" retention="until-delete">
+      <fields>sessionId,url,documentNonce,viewport,displayTitle,lastSeenAt</fields>
+      <rule>No screenshots or full HTML by default.</rule>
+    </store>
+    <store id="ST-ANCHOR" key="anchorId" retention="until-delete">
+      <fields>sessionId,pageId,cssSelector,domPath,visibleText,textSha256,rect</fields>
+      <rule>Coordinates expressed in CSS pixels with devicePixelRatio/scroll offsets captured; DOM locator must be verified before mutation.</rule>
+    </store>
+    <store id="ST-OBS" key="observationId" retention="until-delete">
+      <fields>sessionId,anchorId,authorText,source,createdAt,status</fields>
+      <rule>Only finalized user text, not unconfirmed partial transcripts.</rule>
+    </store>
+    <store id="ST-PROPOSAL" key="proposalId" retention="until-delete">
+      <fields>observationId,anchorId,originalText,originalSha256,replacementText,modelId,contextDigest,rationale</fields>
+      <rule>Generated text remains a proposal; never write HTML/script.</rule>
+    </store>
+    <store id="ST-REVISION" key="revisionId" retention="until-delete">
+      <fields>proposalId,decision,decisionAt,actualPreviewSha256,sequence</fields>
+      <rule>Every keep/undo/dismiss has new immutable revision event.</rule>
+    </store>
+    <store id="ST-CONTEXT" key="contextId" retention="until-delete">
+      <fields>kind,title,text,revision,digest,source,updatedAt</fields>
+      <rule>Selected personas, briefs, sanitized excerpts; user-managed versioning.</rule>
+    </store>
+    <store id="ST-EVENT" key="eventId" retention="until-delete">
+      <fields>sessionId,actorId,operationId,payloadWithoutSecrets,ts,sequence</fields>
+      <rule>Only durable domain events; no raw audio, credential, model chain-of-thought, hidden page data.</rule>
+    </store>
+    <store id="ST-IMAGE" key="imageId" retention="explicit-opt-in">
+      <fields>sessionId,mime,size,sha256,bytes</fields>
+      <rule>Saved only when editor chooses Attach; enforce size budget and purge with review.</rule>
+    </store>
+    <store id="ST-SNAPSHOT" key="sessionId" retention="until-delete">
+      <fields>chartVersion,actorSnapshot,domainRevision,savedAt</fields>
+      <rule>Can be rebuilt from events if snapshot schema incompatible; no browser MediaStream or credential.</rule>
+    </store>
+    <store id="ST-EXPORT" key="exportId" retention="until-delete">
+      <fields>sessionId,packetDigest,exportedAt,filename</fields>
+      <rule>Only metadata; downloaded ZIP belongs to user and cannot be remotely deleted.</rule>
+    </store>
+    <rule id="ST-POL-1">All stores scoped to extension origin and local browser profile; no server sync in V1.</rule>
+    <rule id="ST-POL-2">Raw audio, transient PCM frames, device labels before permission, provider API keys and ephemeral model tokens are prohibited from IndexedDB.</rule>
+    <rule id="ST-POL-3">IndexedDB schema migration must copy data transactionally or roll back and preserve the old store; new schemaVersion increments.</rule>
+    <rule id="ST-POL-4">On QuotaExceeded, do not discard text annotations; prevent optional image attachment and offer export/delete controls.</rule>
+    <rule id="ST-POL-5">Clear review deletes associated anchors, observations, suggestions, previews, snapshots and opted-in images; exported files outside application remain user-managed.</rule>
+  </storage>
+  <acceptance>
+    <case id="AC-01" title="Install and open without backend" flowRef="FL-001" operationRef="IO-DOM-INSPECT">
+      <given>fresh Chrome profile; extension loaded</given>
+      <when>activate action on ordinary https page</when>
+      <then>side panel opens, script injection after user gesture, no network to custom backend</then>
+    </case>
+    <case id="AC-02" title="Restricted site" flowRef="FL-001" operationRef="IO-DOM-INSPECT">
+      <given>chrome:// page active</given>
+      <when>open extension</when>
+      <then>show unsupported site; no injection attempt; no crash</then>
+    </case>
+    <case id="AC-03" title="Temporary permission" flowRef="FL-004" operationRef="IO-DOM-ANCHOR">
+      <given>activeTab grant revoked</given>
+      <when>select or capture target</when>
+      <then>show Reactivate control; never broad host permission request silently</then>
+    </case>
+    <case id="AC-04" title="DOM target stable" flowRef="FL-004" operationRef="IO-DOM-ANCHOR">
+      <given>ordinary h1 unique</given>
+      <when>click element</when>
+      <then>anchor includes page fingerprint, CSS locator, text hash and geometry</then>
+    </case>
+    <case id="AC-05" title="DOM hash mismatch" flowRef="FL-013" operationRef="IO-DOM-PREVIEW">
+      <given>page text changed after proposal</given>
+      <when>preview text</when>
+      <then>fail PRECONDITION_FAILED; no mutation; mark suggestion stale</then>
+    </case>
+    <case id="AC-06" title="React rerender" flowRef="FL-013" operationRef="IO-DOM-PREVIEW">
+      <given>preview active on SPA</given>
+      <when>framework replaces target</when>
+      <then>mark preview invalidated and keep accepted revision history; do not silently repatch new node</then>
+    </case>
+    <case id="AC-07" title="Preview and undo" flowRef="FL-014" operationRef="IO-DOM-REVERT">
+      <given>proposal valid</given>
+      <when>preview then undo</when>
+      <then>original text restored; readback hash matches original; no accepted revision recorded</then>
+    </case>
+    <case id="AC-08" title="Keep and export" flowRef="FL-021" operationRef="IO-PACKET-EXPORT">
+      <given>one kept copy change, one unresolved note</given>
+      <when>click Download</when>
+      <then>valid XML/XSD ZIP; both items represented correctly; no second approval screen</then>
+    </case>
+    <case id="AC-09" title="Zero key annotation" flowRef="FL-007" operationRef="IO-SAVE-OBS">
+      <given>new profile with no key</given>
+      <when>annotate and download</when>
+      <then>offline annotations work; model suggestion prompts key setup</then>
+    </case>
+    <case id="AC-10" title="BYOK credential" flowRef="FL-048" operationRef="IO-CRED-TEST">
+      <given>valid Google AI Studio key</given>
+      <when>enter, test, forget</when>
+      <then>test uses direct provider; raw key absent from logs, content script, storage and ZIP</then>
+    </case>
+    <case id="AC-11" title="Wrong BYOK key" flowRef="FL-024" operationRef="IO-CRED-TEST">
+      <given>invalid key</given>
+      <when>test key</when>
+      <then>show invalid credential state without deleting existing reviews</then>
+    </case>
+    <case id="AC-12" title="Native model function call" flowRef="FL-011" operationRef="IO-DOM-INSPECT">
+      <given>Gemini asks to inspect page context</given>
+      <when>tool dispatcher receives call</when>
+      <then>arguments validated, host adds anchor, typed IO invoked and result correlated to FunctionCall id</then>
+    </case>
+    <case id="AC-13" title="Model proposes script" flowRef="FL-012" operationRef="IO-PROPOSAL-SAVE">
+      <given>Gemini returns replacement containing markup or JS action</given>
+      <when>submit proposal</when>
+      <then>schema/allowlist rejects operation; no evaluation or HTML injection</then>
+    </case>
+    <case id="AC-14" title="Clarification via native dialogue" flowRef="FL-011" operationRef="IO-DIALOG-TURN">
+      <given>ambiguous critique</given>
+      <when>Gemini asks question, user pushes back</when>
+      <then>transcript/intent recorded in ordinary turns; no invented ClarificationResult schema</then>
+    </case>
+    <case id="AC-15" title="Persona revision provenance" flowRef="FL-038" operationRef="IO-CONTEXT-READ">
+      <given>project persona modified after suggestion</given>
+      <when>reopen old accepted suggestion</when>
+      <then>show original persona revision/digest; no silent rewrite</then>
+    </case>
+    <case id="AC-16" title="Audio stopped on closing" flowRef="FL-006" operationRef="IO-MIC-RELEASE">
+      <given>streaming from microphone</given>
+      <when>close side panel</when>
+      <then>all MediaStream tracks stopped; socket closed; raw bytes not persisted</then>
+    </case>
+    <case id="AC-17" title="Device unplug" flowRef="FL-034" operationRef="IO-MIC-LIST">
+      <given>two microphones; one active</given>
+      <when>disconnect active device</when>
+      <then>transmission pauses, device lost shown; offer manual alternate or typed fallback</then>
+    </case>
+    <case id="AC-18" title="Microphone denied" flowRef="FL-006" operationRef="IO-MIC-ACQUIRE">
+      <given>permission denied</given>
+      <when>start voice</when>
+      <then>UI explains permission and offers text composer; no repeated prompt loop</then>
+    </case>
+    <case id="AC-19" title="Provider disconnected" flowRef="FL-033" operationRef="IO-VOICE-CONNECT">
+      <given>Gemini Live WebSocket drops</given>
+      <when>continue review</when>
+      <then>keep observations and accepted patches; typed text fallback; optionally reconnect by user action</then>
+    </case>
+    <case id="AC-20" title="Capture privacy" flowRef="FL-008" operationRef="IO-CAPTURE">
+      <given>visible page contains password field</given>
+      <when>capture screenshot</when>
+      <then>redaction or exclusion before provider send; unredactable capture is blocked</then>
+    </case>
+    <case id="AC-21" title="Storage full" flowRef="FL-049" operationRef="IO-CONTEXT-ADD">
+      <given>IndexedDB quota exhausted by image</given>
+      <when>attach image</when>
+      <then>no partial image commit; annotations preserved; notify and offer download/delete</then>
+    </case>
+    <case id="AC-22" title="Restart recovery" flowRef="FL-016" operationRef="IO-SNAPSHOT-LOAD">
+      <given>several annotations saved; sidepanel closed</given>
+      <when>reopen side panel</when>
+      <then>restore annotations, revisions and persona; mic/socket/key (session-only) reinitialized only on gesture</then>
+    </case>
+    <case id="AC-23" title="Multi-tab isolation" flowRef="FL-003" operationRef="IO-DOM-PREVIEW">
+      <given>two tabs same hostname</given>
+      <when>select and preview in tab A, switch to tab B</when>
+      <then>no patch applied to B; review identity includes tab/document nonce</then>
+    </case>
+    <case id="AC-24" title="Work-packet neutrality" flowRef="FL-021" operationRef="IO-PACKET-EXPORT">
+      <given>packet exported</given>
+      <when>grep files for TinyActors, actor state and credentials</when>
+      <then>packet contains only target DOM context, changes, constraints and evidence; no runtime framework requirements</then>
+    </case>
+    <case id="AC-25" title="Accessibility and narrow panel" flowRef="FL-014" operationRef="IO-DOM-PREVIEW">
+      <given>panel width 360px, height 600px</given>
+      <when>operate select/diff/preview/keep/export by keyboard</when>
+      <then>no horizontal overflow; focus visible and labels non-color-only</then>
+    </case>
+    <case id="AC-26" title="No automatic publish" flowRef="FL-046" operationRef="IO-PACKET-EXPORT">
+      <given>accepted revisions exist</given>
+      <when>export</when>
+      <then>only generates downloadable archive; no actual source repository or production site modified</then>
+    </case>
+    <case id="AC-27" title="Corrupted restore" flowRef="FL-016" operationRef="IO-SNAPSHOT-LOAD">
+      <given>snapshot hash invalid or from older chart version</given>
+      <when>reopen</when>
+      <then>rebuild materialized state from domain events; preserve user data, show recoverable warning</then>
+    </case>
+    <case id="AC-28" title="Revision conflict" flowRef="FL-045" operationRef="IO-PROPOSAL-SAVE">
+      <given>two asynchronous proposals for same anchor</given>
+      <when>accept older stale proposal</when>
+      <then>version conflict surfaced; no overwriting newer accepted state</then>
+    </case>
+  </acceptance>
+  <implementation-order>
+    <milestone id="M-01" title="Manifest, contexts and actor runtime boot" order="1">
+      <gate>Extension opens and runs TinyActors WASM from packaged code with no network except provider after key setup.</gate>
+    </milestone>
+    <milestone id="M-02" title="Platform I/O: DOM selection/preview/revert" order="2">
+      <gate>DOM mutation exact-hash guards and rollback tested on vanilla and React fixture.</gate>
+    </milestone>
+    <milestone id="M-03" title="IndexedDB, event history and recovery" order="3">
+      <gate>All user observations and accepted revisions survive side-panel and browser restart; no secret persistence.</gate>
+    </milestone>
+    <milestone id="M-04" title="Focused UI matching v1.4 reference" order="4">
+      <gate>Component hierarchy, tokens, keyboard access and narrow-panel acceptance tests pass.</gate>
+    </milestone>
+    <milestone id="M-05" title="Gemini BYOK and structured tool routing" order="5">
+      <gate>Key test/forget and native function call correlation pass; no arbitrary code reaches DOM.</gate>
+    </milestone>
+    <milestone id="M-06" title="Microphone lifecycle and visual evidence" order="6">
+      <gate>Device unplug, revoked permission, no supported capture and socket close gracefully degrade.</gate>
+    </milestone>
+    <milestone id="M-07" title="XML work-packet export and packaging" order="7">
+      <gate>Packet conforms to XSD, integrity checks pass, framework-agnostic, no server required.</gate>
+    </milestone>
+    <milestone id="M-08" title="End-to-end independent-agent handoff trial" order="8">
+      <gate>Fresh coder given only full implementation ZIP can build V1 and pass contract/interaction smoke tests.</gate>
+    </milestone>
+  </implementation-order>
+</implementation>

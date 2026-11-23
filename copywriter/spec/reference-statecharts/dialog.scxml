@@ -1,0 +1,23 @@
+<?xml version='1.0' encoding='UTF-8'?>
+<scxml xmlns="http://www.w3.org/2005/07/scxml" xmlns:h="http://www.w3.org/1999/xhtml" version="1.0" name="Clarification" initial="idle"><metadata><h:section id="documentation"><h:h2>Clarification — actor contract</h:h2><h:p><h:strong>Actor invariant: </h:strong>Actor journals and correlates native model/user turns against an observation and context digest; does not invent a second model-level question protocol.</h:p><h:p><h:strong>Specification: </h:strong>ACT-DIALOG in <h:a href="../system.xml">system.xml</h:a>. These comments use XHTML namespace h: and are not executable SCXML actions.</h:p><h:h3>I/O contracts invoked by this actor</h:h3><h:ul><h:li><h:a href="../io-processors.xml#IO-DIALOG-TURN">review.dialog.recordTurn</h:a> — TurnRecordRequest → TurnRecordResult | Fault; external-write, safe-idempotent, 10000 ms max. <h:a href="../io-messages.xsd">XSD</h:a>; flows: FL-035, FL-036, FL-037; requirements: REQ-071, REQ-072, REQ-073, REQ-089</h:li></h:ul></h:section></metadata><state id="idle">
+    <metadata><h:section id="state-idle"><h:h3>State: idle</h:h3><h:ul><h:li><h:code>clarification.asked</h:code> → pending</h:li></h:ul><h:p>I/O result events are delivered only after the corresponding processor returns a schema-valid result. On fault, apply the operation-specific failureHandling contract, never a silent success transition.</h:p></h:section></metadata><transition event="clarification.asked" target="pending"/>
+  </state>
+  <state id="pending">
+    <metadata><h:section id="state-pending"><h:h3>State: pending</h:h3><h:ul><h:li><h:code>clarification.presented</h:code> → awaiting</h:li></h:ul><h:p>I/O result events are delivered only after the corresponding processor returns a schema-valid result. On fault, apply the operation-specific failureHandling contract, never a silent success transition.</h:p></h:section></metadata><transition event="clarification.presented" target="awaiting"/>
+  </state>
+  <state id="awaiting">
+    <metadata><h:section id="state-awaiting"><h:h3>State: awaiting</h:h3><h:ul><h:li><h:code>clarification.answered</h:code> → responding</h:li><h:li><h:code>clarification.challenged</h:code> → responding</h:li><h:li><h:code>clarification.deferred</h:code> → deferred</h:li></h:ul><h:p>I/O result events are delivered only after the corresponding processor returns a schema-valid result. On fault, apply the operation-specific failureHandling contract, never a silent success transition.</h:p></h:section></metadata><transition event="clarification.answered" target="responding"/>
+    <transition event="clarification.challenged" target="responding"/>
+    <transition event="clarification.deferred" target="deferred"/>
+  </state>
+  <state id="responding">
+    <metadata><h:section id="state-responding"><h:h3>State: responding</h:h3><h:ul><h:li><h:code>clarification.continue</h:code> → resolved</h:li><h:li><h:code>clarification.more_requested</h:code> → pending</h:li></h:ul><h:p>I/O result events are delivered only after the corresponding processor returns a schema-valid result. On fault, apply the operation-specific failureHandling contract, never a silent success transition.</h:p></h:section></metadata><transition event="clarification.continue" target="resolved"/>
+    <transition event="clarification.more_requested" target="pending"/>
+  </state>
+  <state id="deferred">
+    <metadata><h:section id="state-deferred"><h:h3>State: deferred</h:h3><h:ul><h:li><h:code>clarification.continue</h:code> → resolved</h:li></h:ul><h:p>I/O result events are delivered only after the corresponding processor returns a schema-valid result. On fault, apply the operation-specific failureHandling contract, never a silent success transition.</h:p></h:section></metadata><transition event="clarification.continue" target="resolved"/>
+  </state>
+  <state id="resolved">
+    <metadata><h:section id="state-resolved"><h:h3>State: resolved</h:h3><h:ul><h:li><h:code>clarification.asked</h:code> → pending</h:li></h:ul><h:p>I/O result events are delivered only after the corresponding processor returns a schema-valid result. On fault, apply the operation-specific failureHandling contract, never a silent success transition.</h:p></h:section></metadata><transition event="clarification.asked" target="pending"/>
+  </state>
+</scxml>

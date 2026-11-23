@@ -1,0 +1,48 @@
+<?xml version='1.0' encoding='UTF-8'?>
+<model-tools xmlns="urn:tinyactors:visual-review:gemini-tools:1" version="1.2.0" provider="Gemini" wireProtocol="native-function-calling" adapterPolicy="validate-and-authorize">
+  <tool name="read_page_context" ioOperationRef="IO-DOM-INSPECT" effect="read" confirmation="never">
+    <description>Inspect a sanitized region of the current publication page, respecting protected elements and current editor scope.</description>
+    <arguments>
+      <argument name="anchorId" type="string" required="false">The previously selected DOM anchor; omit for the current selection.</argument>
+      <argument name="maxNodes" type="integer" required="true">Maximum number of visible DOM nodes to inspect (1..40).</argument>
+    </arguments>
+    <host-bindings>
+      <bind field="includeGeometry" source="true"/>
+      <bind field="requestId" source="trusted host"/>
+      <bind field="actorId" source="selection actor"/>
+      <bind field="origin" source="trusted verified page"/>
+    </host-bindings>
+    <behavior>Receive native FunctionCall (id, name, args); validate against generated JSON Schema; fill host-only metadata; authorize; map into XSD-typed I/O request; invoke the owning actor with correlation and idempotency; convert typed result or fault to native FunctionResponse for the same call ID. Never execute model-generated script or silently apply a proposal to DOM. If Live is interrupted, reconcile any committed side effect before responding or retrying.</behavior>
+  </tool>
+  <tool name="get_project_context" ioOperationRef="IO-CONTEXT-READ" effect="read" confirmation="never">
+    <description>Retrieve already authorized project facts, versioned persona information, and approved context excerpts relevant to a copy decision.</description>
+    <arguments>
+      <argument name="topic" type="string" required="true">A short topic or question to retrieve relevant evidence for.</argument>
+      <argument name="personaRevisionId" type="string" required="false">Optional project persona revision ID, if available.</argument>
+    </arguments>
+    <host-bindings>
+      <bind field="manifestId" source="current pinned context manifest"/>
+      <bind field="requestId" source="trusted host"/>
+      <bind field="actorId" source="context actor"/>
+      <bind field="workspaceScope" source="authenticated session"/>
+    </host-bindings>
+    <behavior>Receive native FunctionCall (id, name, args); validate against generated JSON Schema; fill host-only metadata; authorize; map into XSD-typed I/O request; invoke the owning actor with correlation and idempotency; convert typed result or fault to native FunctionResponse for the same call ID. Never execute model-generated script or silently apply a proposal to DOM. If Live is interrupted, reconcile any committed side effect before responding or retrying.</behavior>
+  </tool>
+  <tool name="propose_copy_patch" ioOperationRef="IO-PROPOSAL-SAVE" effect="proposal-only" confirmation="required-for-preview">
+    <description>PROPOSE a text-only replacement for user review. This saves a suggestion; it DOES NOT modify or publish the page. The editor decides whether to preview and accept.</description>
+    <arguments>
+      <argument name="anchorId" type="string" required="true">Exact DOM anchor ID provided by the host.</argument>
+      <argument name="expectedTextSha256" type="string" required="true">SHA-256 lowercase hexadecimal of current text.</argument>
+      <argument name="replacementText" type="string" required="true">Proposed replacement plain text, never HTML or JavaScript.</argument>
+      <argument name="rationale" type="string" required="true">Why this change helps the declared persona and objective.</argument>
+    </arguments>
+    <host-bindings>
+      <bind field="geminiCallId" source="native functionCall.id"/>
+      <bind field="modelCallId" source="trusted model invocation record"/>
+      <bind field="contextManifestId" source="pinned context digest and ID"/>
+      <bind field="requestId" source="trusted host"/>
+      <bind field="actorId" source="suggestion actor"/>
+    </host-bindings>
+    <behavior>Receive native FunctionCall (id, name, args); validate against generated JSON Schema; fill host-only metadata; authorize; map into XSD-typed I/O request; invoke the owning actor with correlation and idempotency; convert typed result or fault to native FunctionResponse for the same call ID. Never execute model-generated script or silently apply a proposal to DOM. If Live is interrupted, reconcile any committed side effect before responding or retrying.</behavior>
+  </tool>
+</model-tools>
