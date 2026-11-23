@@ -1,18 +1,47 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
-  One conversation with the model about a page under review. A page has
-  any number of them; the core keeps their list and runs the one that is
-  open as an actor of this chart (named `conversation <page> <id>`), so a
-  new conversation starts from nothing and the model reads only this one.
-  When
-  the model proposes a rewrite of a piece of the page (`propose_rewrite`
-  with `original_text`, and the anchor the model processor found for it),
-  this actor spawns an annotation actor for it, and the model's message
-  names the annotations it made (`annotations`; `proposed` when the model
-  said nothing but the proposals). A spoken message (`chat` with a clip)
-  is transcribed first, and the transcript is the user's message. The
-  audience calls of a reply (`define_audience`, `use_audiences`) go to the
+  One conversation of the page chat. A page has any number of them; the
+  core keeps their list and runs the one that is open as an actor of this
+  chart (named `conversation <page> <id>`), so a new conversation starts
+  from nothing and the model reads only this one.
+
+  A conversation is held with the editor (`audienceID` null: the model
+  helps the reviewer improve the copy) or with an audience (`audienceID`
+  names it: the model speaks in the first person as that reader, from what
+  the page says, so the reviewer can check and sharpen the audience). The
+  mode is set when the conversation starts and decides the model request
+  and its tools:
+
+    idle ──chat──▶ asking ─┬─ mode: no audience ─▶ editor ──model.reply──▶ idle
+      ▲                     │                     (`chat`: propose_rewrite, set_note,
+      │                     │                      define_audience, use_audiences,
+      │                     │                      read_as, talk_to)
+      │                     └─ mode: an audience ─▶ reader ──model.reply──▶ idle
+      │                                           (`talk`: update_audience, note_gap)
+      └── chat with a clip ──▶ transcribing ──model.transcript──▶ asking
+
+  The editor: when the model proposes a rewrite of a piece of the page
+  (`propose_rewrite` with `original_text`, and the anchor the model
+  processor found for it), this actor spawns an annotation actor for it,
+  and the model's message names the annotations it made (`annotations`;
+  `proposed` when the model said nothing but the proposals). The audience
+  calls of a reply (`define_audience`, `use_audiences`) go to the
   `settings` processor, and the model's message names them (`audiences`).
+  `talk_to` (a reply's `talks`, each {audience, audienceID, id}) spawns a
+  new conversation with that audience through the Spawner, opened by this
+  one (`from`: this conversation's id); the core opens it when it first
+  reports, and ends this one.
+
+  The reader: it cannot propose rewrites. `update_audience` (a reply's
+  `audiences` of action 'update', {id, name, changes, fields}) goes to the
+  `settings` processor, which saves the audience, so later readings and
+  conversations use it; the message names it with its changes.
+  `note_gap` (a reply's `gaps`, each {item, explanation}) spawns a
+  page-level open item of kind 'missing', the audience's finding, as a
+  reading's gap does; the message names those annotations.
+
+  A spoken message (`chat` with a clip) is transcribed first, and the
+  transcript is the user's message.
 
   Reading the page as an audience: the core's `read {readings}` (the
   reviewer's "Read as") and a reply's `readings` (the model's `read_as`)
@@ -21,12 +50,16 @@
   each through the Spawner, and they run side by side. The model's message
   names them as audience chips of action 'read'.
 
-    model    chat         → model.reply {text, proposed?, rewrites, audiences, readings?, for, sources?, thoughts?, seconds?} | model.error {message}
+    model    chat         {page, messages}   (the editor)
+                          → model.reply {text, proposed?, rewrites, audiences, readings?, talks?, for, sources?, thoughts?, seconds?}
+                          | model.error {message}
+             talk         {page, audienceID, messages}   (the reader)
+                          → model.reply {text, audiences, gaps, for, thoughts?, seconds?} | model.error {message}
              transcribe   → model.transcript {text} | model.error {message}   (the clip's id)
-    spawn    spawn        → spawned {name, address}    (tinyactors' Spawner): annotations and readings
+    spawn    spawn        → spawned {name, address}    (tinyactors' Spawner): annotations, readings, conversations
     settings audience     → audience.saved {ids: {name: id}} | audience.refused {message}
-    store    chat         {page, id, messages}, after every change
-    ui       chat         {page, id, messages, busy, error}, after every change
+    store    chat         {page, id, audienceID, messages}, after every change
+    ui       chat         {page, id, audienceID, from, messages, busy, error}, after every change
 -->
 <scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0"
        datamodel="ecmascript" name="conversation" initial="live">
@@ -34,6 +67,10 @@
     <data id="page"/>
     <!-- the conversation's id among the page's -->
     <data id="id"/>
+    <!-- the audience this conversation is held with; null: the editor -->
+    <data id="audienceID" expr="null"/>
+    <!-- the conversation whose talk_to opened this one, until the core opens it -->
+    <data id="from" expr="null"/>
     <data id="lang" expr="'en'"/>
     <data id="messages" expr="[]"/>
     <data id="busy" expr="false"/>
@@ -64,15 +101,44 @@
       };
     }
 
+    // The Spawner's request for the open item a reader's note_gap becomes:
+    // a page-level annotation of kind 'missing', the audience's finding.
+    function gap(g, page, lang, audienceID, who, n) {
+      var id = 'g' + Date.now().toString(36) + '-' + n;
+      return {
+        chart: 'annotation',
+        name: id,
+        params: {
+          id: id, page: page, lang: lang, source: 'audience', state: 'new',
+          original: g.item, anchor: null, suggestions: [], audiences: who || [],
+          finding: { audienceID: audienceID, kind: 'missing', explanation: g.explanation || '' },
+        },
+      };
+    }
+
+    // The Spawner's request for the conversation with an audience that a
+    // talk_to of this one opens.
+    function talk(t, page, lang, from) {
+      return {
+        chart: 'conversation',
+        name: 'conversation ' + page + ' ' + t.id,
+        params: { page: page, id: t.id, lang: lang, audienceID: t.audienceID, from: from, messages: [] },
+      };
+    }
+
     // The model's message of a reply: its words, the annotations its
-    // rewrites made, the audience calls, the web pages it was grounded on
-    // and the summary of its thinking.
+    // rewrites or gaps made, the audience calls (an update with its
+    // changes), the conversations it opened, the web pages it was grounded
+    // on and the summary of its thinking.
     function reply(data, pending) {
       var m = { role: 'model', text: data.text || 'No change proposed.', at: new Date().toISOString() };
       if (pending.length) m.annotations = pending.map((p) => p.name);
       if (data.proposed) m.proposed = true;
-      var named = (data.audiences || []).flatMap((c) => (c.action === 'use' ? c.names : [c.name]).map((name) => ({ name: name, action: c.action })));
+      var named = (data.audiences || []).flatMap((c) => (c.action === 'update'
+        ? [{ name: c.name, action: 'update', id: c.id, changes: c.changes || [] }]
+        : (c.action === 'use' ? c.names : [c.name]).map((name) => ({ name: name, action: c.action }))));
       named = named.concat((data.readings || []).map((r) => ({ name: r.audience, action: 'read', id: r.audienceID })));
+      named = named.concat((data.talks || []).map((t) => ({ name: t.audience, action: 'talk', id: t.audienceID, chat: t.id })));
       if (named.length) m.audiences = named;
       if (data.sources &amp;&amp; data.sources.length) m.sources = data.sources;
       if (data.thoughts) m.thoughts = data.thoughts;
@@ -95,8 +161,8 @@
   <state id="live" initial="idle">
     <!-- Every state raises `changed`: the conversation goes to the panel and to the store. -->
     <transition event="changed">
-      <send type="ui" event="chat" namelist="page id messages busy error"/>
-      <send type="store" event="chat" namelist="page id messages"/>
+      <send type="ui" event="chat" namelist="page id audienceID from messages busy error"/>
+      <send type="store" event="chat" namelist="page id audienceID messages"/>
     </transition>
     <!-- the settings processor's answers: a saved audience's id on its chip; a refusal is the error -->
     <transition event="audience.saved">
@@ -149,33 +215,63 @@
       </transition>
     </state>
 
-    <state id="asking">
+    <state id="asking" initial="mode">
       <onentry>
         <assign location="busy" expr="true"/>
         <raise event="changed"/>
-        <send type="model" event="chat" namelist="page messages"/>
       </onentry>
-      <transition event="model.reply" target="idle">
-        <assign location="pending" expr="(_event.data.rewrites || []).filter((r) => r.original_text).map((r, i) => annotation(r, page, lang, spawned + i + 1))"/>
-        <assign location="spawned" expr="spawned + pending.length"/>
-        <assign location="messages" expr="messages.concat([reply(_event.data, pending)])"/>
-        <foreach array="pending" item="spawn">
-          <send type="spawn" event="spawn"><content expr="spawn"/></send>
-        </foreach>
-        <foreach array="_event.data.audiences || []" item="call">
-          <send type="settings" event="audience"><content expr="call"/></send>
-        </foreach>
-        <foreach array="_event.data.readings || []" item="r">
-          <send type="spawn" event="spawn"><content expr="reading(r, page, lang)"/></send>
-        </foreach>
-        <assign location="pending" expr="[]"/>
-      </transition>
       <transition event="model.error" target="idle">
         <assign location="error" expr="_event.data.message"/>
       </transition>
       <transition event="error.communication" target="idle">
         <assign location="error" expr="'The model could not be reached.'"/>
       </transition>
+
+      <!-- The conversation's mode decides the request: the editor's or the reader's. -->
+      <state id="mode">
+        <transition cond="audienceID" target="reader"/>
+        <transition target="editor"/>
+      </state>
+
+      <!-- The editor: rewrites become annotations, audience calls go to settings, talk_to opens a conversation. -->
+      <state id="editor">
+        <onentry><send type="model" event="chat" namelist="page messages"/></onentry>
+        <transition event="model.reply" target="idle">
+          <assign location="pending" expr="(_event.data.rewrites || []).filter((r) => r.original_text).map((r, i) => annotation(r, page, lang, spawned + i + 1))"/>
+          <assign location="spawned" expr="spawned + pending.length"/>
+          <assign location="messages" expr="messages.concat([reply(_event.data, pending)])"/>
+          <foreach array="pending" item="spawn">
+            <send type="spawn" event="spawn"><content expr="spawn"/></send>
+          </foreach>
+          <foreach array="_event.data.audiences || []" item="call">
+            <send type="settings" event="audience"><content expr="call"/></send>
+          </foreach>
+          <foreach array="_event.data.readings || []" item="r">
+            <send type="spawn" event="spawn"><content expr="reading(r, page, lang)"/></send>
+          </foreach>
+          <foreach array="_event.data.talks || []" item="t">
+            <send type="spawn" event="spawn"><content expr="talk(t, page, lang, id)"/></send>
+          </foreach>
+          <assign location="pending" expr="[]"/>
+        </transition>
+      </state>
+
+      <!-- The reader: speaks as the audience; its corrections refine the audience, its gaps become open items. -->
+      <state id="reader">
+        <onentry><send type="model" event="talk" namelist="page audienceID messages"/></onentry>
+        <transition event="model.reply" target="idle">
+          <assign location="pending" expr="(_event.data.gaps || []).map((g, i) => gap(g, page, lang, audienceID, _event.data.for, spawned + i + 1))"/>
+          <assign location="spawned" expr="spawned + pending.length"/>
+          <assign location="messages" expr="messages.concat([reply(_event.data, pending)])"/>
+          <foreach array="pending" item="spawn">
+            <send type="spawn" event="spawn"><content expr="spawn"/></send>
+          </foreach>
+          <foreach array="_event.data.audiences || []" item="call">
+            <send type="settings" event="audience"><content expr="call"/></send>
+          </foreach>
+          <assign location="pending" expr="[]"/>
+        </transition>
+      </state>
     </state>
   </state>
 </scxml>

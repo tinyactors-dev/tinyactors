@@ -409,7 +409,10 @@ from the model.
 Charts in `charts/`, one actor per annotation, one for the page chat's
 open conversation, and one per reading of the page as an audience
 (`charts/reading.scxml`: reading → done or failed, retry; its header
-draws the flow).
+draws the flow). A conversation is held with the editor or with an
+audience (`charts/conversation.scxml`, its `audienceID`; the header draws
+the flow): its mode, set when it starts, decides the model request
+(`chat` for the editor, `talk` for the reader) and so the tools.
 Actors reach the world only through `<send type="...">` to I/O processors
 the core registers: `page`, `model`, `store`, `ui`, `settings` (the
 audiences the model defines or chooses: it saves them and answers
