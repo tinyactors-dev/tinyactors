@@ -2,8 +2,8 @@
 // the screens show it. The same scenario on step 5's charts and on step
 // 8's, a live migration between them (and from 8 to 5 and back, with posts
 // on each side and a late joiner), a screen that loses deliveries, what a
-// screen missed read from the store on step 8, and a lost connection of
-// someone who has none.
+// screen missed read from the store on step 8, the times posts keep on
+// the way, and a lost connection of someone who has none.
 // Run: node main.mjs
 import * as tinyactors from '@tinyactors/wasm';
 import { readFileSync } from 'node:fs';
@@ -13,6 +13,8 @@ const read = (step) => Object.fromEntries(['workspace.scxml', 'room.scxml', 'use
   .map((name) => [name, readFileSync(new URL(`./charts/step-${step}/${name}`, import.meta.url), 'utf8')]));
 const versions = { 5: read(5), 8: read(8) };
 const messages = (chat, name) => chat.screen(name).messages.map((m) => m.text).join(' | ') || 'nothing';
+const clock = (seconds) => `${Math.floor(seconds / 60)}:${String(Math.floor(seconds % 60)).padStart(2, '0')}`;
+const timed = (chat, name) => chat.screen(name).messages.map((m) => `${m.text} at ${clock(m.at)}`).join(' | ') || 'nothing';
 
 for (const version of [5, 8]) {
   const chat = await createChat(tinyactors, { versions, version });
@@ -86,6 +88,29 @@ await away.setFaults('nurse');
 await away.post('forager', 'general', 'the next one');
 console.log(`a dropped delivery, then the next post: ${messages(away, 'nurse')}`);
 away.close();
+
+console.log('-- step 8: a post shows the time it was made, however late it reaches a screen');
+const kept = await createChat(tinyactors, { versions });
+for (const name of ['scout', 'forager']) {
+  await kept.connect(name);
+  await kept.join(name, 'general');
+}
+await kept.loseConnection('scout', 9);
+await kept.advance(4_000);
+await kept.post('forager', 'general', 'one');
+await kept.advance(2_000);
+await kept.post('forager', 'general', 'two');
+await kept.advance(5_000); // scout's connection comes back at 0:09
+console.log(`scout lost the connection from 0:00 to 0:09: ${timed(kept, 'scout')}`);
+await kept.setFaults('scout', { delay: 10 });
+await kept.post('forager', 'general', 'three');
+await kept.advance(15_000);
+await kept.setFaults('scout');
+console.log(`a delivery 10 s late, then: ${timed(kept, 'scout')}`);
+await kept.connect('nurse');
+await kept.join('nurse', 'general');
+console.log(`nurse joins at ${clock(kept.now())} and reads: ${timed(kept, 'nurse')}`);
+kept.close();
 
 console.log('-- a late joiner, on each version');
 for (const version of [5, 8]) {

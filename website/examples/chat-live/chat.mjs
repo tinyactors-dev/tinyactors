@@ -117,11 +117,10 @@ export async function createChat(tinyactors, { versions, version = LATEST, seed 
   };
   /**
    * Adds to `user`'s screen the posts of `room` it lacks, in the store's
-   * order: each before the first numbered post after it. `at` is when they
-   * reached the screen; null for a join's history, which shows as earlier.
-   * Answers the posts it added.
+   * order: each before the first numbered post after it, each at the time
+   * the store recorded for it. Answers the posts it added.
    */
-  const fill = (user, room, posts, at) => {
+  const fill = (user, room, posts) => {
     const target = screen(user);
     const missing = posts.filter((post) => !target.messages.some((m) => m.room === room && m.seq === post.seq));
     for (const post of posts) target.newest[room] = Math.max(target.newest[room] ?? 0, post.seq);
@@ -130,14 +129,14 @@ export async function createChat(tinyactors, { versions, version = LATEST, seed 
     const here = target.messages.filter((m) => m.room === room);
     for (const post of missing) {
       const index = here.findIndex((m) => m.seq !== undefined && m.seq > post.seq);
-      here.splice(index < 0 ? here.length : index, 0, { room, seq: post.seq, from: post.from, text: post.text, at });
+      here.splice(index < 0 ? here.length : index, 0, { room, seq: post.seq, from: post.from, text: post.text, at: post.at });
     }
     target.messages = [...others, ...here].slice(-KEEP);
     return missing;
   };
   /** Reads from the store the posts of `room` numbered after `after` and before `before` that `user`'s screen lacks. */
   const recover = (user, room, after, before = Infinity) => {
-    const added = fill(user, room, history.read(room).filter((post) => post.seq > after && post.seq < before), now());
+    const added = fill(user, room, history.read(room).filter((post) => post.seq > after && post.seq < before));
     if (added.length > 0) note('data', `${user}'s screen reads from the store what it lacks of #${room}: ${added.map((post) => `post ${post.seq}`).join(', ')}`);
   };
   /**
@@ -164,7 +163,9 @@ export async function createChat(tinyactors, { versions, version = LATEST, seed 
         if (newest !== undefined && data.seq > newest + 1) recover(data.to, data.room, newest, data.seq);
         target.newest[data.room] = Math.max(newest ?? 0, data.seq);
       }
-      target.messages.push({ room: data.room, seq: data.seq, from: data.from, text: data.text, at: now() });
+      // step 8's posts carry the time the store recorded, so one held or delayed on the way shows
+      // when it was posted; step 5's are not stored and carry none: the screen shows when it came
+      target.messages.push({ room: data.room, seq: data.seq, from: data.from, text: data.text, at: data.at ?? now() });
       if (target.messages.length > KEEP) target.messages.shift();
     } else if (event === 'roster') target.roster = { ...data.roster };
     else if (event === 'roster.update') target.roster = { ...target.roster, [data.user]: data.status };
@@ -173,10 +174,10 @@ export async function createChat(tinyactors, { versions, version = LATEST, seed 
     else if (event === 'joined') {
       if (!target.rooms.includes(data.room)) target.rooms = [...target.rooms, data.room];
       // on step 8 a join reads the channel's latest posts from the store, and the screen adds those it
-      // lacks, by the store's numbers, with no time of their own (they reached it as data); step 5 keeps none
+      // lacks, by the store's numbers, at the store's times; step 5 keeps none
       if (current === LATEST) {
         target.newest[data.room] ??= 0;
-        fill(data.to, data.room, history.read(data.room), null);
+        fill(data.to, data.room, history.read(data.room));
       }
     }
     else if (event === 'error') target.notices.push(data.reason);
@@ -211,20 +212,22 @@ export async function createChat(tinyactors, { versions, version = LATEST, seed 
 
   // ---- the channels' history, step 8's: data this program stores, a list
   // of posts a channel. The room chart sends each post here (chat:history);
-  // the store numbers it, per channel, and answers `appended` with the
-  // number, which the room puts on the post to each member. The store holds
+  // the store numbers it, per channel, records when it was made (the
+  // simulated clock, in seconds) and answers `appended` with both, which
+  // the room puts on the post to each member. The store holds
   // the count, so a switch of chart versions never starts it again. A real
   // application keeps it in a database table.
   const history = {
-    posts: new Map(), // room -> [{ seq, from, text }]
+    posts: new Map(), // room -> [{ seq, at, from, text }]
     receive(send) {
       const { room, from, text } = send.data;
       if (!this.posts.has(room)) this.posts.set(room, []);
       const posts = this.posts.get(room);
       const seq = posts.length + 1;
-      posts.push({ seq, from, text });
+      const at = now();
+      posts.push({ seq, at, from, text });
       note('data', `#${room}'s history stores post ${seq} from ${from}`);
-      send.answer('appended', { seq, room, from, text });
+      send.answer('appended', { seq, at, room, from, text });
     },
     /** The latest `limit` posts of `room`. */
     read(room, limit = 50) {

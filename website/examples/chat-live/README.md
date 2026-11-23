@@ -52,12 +52,15 @@ and a switch to them clears the indicators, since they never send the
 
 On step 8 a channel's history is data this program stores (`chat.mjs`,
 `history`: the `chat:history` I/O processor the room chart sends each
-post to). The store numbers each channel's posts and answers the room with
-the number, which the room puts on the post to each member; a switch of
-chart versions never starts the numbers again. A join reads the channel's
-latest 50 posts from the store; the screen adds those it lacks, shown as
-"earlier" since they reached it as data with no time of their own, and
-shows each numbered post once.
+post to). The store numbers each channel's posts, records when each was
+made by the simulated clock, and answers the room with both, which the
+room puts on the post to each member; a switch of chart versions never
+starts the numbers again. A join reads the channel's latest 50 posts from
+the store; the screen adds those it lacks and shows each numbered post
+once. A screen shows each post at the time the store recorded, whether it
+came live, held during a lost connection, delayed by a fault, or read
+from the store. Step 5's posts are not stored and carry no time, so on
+step 5 a screen shows when each post reached it.
 
 A screen also misses posts: those made while its person was signed out or
 offline, and deliveries a fault dropped. Catching up is the program's

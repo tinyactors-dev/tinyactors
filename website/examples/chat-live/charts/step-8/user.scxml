@@ -11,7 +11,8 @@
      that came meanwhile.
      Joining a room tells the screen, which reads the room's latest posts
      from the application's store; each message carries the number the
-     store gave it, so a screen shows a post once. -->
+     store gave it, so a screen shows a post once, and the time the store
+     recorded, so a screen shows when it was posted, held or not. -->
 <scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0"
        datamodel="ecmascript" name="user" initial="offline">
   <datamodel>
@@ -38,6 +39,7 @@
         <send type="chat:client" event="message">
           <param name="to" expr="name"/>
           <param name="seq" expr="message.seq"/>
+          <param name="at" expr="message.at"/>
           <param name="room" expr="message.room"/>
           <param name="from" expr="message.from"/>
           <param name="text" expr="message.text"/>
@@ -161,6 +163,7 @@
       <send type="chat:client" event="message">
         <param name="to" expr="name"/>
         <param name="seq" expr="_event.data.seq"/>
+        <param name="at" expr="_event.data.at"/>
         <param name="room" expr="_event.data.room"/>
         <param name="from" expr="_event.data.from"/>
         <param name="text" expr="_event.data.text"/>
@@ -198,7 +201,7 @@
     <transition event="disconnect" target="offline"/>
     <transition event="grace.over" target="offline"/>
     <transition event="message">
-      <assign location="held" expr="held.concat([{ seq: _event.data.seq, room: _event.data.room, from: _event.data.from, text: _event.data.text }])"/>
+      <assign location="held" expr="held.concat([{ seq: _event.data.seq, at: _event.data.at, room: _event.data.room, from: _event.data.from, text: _event.data.text }])"/>
     </transition>
   </state>
 </scxml>

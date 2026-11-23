@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
+import { SimulatedClock } from '@tinyactors/node';
 import { History, run } from './main.mjs';
 
 // Actors run in no fixed order relative to each other: compare each phase,
@@ -12,27 +13,27 @@ for (const datamodel of ['native', 'quickjs']) {
       '-- ada and bob join and talk',
       'ada joins general and reads nothing yet',
       'bob joins general and reads nothing yet',
-      'ada sees post 1 from ada: hi bob',
-      'bob sees post 1 from ada: hi bob',
-      'ada sees post 2 from bob: hi ada',
-      'bob sees post 2 from bob: hi ada',
+      'ada sees post 1 from ada at 0:00: hi bob',
+      'bob sees post 1 from ada at 0:00: hi bob',
+      'ada sees post 2 from bob at 0:30: hi ada',
+      'bob sees post 2 from bob at 0:30: hi ada',
       '-- cat joins late, bob joins again',
-      'cat joins general and reads ada: hi bob | bob: hi ada',
-      'bob joins general and reads ada: hi bob | bob: hi ada',
-      'ada sees post 3 from ada: welcome, cat',
-      'bob sees post 3 from ada: welcome, cat',
-      'cat sees post 3 from ada: welcome, cat',
+      'cat joins general and reads ada at 0:00: hi bob | bob at 0:30: hi ada',
+      'bob joins general and reads ada at 0:00: hi bob | bob at 0:30: hi ada',
+      'ada sees post 3 from ada at 2:00: welcome, cat',
+      'bob sees post 3 from ada at 2:00: welcome, cat',
+      'cat sees post 3 from ada at 2:00: welcome, cat',
     ]));
   });
 }
 
 for (const datamodel of ['native', 'quickjs']) {
-  test(`8-history, ${datamodel}: a user who signs out reads the posts made meanwhile from the store when their connection opens`, async () => {
+  test(`8-history, ${datamodel}: a user who signs out reads the posts made meanwhile from the store when their connection opens, each at the time it was posted`, async () => {
     assert.deepEqual(phases(await run({ datamodel })).at(-1), phases([
-      '-- cat signs out, and back in',
-      'ada sees post 4 from bob: lunch at noon',
-      'bob sees post 4 from bob: lunch at noon',
-      'cat connects and reads in general: bob: lunch at noon',
+      '-- cat signs out, and back in five minutes later',
+      'ada sees post 4 from bob at 3:00: lunch at noon',
+      'bob sees post 4 from bob at 3:00: lunch at noon',
+      'cat connects and reads in general: bob at 3:00: lunch at noon',
     ])[0]);
   });
 }
@@ -49,18 +50,19 @@ class Refusing extends History {
 
 for (const datamodel of ['native', 'quickjs']) {
   test(`8-history, ${datamodel}: a post the store refuses is neither stored nor delivered`, async () => {
-    assert.deepEqual(phases(await run({ datamodel, history: new Refusing() })).slice(0, 2), phases([
+    const clock = new SimulatedClock();
+    assert.deepEqual(phases(await run({ datamodel, clock, history: new Refusing(clock) })).slice(0, 2), phases([
       '-- ada and bob join and talk',
       'ada joins general and reads nothing yet',
       'bob joins general and reads nothing yet',
-      'ada sees post 1 from ada: hi bob',
-      'bob sees post 1 from ada: hi bob',
+      'ada sees post 1 from ada at 0:00: hi bob',
+      'bob sees post 1 from ada at 0:00: hi bob',
       '-- cat joins late, bob joins again',
-      'cat joins general and reads ada: hi bob',
-      'bob joins general and reads ada: hi bob',
-      'ada sees post 2 from ada: welcome, cat',
-      'bob sees post 2 from ada: welcome, cat',
-      'cat sees post 2 from ada: welcome, cat',
+      'cat joins general and reads ada at 0:00: hi bob',
+      'bob joins general and reads ada at 0:00: hi bob',
+      'ada sees post 2 from ada at 2:00: welcome, cat',
+      'bob sees post 2 from ada at 2:00: welcome, cat',
+      'cat sees post 2 from ada at 2:00: welcome, cat',
     ]));
   });
 }

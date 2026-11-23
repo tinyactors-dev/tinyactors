@@ -1,17 +1,17 @@
 -- ada and bob join and talk
 ada joins general and reads nothing yet
 bob joins general and reads nothing yet
-ada sees post 1 from ada: hi bob
-bob sees post 1 from ada: hi bob
-ada sees post 2 from bob: hi ada
-bob sees post 2 from bob: hi ada
+ada sees post 1 from ada at 0:00: hi bob
+bob sees post 1 from ada at 0:00: hi bob
+ada sees post 2 from bob at 0:30: hi ada
+bob sees post 2 from bob at 0:30: hi ada
 -- cat joins late, bob joins again
-cat joins general and reads ada: hi bob | bob: hi ada
-bob joins general and reads ada: hi bob | bob: hi ada
-ada sees post 3 from ada: welcome, cat
-bob sees post 3 from ada: welcome, cat
-cat sees post 3 from ada: welcome, cat
--- cat signs out, and back in
-ada sees post 4 from bob: lunch at noon
-bob sees post 4 from bob: lunch at noon
-cat connects and reads in general: bob: lunch at noon
+cat joins general and reads ada at 0:00: hi bob | bob at 0:30: hi ada
+bob joins general and reads ada at 0:00: hi bob | bob at 0:30: hi ada
+ada sees post 3 from ada at 2:00: welcome, cat
+bob sees post 3 from ada at 2:00: welcome, cat
+cat sees post 3 from ada at 2:00: welcome, cat
+-- cat signs out, and back in five minutes later
+ada sees post 4 from bob at 3:00: lunch at noon
+bob sees post 4 from bob at 3:00: lunch at noon
+cat connects and reads in general: bob at 3:00: lunch at noon

@@ -20,6 +20,10 @@ lost on the way: 3
 signed out and back: while you were out
 lost for 2 minutes and back: while you were out | in the grace | after the grace
 a dropped delivery, then the next post: while you were out | in the grace | after the grace | dropped | the next one
+-- step 8: a post shows the time it was made, however late it reaches a screen
+scout lost the connection from 0:00 to 0:09: one at 0:04 | two at 0:06
+a delivery 10 s late, then: one at 0:04 | two at 0:06 | three at 0:11
+nurse joins at 0:26 and reads: one at 0:04 | two at 0:06 | three at 0:11
 -- a late joiner, on each version
 step 5: nurse's screen got: bring a friend; scout's: sugar by the oak | bring a friend | bring a friend
 step 8: nurse's screen got: sugar by the oak | bring a friend; scout's: sugar by the oak | bring a friend

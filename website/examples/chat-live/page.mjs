@@ -564,10 +564,10 @@ export async function mount(root) {
         : 'No messages on your screen yet.';
     messages.replaceChildren(...(here.length ? here.map((message, index) => {
       const before = here[index - 1];
-      // a post from a room's history (step 8's join) came with no time of its own
-      const stamp = el('time', { class: 'chatlive__at' }, message.at === null ? 'earlier' : clock(message.at));
+      // when the post was made (step 8's store records it), or on step 5 when it reached this screen
+      const stamp = el('time', { class: 'chatlive__at' }, clock(message.at));
       const body = el('p', { class: 'chatlive__body' }, ...marked(message.text, query));
-      if (before && before.from === message.from && message.at - before.at < GROUP) {
+      if (before && before.from === message.from && Math.abs(message.at - before.at) < GROUP) {
         return el('li', { class: 'chatlive__message chatlive__message--more' }, stamp, body);
       }
       return el('li', { class: 'chatlive__message' }, avatar(message.from, 'large'),
