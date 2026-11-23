@@ -19,11 +19,17 @@ https://www.tinyactors.dev/chat/.
   ```
 
 - `page.mjs` draws it as a team chat client looks (`.chatlive` in
-  `style/site.css`, in Lato): a sidebar with who you are, the rooms and the
-  people (your screen), the room with each message's simulated time, and a
-  details pane with any actor's chart lit in the state its host reports
-  (`components/live-chart.mjs`); the clock's controls sit above it.
+  `style/site.css`, in Lato): a top bar whose search filters the room's
+  messages on your screen; a rail of tabs with your avatar at its foot,
+  whose menu signs you in or out and switches the person you are; a
+  sidebar with the rooms and the people (your screen); and the room with
+  each message's simulated time. The bug button in the top bar opens a
+  debugger pane with the clock's controls, every actor, in memory or in
+  the store, and any actor's chart lit in the state its host reports
+  (`components/live-chart.mjs`).
 
 The roster a person's screen holds leaves out their own changes (the
 workspace sends a change to the other people online), so the page shows
-your own status from your actor's state.
+your own status from your actor's state. While your actor is in the
+store, its state is in its blob, so the page shows what the workspace
+last told another person online about you.
