@@ -4,6 +4,7 @@
 // (bench_run), so a call's time includes the C -> Swift crossing.
 //
 //   JSONBench [iterations] [runs]
+//   (JSONBENCH_ONLY=<language/name part>, JSONBENCH_VERBOSE=1: arguments and results)
 import CTinyactors
 import Foundation
 import SwiftCBOR
@@ -124,6 +125,8 @@ let argv = CommandLine.arguments
 let iterations = argv.count > 1 ? UInt64(argv[1])! : 1_000_000
 let runs = argv.count > 2 ? Int(argv[2])! : 5
 let verbose = ProcessInfo.processInfo.environment["JSONBENCH_VERBOSE"] != nil
+/// JSONBENCH_ONLY=swift/hasItems runs the functions whose "language/name" contains it.
+let only = ProcessInfo.processInfo.environment["JSONBENCH_ONLY"]
 
 let roomBytes = 64 * 1024 // the datamodel's default max_document_bytes
 let room = UnsafeMutableRawPointer.allocate(byteCount: roomBytes, alignment: 16)
@@ -144,7 +147,7 @@ func diagnostic(_ bytes: ta_bytes) -> String {
     }
 }
 
-for f in functions {
+for f in functions where only.map({ "\(f.language)/\(f.name)".contains($0) }) ?? true {
     let box = Unmanaged.passRetained(FunctionBox(f.body))
     var spec = bench_spec(function: trampoline, context: box.toOpaque(),
                           arguments: argumentBlocks[f.arguments]!, argument_count: f.arguments, pad: 0,
