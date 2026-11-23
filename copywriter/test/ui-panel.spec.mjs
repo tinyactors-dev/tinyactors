@@ -348,26 +348,78 @@ test('thinking: a reply shows a quiet "Thought for N s" that unfolds its summary
   await page.close();
 });
 
-test('personas: the chat\'s chip opens the persona in Settings, which deletes it; the default has no delete', async () => {
-  const { page, panel } = await open('');
+test('audiences: the chat\'s chip opens the audience in Settings, where a switch, the editor and delete work', async () => {
+  const { page, panel, errors } = await open('');
   const composer = panel.locator('textarea[aria-label=Message]');
-  await composer.fill('Define a persona for a skeptical senior backend engineer and use it');
+  await composer.fill('Who is this page for?');
   await composer.press('Enter');
-  const chip = panel.locator('[data-view=chat] .cw-persona-chip');
+  const chip = panel.locator('[data-view=chat] .cw-audience-chip');
   await chip.waitFor();
   assert.equal(await chip.textContent(), 'Skeptical backend engineer');
   assert.match(await chip.getAttribute('class'), /is-active/);
   await chip.click();
   await panel.locator('[data-view=settings]').waitFor();
-  const pick = panel.locator('#cw-persona');
-  assert.equal(await pick.locator('option:checked').textContent(), 'Skeptical backend engineer');
-  assert.match(await panel.locator('[data-view=settings] .cw-textarea').inputValue(), /senior backend engineers/);
-  await panel.locator('[data-action=delete-persona]').click();
-  await page.waitForFunction(() => reviewer.getState().settings.personas.length === 2);
-  assert.equal(await pick.locator('option:checked').textContent(), 'tinyactors.dev voice');
-  assert.equal(await panel.locator('[data-action=delete-persona]').count(), 0, 'the default cannot be deleted');
-  await pick.selectOption('plain');
-  await panel.locator('[data-action=delete-persona]').waitFor();
+  const id = await page.evaluate(() => reviewer.getState().settings.audiences.at(-1).id);
+  const row = panel.locator(`.cw-audience[data-audience="${id}"]`);
+  assert.equal(await row.locator('.cw-input').inputValue(), 'Skeptical backend engineer', 'opened on it');
+  assert.equal(await row.locator('textarea[aria-label="Their objections"]').inputValue(), 'Hype.');
+  // the switch: writing for it or not
+  await row.locator('.cw-switch').click();
+  await page.waitForFunction((x) => !reviewer.getState().settings.audienceIDs.includes(x), id);
+  await row.locator('.cw-switch').click();
+  await page.waitForFunction((x) => reviewer.getState().settings.audienceIDs.includes(x), id);
+  // edit and save
+  await row.locator('textarea[aria-label="What they want here"]').fill('Memory per actor and throughput.');
+  await row.locator('[data-action=save-audience]').click();
+  await page.waitForFunction((x) => reviewer.getState().settings.audiences.find((a) => a.id === x).wants === 'Memory per actor and throughput.', id);
+  // a new one
+  await panel.locator('[data-action=add-audience]').click();
+  await panel.locator('.cw-audience-edit .cw-input').fill('CTO');
+  await panel.locator('.cw-audience-edit textarea[aria-label="Who they are"]').fill('Signs the budget.');
+  await panel.locator('.cw-audience-edit [data-action=save-audience]').click();
+  await page.waitForFunction(() => reviewer.getState().settings.audiences.some((a) => a.name === 'CTO'));
+  // delete
+  await row.locator('[data-action=edit-audience]').click();
+  await row.locator('[data-action=delete-audience]').click();
+  await page.waitForFunction((x) => !reviewer.getState().settings.audiences.some((a) => a.id === x), id);
+  assert.deepEqual(await page.evaluate(() => reviewer.getState().settings.audiences.map((a) => a.name)), ['Student', 'CTO']);
+  assert.deepEqual(errors, []);
+  await page.close();
+});
+
+test('settings: the voice is edited, saved and set back to the default', async () => {
+  const { page, panel } = await open('');
+  await panel.locator('[data-action=settings]').click();
+  const voice = panel.locator('#cw-voice');
+  assert.match(await voice.inputValue(), /tinyactors\.dev/);
+  assert.equal(await panel.locator('[data-action=reset-voice]').count(), 0, 'the default: nothing to reset');
+  await voice.fill('Short words only.');
+  await panel.locator('[data-action=save-voice]').click();
+  await page.waitForFunction(() => reviewer.getState().settings.voice.custom);
+  await panel.locator('[data-action=reset-voice]').click();
+  await page.waitForFunction(() => !reviewer.getState().settings.voice.custom);
+  assert.match(await voice.inputValue(), /tinyactors\.dev/, 'the editor follows');
+  await page.close();
+});
+
+test('conversations: a new one from the chat\'s header; the earlier ones are listed in an empty one and reopen', async () => {
+  const { page, panel } = await open('');
+  await panel.locator('[data-action=chat]').click();
+  const earlier = panel.locator('.cw-conversations [data-action=open-chat]');
+  assert.equal(await earlier.count(), 1, 'an earlier conversation');
+  assert.equal(await panel.locator('[data-action=new-chat]').isVisible(), false, 'an empty one needs no new one');
+  const composer = panel.locator('textarea[aria-label=Message]');
+  await composer.fill('What should change?');
+  await composer.press('Enter');
+  await panel.locator('[data-view=chat] .cw-msg--model .cw-msg-body').waitFor();
+  await panel.locator('[data-action=new-chat]').click();
+  await page.waitForFunction(() => reviewer.getState().chat.messages.length === 0);
+  await earlier.nth(1).waitFor();
+  assert.equal(await earlier.count(), 2);
+  assert.match(await earlier.first().textContent(), /What should change\?now/);
+  await earlier.filter({ hasText: 'Which claims need a number?' }).click();
+  await panel.locator('[data-view=chat] .cw-msg--model', { hasText: 'Blazing-fast' }).waitFor();
+  assert.deepEqual((await commands(page)).filter((c) => c.startsWith('chat.')), ['chat.new', 'chat.open']);
   await page.close();
 });
 

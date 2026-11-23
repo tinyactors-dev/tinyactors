@@ -19,8 +19,8 @@
 
 import {
   createElement,
-  ArchiveRestore, ArrowLeft, ArrowRight, ArrowUp, Check, ChevronDown, ChevronRight, CircleSlash, Copy, Download, Drama,
-  Ellipsis, Eye, EyeOff, FileArchive, KeyRound, LoaderCircle, MessageSquare, MessagesSquare, Mic,
+  ArchiveRestore, ArrowLeft, ArrowRight, ArrowUp, Check, ChevronDown, ChevronRight, CircleSlash, Copy, Download,
+  Ellipsis, Eye, EyeOff, FileArchive, KeyRound, LoaderCircle, MessageSquare, MessagesSquare, Mic, Plus, SquarePen, UsersRound,
   MousePointerClick, Pencil, RefreshCw, RotateCcw, Settings, Sparkles, SquareDashedMousePointer, Trash2, TriangleAlert, Undo2, X,
 } from 'lucide';
 import { panelCSS } from './panel-css.mjs';
@@ -133,6 +133,18 @@ function when(at) {
   return Number.isFinite(t) ? new Date(t).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' }) : '';
 }
 
+// How long ago, in a few characters: now, 5 min, 3 h, 2 d, then the date.
+function ago(at) {
+  const t = typeof at === 'number' ? at : Date.parse(at);
+  if (!Number.isFinite(t)) return '';
+  const minutes = Math.round((Date.now() - t) / 60000);
+  if (minutes < 1) return 'now';
+  if (minutes < 60) return `${minutes} min`;
+  if (minutes < 60 * 24) return `${Math.round(minutes / 60)} h`;
+  if (minutes < 60 * 24 * 7) return `${Math.round(minutes / 1440)} d`;
+  return new Date(t).toLocaleDateString([], { month: 'short', day: 'numeric' });
+}
+
 function seconds(ms) {
   const s = Math.floor(ms / 1000);
   return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
@@ -166,8 +178,9 @@ export function mountPanel(root, reviewer, { layout = 'sidebar' } = {}) {
     editDraft: '',
     showKey: false,
     keyDraft: '',
-    personaDraft: null,    // { id, instructions }
-    personaShown: null,    // the persona Settings shows, when a chip opened one that is not in use
+    voiceDraft: null,      // the voice's instructions being edited
+    audienceOpen: null,    // the audience whose editor is open ('new' for a new one)
+    audienceDraft: null,   // its fields being edited
     refreshing: false,
   };
   const rec = { active: false, toggled: false, pendingStart: false, downAt: 0, startedAt: 0, target: null, timer: 0 };
@@ -204,13 +217,16 @@ export function mountPanel(root, reviewer, { layout = 'sidebar' } = {}) {
     'data-action': 'chat', 'aria-pressed': 'false',
     onclick: () => go(ui.view === 'chat' ? 'list' : 'chat'),
   });
+  const newChatButton = iconButton(SquarePen, 'New conversation', {
+    'data-action': 'new-chat', onclick: () => send({ type: 'chat.new' }),
+  });
   const settingsButton = iconButton(Settings, 'Settings', {
     'data-action': 'settings', 'aria-pressed': 'false',
     onclick: () => go(ui.view === 'settings' ? 'list' : 'settings'),
   });
   const exportAnchor = h('div', { class: 'cw-anchor', 'data-anchor': 'export' },
     iconButton(Download, 'Export', { 'aria-haspopup': 'menu', 'aria-expanded': 'false', 'data-menu': 'export', onclick: () => toggleMenu('export') }));
-  const header = h('header', { class: 'cw-header' }, lead, heading, moreAnchor, chatButton, settingsButton, exportAnchor);
+  const header = h('header', { class: 'cw-header' }, lead, heading, moreAnchor, newChatButton, chatButton, settingsButton, exportAnchor);
 
   // a div, not <main>: the host page keeps its one main landmark
   const main = h('div', { class: 'cw-main', tabindex: '-1' });
@@ -230,7 +246,7 @@ export function mountPanel(root, reviewer, { layout = 'sidebar' } = {}) {
 
   function go(view) {
     ui.view = view;
-    if (view !== 'settings') ui.personaShown = null;
+    if (view !== 'settings') { ui.audienceOpen = null; ui.audienceDraft = null; }
     ui.menu = null;
     if (view !== 'settings' && state.activeID) send({ type: 'deselect', id: state.activeID });
     render();
@@ -543,8 +559,8 @@ export function mountPanel(root, reviewer, { layout = 'sidebar' } = {}) {
   // One message. A page chat's reply that made annotations links to them;
   // when its text only listed them (proposed), the links say it instead.
   // A spoken message carries a small mic; a reply that thought shows a
-  // quiet "Thought for N s" that unfolds its summary; persona calls are
-  // chips that open the persona in Settings.
+  // quiet "Thought for N s" that unfolds its summary; audience calls are
+  // chips that open the audience in Settings.
   function message(m) {
     const id = `m:${m.role}:${m.at}:${m.text.length}`;
     const made = (m.annotations ?? []).map((x) => state.annotations?.find((a) => a.id === x)).filter(Boolean);
@@ -554,7 +570,7 @@ export function mountPanel(root, reviewer, { layout = 'sidebar' } = {}) {
         m.spoken && h('span', { class: 'cw-spoken', title: 'Spoken' }, icon(Mic), h('span', { class: 'cw-sr' }, 'Spoken: ')),
         markdown(m.text)),
       made.length > 0 && h('div', { class: 'cw-links' }, made.map(link)),
-      m.personas?.length > 0 && h('div', { class: 'cw-persona-chips' }, m.personas.map(personaChip)));
+      m.audiences?.length > 0 && h('div', { class: 'cw-audience-chips' }, m.audiences.map(audienceChip)));
     seen.add(id);
     return node;
   }
@@ -571,15 +587,16 @@ export function mountPanel(root, reviewer, { layout = 'sidebar' } = {}) {
     return details;
   }
 
-  function personaChip(p) {
-    const persona = state.settings?.personas?.find((x) => x.id === p.id) ?? state.settings?.personas?.find((x) => x.name === p.name);
-    const active = persona && persona.id === state.settings?.personaID;
+  function audienceChip(c) {
+    const audiences = state.settings?.audiences ?? [];
+    const audience = audiences.find((x) => x.id === c.id) ?? audiences.find((x) => x.name.toLowerCase() === c.name.toLowerCase());
+    const active = audience && (state.settings?.audienceIDs ?? []).includes(audience.id);
     return h('button', {
-      type: 'button', class: `cw-persona-chip${active ? ' is-active' : ''}`, 'data-action': 'open-persona', 'data-persona': persona?.id ?? '',
-      disabled: !persona, title: `${p.action === 'define' ? 'Persona saved' : 'Persona in use'}${active ? ' · active' : ''}`,
-      'aria-label': `Persona: ${p.name}`,
-      onclick: () => { if (persona) { ui.personaShown = persona.id; ui.personaDraft = null; go('settings'); } },
-    }, icon(Drama), h('span', null, p.name));
+      type: 'button', class: `cw-audience-chip${active ? ' is-active' : ''}`, 'data-action': 'open-audience', 'data-audience': audience?.id ?? '',
+      disabled: !audience, title: `${c.action === 'define' ? 'Audience saved' : 'Writing for it'}${active ? ' · active' : ''}`,
+      'aria-label': `Audience: ${c.name}`,
+      onclick: () => { if (audience) { ui.audienceOpen = audience.id; ui.audienceDraft = null; go('settings'); } },
+    }, icon(UsersRound), h('span', null, c.name));
   }
 
   // A clip being transcribed: the user's bubble, waiting for its words.
@@ -628,6 +645,14 @@ export function mountPanel(root, reviewer, { layout = 'sidebar' } = {}) {
         state.settings?.hasKey && h('div', { class: 'cw-chips' }, PROMPTS.map((text) => h('button', {
           type: 'button', class: 'cw-chip', onclick: () => send({ type: 'chat', text }),
         }, text)))));
+      const earlier = (chat.conversations ?? []).filter((c) => c.id !== chat.id);
+      if (earlier.length) {
+        body.append(h('ul', { class: 'cw-conversations', role: 'list', 'aria-label': 'Earlier conversations' }, earlier.map((c) => h('li', null,
+          h('button', {
+            type: 'button', class: 'cw-conversation', 'data-action': 'open-chat', 'data-chat': c.id, title: when(c.at),
+            onclick: () => send({ type: 'chat.open', id: c.id }),
+          }, h('span', { class: 'cw-conversation-title' }, c.title), h('span', { class: 'cw-conversation-at' }, ago(c.at)))))));
+      }
     } else {
       body.append(thread(chat.messages, chat.busy, transcribing));
     }
@@ -765,6 +790,67 @@ export function mountPanel(root, reviewer, { layout = 'sidebar' } = {}) {
     });
   }
 
+  // An audience: a switch (active or not) and its name, which opens its editor.
+  function audienceRow(a, active, activeIDs) {
+    const open = ui.audienceOpen === a.id;
+    const toggle = h('input', {
+      type: 'checkbox', role: 'switch', class: 'cw-switch', checked: active, 'data-focus-key': `audience-on:${a.id}`,
+      'aria-label': `Write for ${a.name}`, title: active ? 'Writing for it' : 'Not writing for it',
+    });
+    toggle.addEventListener('change', () => send({
+      type: 'settings.save', audienceIDs: toggle.checked ? [...activeIDs, a.id] : activeIDs.filter((x) => x !== a.id),
+    }));
+    return h('div', { class: `cw-audience${open ? ' is-open' : ''}`, 'data-audience': a.id },
+      h('div', { class: 'cw-audience-head' }, toggle,
+        h('button', {
+          type: 'button', class: 'cw-audience-name', 'aria-expanded': String(open), 'data-action': 'edit-audience', title: a.description,
+          onclick: () => { ui.audienceOpen = open ? null : a.id; ui.audienceDraft = null; render(); },
+        }, h('span', null, a.name), a.source === 'model' && h('span', { class: 'cw-ok', title: 'Defined by Gemini' }, icon(Sparkles)),
+        icon(ChevronRight, 'cw-chevron'))),
+      open && audienceEditor(a));
+  }
+
+  const AUDIENCE_FIELDS = [
+    ['description', 'Who they are'], ['knows', 'What they know'], ['wants', 'What they want here'],
+    ['tasks', 'What they came to do'], ['objections', 'Their objections'],
+  ];
+
+  function audienceEditor(a) {
+    ui.audienceDraft ??= { id: a?.id, name: a?.name ?? '', ...Object.fromEntries(AUDIENCE_FIELDS.map(([f]) => [f, a?.[f] ?? ''])) };
+    const draft = ui.audienceDraft;
+    const key = a?.id ?? 'new';
+    const name = h('input', { class: 'cw-input', 'data-focus-key': `audience-name:${key}`, value: draft.name, placeholder: 'Name', 'aria-label': 'Name' });
+    name.addEventListener('input', () => { draft.name = name.value; });
+    const fields = AUDIENCE_FIELDS.map(([field, label]) => {
+      const area = h('textarea', { class: 'cw-textarea cw-textarea--small', rows: '2', 'data-focus-key': `audience-${field}:${key}`, value: draft[field], placeholder: label, 'aria-label': label });
+      area.addEventListener('input', () => { draft[field] = area.value; });
+      return h('label', { class: 'cw-field' }, h('span', { class: 'cw-field-label' }, label), area);
+    });
+    const save = () => {
+      const audience = { ...draft };
+      if (!audience.id) delete audience.id;
+      send({ type: 'settings.save', audience }).then((r) => {
+        if (r === FAILED) return;
+        ui.audienceOpen = null;
+        ui.audienceDraft = null;
+        render();
+      });
+    };
+    return h('div', { class: 'cw-audience-edit' }, name, fields,
+      h('div', { class: 'cw-buttons' },
+        a && iconButton(Trash2, 'Delete audience', {
+          variant: 'cw-btn--danger', 'data-action': 'delete-audience',
+          onclick: () => {
+            ui.audienceOpen = null;
+            ui.audienceDraft = null;
+            send({ type: 'settings.deleteAudience', id: a.id }).then((r) => r !== FAILED && toast(`${a.name} deleted`));
+          },
+        }),
+        h('span', { class: 'cw-grow' }),
+        iconButton(X, 'Cancel', { onclick: () => { ui.audienceOpen = null; ui.audienceDraft = null; render(); } }),
+        button('Save', { variant: 'cw-btn--secondary', 'data-action': 'save-audience', onclick: save })));
+  }
+
   function settingsView() {
     const s = state.settings ?? {};
     const hasKey = !!s.hasKey;
@@ -837,46 +923,41 @@ export function mountPanel(root, reviewer, { layout = 'sidebar' } = {}) {
           onclick: () => { if (s.thinking !== value) send({ type: 'settings.save', thinking: value }); },
         }, text)))));
 
-    // the persona
-    const personas = s.personas ?? [];
-    const persona = personas.find((p) => p.id === ui.personaShown) ?? personas.find((p) => p.id === s.personaID) ?? personas[0];
-    if (persona) {
-      const inUse = persona.id === s.personaID;
-      if (ui.personaDraft?.id !== persona.id) ui.personaDraft = { id: persona.id, instructions: persona.instructions ?? '' };
-      const pick = h('select', { id: 'cw-persona', 'data-focus-key': 'persona', title: inUse ? 'In use' : 'Not in use' },
-        personas.map((p) => h('option', { value: p.id, selected: p.id === persona.id }, p.name)));
-      pick.addEventListener('change', () => { ui.personaDraft = null; ui.personaShown = null; send({ type: 'settings.save', personaID: pick.value }); });
-      const instructions = h('textarea', {
-        class: 'cw-textarea', 'data-focus-key': `instructions:${persona.id}`, rows: '8', 'aria-label': 'Instructions',
-        value: ui.personaDraft.instructions, placeholder: 'How Gemini writes for this site',
-      });
-      const keep = button('Save', { variant: 'cw-btn--secondary', 'data-action': 'save-persona', hidden: ui.personaDraft.instructions === (persona.instructions ?? '') });
-      instructions.addEventListener('input', () => {
-        ui.personaDraft = { id: persona.id, instructions: instructions.value };
-        keep.hidden = instructions.value === (persona.instructions ?? '');
-      });
-      keep.addEventListener('click', () => {
-        send({ type: 'settings.save', persona: { id: persona.id, name: persona.name, instructions: instructions.value } })
-          .then((r) => r !== FAILED && toast('Instructions saved'));
-      });
-      body.append(h('div', { class: 'cw-group', 'data-persona-shown': persona.id },
-        h('label', { class: 'cw-label', for: 'cw-persona' }, 'Persona',
-          persona.source === 'model' && h('span', { class: 'cw-ok', title: 'Defined by Gemini' }, icon(Sparkles), h('span', { class: 'cw-sr' }, 'defined by Gemini'))),
-        h('div', { class: 'cw-split' },
-          h('div', { class: 'cw-control' }, pick, icon(ChevronDown, 'cw-caret')),
-          !persona.builtIn && iconButton(Trash2, 'Delete persona', {
-            variant: 'cw-btn--danger', 'data-action': 'delete-persona',
-            onclick: () => {
-              ui.personaShown = null;
-              ui.personaDraft = null;
-              send({ type: 'settings.deletePersona', id: persona.id }).then((r) => r !== FAILED && toast(`${persona.name} deleted`));
-            },
-          })),
-        instructions,
-        h('div', { class: 'cw-buttons' },
-          !inUse && button('Use', { variant: 'cw-btn--secondary', 'data-action': 'use-persona', onclick: () => { ui.personaShown = null; send({ type: 'settings.save', personaID: persona.id }); } }, Check),
-          h('span', { class: 'cw-grow' }), keep)));
-    }
+    // the voice: how to write
+    const voice = s.voice ?? { instructions: '', custom: false };
+    // the draft follows the saved voice whenever that changes
+    if (ui.voiceDraft?.base !== voice.instructions) ui.voiceDraft = { base: voice.instructions, text: voice.instructions };
+    const voiceArea = h('textarea', {
+      class: 'cw-textarea', id: 'cw-voice', 'data-focus-key': 'voice', rows: '8', value: ui.voiceDraft.text, placeholder: 'How Gemini writes for this site',
+    });
+    const saveVoice = button('Save', { variant: 'cw-btn--secondary', 'data-action': 'save-voice', hidden: ui.voiceDraft.text === voice.instructions });
+    voiceArea.addEventListener('input', () => { ui.voiceDraft.text = voiceArea.value; saveVoice.hidden = voiceArea.value === voice.instructions; });
+    saveVoice.addEventListener('click', () => {
+      const text = voiceArea.value;
+      send({ type: 'settings.save', voice: text }).then((r) => r !== FAILED && toast('Voice saved'));
+    });
+    body.append(h('div', { class: 'cw-group' },
+      h('label', { class: 'cw-label', for: 'cw-voice', title: 'How to write' }, 'Voice'),
+      voiceArea,
+      h('div', { class: 'cw-buttons' },
+        voice.custom && button('Default', {
+          'data-action': 'reset-voice', title: 'The website\'s voice again',
+          onclick: () => send({ type: 'settings.save', voice: '' }),
+        }, RotateCcw),
+        h('span', { class: 'cw-grow' }), saveVoice)));
+
+    // the audiences: who reads
+    const audiences = s.audiences ?? [];
+    const activeIDs = s.audienceIDs ?? [];
+    const list = h('ul', { class: 'cw-audiences', role: 'list' });
+    for (const a of audiences) list.append(h('li', null, audienceRow(a, activeIDs.includes(a.id), activeIDs)));
+    if (ui.audienceOpen === 'new') list.append(h('li', null, audienceEditor(null)));
+    body.append(h('div', { class: 'cw-group' },
+      h('div', { class: 'cw-label', title: 'Who reads' }, 'Audiences', h('span', { class: 'cw-grow' }),
+        ui.audienceOpen !== 'new' && iconButton(Plus, 'Add an audience', {
+          'data-action': 'add-audience', onclick: () => { ui.audienceOpen = 'new'; ui.audienceDraft = null; render(); },
+        })),
+      audiences.length || ui.audienceOpen === 'new' ? list : h('p', { class: 'cw-fine' }, 'Ask the page chat who the page is for.')));
     return view;
   }
 
@@ -911,10 +992,10 @@ export function mountPanel(root, reviewer, { layout = 'sidebar' } = {}) {
   }
 
   function mainKey() {
-    if (ui.view === 'settings') return JSON.stringify(['settings', state.settings, ui.showKey, ui.refreshing, ui.personaShown]);
+    if (ui.view === 'settings') return JSON.stringify(['settings', state.settings, ui.showKey, ui.refreshing, ui.audienceOpen]);
     const a = activeAnnotation();
-    if (a) return JSON.stringify(['detail', a, ui.editing === a.id, state.settings?.hasKey, state.recording, state.settings?.personas, state.settings?.personaID]);
-    if (ui.view === 'chat') return JSON.stringify(['chat', state.chat, state.settings?.hasKey, state.annotations?.map((x) => [x.id, x.state, x.chosenID]), state.recording, state.settings?.personas, state.settings?.personaID]);
+    if (a) return JSON.stringify(['detail', a, ui.editing === a.id, state.settings?.hasKey, state.recording, state.settings?.audiences, state.settings?.audienceIDs]);
+    if (ui.view === 'chat') return JSON.stringify(['chat', state.chat, state.settings?.hasKey, state.annotations?.map((x) => [x.id, x.state, x.chosenID]), state.recording, state.settings?.audiences, state.settings?.audienceIDs]);
     return JSON.stringify(['list', state.status, state.error, state.annotations, state.settings?.hasKey, ui.showDone, state.picking]);
   }
 
@@ -961,7 +1042,7 @@ export function mountPanel(root, reviewer, { layout = 'sidebar' } = {}) {
   function renderHeader() {
     const a = activeAnnotation();
     const atHome = ui.view === 'list' && !a;
-    const key = JSON.stringify([atHome, ui.view, !!a, state.page, state.chat?.busy]);
+    const key = JSON.stringify([atHome, ui.view, !!a, state.page, state.chat?.busy, state.chat?.messages?.length > 0]);
     if (keys.header === key) return;
     const wasHome = keys.home;
     keys.header = key;
@@ -975,6 +1056,8 @@ export function mountPanel(root, reviewer, { layout = 'sidebar' } = {}) {
     heading.title = ui.view === 'settings' ? '' : (state.page?.url ?? '');
     moreAnchor.hidden = !a;
     chatButton.hidden = !!a;
+    newChatButton.hidden = ui.view !== 'chat' || !!a || !state.chat?.messages?.length;
+    newChatButton.disabled = !!state.chat?.busy;  // the reply on its way belongs to this conversation
     chatButton.setAttribute('aria-pressed', String(ui.view === 'chat'));
     chatButton.classList.toggle('cw-busy', !!state.chat?.busy && ui.view !== 'chat');
     settingsButton.setAttribute('aria-pressed', String(ui.view === 'settings'));

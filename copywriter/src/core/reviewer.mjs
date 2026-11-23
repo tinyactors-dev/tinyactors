@@ -606,6 +606,7 @@ export function createReviewer({
       await host.idle();
     },
     async 'chat.new'() {
+      if (chat.busy) throw new Error('Wait for the answer first.'); // it belongs to this conversation
       if (!chat.messages.length) return; // the open one is new already
       endConversation();
       startConversation(nextID('c'));
@@ -614,6 +615,7 @@ export function createReviewer({
     },
     async 'chat.open'({ id }) {
       if (id === conversationID) return;
+      if (chat.busy) throw new Error('Wait for the answer first.');
       if (!conversations.get(id)?.messages.length) throw new Error('No such conversation on this page.');
       endConversation();
       startConversation(id);

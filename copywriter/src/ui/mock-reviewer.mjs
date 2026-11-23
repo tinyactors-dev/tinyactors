@@ -92,15 +92,18 @@ export function createMockReviewer({ hasKey = true, delay = 1, empty = false, st
         { id: 'gemini-3.8-flash', label: 'Gemini 3.8 Flash' },
         { id: 'gemini-3.5-pro', label: 'Gemini 3.5 Pro' },
       ],
-      personaID: 'voice',
-      personas: [
-        { id: 'voice', name: 'tinyactors.dev voice', instructions: VOICE, builtIn: true },
-        { id: 'plain', name: 'Plain English', instructions: 'Short words. One idea per sentence.' },
+      voice: { instructions: VOICE, custom: false },
+      audiences: [
+        { id: 'student', name: 'Student', description: 'Learns statecharts for a course.', wants: 'One small example.' },
       ],
+      audienceIDs: [],
     },
     annotations: empty ? [] : sample(now),
     activeID: null,
-    chat: { messages: [], busy: false },
+    chat: {
+      id: 'c1', messages: [], busy: false,
+      conversations: [{ id: 'c0', title: 'Which claims need a number?', at: now - 3 * 60 * MINUTE }],
+    },
     recording: { state: 'idle', target: null },
     totals: { kept: 0, open: 0, pages: 3 },
     exporting: 'idle',
@@ -110,6 +113,20 @@ export function createMockReviewer({ hasKey = true, delay = 1, empty = false, st
     const kept = annotations.filter((a) => a.state === 'kept').length;
     const open = annotations.filter((a) => !['kept', 'dismissed'].includes(a.state)).length;
     return { kept: kept + 2, open, pages: state.totals.pages };   // two kept on other pages
+  }
+
+  // the page chat's conversations: id → messages (the open one is state.chat)
+  const conversations = new Map([['c0', [
+    { role: 'user', text: 'Which claims need a number?', at: now - 3 * 60 * MINUTE },
+    { role: 'model', text: '“Blazing-fast” needs one: the page measures events per second.', at: now - 3 * 60 * MINUTE },
+  ]]]);
+  function chatSet(patch) {
+    const chat = { ...state.chat, ...patch };
+    if (chat.messages.length) conversations.set(chat.id, chat.messages);
+    chat.conversations = [...conversations.entries()].filter(([, m]) => m.length)
+      .map(([cid, m]) => ({ id: cid, title: m[0].text.slice(0, 60), at: m.at(-1).at }))
+      .sort((a, b) => b.at - a.at);
+    return chat;
   }
 
   function set(patch) {
@@ -194,19 +211,22 @@ export function createMockReviewer({ hasKey = true, delay = 1, empty = false, st
     },
     async note({ id: annotationID, text }) { update(annotationID, (a) => ({ ...a, note: text })); },
     async chat({ text, spoken }) {
-      set({ chat: { messages: [...state.chat.messages, { role: 'user', text, at: Date.now(), ...(spoken ? { spoken: true } : {}) }], busy: true } });
+      set({ chat: chatSet({ messages: [...state.chat.messages, { role: 'user', text, at: Date.now(), ...(spoken ? { spoken: true } : {}) }], busy: true }) });
       await wait(1100);
-      if (/persona/i.test(text)) {
-        const persona = { id: id('p'), name: 'Skeptical backend engineer', instructions: 'Readers are senior backend engineers. Prove every claim.', source: 'model' };
+      if (/who|audience|persona/i.test(text)) {
+        const audience = {
+          id: id('u'), name: 'Skeptical backend engineer', description: 'A senior backend engineer evaluating actor runtimes.',
+          knows: 'Threads, queues, Erlang.', wants: 'Numbers: memory per actor.', tasks: 'Decide whether to try it.', objections: 'Hype.', source: 'model',
+        };
         set({
-          settings: { ...state.settings, personas: [...state.settings.personas, persona], personaID: persona.id },
-          chat: {
+          settings: { ...state.settings, audiences: [...state.settings.audiences, audience], audienceIDs: [...state.settings.audienceIDs, audience.id] },
+          chat: chatSet({
             busy: false,
             messages: [...state.chat.messages, {
-              role: 'model', at: Date.now(), text: 'Saved a persona for senior backend engineers and switched to it.',
-              personas: [{ name: persona.name, action: 'define', id: persona.id }], thoughts: '**Defining the reader**\nSenior engineers distrust adjectives.', seconds: 4,
+              role: 'model', at: Date.now(), text: 'The page is for backend engineers evaluating actor runtimes; I saved them as an audience.',
+              audiences: [{ name: audience.name, action: 'define', id: audience.id }], thoughts: '**Finding the reader**\nThe page talks to engineers.', seconds: 4,
             }],
-          },
+          }),
         });
         return;
       }
@@ -220,14 +240,22 @@ export function createMockReviewer({ hasKey = true, delay = 1, empty = false, st
       };
       set({
         annotations: [proposed, ...state.annotations],
-        chat: {
+        chat: chatSet({
           busy: false,
           messages: [...state.chat.messages, {
             role: 'model', at: t, annotations: [proposed.id],
             text: 'The page has **three headings** over 8 words. The second says least: lead with the verbs.',
           }],
-        },
+        }),
       });
+    },
+    async 'chat.new'() {
+      if (!state.chat.messages.length) return;
+      set({ chat: chatSet({ id: id('c'), messages: [], busy: false }) });
+    },
+    async 'chat.open'({ id: chatID }) {
+      if (!conversations.has(chatID)) throw new Error('No such conversation on this page.');
+      set({ chat: chatSet({ id: chatID, messages: conversations.get(chatID), busy: false }) });
     },
     async 'pick.start'() { set({ picking: true }); },
     async 'pick.stop'() { set({ picking: false }); },
@@ -236,7 +264,7 @@ export function createMockReviewer({ hasKey = true, delay = 1, empty = false, st
       set({ recording: { state: 'transcribing', target } });
       const annotation = target && target !== 'page' && get(target);
       if (annotation) update(target, (a) => ({ ...a, state: 'transcribing' }));
-      else set({ chat: { ...state.chat, busy: true } });
+      else set({ chat: chatSet({ busy: true }) });
       await wait(700);
       set({ recording: { state: 'idle', target: null } });
       const text = 'Make it shorter and lead with the number.';
@@ -253,16 +281,24 @@ export function createMockReviewer({ hasKey = true, delay = 1, empty = false, st
       if (command.apiKey) settings.hasKey = true;
       if (command.rememberKey != null) settings.rememberKey = command.rememberKey;
       if (command.model) settings.model = command.model;
-      if (command.personaID) settings.personaID = command.personaID;
       if (command.thinking) settings.thinking = command.thinking;
-      if (command.persona) settings.personas = settings.personas.map((p) => (p.id === command.persona.id ? { ...p, ...command.persona } : p));
+      if (command.voice !== undefined) settings.voice = command.voice ? { instructions: command.voice, custom: command.voice !== VOICE } : { instructions: VOICE, custom: false };
+      if (command.audienceIDs) settings.audienceIDs = command.audienceIDs;
+      if (command.audience) {
+        const audience = { ...command.audience, id: command.audience.id || id('u') };
+        settings.audiences = settings.audiences.some((a) => a.id === audience.id)
+          ? settings.audiences.map((a) => (a.id === audience.id ? { ...a, ...audience } : a))
+          : [...settings.audiences, audience];
+      }
       await wait(150);
       set({ settings });
     },
-    async 'settings.deletePersona'({ id: personaID }) {
-      const settings = { ...state.settings, personas: state.settings.personas.filter((p) => p.id !== personaID) };
-      if (settings.personaID === personaID) settings.personaID = settings.personas[0].id;
-      set({ settings });
+    async 'settings.deleteAudience'({ id: audienceID }) {
+      set({ settings: {
+        ...state.settings,
+        audiences: state.settings.audiences.filter((a) => a.id !== audienceID),
+        audienceIDs: state.settings.audienceIDs.filter((x) => x !== audienceID),
+      } });
     },
     async 'settings.forgetKey'() { set({ settings: { ...state.settings, hasKey: false, rememberKey: false } }); },
     async 'models.refresh'() {

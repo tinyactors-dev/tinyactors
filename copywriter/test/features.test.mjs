@@ -435,3 +435,17 @@ test('pick mode: a page without it refuses; another page ends it', async () => {
   assert.equal(second.reviewer.getState().picking, false);
   second.reviewer.close();
 });
+
+test('conversations: while the model answers, the conversation stays open', async () => {
+  const fetch = gatedFetch(geminiReply('Later.'));
+  const release = fetch.hold(0);
+  const { reviewer } = await setup({ fetch });
+  const asking = reviewer.dispatch({ type: 'chat', text: 'Slow?' });
+  await until(() => reviewer.getState().chat.busy);
+  await assert.rejects(reviewer.dispatch({ type: 'chat.new' }), /Wait for the answer/);
+  release();
+  await asking;
+  await reviewer.dispatch({ type: 'chat.new' });
+  assert.deepEqual(reviewer.getState().chat.messages, []);
+  reviewer.close();
+});

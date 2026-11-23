@@ -360,3 +360,37 @@ test('on a phone, pick mode ends with Escape on the page and with the pick butto
   await page.waitForFunction(() => !tinyactorsCopywriter.reviewer.getState().picking);
   await context.close();
 });
+
+test('a database of version 1: the page\'s chat is its first conversation, an edited default persona the voice', async () => {
+  const context = await browser.newContext(PHONE);
+  await context.addInitScript(() => {
+    localStorage.setItem('tinyactors-copywriter', 'on');
+    sessionStorage.setItem('tinyactors-copywriter-key', 'AIza-test-key');
+  });
+  const page = await context.newPage();
+  // version 1, as the copywriter left it before 2026-11-23, made on the page's origin before the widget loads
+  await page.goto(`${origin(server)}/copywriter/`);
+  await page.evaluate((url) => new Promise((resolve, reject) => {
+    const open = indexedDB.open('copywriter', 1);
+    open.onupgradeneeded = () => {
+      const db = open.result;
+      db.createObjectStore('annotations', { keyPath: ['page', 'id'] }).createIndex('page', 'page');
+      db.createObjectStore('chats', { keyPath: 'page' }).put({ page: url, messages: [{ role: 'user', text: 'Old question', at: '2026-11-20T10:00:00.000Z' }, { role: 'model', text: 'Old answer', at: '2026-11-20T10:00:05.000Z' }] });
+      db.createObjectStore('settings', { keyPath: 'key' }).put({ key: 'settings', value: { model: 'gemini-4-hydrogen', personaID: 'terse', thinking: 'low' } });
+      const personas = db.createObjectStore('personas', { keyPath: 'id' });
+      personas.put({ id: 'tinyactors-voice', name: 'tinyactors voice', instructions: 'Edited voice.' });
+      personas.put({ id: 'terse', name: 'Terse', instructions: 'Five words.' });
+    };
+    open.onsuccess = () => { open.result.close(); resolve(); };
+    open.onerror = () => reject(open.error);
+  }), `${origin(server)}/page/page.html`);
+  await page.goto(`${origin(server)}/page/page.html`);
+  await page.waitForFunction(() => globalThis.tinyactorsCopywriter?.reviewer.getState().status === 'ready');
+  const state = await page.evaluate(() => tinyactorsCopywriter.reviewer.getState());
+  assert.equal(state.chat.id, 'c0');
+  assert.deepEqual(state.chat.messages.map((m) => m.text), ['Old question', 'Old answer']);
+  assert.deepEqual(state.settings.voice, { instructions: 'Edited voice.', custom: true });
+  assert.equal(state.settings.thinking, 'low', 'the other settings stay');
+  assert.deepEqual(state.settings.audiences, []);
+  await context.close();
+});
