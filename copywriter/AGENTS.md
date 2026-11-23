@@ -492,7 +492,10 @@ copywriter/
   site/                   the /copywriter/ page: download the extension, turn the widget on for this device
   test/                   node:test for charts and core (readings.test.mjs: the reading actors; audiences.test.mjs: pages' sets and side-by-side rewrites; site.test.mjs: what pages say they are for, site audiences; talks.test.mjs:
                           conversations with an audience; plans.test.mjs: revising a page, the site map of
-                          test/fixtures/site/); Playwright for
+                          test/fixtures/site/; verify.test.mjs: the site view's grid, the site reading's
+                          coordinator (three at once, cancel, a failed page), history, Check changes, the criteria
+                          check and the export's ticked criteria, against a fake Gemini that answers by what each
+                          request asks); Playwright for
                           the panel over src/ui/mock-reviewer.mjs (?read=0: no reading yet; ?suggest=1: the page's
                           audiences suggested; ?diverged=1: the site audience edited here; its plan, and its export
                           built by the real packet code, `reviewer.exported()`), the extension and the widget
@@ -681,7 +684,7 @@ transcript exists; then the message shows, and the conversation goes on
 | `site.read` | `urls?` | reads the site's pages (those named, else every page of the site map with audiences) as their own audiences, in the background, at most three at a time, and checks each page's acceptance criteria; resolves to the jobs' count at once. Refused without a key, a site map or `fetchPage`, and while one runs |
 | `site.cancel` | | stops the site reading: no job starts, the readings under way end and the ones they replaced are back |
 | `site.open` | `url` | opens that page (`page.open`) |
-| `verify` | | "Check changes": reads the open page again as its audiences (those it links and those read) and checks its criteria, as a site reading of one page |
+| `verify` | | "Check changes": reads the open page again as the audiences it was read as (none read: those it links) and checks its criteria, as a site reading of one page |
 | `export` | `scope: 'page' \| 'all'`, `to: 'download' \| 'clipboard'` | the kept changes, the open items, the checklist gaps not made into open items, and the accepted plan: criteria, tasks for other pages, proposed pages |
 
 ## Platform adapters (what each platform gives the core)

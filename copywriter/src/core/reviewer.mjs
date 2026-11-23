@@ -1779,7 +1779,8 @@ export function createReviewer({
       if (!(await credentials.get())) throw new Error('No Gemini key: add yours in Settings.');
       const read = [...readings.values()].filter((r) => r.page === current.url && r.state === 'done').map((r) => r.audienceID);
       const linkedHere = linkedIDs(current.url);
-      const ids = [...new Set([...linkedHere, ...read])].filter((id) => audiences.some((a) => a.id === id));
+      // the same audiences as before; a page never read, the ones it links
+      const ids = [...new Set(read.length ? read : linkedHere)].filter((id) => audiences.some((a) => a.id === id));
       if (!ids.length && !criteriaFor(current.url, [...plans.values()], standing).length) throw new Error('Read the page as an audience first.');
       return readSite([{ url: current.url, title: current.title, audienceIDs: ids }], { origin: originOf(current.url) });
     },

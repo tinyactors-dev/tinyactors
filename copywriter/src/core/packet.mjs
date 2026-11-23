@@ -93,7 +93,7 @@ const kindNote = (pages, url) => (pages[url]?.kind ? ` The page is a ${pages[url
 const metOf = (items, url, c) => (items.met || []).find((m) => m.text === c.text && (m.page === url || pathOf(m.page) === pathOf(url)));
 // A criterion's box in CHANGES.md: ticked when it is met already.
 const box = (items, url, c) => (metOf(items, url, c) ? '- [x]' : '- [ ]');
-const metNote = (items, url, c) => { const m = metOf(items, url, c); return m ? ` Met already${m.quote ? `: “${m.quote}”` : ''}.` : ''; };
+const metNote = (items, url, c) => { const m = metOf(items, url, c); return m ? ` Met already${m.quote ? `: “${m.quote}”` : '.'}` : ''; };
 
 // The need an annotation is about (a reading's finding, or a gap made an open item).
 const needOf = (a) => a.finding?.needID || a.finding?.item?.needID || '';
@@ -402,8 +402,8 @@ function readme(items, at) {
     '',
     `The plan of a page gives acceptance criteria (${[...items.criteria.values()].reduce((n, c) => n + c.length, 0)} here), each under the page`,
     'it names in CHANGES.md, and the tasks for other pages carry their own. Check each',
-    'criterion against the built site and report which hold. One ticked ([x], "Met',
-    'already") held when the copywriter last read its page: confirm it, nothing more.',
+    'criterion against the built site and report which hold. One ticked ([x],',
+    '"Met already") held when the copywriter last read its page: confirm it, nothing more.',
     '',
     'A need is named `audience.need` (`tech-lead.host-dies`): the audience\'s id and the',
     'need\'s, from the site\'s audience files. The site says which needs each page',
