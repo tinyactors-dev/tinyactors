@@ -23,7 +23,11 @@ runs = {
   'quickjs' => [],
   'quickjs isolated' => %w[--suite scenarios --suite w3c --realm isolated],
   'test datamodel' => ['--suite', 'w3c', '--datamodel', 'test',
-                       '--skip', Core::ROOT.join('tests/support/datamodel_test_w3c_skip.txt').to_s]
+                       '--skip', Core::ROOT.join('tests/support/datamodel_test_w3c_skip.txt').to_s],
+  # the json datamodel (src/datamodel_json, a spike): scenarios and W3C,
+  # but for the tests confJSON.xsl cannot translate (skip-json.txt)
+  'json datamodel' => ['--suite', 'scenarios', '--suite', 'w3c', '--datamodel', 'json',
+                       '--skip', Core::ROOT.join('../tinyactors-test/suites/w3c/skip-json.txt').to_s]
 }.transform_values { |options| ['--kind', 'reference', *options] }
 
 # One after another: the first converts the W3C suite and the scenarios

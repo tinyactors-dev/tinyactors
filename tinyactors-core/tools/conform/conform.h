@@ -21,6 +21,7 @@
 #include <tinyactors/host.h>
 
 #include "support/datamodel_test.h"
+#include <tinyactors/datamodel_json.h>
 
 /* ---- bytes the program owns ---------------------------------------------------- */
 
@@ -164,12 +165,15 @@ void conform_result_sends(conform_result *result, const char *name, conform_send
 typedef struct conform_datamodel {
     ta_datamodel_ecmascript *ecmascript;
     datamodel_test *test;
+    ta_datamodel_json *json;
     uint32_t realm;
     ta_datamodel_binding binding;
 } conform_datamodel;
 /* The datamodel the call's `datamodel` and `realm` params name, made new; 0
  * with the call's error set when they name none it offers. */
 int conform_datamodel_open(conform_datamodel *datamodel, conform_call *call);
+/* The json datamodel's function library (json_functions.c). */
+ta_status conform_json_functions(ta_datamodel_json *json);
 /* Again, as it was opened (a restart): 0 when the heap refused. */
 int conform_datamodel_reopen(conform_datamodel *datamodel);
 void conform_datamodel_close(conform_datamodel *datamodel);

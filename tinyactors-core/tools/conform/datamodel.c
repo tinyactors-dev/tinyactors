@@ -11,7 +11,19 @@
 
 #include <tinyactors/runtime.h>
 
+static int json_make(conform_datamodel *datamodel) {
+    ta_datamodel_json_config config;
+    memset(&config, 0, sizeof config);
+    config.size = sizeof config;
+    config.allocator = ta_runtime_malloc();
+    if (ta_datamodel_json_new(&config, &datamodel->json) != TA_OK) return 0;
+    if (conform_json_functions(datamodel->json) != TA_OK) return 0;
+    datamodel->binding = ta_datamodel_json_binding(datamodel->json);
+    return 1;
+}
+
 static int datamodel_make(conform_datamodel *datamodel) {
+    if (datamodel->json) return 1;
     if (datamodel->test) {
         datamodel->binding = datamodel_test_binding(datamodel->test);
         return 1;
@@ -34,6 +46,7 @@ int conform_datamodel_open(conform_datamodel *datamodel, conform_call *call) {
     memset(datamodel, 0, sizeof *datamodel);
     ta_string_view name = ta_string("quickjs"), realm = ta_string("auto");
     if (!conform_text(call, "datamodel", &name) || !conform_text(call, "realm", &realm)) return 0;
+    if (view_is(name, "json")) return json_make(datamodel);
     if (!view_is(name, "quickjs") && !view_is(name, "test")) {
         conform_fail(call, &(conform_failure){CONFORM_INVALID_PARAMS, "range", "params.datamodel"},
                      "ta-conform offers the datamodels quickjs and test, no native one");
@@ -52,8 +65,10 @@ int conform_datamodel_open(conform_datamodel *datamodel, conform_call *call) {
 
 int conform_datamodel_reopen(conform_datamodel *datamodel) {
     int test = datamodel->test != NULL;
+    int json = datamodel->json != NULL;
     uint32_t realm = datamodel->realm;
     conform_datamodel_close(datamodel);
+    if (json) return json_make(datamodel);
     datamodel->realm = realm;
     if (test && !(datamodel->test = datamodel_test_new())) return 0;
     return datamodel_make(datamodel);
@@ -62,6 +77,7 @@ int conform_datamodel_reopen(conform_datamodel *datamodel) {
 void conform_datamodel_close(conform_datamodel *datamodel) {
     if (datamodel->ecmascript) ta_datamodel_ecmascript_free(datamodel->ecmascript);
     if (datamodel->test) datamodel_test_free(datamodel->test);
+    if (datamodel->json) ta_datamodel_json_free(datamodel->json);
     memset(datamodel, 0, sizeof *datamodel);
 }
 
@@ -86,12 +102,18 @@ static ta_status snapshot_write(void *context, ta_buffer *out) {
     return ta_datamodel_ecmascript_snapshot((ta_datamodel_ecmascript *)context, out);
 }
 
+static ta_status json_snapshot_write(void *context, ta_buffer *out) {
+    return ta_datamodel_json_snapshot((ta_datamodel_json *)context, out);
+}
+
 ta_status conform_datamodel_snapshot(conform_datamodel *datamodel, ta_buffer *out) {
+    if (datamodel->json) return conform_write_growing(&(conform_writing){json_snapshot_write, datamodel->json}, out);
     if (!datamodel->ecmascript) return TA_ERROR_UNSUPPORTED;
     return conform_write_growing(&(conform_writing){snapshot_write, datamodel->ecmascript}, out);
 }
 
 ta_status conform_datamodel_restore(conform_datamodel *datamodel, ta_bytes state) {
+    if (datamodel->json) return ta_datamodel_json_restore(datamodel->json, state);
     if (!datamodel->ecmascript) return TA_ERROR_UNSUPPORTED;
     return ta_datamodel_ecmascript_restore(datamodel->ecmascript, state);
 }

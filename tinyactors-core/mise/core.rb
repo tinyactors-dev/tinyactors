@@ -60,6 +60,9 @@ module Core
     # The SCXML ECMAScript data model; link it like a tree-sitter language.
     Layer.new(name: 'datamodel_ecmascript', uses: %w[image quickjs],
               sources: %w[src/datamodel_ecmascript/datamodel_ecmascript.c]),
+    # The "json" data model (docs/proposals/json-datamodel.md): a spike, on a branch.
+    Layer.new(name: 'datamodel_json', uses: %w[image base], freestanding: true,
+              sources: %w[src/datamodel_json/datamodel_json.c]),
     # The tests' data model (tests/support), linked by the test programs only.
     Layer.new(name: 'test_datamodel', uses: %w[image], libraries: %w[-lm], sources: %w[tests/support/datamodel_test.c])
   ].to_h { |layer| [layer.name, layer] }.freeze
@@ -226,8 +229,8 @@ module Core
     # The C reference implementation of the conformance suite's driver
     # protocol (../tinyactors-test/docs/driver.md); `mise run conform` runs
     # the suite against it.
-    Program.new(name: 'ta-conform', uses: %w[host runtime compile basic_http test_datamodel] + ECMASCRIPT,
-                sources: %w[conform.c datamodel.c vectors.c scenario.c w3c.c].map { |s| "tools/conform/#{s}" },
+    Program.new(name: 'ta-conform', uses: %w[host runtime compile basic_http test_datamodel datamodel_json] + ECMASCRIPT,
+                sources: %w[conform.c datamodel.c json_functions.c vectors.c scenario.c w3c.c].map { |s| "tools/conform/#{s}" },
                 defines: {}),
     # The torture chamber's host (tools/torture/README.md).
     Program.new(name: 'torture-bench', uses: %w[host runtime compile otlp] + ECMASCRIPT,

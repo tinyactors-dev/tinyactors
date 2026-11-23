@@ -1,0 +1,38 @@
+# W3C IRP tests confJSON.xsl does not translate, one per line:
+#   <test id> <reason>
+# The run task skips them for --language json, besides skip.txt.
+#
+# The tests of the ECMAScript data model (SCXML 1.0, B.2) name it
+# (datamodel="ecmascript") instead of conf:datamodel, so no stylesheet
+# changes their datamodel, and most are written in ECMAScript: they test
+# quickjs, which runs them with --language ecmascript.
+444 B.2 ECMAScript data model: datamodel="ecmascript"; <data> creates an ECMAScript variable (cond="++var1==2")
+445 B.2 ECMAScript data model: datamodel="ecmascript"; an unassigned <data> is ECMAScript undefined (var1==undefined; json: the conf:unboundVar tests, 277 and 280)
+446 B.2 ECMAScript data model: datamodel="ecmascript"; JSON content of <data> becomes an ECMAScript array (instanceof Array; json: conf:array123 content, 150 to 156)
+448 B.2 ECMAScript data model: datamodel="ecmascript"; one global ECMAScript scope (json: one document per session, 278)
+449 B.2 ECMAScript data model: datamodel="ecmascript"; ECMAScript ToBoolean in cond (cond="'foo'"; json has no truthiness: 309, 344)
+451 B.2 ECMAScript data model: datamodel="ecmascript"; In() in ECMAScript (json: the conf:inState tests, such as 310)
+452 B.2 ECMAScript data model: datamodel="ecmascript"; any ECMAScript left-hand-side expression is a location (a constructor in <script>)
+453 B.2 ECMAScript data model: datamodel="ecmascript"; any ECMAScript expression is a value (a function expression)
+456 B.2 ECMAScript data model: datamodel="ecmascript"; an ECMAScript program in <script> (Var1+=1)
+457 B.2 ECMAScript data model: datamodel="ecmascript"; legal foreach collections are ECMAScript arrays (instanceof Array; json: 152)
+459 B.2 ECMAScript data model: datamodel="ecmascript"; foreach order of an ECMAScript array (cond uses ECMAScript's |; json: 153)
+460 B.2 ECMAScript data model: datamodel="ecmascript"; foreach shallow copy ([].concat(Var1, [4]))
+557 B.2 ECMAScript data model: datamodel="ecmascript"; XML content of <data> becomes a DOM (getElementsByTagName)
+558 B.2 ECMAScript data model: datamodel="ecmascript"; other content of <data> becomes a space-normalized ECMAScript string
+560 B.2 ECMAScript data model: datamodel="ecmascript"; key-value pairs become properties of _event.data (_event.data.aParam)
+561 B.2 ECMAScript data model: datamodel="ecmascript"; XML in _event.data becomes a DOM (getElementsByTagName)
+562 B.2 ECMAScript data model: datamodel="ecmascript"; other content of _event.data becomes a space-normalized ECMAScript string
+569 B.2 ECMAScript data model: datamodel="ecmascript"; _ioprocessors entries are ECMAScript objects (_ioprocessors['scxml'].location)
+578 B.2 ECMAScript data model: datamodel="ecmascript"; JSON content of _event.data becomes an ECMAScript object (_event.data.productName)
+#
+# Scripts: the json datamodel has none, and every <script> is
+# error.execution. These tests pass only when <conf:script/> assigns 1 to
+# Var1.
+302 a chart-level <conf:script/> must set Var1 to 1 at load time; json has no <script> (error.execution), so Var1 is never set
+303 <conf:script/> in <onentry> must set Var1 to 1 after an <assign>; json has no <script> (error.execution)
+304 <conf:script/> must declare Var1 (var Var1 = 1); json has no <script>, and a variable is only a <data> or a <foreach> item or index
+#
+# Values the json datamodel does not have.
+530 <assign> with an <scxml> child must put that XML in Var1 for <content expr> to invoke; in json, XML children of <assign> are the expression's error (error.execution), so Var1 keeps 1 and the invoke fails
+567 BasicHTTP delivers form fields as text, so _event.data.param1 is '2'; conf:idVal="1=2" compares it with the number 2, which ECMAScript's == coerces and json's eq does not (eq('2', 2) is false)
