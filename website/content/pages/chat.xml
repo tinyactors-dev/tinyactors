@@ -1,11 +1,11 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <page xmlns="https://www.tinyactors.dev/ns/site" id="chat" path="/chat/">
   <title>Build a team chat with tinyactors</title>
-  <description>Try a team chat in your browser, then build it in five steps, ending with a thousand users and fifty in memory.</description>
+  <description>Try a team chat in your browser, then build it in seven steps, from one room to users who ride out a lost connection.</description>
 
   <hero>
     <headline>Build a team chat</headline>
-    <lede>Try the finished chat in this tab, then build it in five steps, each a program you can run.</lede>
+    <lede>Try the finished chat in this tab, then build it in seven steps, each a program you can run.</lede>
     <install>
       <command package="node" guide="https://github.com/tinyactors-dev/tinyactors-napi#readme">npm install @tinyactors/node</command>
     </install>
@@ -79,6 +79,32 @@
       <code src="../../examples/chat/5-hibernation/output.txt" language="text" role="output"/>
     </example>
     <p>The charts are step 4's: an event, or a user's 300-second timer, loads a saved actor again.</p>
+  </section>
+
+  <section id="typing">
+    <heading>6. Show who is typing</heading>
+    <p>A notice for every key would flood every screen. The user's chart tells its room at most once every 3 seconds, on a timer of its own.</p>
+    <code src="../../examples/chat/6-typing/charts/user.scxml" lines="37-53" language="scxml" file="charts/user.scxml"/>
+    <p>Each other member's chart shows the notice for 5 seconds after the last one, restarting its timer on each.</p>
+    <code src="../../examples/chat/6-typing/charts/user.scxml" lines="55-80" language="scxml" file="charts/user.scxml"/>
+    <p>The program types three keys as ada and posts, then lets bob's indicator run out.</p>
+    <example>
+      <code src="../../examples/chat/6-typing/main.mjs" lines="40-56" language="javascript" file="main.mjs"/>
+      <code src="../../examples/chat/6-typing/output.txt" language="text" role="output"/>
+    </example>
+  </section>
+
+  <section id="reconnect">
+    <heading>7. Ride out a lost connection</heading>
+    <p>A phone in a tunnel loses its connection for a few seconds, and until now everyone saw its user go offline. On <code>connection.lost</code>, the user's chart waits 30 seconds in <code>reconnecting</code> and keeps the messages that come meanwhile.</p>
+    <code src="../../examples/chat/7-reconnect/charts/user.scxml" lines="184-194" language="scxml" file="charts/user.scxml"/>
+    <p>Back within 30 seconds, the user returns to <code>active</code> or <code>away</code> through the history state <code>resume</code>, and gets the held messages.</p>
+    <code src="../../examples/chat/7-reconnect/charts/user.scxml" lines="31-56" language="scxml" file="charts/user.scxml"/>
+    <p>Bob is back after 10 seconds, then gone for 40: only the second loss makes him offline.</p>
+    <example>
+      <code src="../../examples/chat/7-reconnect/main.mjs" lines="40-58" language="javascript" file="main.mjs"/>
+      <code src="../../examples/chat/7-reconnect/output.txt" language="text" role="output"/>
+    </example>
   </section>
 
   <section id="next">

@@ -1,0 +1,7 @@
+-- bob enters a tunnel, ada posts
+ada sees ada in general: where are you?
+-- 10 seconds later bob is back
+bob sees ada in general: where are you?
+-- bob loses the connection for 40 seconds
+ada sees bob is offline
+ada sees ada in general: gone?

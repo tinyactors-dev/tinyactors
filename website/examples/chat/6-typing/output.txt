@@ -1,0 +1,14 @@
+-- ada types three keys
+bob sees ada typing in general
+cat sees ada typing in general
+-- 4 seconds pass, ada types and posts
+ada sees ada in general: lunch?
+bob sees ada stop typing in general
+cat sees ada stop typing in general
+bob sees ada in general: lunch?
+cat sees ada in general: lunch?
+-- bob types, then stops for 6 seconds
+ada sees bob typing in general
+cat sees bob typing in general
+ada sees bob stop typing in general
+cat sees bob stop typing in general

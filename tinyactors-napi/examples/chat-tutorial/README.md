@@ -1,6 +1,6 @@
 # Chat tutorial
 
-This series builds a chat in five steps. Each step is a program you can
+This series builds a chat in seven steps. Each step is a program you can
 run, and each adds one idea to the step before.
 
 1. [A room](1-room/): one actor, events from your program, an I/O processor.
@@ -8,8 +8,11 @@ run, and each adds one idea to the step before.
 3. [The workspace](3-workspace/): a collection actor makes the rooms.
 4. [The status roster](4-roster/): the workspace tracks every user's status.
 5. [Hibernation](5-hibernation/): a thousand users, fifty in memory.
+6. [Who is typing](6-typing/): a throttle and an expiry, as timers.
+7. [A lost connection](7-reconnect/): a grace period, and the messages it holds.
 
-The next step will run the chat in a browser.
+The website runs step 7's chat in the browser:
+https://www.tinyactors.dev/chat/.
 
 [Chat rooms](../chat-rooms/) is the full application: sockets, a
 heartbeat, a database and a file store.
