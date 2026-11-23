@@ -21,6 +21,14 @@
   `audiences` holds the names of the audiences the last rewrites were
   written for (the reply's `for`), which the export names.
 
+  A finding of a reading (charts/reading.scxml) is an annotation of
+  source 'audience' whose `finding` is {audienceID, kind, explanation,
+  need?, section?, item?}; its proposed rewrite is its first suggestion.
+  One with no `anchor` is page-level: what the page lacks, never located
+  or previewed. A newer reading of the audience sends `retire`: a finding
+  the reviewer has not touched (draft or suggested, no note, no message,
+  no text of their own) deletes itself.
+
   A suggestion's `after` is the number of messages before it: the panel
   shows it after the message that brought it. The record is the datamodel
   but `request` and `clip`. `state` names the decision for
@@ -45,6 +53,8 @@
     <data id="updatedAt" expr="null"/>
     <data id="state" expr="'new'"/>
     <data id="audiences" expr="[]"/>
+    <!-- a reading's finding: {audienceID, kind, explanation, need?, section?, item?} -->
+    <data id="finding" expr="null"/>
     <!-- what the next model request carries besides the messages: {more} -->
     <data id="request" expr="null"/>
     <!-- the id of the clip being transcribed (the core keeps the audio) -->
@@ -70,8 +80,8 @@
     <!-- Every state raises `changed`: the record goes to the panel and to the store. -->
     <transition event="changed">
       <assign location="updatedAt" expr="new Date().toISOString()"/>
-      <send type="ui" event="changed" namelist="id page lang original anchor anchorFound note source suggestions chosenID messages error createdAt updatedAt state audiences"/>
-      <send type="store" event="save" namelist="id page lang original anchor anchorFound note source suggestions chosenID messages error createdAt updatedAt state audiences"/>
+      <send type="ui" event="changed" namelist="id page lang original anchor anchorFound note source suggestions chosenID messages error createdAt updatedAt state audiences finding"/>
+      <send type="store" event="save" namelist="id page lang original anchor anchorFound note source suggestions chosenID messages error createdAt updatedAt state audiences finding"/>
     </transition>
     <transition event="note">
       <assign location="note" expr="_event.data.text"/>
@@ -109,6 +119,8 @@
       <transition cond="state === 'new' &amp;&amp; note" target="asking">
         <assign location="messages" expr="[{ role: 'user', text: note, at: createdAt }]"/>
       </transition>
+      <!-- page-level: nothing on the page to find -->
+      <transition cond="!anchor" target="open"/>
       <transition target="open">
         <send type="page" event="locate"><content expr="({ id, anchor })"/></send>
       </transition>
@@ -124,9 +136,11 @@
       </state>
       <state id="draft">
         <onentry><assign location="state" expr="'draft'"/><raise event="changed"/></onentry>
+        <transition event="retire" cond="source === 'audience' &amp;&amp; !note &amp;&amp; !messages.length &amp;&amp; !suggestions.some((s) => s.own)" target="deleted"/>
       </state>
       <state id="suggested">
         <onentry><assign location="state" expr="'suggested'"/><raise event="changed"/></onentry>
+        <transition event="retire" cond="source === 'audience' &amp;&amp; !note &amp;&amp; !messages.length &amp;&amp; !suggestions.some((s) => s.own)" target="deleted"/>
       </state>
       <state id="failed">
         <onentry><assign location="state" expr="'failed'"/><raise event="changed"/></onentry>
@@ -151,11 +165,15 @@
       <transition event="suggest" target="asking">
         <assign location="request" expr="({ more: true })"/>
       </transition>
+      <!-- page-level: the reviewer's own text to add, never previewed -->
+      <transition event="edit" cond="!anchor" target="suggested">
+        <assign location="suggestions" expr="suggestions.concat([{ id: 's' + (suggestions.length + 1), text: _event.data.text, rationale: 'Your own text', own: true, after: messages.length }])"/>
+      </transition>
       <transition event="edit" target="previewing">
         <assign location="suggestions" expr="suggestions.concat([{ id: 's' + (suggestions.length + 1), text: _event.data.text, rationale: 'Your own text', own: true, after: messages.length }])"/>
         <assign location="chosenID" expr="suggestions[suggestions.length - 1].id"/>
       </transition>
-      <transition event="preview" cond="suggestions.some((s) => s.id === _event.data.suggestionID)" target="previewing">
+      <transition event="preview" cond="anchor &amp;&amp; suggestions.some((s) => s.id === _event.data.suggestionID)" target="previewing">
         <assign location="chosenID" expr="_event.data.suggestionID"/>
       </transition>
       <transition event="dismiss" target="dismissed"/>
@@ -191,7 +209,7 @@
         <assign location="state" expr="'asking'"/>
         <assign location="error" expr="null"/>
         <raise event="changed"/>
-        <send type="model" event="rewrite" namelist="id page original note messages suggestions request"/>
+        <send type="model" event="rewrite" namelist="id page original note messages suggestions request finding anchor"/>
       </onentry>
       <transition event="model.reply" target="opening">
         <assign location="messages" expr="messages.concat([reply(_event.data)])"/>
@@ -230,7 +248,7 @@
         <assign location="chosenID" expr="null"/>
         <assign location="error" expr="'The text is no longer on the page.'"/>
       </transition>
-      <transition event="preview" cond="suggestions.some((s) => s.id === _event.data.suggestionID)" target="previewing">
+      <transition event="preview" cond="anchor &amp;&amp; suggestions.some((s) => s.id === _event.data.suggestionID)" target="previewing">
         <assign location="chosenID" expr="_event.data.suggestionID"/>
       </transition>
       <transition event="edit" target="previewing">

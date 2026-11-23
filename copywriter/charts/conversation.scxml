@@ -14,9 +14,16 @@
   audience calls of a reply (`define_audience`, `use_audiences`) go to the
   `settings` processor, and the model's message names them (`audiences`).
 
-    model    chat         → model.reply {text, proposed?, rewrites, audiences, for, sources?, thoughts?, seconds?} | model.error {message}
+  Reading the page as an audience: the core's `read {readings}` (the
+  reviewer's "Read as") and a reply's `readings` (the model's `read_as`)
+  each name the readings to start, {name, audienceID, audience, previous,
+  replaces}; this actor spawns a reading actor (charts/reading.scxml) for
+  each through the Spawner, and they run side by side. The model's message
+  names them as audience chips of action 'read'.
+
+    model    chat         → model.reply {text, proposed?, rewrites, audiences, readings?, for, sources?, thoughts?, seconds?} | model.error {message}
              transcribe   → model.transcript {text} | model.error {message}   (the clip's id)
-    spawn    spawn        → spawned {name, address}    (tinyactors' Spawner)
+    spawn    spawn        → spawned {name, address}    (tinyactors' Spawner): annotations and readings
     settings audience     → audience.saved {ids: {name: id}} | audience.refused {message}
     store    chat         {page, id, messages}, after every change
     ui       chat         {page, id, messages, busy, error}, after every change
@@ -65,11 +72,23 @@
       if (pending.length) m.annotations = pending.map((p) => p.name);
       if (data.proposed) m.proposed = true;
       var named = (data.audiences || []).flatMap((c) => (c.action === 'use' ? c.names : [c.name]).map((name) => ({ name: name, action: c.action })));
+      named = named.concat((data.readings || []).map((r) => ({ name: r.audience, action: 'read', id: r.audienceID })));
       if (named.length) m.audiences = named;
       if (data.sources &amp;&amp; data.sources.length) m.sources = data.sources;
       if (data.thoughts) m.thoughts = data.thoughts;
       if (data.seconds) m.seconds = data.seconds;
       return m;
+    }
+
+    // The Spawner's request for a reading actor of one audience.
+    function reading(r, page, lang) {
+      return {
+        chart: 'reading', name: r.name,
+        params: {
+          name: r.name, page: page, lang: lang, audienceID: r.audienceID, audience: r.audience,
+          previous: r.previous || [], replaces: r.replaces || null, state: 'new',
+        },
+      };
     }
   </script>
 
@@ -88,6 +107,13 @@
       <assign location="error" expr="_event.data.message"/>
       <raise event="changed"/>
     </transition>
+    <!-- the reviewer's "Read as": a reading actor per audience, whatever this conversation is doing -->
+    <transition event="read">
+      <foreach array="_event.data.readings" item="r">
+        <send type="spawn" event="spawn"><content expr="reading(r, page, lang)"/></send>
+      </foreach>
+    </transition>
+    <transition event="spawned"/>
 
     <state id="idle">
       <onentry><assign location="busy" expr="false"/><raise event="changed"/></onentry>
@@ -138,6 +164,9 @@
         </foreach>
         <foreach array="_event.data.audiences || []" item="call">
           <send type="settings" event="audience"><content expr="call"/></send>
+        </foreach>
+        <foreach array="_event.data.readings || []" item="r">
+          <send type="spawn" event="spawn"><content expr="reading(r, page, lang)"/></send>
         </foreach>
         <assign location="pending" expr="[]"/>
       </transition>

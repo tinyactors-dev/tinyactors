@@ -1,0 +1,184 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  One reading of a page as one audience: the model reads the whole page as
+  that reader and says where they get stuck (findings) and which of their
+  wants, tasks and objections the page answers (the checklist).
+
+  The page chat's conversation actor spawns one reading actor per audience
+  through the Spawner, when the reviewer asks ("Read as", the `read`
+  command) or the model does (`read_as`); several run side by side. An
+  actor of this chart:
+
+    reading ──model.reading──▶ done      the checklist is `items`; each finding
+       │                         │       becomes an annotation actor (spawned
+       │ model.error             │ gap   through the Spawner), named in `findingIDs`
+       ▼                         ▼
+    failed ──retry──▶ reading   done     a checklist gap made an open item
+
+  Reading an audience again starts a new actor, given the last reading's
+  findings (`previous`) and actor (`replaces`). When its answer comes it
+  tells each previous finding to `retire` (an annotation the reviewer has
+  not touched deletes itself; one kept, dismissed, edited, noted or asked
+  about stays) and the previous reading that it is `superseded` (it ends).
+  Both go by name, to the actors' local addresses.
+
+    model    read        {page, audienceID}
+                         → model.reading {items, findings, thoughts?, seconds?} | model.error {message}
+    spawn    spawn       an annotation per finding, and per gap opened → spawned {name, address}
+    (actors) retire      to each previous finding;  superseded  to the previous reading
+    store    reading     its record, after every change
+    ui       reading     its record, after every change
+
+  An item of `items`: {field: 'wants' | 'tasks' | 'objections', text,
+  status: 'answered' | 'partial' | 'missing', anchor?, explanation,
+  annotationID?}: the anchor of the text that answers it, and the open
+  item made of it. A finding: {kind: 'objection' | 'task' | 'doubt' |
+  'jargon' | 'missing', anchor?, original_text?, need, explanation,
+  replacement?, section?}; one without an anchor is page-level.
+
+  `state` names where it was for the store; an actor spawned with a stored
+  record starts from it (one stored while reading was cut off: failed).
+-->
+<scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0"
+       datamodel="ecmascript" name="reading" initial="live">
+  <datamodel>
+    <!-- the actor's own name, and the system's base for the names of others -->
+    <data id="name"/>
+    <data id="page"/>
+    <data id="lang" expr="'en'"/>
+    <data id="audienceID"/>
+    <!-- the audience's name, for the annotations' "written for" -->
+    <data id="audience" expr="''"/>
+    <data id="state" expr="'new'"/>
+    <data id="started" expr="null"/>
+    <!-- when the reading was answered -->
+    <data id="at" expr="null"/>
+    <data id="items" expr="[]"/>
+    <data id="findingIDs" expr="[]"/>
+    <!-- the previous reading's findings and actor, until this one replaces them -->
+    <data id="previous" expr="[]"/>
+    <data id="replaces" expr="null"/>
+    <data id="error" expr="null"/>
+    <data id="thoughts" expr="null"/>
+    <data id="seconds" expr="null"/>
+    <!-- the Spawner's requests of the answer being handled -->
+    <data id="pending" expr="[]"/>
+  </datamodel>
+
+  <script>
+    // An actor's local address in this system, by its name.
+    function address(name) {
+      return 'tinyactors://copywriter/@' + encodeURIComponent(name);
+    }
+
+    // The Spawner's request for the annotation a finding becomes: anchored
+    // where the reader gets stuck, or page-level (no anchor) for what the
+    // page lacks. The proposed rewrite is its first suggestion.
+    function finding(f, r, n) {
+      var id = 'f' + Date.now().toString(36) + '-' + n;
+      var placed = Boolean(f.anchor);
+      var params = {
+        id: id, page: r.page, lang: r.lang, source: 'audience', state: 'new',
+        original: placed ? f.anchor.quote.exact : (f.need || f.original_text || f.explanation),
+        anchor: f.anchor || null,
+        suggestions: f.replacement ? [{ id: 's1', text: f.replacement, rationale: f.explanation, after: 0 }] : [],
+        audiences: r.audience ? [r.audience] : [],
+        finding: { audienceID: r.audienceID, kind: f.kind, explanation: f.explanation },
+      };
+      if (f.section) params.finding.section = f.section;
+      if (f.need) params.finding.need = f.need;
+      return { chart: 'annotation', name: id, params: params };
+    }
+
+    // The Spawner's request for the open item a checklist gap becomes: a
+    // page-level annotation of kind 'missing'.
+    function gap(item, id, r) {
+      return {
+        chart: 'annotation', name: id,
+        params: {
+          id: id, page: r.page, lang: r.lang, source: 'audience', state: 'new',
+          original: item.text, anchor: null, suggestions: [], audiences: r.audience ? [r.audience] : [],
+          finding: { audienceID: r.audienceID, kind: 'missing', explanation: item.explanation || '', item: { field: item.field, status: item.status } },
+        },
+      };
+    }
+  </script>
+
+  <state id="live" initial="restore">
+    <!-- Every state raises `changed`: the record goes to the panel and to the store. -->
+    <transition event="changed">
+      <send type="ui" event="reading" namelist="name page lang audienceID audience state started at items findingIDs previous replaces error thoughts seconds"/>
+      <send type="store" event="reading" namelist="name page lang audienceID audience state started at items findingIDs previous replaces error thoughts seconds"/>
+    </transition>
+    <!-- a newer reading of the same audience answered: this one ends -->
+    <transition event="superseded" target="ended"/>
+    <!-- a retire or a spawn whose actor is gone: nothing to do -->
+    <transition event="error.communication spawned"/>
+
+    <!-- A new actor, or one the store gave back: go to the state it was in. -->
+    <state id="restore">
+      <transition cond="state === 'done'" target="done"/>
+      <transition cond="state === 'failed'" target="failed"/>
+      <transition cond="state === 'reading'" target="failed">
+        <assign location="error" expr="'The reading was cut off: read again.'"/>
+      </transition>
+      <transition target="reading"/>
+    </state>
+
+    <!-- The model reads the page as the audience. -->
+    <state id="reading">
+      <onentry>
+        <assign location="state" expr="'reading'"/>
+        <assign location="started" expr="new Date().toISOString()"/>
+        <assign location="error" expr="null"/>
+        <raise event="changed"/>
+        <send type="model" event="read" namelist="page audienceID"/>
+      </onentry>
+      <transition event="model.reading" target="done">
+        <assign location="items" expr="_event.data.items || []"/>
+        <assign location="pending" expr="(_event.data.findings || []).map((f, i) => finding(f, { page, lang, audienceID, audience }, i + 1))"/>
+        <assign location="findingIDs" expr="pending.map((p) => p.name)"/>
+        <assign location="at" expr="new Date().toISOString()"/>
+        <assign location="thoughts" expr="_event.data.thoughts || null"/>
+        <assign location="seconds" expr="_event.data.seconds || null"/>
+        <foreach array="pending" item="spawn">
+          <send type="spawn" event="spawn"><content expr="spawn"/></send>
+        </foreach>
+        <!-- the previous reading's findings: the untouched ones delete themselves -->
+        <foreach array="previous" item="old">
+          <send targetexpr="address(old)" event="retire"/>
+        </foreach>
+        <if cond="replaces">
+          <send targetexpr="address(replaces)" event="superseded"/>
+        </if>
+        <assign location="previous" expr="[]"/>
+        <assign location="replaces" expr="null"/>
+        <assign location="pending" expr="[]"/>
+      </transition>
+      <transition event="model.error" target="failed">
+        <assign location="error" expr="_event.data.message"/>
+      </transition>
+      <transition event="error.communication" target="failed">
+        <assign location="error" expr="'The model could not be reached.'"/>
+      </transition>
+    </state>
+
+    <!-- The request failed: the previous reading stays until a retry answers. -->
+    <state id="failed">
+      <onentry><assign location="state" expr="'failed'"/><raise event="changed"/></onentry>
+      <transition event="retry" target="reading"/>
+    </state>
+
+    <!-- Answered: the checklist stays, and a gap of it can become an open item. -->
+    <state id="done">
+      <onentry><assign location="state" expr="'done'"/><raise event="changed"/></onentry>
+      <transition event="gap" cond="items[_event.data.index] &amp;&amp; !items[_event.data.index].annotationID &amp;&amp; items[_event.data.index].status !== 'answered'">
+        <send type="spawn" event="spawn"><content expr="gap(items[_event.data.index], _event.data.id, { page, lang, audienceID, audience })"/></send>
+        <assign location="items" expr="items.map((x, i) => (i === _event.data.index ? Object.assign({}, x, { annotationID: _event.data.id }) : x))"/>
+        <raise event="changed"/>
+      </transition>
+    </state>
+  </state>
+
+  <final id="ended"/>
+</scxml>

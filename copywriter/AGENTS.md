@@ -342,8 +342,10 @@ from the model.
 
 ## Actors and processors
 
-Charts in `charts/`, one actor per annotation plus one for the page
-chat's open conversation.
+Charts in `charts/`, one actor per annotation, one for the page chat's
+open conversation, and one per reading of the page as an audience
+(`charts/reading.scxml`: reading → done or failed, retry; its header
+draws the flow).
 Actors reach the world only through `<send type="...">` to I/O processors
 the core registers: `page`, `model`, `store`, `ui`, `settings` (the
 audiences the model defines or chooses: it saves them and answers
