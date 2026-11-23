@@ -161,14 +161,16 @@ function marked(text, query, start = 0, end = text.length) {
 
 /**
  * A message's text: each mention of a person a pill (yours in the pill for you), with the
- * search's matches marked, across a pill's edge too. A pill is text in a span, no link.
+ * search's matches marked, across a pill's edge too. A pill is a button that opens the
+ * person's card; the list's one listener opens it, so a row redrawn needs no listener of its own.
  */
 function body(text, query, you) {
   const parts = [];
   let at = 0;
   for (const [start, end, name] of mentions(text)) {
     parts.push(...marked(text, query, at, start),
-      el('span', { class: name === you ? 'chatlive__mention chatlive__mention--you' : 'chatlive__mention' }, ...marked(text, query, start, end)));
+      el('button', { type: 'button', class: name === you ? 'chatlive__mention chatlive__mention--you' : 'chatlive__mention', 'data-person': name,
+        'aria-haspopup': 'dialog', 'aria-expanded': 'false' }, ...marked(text, query, start, end)));
     at = end;
   }
   parts.push(...marked(text, query, at));
@@ -520,7 +522,7 @@ export async function mount(root) {
   /** The direct message on your screen with `name`, or undefined. */
   const dmWith = (name) => chat.screen(you).dms.find((dm) => dm.with === name);
   /** Opens your direct message with `name` (yourself: your notes); the workspace makes it the first time. */
-  async function openDM(name) {
+  async function openDM(name, act = false) {
     peopleNote.textContent = '';
     if (chat.version() !== LATEST) {
       peopleNote.textContent = `Step ${chat.version()}’s charts have no direct messages. Switch to step ${LATEST} in the debugger.`;
@@ -534,7 +536,7 @@ export async function mount(root) {
       peopleNote.textContent = `Sign in to message ${name}.`;
       return;
     }
-    openRoom(made);
+    openRoom(made, act);
   }
 
   // ---- the rail's other views, each in the sidebar's place
@@ -624,6 +626,110 @@ export async function mount(root) {
   const banner = el('p', { class: 'chatlive__banner', role: 'status', hidden: '' },
     el('strong', {}, 'Connecting…'), ` The others see you as away, and new messages wait ${GRACE} seconds for you.`);
   const messages = el('ol', { class: 'chatlive__messages', 'aria-label': 'Messages' });
+  messages.addEventListener('click', (event) => {
+    const pill = event.target.closest('.chatlive__mention');
+    if (!pill) return;
+    if (pill === cardPill) closeCard(true);
+    else openCard(pill);
+  });
+  messages.addEventListener('scroll', () => placeCard());
+  // ---- a person's card, opened from an @mention as a client's is: their avatar, name and
+  // presence as your screen knows them, and "Message", which opens your direct message with them
+  const cardAvatar = el('span', {});
+  const cardName = el('strong', { class: 'chatlive__profile-name', id: 'chatlive-profile-name' });
+  const cardStatus = el('span', { class: 'chatlive__profile-status' }, el('span', { class: 'chatlive__dot', 'aria-hidden': 'true' }), el('span', {}));
+  const cardMessage = el('button', { type: 'button', class: 'chatlive__profile-message' }, icon('dms'), 'Message');
+  const cardNote = el('p', { class: 'chatlive__profile-note' });
+  const card = el('div', { class: 'chatlive__profile', role: 'dialog', 'aria-labelledby': 'chatlive-profile-name', tabindex: '-1', hidden: '' },
+    el('div', { class: 'chatlive__profile-head' }, cardAvatar, el('div', { class: 'chatlive__profile-who' }, cardName, cardStatus)), cardMessage, cardNote);
+  let cardPill = null; // the pill whose card is open
+  let cardView = null; // the view it opened in: another conversation, person or search closes it
+  const cardViewNow = () => [you, room, query, railView, app.dataset.view].join('\n');
+  function openCard(pill) {
+    closeCard(false);
+    cardPill = pill;
+    cardView = cardViewNow();
+    pill.setAttribute('aria-expanded', 'true');
+    card.hidden = false;
+    drawCard();
+    placeCard();
+    (cardMessage.hidden ? card : cardMessage).focus();
+  }
+  function closeCard(refocus) {
+    if (!cardPill) return;
+    const pill = cardPill;
+    cardPill = null;
+    card.hidden = true;
+    pill.setAttribute('aria-expanded', 'false');
+    if (refocus && pill.isConnected) pill.focus();
+  }
+  /** The card under its pill, or above it when there is no room below; on a phone the stylesheet puts it at the foot. */
+  function placeCard() {
+    if (!cardPill) return;
+    if (phone()) { card.style.left = card.style.top = ''; return; }
+    const at = cardPill.getBoundingClientRect();
+    const box = app.getBoundingClientRect();
+    const left = Math.min(Math.max(8, at.left - box.left), box.width - card.offsetWidth - 8);
+    const below = at.bottom - box.top + 4;
+    const top = below + card.offsetHeight > box.height - 8 ? at.top - box.top - card.offsetHeight - 4 : below;
+    card.style.left = `${left}px`;
+    card.style.top = `${Math.max(8, top)}px`;
+  }
+  /** The open card's person as your screen knows them now. */
+  function drawCard() {
+    if (!cardPill) return;
+    const name = cardPill.dataset.person;
+    const self = name === you;
+    if (cardAvatar.dataset.who !== name) {
+      cardAvatar.dataset.who = name;
+      cardAvatar.replaceChildren(avatar(name, 'card'));
+    }
+    if (cardName.dataset.who !== `${name}\n${self}`) {
+      cardName.dataset.who = `${name}\n${self}`;
+      cardName.replaceChildren(name, ...(self ? [el('span', { class: 'chatlive__profile-you' }, ' (you)')] : []));
+    }
+    const state = self ? statusOf(selfState) : STATUS[chat.screen(you).roster[name]] ?? 'unknown';
+    const className = `chatlive__profile-status chatlive__profile-status--${state}`;
+    if (cardStatus.className !== className) cardStatus.className = className;
+    cardStatus.hidden = state === 'unknown';
+    setText(cardStatus.lastChild, LABEL[state] ?? '');
+    // step 5 has no direct messages; signed out, only one your screen has still opens
+    const older = chat.version() !== LATEST;
+    const signedOut = !older && !selfState?.online && !dmWith(name);
+    const hide = older || signedOut;
+    if (hide && document.activeElement === cardMessage) card.focus();
+    cardMessage.hidden = hide;
+    cardMessage.title = self ? 'Open your notes' : `Message ${name}`;
+    setText(cardNote, older ? `Step ${chat.version()}’s charts have no direct messages.` : signedOut ? self ? 'Sign in to open your notes.' : `Sign in to message ${name}.` : '');
+    cardNote.hidden = !hide;
+  }
+  cardMessage.addEventListener('click', () => {
+    const name = cardPill.dataset.person;
+    closeCard(false);
+    openDM(name, true);
+  });
+  card.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      closeCard(true);
+    } else if (event.key === 'Tab') {
+      // Tab goes through the card; past its edge the card closes and focus is back on the pill
+      const all = [...card.querySelectorAll('button')].filter((each) => !each.hidden);
+      const at = all.indexOf(document.activeElement);
+      if (event.shiftKey ? at <= 0 : at === all.length - 1) {
+        event.preventDefault();
+        closeCard(true);
+      }
+    }
+  });
+  document.addEventListener('pointerdown', (event) => {
+    if (!cardPill || card.contains(event.target) || cardPill.contains(event.target)) return;
+    const pill = cardPill;
+    closeCard(false);
+    // a click on nothing that takes focus leaves it on the pill, as Escape does
+    setTimeout(() => { if ((!document.activeElement || document.activeElement === document.body) && pill.isConnected) pill.focus({ preventScroll: true }); });
+  });
+
   // the list is updated in place; this region alone announces each message that reaches the screen
   const arrived = el('p', { class: 'visually-hidden', 'aria-live': 'polite' });
   const text = el('input', { type: 'text', class: 'chatlive__text', 'aria-label': 'Message', maxlength: '200' });
@@ -853,7 +959,7 @@ export async function mount(root) {
     render();
   }
 
-  app.append(top, rail, sidebar, dmView, activityView, el('div', { class: 'chatlive__pane' }, main, debug), menu, addMenu, createDialog, browseDialog);
+  app.append(top, rail, sidebar, dmView, activityView, el('div', { class: 'chatlive__pane' }, main, debug), menu, addMenu, card, createDialog, browseDialog);
   // Escape on a phone goes back from a conversation to its list, as the back button does
   app.addEventListener('keydown', (event) => {
     if (event.key !== 'Escape' || event.defaultPrevented || app.dataset.view !== 'room' || !debug.hidden || !menu.hidden || !phone()) return;
@@ -1092,6 +1198,12 @@ export async function mount(root) {
       else node.replaceChildren(avatar(message.from, 'large'), el('p', { class: 'chatlive__line' }, el('span', { class: 'chatlive__from' }, message.from), stamp,
         ...(query ? [channelLink(message.room)] : [])), paragraph);
     });
+    // the card closes with its conversation, and with its pill when a redraw replaced the row
+    if (cardPill && (cardView !== cardViewNow() || !cardPill.isConnected)) {
+      const inside = card.contains(document.activeElement);
+      closeCard(false);
+      if (inside) roomTitle.focus();
+    }
     if (scrollTo !== undefined) {
       messages.scrollTop = scrollTo ?? messages.scrollHeight; // a person's view brought back where they left it
       scrollTo = undefined;
@@ -1135,6 +1247,8 @@ export async function mount(root) {
         : typers.length === 2 ? `${typers[0]} and ${typers[1]} are typing…`
           : 'Several people are typing…');
 
+    drawCard();
+    placeCard();
     // the rail's views: the one picked shows in the sidebar's place
     for (const [key, column] of Object.entries(columns)) column.hidden = key !== railView;
     back.setAttribute('aria-label', `Back to ${VIEWS[railView]}`);

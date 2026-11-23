@@ -732,9 +732,29 @@ ta-tabs { display: block; }
 .chatlive__at { font-size: 12px; color: var(--cl-muted); font-variant-numeric: tabular-nums; }
 .chatlive__body { margin: 0; line-height: 22px; overflow-wrap: anywhere; }
 .chatlive__body mark { background: var(--cl-mark); color: inherit; border-radius: 2px; }
-/* a mention of a person, a tinted pill; of you, gold, and the row of a post mentioning you tinted with a bar at its edge */
-.chatlive__mention { padding: 0 2px; border-radius: 3px; background: var(--cl-mention); color: var(--cl-link); }
-.chatlive__mention--you { background: var(--cl-you); color: var(--cl-fg); }
+/* a mention of a person, a tinted pill that opens their card; of you, gold, and the row of a post mentioning you tinted with a bar at its edge */
+.chatlive__app .chatlive__mention { display: inline; margin: 0; padding: 0 2px; border: 0; border-radius: 3px; background: var(--cl-mention); color: var(--cl-link);
+  line-height: inherit; cursor: pointer; }
+.chatlive__app .chatlive__mention--you { background: var(--cl-you); color: var(--cl-fg); }
+.chatlive__app .chatlive__mention:hover, .chatlive__app .chatlive__mention[aria-expanded="true"] { text-decoration: underline; text-underline-offset: 2px; }
+/* a person's card, under the mention that opened it */
+.chatlive__profile { position: absolute; z-index: 3; width: 300px; max-width: calc(100% - 16px); box-sizing: border-box; padding: 16px;
+  border-radius: 8px; background: var(--cl-pane); color: var(--cl-fg); box-shadow: var(--cl-shadow); }
+.chatlive__profile:focus { outline: 0; }
+.chatlive__profile-head { display: flex; align-items: flex-start; gap: 12px; }
+.chatlive__avatar--card { width: 72px; height: 72px; border-radius: 8px; font-size: 36px; }
+.chatlive__profile-who { display: flex; flex-direction: column; gap: 4px; min-width: 0; padding-top: 6px; }
+.chatlive__profile-name { font-size: 18px; font-weight: 900; line-height: 1.3; overflow-wrap: anywhere; }
+.chatlive__profile-you { font-weight: 400; color: var(--cl-muted); }
+.chatlive__profile-status { display: flex; align-items: center; gap: 6px; font-size: 13px; line-height: 18px; color: var(--cl-muted); }
+.chatlive__profile-status .chatlive__dot { border: 2px solid var(--cl-muted); }
+.chatlive__profile-status--active .chatlive__dot { border-color: var(--cl-active); background: var(--cl-active); }
+.chatlive__profile-status--offline .chatlive__dot { border-color: var(--cl-off); }
+.chatlive__profile-status--reconnecting .chatlive__dot { border-color: var(--cl-late); }
+.chatlive__profile-message { display: flex; align-items: center; justify-content: center; gap: 6px; width: 100%; height: 36px; margin-top: 16px;
+  border: 1px solid var(--cl-line); border-radius: 6px; background: var(--cl-pane); font-weight: 700 !important; cursor: pointer; }
+.chatlive__profile-message:hover { background: var(--cl-hover); }
+.chatlive__profile-note { margin: 16px 0 0; font-size: 13px; line-height: 18px; color: var(--cl-muted); }
 .chatlive__mention mark { background: none; color: inherit; text-decoration: underline 2px; text-underline-offset: 3px; }
 .chatlive__message--you, .chatlive__message--you:hover { background: var(--cl-you-row); box-shadow: inset 3px 0 var(--cl-you-bar); }
 .chatlive__message--more { padding-top: 2px; padding-bottom: 2px; margin-top: -8px; }
@@ -884,6 +904,7 @@ ta-tabs { display: block; }
   .chatlive__debug { position: absolute; inset: 44px 4px 4px; z-index: 2; width: auto; border: 0; border-radius: 8px; box-shadow: var(--cl-shadow); }
   .chatlive__app--debug[data-view] .chatlive__pane { display: grid; grid-template-rows: minmax(0, 1fr); }
   .chatlive__menu { left: auto; right: 8px; bottom: 64px; }
+  .chatlive__profile { left: 8px; right: 8px; top: auto; bottom: 68px; width: auto; max-width: none; }
   .chatlive__bar-title, .chatlive__foot, .chatlive__message, .chatlive__empty, .chatlive__notice, .chatlive__beginning { padding-left: 12px; padding-right: 12px; }
   .chatlive__foot { padding-bottom: 2px; }
   .chatlive__signed-out { flex-wrap: wrap; }
