@@ -596,7 +596,13 @@ of the model for a page with none: unset → suggesting → suggested →
 set; `model` answers its `suggest {url}` with `model.audiences
 {audienceIDs}`; a page that links site audiences is spawned with them as
 `linked` and they are its set, `from: 'site'`, until the reviewer chooses
-one, `from: 'user'`, and it is never asked). A reading's checklist items
+one, `from: 'user'`, and it is never asked), and one for the open page's
+revision plan (`charts/plan.scxml`: idle → planning → planned, failed;
+`model` answers its `plan {page}` with `model.plan {items, newPages,
+sitePages}`; `accept`, `reject` and `acceptAll` decide items, an accepted
+rewrite, cut, add or link spawning an annotation of source `plan` whose
+`plan` names the item, its needs and criteria; a re-plan keeps the decided
+items; its header draws the flow). A reading's checklist items
 of a site audience carry `needID` (`audience.need`), `kind` (the kind of
 page the need belongs on) and `claimed` (the sections that claim to answer
 it); a finding about one carries its `needID`, and so does an open item

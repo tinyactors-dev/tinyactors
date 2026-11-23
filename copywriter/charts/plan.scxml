@@ -1,0 +1,225 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  The revision plan of one page ("Revise page"): one model request over
+  everything the reviewer gathered (the page's kind and audiences, its
+  sections' claims, every reading's checklist, the open findings, the kept
+  changes and open notes, the voice, and the site map: the other pages with
+  their kind and audiences) that decides WHERE each need is answered, then
+  the reviewer's decision on each item.
+
+  The core spawns one actor of this chart for the page it opens, from the
+  page's stored plan (or none), and ends it when the panel leaves the page.
+
+    idle ──plan──▶ planning ──model.plan──▶ planned ──plan──▶ planning
+                     │                        │ accept {id} | reject {id} | acceptAll
+                     │ model.error            ▼
+                     ▼                      planned (each item decided)
+                   failed ──plan──▶ planning
+
+  Re-planning replaces the items the reviewer has not decided and keeps
+  the decided ones (accepted or rejected); a new item that repeats a
+  decided one (same action, target, text on the page and needs) is
+  dropped, as a new page of a decided one's title is. The model is told
+  the decided items, so it neither repeats nor undoes them.
+
+  The core has already routed each item when it comes (src/core/plan.mjs,
+  `planOf`): a rewrite or add here of a need whose kind is not the page's
+  became a `link` here (one short line and a link) to the page of that
+  kind and audience, or to a new page. Accepting an item:
+
+    rewrite, cut   an annotation here (source 'plan'; its suggestion the
+                   plan's text, '' for a cut), previewed and kept as usual
+    add            a page-level open item here, the drafted copy its suggestion
+    link           an annotation here (anchored: the sentence becomes the
+                   line; else a page-level item), and a task for the target
+    move           a task for the target (no annotation here)
+    new page       a proposed page, exported with its kind, audiences and outline
+
+  An annotation made of an item carries `plan` {itemID, action, needs,
+  criteria, target, where}; the export lists the criteria of accepted
+  items under the page they name ("Acceptance criteria", "Other pages").
+
+    model  plan    {page}
+                   → model.plan {items, newPages, sitePages, thoughts?, seconds?} | model.error {message}
+    spawn  spawn   an annotation per accepted rewrite, cut, add and link → spawned {name, address}
+    store  plan    its record, after every change
+    ui     plan    its record, after every change
+
+  An item: {id, action: 'rewrite' | 'add' | 'cut' | 'link' | 'move',
+  needs: [needID], target: 'here' | URL | 'new', original_text?, anchor?,
+  text, target_text?, where?, reason, criteria: [{needID, text, page}],
+  conflict?, routed?, audiences: [name], decision: null | 'accepted' |
+  'rejected', annotationID?}. A new page: {id, title, kind, audiences,
+  outline: [line], needs, criteria, reason?, decision}.
+
+  `state` names where it was for the store; an actor spawned with a
+  stored record starts from it (one stored while planning was cut off:
+  failed).
+-->
+<scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0"
+       datamodel="ecmascript" name="plan" initial="live">
+  <datamodel>
+    <data id="page"/>
+    <data id="lang" expr="'en'"/>
+    <data id="state" expr="'new'"/>
+    <data id="started" expr="null"/>
+    <!-- when the plan was answered -->
+    <data id="at" expr="null"/>
+    <data id="items" expr="[]"/>
+    <data id="newPages" expr="[]"/>
+    <!-- how many pages of the site map the plan was made with -->
+    <data id="sitePages" expr="0"/>
+    <data id="error" expr="null"/>
+    <data id="thoughts" expr="null"/>
+    <data id="seconds" expr="null"/>
+    <!-- the Spawner's requests of the decision being handled -->
+    <data id="pending" expr="[]"/>
+  </datamodel>
+
+  <script>
+    // Two items are the same proposal: one action, target, text on the page and needs.
+    function same(a, b) {
+      return a.action === b.action &amp;&amp; a.target === b.target
+        &amp;&amp; String(a.original_text || '') === String(b.original_text || '')
+        &amp;&amp; (a.needs || []).join(' ') === (b.needs || []).join(' ');
+    }
+
+    // A new plan's items: the decided ones of the last, then the new ones
+    // that repeat none of them.
+    function merge(before, fresh) {
+      var kept = before.filter(function (x) { return x.decision; });
+      return kept.concat(fresh.filter(function (f) { return !kept.some(function (k) { return same(k, f); }); }));
+    }
+    function mergePages(before, fresh) {
+      var kept = before.filter(function (x) { return x.decision; });
+      var title = function (p) { return String(p.title || '').trim().toLowerCase(); };
+      return kept.concat(fresh.filter(function (f) { return !kept.some(function (k) { return title(k) === title(f); }); }));
+    }
+
+    // The Spawner's request for the annotation an accepted item becomes
+    // here, or null (a move, a rewrite elsewhere: a task only).
+    function annotationOf(x, r) {
+      if (x.target !== 'here' &amp;&amp; x.action !== 'link') return null;
+      var placed = Boolean(x.anchor);
+      if (x.action === 'cut' &amp;&amp; !placed) return null;
+      var id = x.id + '-a';
+      return {
+        chart: 'annotation', name: id,
+        params: {
+          id: id, page: r.page, lang: r.lang, source: 'plan', state: 'new',
+          original: placed ? x.anchor.quote.exact : (x.reason || x.text),
+          anchor: x.anchor || null,
+          suggestions: [{ id: 's1', text: x.action === 'cut' ? '' : x.text, rationale: x.reason || '', after: 0 }],
+          audiences: x.audiences || [],
+          plan: { itemID: x.id, action: x.action, needs: x.needs || [], criteria: x.criteria || [], target: x.target, where: x.where || null },
+        },
+      };
+    }
+
+    // `ids` decided as `decision`: each item and new page named, not decided yet.
+    function decide(list, ids, decision) {
+      return list.map(function (x) {
+        if (x.decision || ids.indexOf(x.id) &lt; 0) return x;
+        var y = Object.assign({}, x, { decision: decision });
+        if (decision === 'accepted' &amp;&amp; annotationOf(x, { page: '', lang: '' })) y.annotationID = x.id + '-a';
+        return y;
+      });
+    }
+    function undecided(list) {
+      return list.filter(function (x) { return !x.decision; }).map(function (x) { return x.id; });
+    }
+  </script>
+
+  <state id="live" initial="restore">
+    <!-- Every state raises `changed`: the record goes to the panel and to the store. -->
+    <transition event="changed">
+      <send type="ui" event="plan" namelist="page lang state started at items newPages sitePages error thoughts seconds"/>
+      <send type="store" event="plan" namelist="page lang state started at items newPages sitePages error thoughts seconds"/>
+    </transition>
+    <!-- a spawn's answer, or a spawn whose actor is gone: nothing to do -->
+    <transition event="spawned error.communication"/>
+
+    <!-- The reviewer decides an item or a new page, whatever the plan's state:
+         a re-plan keeps the decided ones. -->
+    <transition event="accept">
+      <assign location="pending" expr="items.filter((x) => x.id === _event.data.id &amp;&amp; !x.decision).map((x) => annotationOf(x, { page, lang })).filter(Boolean)"/>
+      <foreach array="pending" item="spawn">
+        <send type="spawn" event="spawn"><content expr="spawn"/></send>
+      </foreach>
+      <assign location="items" expr="decide(items, [_event.data.id], 'accepted')"/>
+      <assign location="newPages" expr="decide(newPages, [_event.data.id], 'accepted')"/>
+      <assign location="pending" expr="[]"/>
+      <raise event="changed"/>
+    </transition>
+    <transition event="acceptAll">
+      <assign location="pending" expr="items.filter((x) => !x.decision).map((x) => annotationOf(x, { page, lang })).filter(Boolean)"/>
+      <foreach array="pending" item="spawn">
+        <send type="spawn" event="spawn"><content expr="spawn"/></send>
+      </foreach>
+      <assign location="items" expr="decide(items, undecided(items), 'accepted')"/>
+      <assign location="newPages" expr="decide(newPages, undecided(newPages), 'accepted')"/>
+      <assign location="pending" expr="[]"/>
+      <raise event="changed"/>
+    </transition>
+    <transition event="reject">
+      <assign location="items" expr="decide(items, [_event.data.id], 'rejected')"/>
+      <assign location="newPages" expr="decide(newPages, [_event.data.id], 'rejected')"/>
+      <raise event="changed"/>
+    </transition>
+
+    <!-- A new actor, or one the store gave back: go to the state it was in. -->
+    <state id="restore">
+      <transition cond="state === 'planned'" target="planned"/>
+      <transition cond="state === 'failed'" target="failed"/>
+      <transition cond="state === 'planning'" target="failed">
+        <assign location="error" expr="'The plan was cut off: plan again.'"/>
+      </transition>
+      <transition target="idle"/>
+    </state>
+
+    <!-- No plan yet. -->
+    <state id="idle">
+      <onentry><assign location="state" expr="'idle'"/></onentry>
+      <transition event="plan" target="planning"/>
+    </state>
+
+    <!-- The model plans the page; the last plan's items stay shown meanwhile. -->
+    <state id="planning">
+      <onentry>
+        <assign location="state" expr="'planning'"/>
+        <assign location="started" expr="new Date().toISOString()"/>
+        <assign location="error" expr="null"/>
+        <raise event="changed"/>
+        <send type="model" event="plan" namelist="page"/>
+      </onentry>
+      <!-- one plan at a time -->
+      <transition event="plan"/>
+      <transition event="model.plan" target="planned">
+        <assign location="items" expr="merge(items, _event.data.items || [])"/>
+        <assign location="newPages" expr="mergePages(newPages, _event.data.newPages || [])"/>
+        <assign location="sitePages" expr="_event.data.sitePages || 0"/>
+        <assign location="at" expr="new Date().toISOString()"/>
+        <assign location="thoughts" expr="_event.data.thoughts || null"/>
+        <assign location="seconds" expr="_event.data.seconds || null"/>
+      </transition>
+      <transition event="model.error" target="failed">
+        <assign location="error" expr="_event.data.message"/>
+      </transition>
+      <transition event="error.communication" target="failed">
+        <assign location="error" expr="'The model could not be reached.'"/>
+      </transition>
+    </state>
+
+    <!-- Planned: each item waits for the reviewer's decision. -->
+    <state id="planned">
+      <onentry><assign location="state" expr="'planned'"/><raise event="changed"/></onentry>
+      <transition event="plan" target="planning"/>
+    </state>
+
+    <!-- The request failed: the last plan's items stay until a new one answers. -->
+    <state id="failed">
+      <onentry><assign location="state" expr="'failed'"/><raise event="changed"/></onentry>
+      <transition event="plan" target="planning"/>
+    </state>
+  </state>
+</scxml>

@@ -24,6 +24,11 @@
   A finding of a reading (charts/reading.scxml) is an annotation of
   source 'audience' whose `finding` is {audienceID, kind, explanation,
   need?, section?, item?}; its proposed rewrite is its first suggestion.
+  An accepted item of the page's revision plan (charts/plan.scxml) is an
+  annotation of source 'plan' whose `plan` is {itemID, action, needs,
+  criteria, target, where}: the plan's text its first suggestion ('' for
+  a cut), previewed and kept as any other; the export lists its criteria.
+
   One with no `anchor` is page-level: what the page lacks, never located
   or previewed. A newer reading of the audience sends `retire`: a finding
   the reviewer has not touched (draft or suggested, no note, no message,
@@ -64,6 +69,8 @@
     <data id="audiences" expr="[]"/>
     <!-- a reading's finding: {audienceID, kind, explanation, need?, section?, item?} -->
     <data id="finding" expr="null"/>
+    <!-- an accepted item of the page's plan (charts/plan.scxml): {itemID, action, needs, criteria, target, where} -->
+    <data id="plan" expr="null"/>
     <!-- what the next model request carries besides the messages: {more} -->
     <data id="request" expr="null"/>
     <!-- the page's active audiences at the last ask or suggest (or the spawn) -->
@@ -108,8 +115,8 @@
     <!-- Every state raises `changed`: the record goes to the panel and to the store. -->
     <transition event="changed">
       <assign location="updatedAt" expr="new Date().toISOString()"/>
-      <send type="ui" event="changed" namelist="id page lang original anchor anchorFound note source suggestions chosenID messages error createdAt updatedAt state audiences finding"/>
-      <send type="store" event="save" namelist="id page lang original anchor anchorFound note source suggestions chosenID messages error createdAt updatedAt state audiences finding"/>
+      <send type="ui" event="changed" namelist="id page lang original anchor anchorFound note source suggestions chosenID messages error createdAt updatedAt state audiences finding plan"/>
+      <send type="store" event="save" namelist="id page lang original anchor anchorFound note source suggestions chosenID messages error createdAt updatedAt state audiences finding plan"/>
     </transition>
     <transition event="note">
       <assign location="note" expr="_event.data.text"/>
