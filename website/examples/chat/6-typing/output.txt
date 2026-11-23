@@ -12,3 +12,7 @@ ada sees bob typing in general
 cat sees bob typing in general
 ada sees bob stop typing in general
 cat sees bob stop typing in general
+-- bob types again, then cat disconnects
+ada sees bob typing in general
+cat sees bob typing in general
+cat sees bob stop typing in general

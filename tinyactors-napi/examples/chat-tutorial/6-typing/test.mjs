@@ -7,7 +7,7 @@ import { run } from './main.mjs';
 const phases = (lines) => lines.join('\n').split(/^(?=-- )/m).map((phase) => phase.split('\n').filter(Boolean).sort());
 
 for (const datamodel of ['native', 'quickjs']) {
-  test(`6-typing, ${datamodel}: typing is told at most every 3 seconds, and its indicator ends with a post or after 5 seconds`, async () => {
+  test(`6-typing, ${datamodel}: typing is told at most every 3 seconds, and its indicator ends with a post, after 5 seconds, or when the viewer disconnects`, async () => {
     assert.deepEqual(phases(await run({ datamodel })), phases([
       '-- ada types three keys',
       'bob sees ada typing in general',
@@ -22,6 +22,10 @@ for (const datamodel of ['native', 'quickjs']) {
       'ada sees bob typing in general',
       'cat sees bob typing in general',
       'ada sees bob stop typing in general',
+      'cat sees bob stop typing in general',
+      '-- bob types again, then cat disconnects',
+      'ada sees bob typing in general',
+      'cat sees bob typing in general',
       'cat sees bob stop typing in general',
     ]));
   });

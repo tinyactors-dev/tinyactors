@@ -14,7 +14,8 @@ until the typist posts, or for 5 seconds after the last one.
 - A member's chart shows it (`typing` to `chat:client`) and starts a
   5-second `indicator.expired` timer, cancelling the one before. A post
   from the typist cancels it at once (`typing.stopped`).
-- Leaving `online` cancels every indicator's timer.
+- Leaving `online` cancels every indicator's timer and takes each
+  indicator off this user's screen (`typing.stopped`).
 
 The timer's event is `indicator.expired`, not `typing.expired`: an
 SCXML event name matches by its dotted prefix, so a transition on
@@ -41,7 +42,13 @@ ada sees bob typing in general
 cat sees bob typing in general
 ada sees bob stop typing in general
 cat sees bob stop typing in general
+-- bob types again, then cat disconnects
+ada sees bob typing in general
+cat sees bob typing in general
+cat sees bob stop typing in general
 ```
 
 Three keys made one notice. The post ended ada's indicator on every
-screen; bob's ended by itself, 5 seconds after his last key.
+screen; bob's ended by itself, 5 seconds after his last key. When cat
+disconnected, bob's indicator left cat's screen at once; ada still sees
+it.

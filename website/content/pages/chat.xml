@@ -84,12 +84,14 @@
   <section id="typing">
     <heading>6. Show who is typing</heading>
     <p>A notice for every key would flood every screen. The user's chart tells its room at most once every 3 seconds, on a timer of its own.</p>
-    <code src="../../examples/chat/6-typing/charts/user.scxml" lines="37-53" language="scxml" file="charts/user.scxml"/>
+    <code src="../../examples/chat/6-typing/charts/user.scxml" lines="42-58" language="scxml" file="charts/user.scxml"/>
     <p>Each other member's chart shows the notice for 5 seconds after the last one, restarting its timer on each.</p>
-    <code src="../../examples/chat/6-typing/charts/user.scxml" lines="55-80" language="scxml" file="charts/user.scxml"/>
-    <p>The program types three keys as ada and posts, then lets bob's indicator run out.</p>
+    <code src="../../examples/chat/6-typing/charts/user.scxml" lines="60-85" language="scxml" file="charts/user.scxml"/>
+    <p>When its user disconnects, the chart cancels those timers and takes each notice off the user's screen.</p>
+    <code src="../../examples/chat/6-typing/charts/user.scxml" lines="27-39" language="scxml" file="charts/user.scxml"/>
+    <p>The program types three keys as ada and posts, then lets bob's indicator run out. Bob types again and cat disconnects: the notice leaves cat's screen at once.</p>
     <example>
-      <code src="../../examples/chat/6-typing/main.mjs" lines="40-56" language="javascript" file="main.mjs"/>
+      <code src="../../examples/chat/6-typing/main.mjs" lines="40-61" language="javascript" file="main.mjs"/>
       <code src="../../examples/chat/6-typing/output.txt" language="text" role="output"/>
     </example>
   </section>
@@ -97,9 +99,9 @@
   <section id="reconnect">
     <heading>7. Ride out a lost connection</heading>
     <p>A phone in a tunnel loses its connection for a few seconds, and until now everyone saw its user go offline. On <code>connection.lost</code>, the user's chart waits 30 seconds in <code>reconnecting</code> and keeps the messages that come meanwhile.</p>
-    <code src="../../examples/chat/7-reconnect/charts/user.scxml" lines="184-194" language="scxml" file="charts/user.scxml"/>
+    <code src="../../examples/chat/7-reconnect/charts/user.scxml" lines="189-199" language="scxml" file="charts/user.scxml"/>
     <p>Back within 30 seconds, the user returns to <code>active</code> or <code>away</code> through the history state <code>resume</code>, and gets the held messages.</p>
-    <code src="../../examples/chat/7-reconnect/charts/user.scxml" lines="31-56" language="scxml" file="charts/user.scxml"/>
+    <code src="../../examples/chat/7-reconnect/charts/user.scxml" lines="31-61" language="scxml" file="charts/user.scxml"/>
     <p>Bob is back after 10 seconds, then gone for 40: only the second loss makes him offline.</p>
     <example>
       <code src="../../examples/chat/7-reconnect/main.mjs" lines="40-58" language="javascript" file="main.mjs"/>

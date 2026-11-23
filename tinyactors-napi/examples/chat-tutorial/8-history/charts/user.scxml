@@ -46,9 +46,14 @@
       <assign location="held" expr="[]"/>
     </onentry>
     <onexit>
-      <!-- the screen is gone: its indicators and their timers go too -->
+      <!-- this user's screen stops showing who is typing, and the timers go -->
       <foreach array="Object.values(typers)" item="typer">
         <cancel sendidexpr="typer.id"/>
+        <send type="chat:client" event="typing.stopped">
+          <param name="to" expr="name"/>
+          <param name="room" expr="typer.room"/>
+          <param name="user" expr="typer.user"/>
+        </send>
       </foreach>
       <assign location="typers" expr="({})"/>
       <assign location="quiet" expr="({})"/>

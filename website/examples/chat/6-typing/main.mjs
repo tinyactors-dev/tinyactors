@@ -54,6 +54,12 @@ export async function run(options = {}) {
   clock.increment(6_000);
   await host.idle();
 
+  client.lines.push('-- bob types again, then cat disconnects');
+  bob.send('typing', { room: 'general' });
+  await host.idle();
+  host.actor('user.cat').send('disconnect');
+  await host.idle();
+
   host.close();
   return client.lines;
 }
