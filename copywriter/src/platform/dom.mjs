@@ -1,0 +1,383 @@
+// The page adapter's DOM side, shared by the extension's content script and
+// the embedded widget (AGENTS.md, "Platform adapters"): a selection as a W3C
+// text-quote anchor with a CSS path, finding an anchor's text again,
+// previewing a replacement by rewriting Text nodes only (never markup),
+// reverting it, and outlining the active annotation's text.
+//
+//   const page = createDOMPage({ exclude: (node) => widget.contains(node) });
+//   page.selection()  page.locate(anchor)  page.preview({id, anchor, text})  ...
+//
+// Text is compared with its whitespace collapsed, and a space stands
+// between blocks, as a reader sees it: a selection's toString() and the
+// page's Text nodes then agree.
+
+const SKIPPED = new Set(['SCRIPT', 'STYLE', 'NOSCRIPT', 'TEMPLATE', 'TEXTAREA', 'SELECT', 'OPTION', 'svg', 'math', 'IFRAME', 'OBJECT', 'CANVAS']);
+const BLOCKS = new Set([
+  'ADDRESS', 'ARTICLE', 'ASIDE', 'BLOCKQUOTE', 'BODY', 'BR', 'CAPTION', 'DD', 'DETAILS', 'DIALOG', 'DIV', 'DL', 'DT',
+  'FIELDSET', 'FIGCAPTION', 'FIGURE', 'FOOTER', 'FORM', 'H1', 'H2', 'H3', 'H4', 'H5', 'H6', 'HEADER', 'HR', 'LI',
+  'MAIN', 'NAV', 'OL', 'P', 'PRE', 'SECTION', 'SUMMARY', 'TABLE', 'TBODY', 'TD', 'TFOOT', 'TH', 'THEAD', 'TR', 'UL',
+  'BUTTON', 'LABEL', 'IMG',
+]);
+const CONTEXT = 32;              // characters of prefix and suffix an anchor keeps
+const MAX_CONTEXT_TEXT = 20000;  // what context() gives the model
+const HIGHLIGHT = 'tinyactors-copywriter';
+const PREVIEW_HIGHLIGHT = 'tinyactors-copywriter-preview';
+
+const isSpace = (c) => c === ' ' || c === '\n' || c === '\t' || c === '\r' || c === '\f' || c === ' ';
+
+/** Text with its whitespace collapsed to single spaces, trimmed. */
+export function normalize(text) {
+  return String(text ?? '').replace(/[\s ]+/g, ' ').trim();
+}
+
+function blockOf(node) {
+  for (let el = node.parentElement; el; el = el.parentElement) {
+    if (BLOCKS.has(el.tagName)) return el;
+  }
+  return null;
+}
+
+/**
+ * The page's text as a reader sees it: `text` (whitespace collapsed, a
+ * space between blocks) and, for each character, the Text node and the
+ * offset it came from (`node` -1 for a space between blocks).
+ */
+export function indexText(root, exclude = () => false) {
+  const doc = root.ownerDocument || root;
+  const nodes = [];
+  const starts = [];   // per node: its offsets' positions in text (Int32Array, length+1)
+  const chars = [];
+  const at = [];       // per char: [node index, offset]
+  let lastBlock;
+  const walker = doc.createTreeWalker(root, 0x1 | 0x4, {   // elements and text
+    acceptNode(node) {
+      if (node.nodeType === 1) {
+        if (SKIPPED.has(node.tagName) || exclude(node)) return 2;  // reject the subtree
+        return 3;  // skip the element, visit its children
+      }
+      return 1;
+    },
+  });
+  for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+    const block = blockOf(node);
+    const data = node.data;
+    if (lastBlock !== undefined && block !== lastBlock && chars.length && chars[chars.length - 1] !== ' ') {
+      chars.push(' ');
+      at.push(-1, 0);
+    }
+    lastBlock = block;
+    const index = nodes.length;
+    const map = new Int32Array(data.length + 1);
+    for (let i = 0; i < data.length; i++) {
+      map[i] = chars.length;
+      const c = data[i];
+      if (isSpace(c)) {
+        if (chars.length === 0 || chars[chars.length - 1] === ' ') continue;
+        chars.push(' ');
+      } else {
+        chars.push(c);
+      }
+      at.push(index, i);
+    }
+    map[data.length] = chars.length;
+    nodes.push(node);
+    starts.push(map);
+  }
+  return { text: chars.join(''), nodes, starts, at };
+}
+
+// A text-node boundary for a range boundary that may sit in an element.
+function textBoundary(container, offset, { end }) {
+  if (container.nodeType === 3) return [container, offset];
+  const doc = container.ownerDocument || container;
+  const walker = doc.createTreeWalker(container, 0x4);
+  if (!end) {
+    const child = container.childNodes[offset];
+    if (child) {
+      if (child.nodeType === 3) return [child, 0];
+      walker.currentNode = child;
+      const first = child.nodeType === 1 ? walker.nextNode() : null;
+      if (first && child.contains(first)) return [first, 0];
+    }
+    return [container, offset];
+  }
+  const child = container.childNodes[offset - 1];
+  if (child) {
+    if (child.nodeType === 3) return [child, child.data.length];
+    let last = null;
+    walker.currentNode = child;
+    for (let n = walker.nextNode(); n && child.contains(n); n = walker.nextNode()) last = n;
+    if (last) return [last, last.data.length];
+  }
+  return [container, offset];
+}
+
+// The position of a text boundary in the index, or -1.
+function positionOf(index, node, offset) {
+  const i = index.nodes.indexOf(node);
+  if (i < 0) return -1;
+  return index.starts[i][Math.min(offset, index.starts[i].length - 1)];
+}
+
+/** A CSS path to `el`: its id when unique, else tag:nth-of-type steps from the nearest one. */
+export function cssPath(el) {
+  const doc = el.ownerDocument;
+  const steps = [];
+  for (let node = el; node && node.nodeType === 1; node = node.parentElement) {
+    if (node === doc.body || node === doc.documentElement) { steps.unshift(node.tagName.toLowerCase()); break; }
+    if (node.id && /^[A-Za-z][\w-]*$/.test(node.id) && doc.querySelectorAll(`#${node.id}`).length === 1) {
+      steps.unshift(`#${node.id}`);
+      break;
+    }
+    const tag = node.tagName.toLowerCase();
+    let nth = 1;
+    for (let s = node.previousElementSibling; s; s = s.previousElementSibling) if (s.tagName === node.tagName) nth++;
+    let more = false;
+    for (let s = node.nextElementSibling; s && !more; s = s.nextElementSibling) if (s.tagName === node.tagName) more = true;
+    steps.unshift(nth > 1 || more ? `${tag}:nth-of-type(${nth})` : tag);
+  }
+  return steps.join(' > ');
+}
+
+/** The anchor of a range: its text quote (exact, prefix, suffix) and the CSS path of its nearest element. */
+export function anchorOf(range, { root, exclude } = {}) {
+  const doc = range.startContainer.ownerDocument || range.startContainer;
+  const index = indexText(root || doc.body, exclude);
+  const [sn, so] = textBoundary(range.startContainer, range.startOffset, { end: false });
+  const [en, eo] = textBoundary(range.endContainer, range.endOffset, { end: true });
+  let start = sn.nodeType === 3 ? positionOf(index, sn, so) : -1;
+  let end = en.nodeType === 3 ? positionOf(index, en, eo) : -1;
+  if (start < 0 || end < 0 || end <= start) {
+    // Fall back to the selected text itself, found in the page.
+    const exact = normalize(range.toString());
+    start = exact ? index.text.indexOf(exact) : -1;
+    if (start < 0) return null;
+    end = start + exact.length;
+  }
+  while (start < end && index.text[start] === ' ') start++;
+  while (end > start && index.text[end - 1] === ' ') end--;
+  if (end <= start) return null;
+  let element = range.commonAncestorContainer;
+  if (element.nodeType !== 1) element = element.parentElement;
+  return {
+    quote: {
+      exact: index.text.slice(start, end),
+      prefix: index.text.slice(Math.max(0, start - CONTEXT), start),
+      suffix: index.text.slice(end, end + CONTEXT),
+    },
+    selector: element ? cssPath(element) : '',
+  };
+}
+
+// How well the text around position `at` agrees with the anchor's context.
+function score(text, at, length, quote) {
+  let s = 0;
+  const prefix = normalize(quote.prefix ?? '');
+  const suffix = normalize(quote.suffix ?? '');
+  const before = text.slice(Math.max(0, at - prefix.length - 1), at).trimEnd();
+  const after = text.slice(at + length, at + length + suffix.length + 1).trimStart();
+  for (let i = 1; i <= prefix.length && before[before.length - i] === prefix[prefix.length - i]; i++) s++;
+  for (let i = 0; i < suffix.length && after[i] === suffix[i]; i++) s++;
+  return s;
+}
+
+/** A Range over the anchor's text in the page, or null when it is not there. */
+export function findRange(anchor, { root, exclude } = {}) {
+  const exact = normalize(anchor?.quote?.exact);
+  if (!exact) return null;
+  const doc = (root || document).ownerDocument || document;
+  const index = indexText(root || doc.body, exclude);
+  let scope = null;
+  try { scope = anchor.selector ? doc.querySelector(anchor.selector) : null; } catch { /* not a selector */ }
+  let best = -1;
+  let bestScore = -1;
+  for (let at = index.text.indexOf(exact); at >= 0; at = index.text.indexOf(exact, at + 1)) {
+    let s = score(index.text, at, exact.length, anchor.quote) * 2;
+    if (scope && index.at[at * 2] >= 0 && scope.contains(index.nodes[index.at[at * 2]])) s += 1;
+    if (s > bestScore) { best = at; bestScore = s; }
+  }
+  if (best < 0) return null;
+  const last = best + exact.length - 1;
+  const range = doc.createRange();
+  range.setStart(index.nodes[index.at[best * 2]], index.at[best * 2 + 1]);
+  range.setEnd(index.nodes[index.at[last * 2]], index.at[last * 2 + 1] + 1);
+  return range;
+}
+
+// The Text nodes a range covers, each with the part of its data inside it.
+function textParts(range) {
+  const parts = [];
+  const doc = range.startContainer.ownerDocument;
+  const root = range.commonAncestorContainer;
+  if (root.nodeType === 3) return [{ node: root, from: range.startOffset, to: range.endOffset }];
+  const walker = doc.createTreeWalker(root, 0x4);
+  for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+    if (!range.intersectsNode(node)) continue;
+    const from = node === range.startContainer ? range.startOffset : 0;
+    const to = node === range.endContainer ? range.endOffset : node.data.length;
+    if (to > from) parts.push({ node, from, to });
+  }
+  return parts;
+}
+
+/**
+ * The adapter's DOM methods over `doc`. `exclude(node)` names what is not
+ * the page (the widget). `keepSelection(event)` says whether a selection
+ * that went empty keeps the last one (the widget: a tap on the sheet
+ * clears the page's selection on a phone). `scrollBlock` is where
+ * highlight() scrolls the text to ('center', or 'start' under a sheet).
+ */
+export function createDOMPage({ doc = document, exclude = () => false, keepSelection = () => false, scrollBlock = () => 'center' } = {}) {
+  const win = doc.defaultView;
+  const previews = new Map(); // id → {parts: [{node, before, after}], range}
+  let last = null;            // the last non-empty selection, {text, anchor}
+  const listeners = new Set();
+  let timer = 0;
+  let reported = null;
+
+  const options = () => ({ root: doc.body, exclude });
+
+  function current() {
+    const selection = doc.getSelection();
+    if (!selection || selection.rangeCount === 0 || selection.isCollapsed) return null;
+    const range = selection.getRangeAt(0);
+    const node = range.commonAncestorContainer;
+    if (exclude(node.nodeType === 1 ? node : node.parentElement)) return null;
+    const text = normalize(selection.toString());
+    if (!text) return null;
+    const anchor = anchorOf(range, options());
+    return anchor ? { text: anchor.quote.exact, anchor } : null;
+  }
+
+  function onSelectionChange() {
+    clearTimeout(timer);
+    timer = win.setTimeout(() => {
+      const now = current();
+      if (now) last = now;
+      else if (keepSelection()) return;
+      else last = null;
+      const value = now || null;
+      if ((value && value.text) === (reported && reported.text)) return;
+      reported = value;
+      for (const fn of listeners) fn(value);
+    }, 120);
+  }
+  doc.addEventListener('selectionchange', onSelectionChange);
+
+  // One stylesheet for the highlights, the page's own (adoptedStyleSheets
+  // leaves the page's markup alone).
+  let styled = false;
+  function style() {
+    if (styled) return;
+    styled = true;
+    try {
+      const sheet = new win.CSSStyleSheet();
+      sheet.replaceSync(`::highlight(${HIGHLIGHT}) { background-color: rgba(31, 94, 74, .22); color: inherit; }
+::highlight(${PREVIEW_HIGHLIGHT}) { background-color: rgba(216, 166, 78, .28); text-decoration: underline dotted rgba(31, 94, 74, .8); }`);
+      doc.adoptedStyleSheets = [...doc.adoptedStyleSheets, sheet];
+    } catch { /* no constructable stylesheets: highlights stay unstyled */ }
+  }
+  const highlights = () => (win.CSS && win.CSS.highlights && win.Highlight ? win.CSS.highlights : null);
+
+  function showPreviews() {
+    const registry = highlights();
+    if (!registry) return;
+    style();
+    const ranges = [...previews.values()].map((p) => p.range).filter((r) => r && !r.collapsed);
+    if (ranges.length) registry.set(PREVIEW_HIGHLIGHT, new win.Highlight(...ranges));
+    else registry.delete(PREVIEW_HIGHLIGHT);
+  }
+
+  function info() {
+    const url = new URL(doc.location.href);
+    url.hash = '';
+    return { url: url.href, title: doc.title || '', lang: doc.documentElement.lang || 'en' };
+  }
+
+  function context() {
+    const headings = [...doc.querySelectorAll('h1, h2, h3')]
+      .filter((h) => !exclude(h) && (h.checkVisibility ? h.checkVisibility() : true))
+      .map((h) => normalize(h.textContent)).filter(Boolean).slice(0, 60);
+    const index = indexText(doc.body, (el) => exclude(el) || (el.checkVisibility ? !el.checkVisibility() : false));
+    return { headings, text: index.text.slice(0, MAX_CONTEXT_TEXT) };
+  }
+
+  function preview({ id, anchor, text }) {
+    if (previews.has(id)) revert({ id });
+    const range = findRange(anchor, options());
+    if (!range) return false;
+    const parts = textParts(range);
+    if (!parts.length) return false;
+    const replacement = String(text ?? '');
+    const done = [];
+    parts.forEach(({ node, from, to }, i) => {
+      const before = node.data;
+      const after = before.slice(0, from) + (i === 0 ? replacement : '') + before.slice(to);
+      node.data = after;
+      done.push({ node, before, after });
+    });
+    const first = parts[0];
+    const shown = doc.createRange();
+    shown.setStart(first.node, first.from);
+    shown.setEnd(first.node, first.from + replacement.length);
+    previews.set(id, { parts: done, range: shown });
+    showPreviews();
+    return true;
+  }
+
+  function revert({ id }) {
+    const p = previews.get(id);
+    if (!p) return false;
+    previews.delete(id);
+    let ok = true;
+    for (const { node, before, after } of p.parts) {
+      if (node.isConnected && node.data === after) node.data = before;
+      else ok = false;
+    }
+    showPreviews();
+    return ok;
+  }
+
+  function highlight(anchor) {
+    const registry = highlights();
+    if (!anchor) {
+      registry?.delete(HIGHLIGHT);
+      return true;
+    }
+    const range = findRange(anchor, options());
+    if (!range) { registry?.delete(HIGHLIGHT); return false; }
+    if (registry) {
+      style();
+      registry.set(HIGHLIGHT, new win.Highlight(range));
+    }
+    const rect = range.getBoundingClientRect();
+    const block = scrollBlock();
+    const visible = rect.top >= 0 && rect.bottom <= (block === 'start' ? win.innerHeight * 0.35 : win.innerHeight);
+    if (!visible) {
+      const el = range.startContainer.parentElement;
+      el?.scrollIntoView({ block, behavior: 'smooth' });
+    }
+    return true;
+  }
+
+  return {
+    info,
+    context,
+    /** The selection now, or the last one kept (keepSelection). */
+    selection: () => current() || (keepSelection() ? last : null),
+    onSelection(fn) { listeners.add(fn); return () => listeners.delete(fn); },
+    locate: (anchor) => Boolean(findRange(anchor, options())),
+    preview,
+    revert,
+    highlight,
+    /** Puts every preview back and stops listening (the script is replaced). */
+    dispose() {
+      for (const id of [...previews.keys()]) revert({ id });
+      highlights()?.delete(HIGHLIGHT);
+      highlights()?.delete(PREVIEW_HIGHLIGHT);
+      doc.removeEventListener('selectionchange', onSelectionChange);
+      clearTimeout(timer);
+      listeners.clear();
+    },
+  };
+}

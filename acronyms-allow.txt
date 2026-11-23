@@ -84,3 +84,8 @@ tabId          copywriter/spec/*                                         # Chrom
 # The DOM's own names, which the copywriter's panel calls.
 getElementById copywriter/**/*                                           # DOM API
 pointerId      copywriter/**/*                                           # DOM PointerEvent field
+
+# Chrome's extension API names a tab and a window `tabId` and `windowId`
+# (chrome.tabs.onActivated, chrome.scripting.executeScript's target).
+tabId          copywriter/**/*                                           # chrome.tabs API field
+windowId       copywriter/**/*                                           # chrome.tabs API field

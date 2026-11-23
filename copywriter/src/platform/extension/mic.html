@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Microphone · tinyactors copywriter</title>
+<link rel="stylesheet" href="fonts.css">
+<style>
+  :root { color-scheme: light dark; --paper: #F4EEE2; --ink: #2A2622; --muted: #5C544B; --pine: #1F5E4A; --on-pine: #FFF8F0; }
+  @media (prefers-color-scheme: dark) { :root { --paper: #18120D; --ink: #F1E6D2; --muted: #CBBBA2; --pine: #5FAE8F; --on-pine: #120D09; } }
+  html, body { margin: 0; min-height: 100%; background: var(--paper); color: var(--ink); font: 16px/1.5 'IBM Plex Sans', system-ui, sans-serif; }
+  main { max-width: 420px; margin: 18vh auto 0; padding: 0 16px; }
+  h1 { font: 400 32px/1.1 Newsreader, Georgia, serif; letter-spacing: -0.02em; margin: 0 0 12px; }
+  p { color: var(--muted); margin: 0 0 24px; }
+  button { font: 500 14px/1 inherit; font-family: inherit; height: 40px; padding: 0 16px; border: 0; border-radius: 2px; background: var(--pine); color: var(--on-pine); cursor: pointer; }
+</style>
+<script type="module" src="mic.js"></script>
+</head>
+<body>
+<main>
+  <h1>Microphone</h1>
+  <p id="status">Allow it once for push-to-talk in the side panel.</p>
+  <button type="button" id="allow">Allow microphone</button>
+</main>
+</body>
+</html>
