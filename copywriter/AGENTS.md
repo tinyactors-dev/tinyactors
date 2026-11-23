@@ -192,7 +192,15 @@ one-off Python.
   {item, explanation}`, which becomes a page-level open item of kind
   `missing`, the audience's finding, as a reading's gap does. Back to the
   editor is any other conversation: `chat.new` starts one with the editor.
-  Use: checking and sharpening the audience itself.
+  Use: checking and sharpening the audience itself. Checked against the
+  API on 2026-11-23 (`mise run talk-eval`: the live home page, the three
+  starting audiences, "What would make you close this tab?" then a
+  correction; Gemini 4 Hydrogen at high thinking): 8 to 21 s an answer,
+  each in the first person, quoting the page and saying what it does not
+  tell, no number the page lacks; every correction an `update_audience`
+  of the fields it touched. Asked to note every gap, the first answer
+  noted three or four; `TALK_RULES` now asks for the one that matters
+  most, at most one per answer, none already noted or found.
 
 ## Layout
 
@@ -243,8 +251,8 @@ copywriter/
   test/                   node:test for charts and core (readings.test.mjs: the reading actors; talks.test.mjs:
                           conversations with an audience); Playwright for
                           the panel over src/ui/mock-reviewer.mjs (?read=0: no reading yet), the extension and the widget
-  mise/tasks/             build, test, charts, eval, read-eval (Ruby)
-  tools/                  serve.mjs (the panel's preview), eval.mjs and read-eval.mjs (the real Gemini)
+  mise/tasks/             build, test, charts, eval, read-eval, talk-eval (Ruby)
+  tools/                  serve.mjs (the panel's preview), eval.mjs, read-eval.mjs and talk-eval.mjs (the real Gemini)
   dist/                   build output (not in git): extension/, copywriter-extension.zip, site/
 ```
 

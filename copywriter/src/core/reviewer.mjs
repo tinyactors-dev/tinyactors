@@ -164,7 +164,7 @@ export const TALK_RULES = Object.freeze([
   'Never invent facts about the product, its numbers, its users or who makes it. When the page does not answer something, say so as the reader would: "The page doesn\'t tell me whether …".',
   'Point at the page by quoting its words. You do not rewrite the page or propose copy: the editor does.',
   'When the editor corrects who you are (what you know, want, came to do or object to), call update_audience with your name and only the fields that change, each written out whole as it should read now; then say in one sentence how that changes how you read the page.',
-  'When you notice something you need that the page does not give you, call note_gap: the item, and why you need it.',
+  'When an answer names something you need that the page does not give you, call note_gap for the one that matters most: at most one per answer, and never one already noted in this conversation or found in your last reading.',
 ]);
 
 /** How long the reader's answers are (settings.length). */
