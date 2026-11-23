@@ -52,13 +52,13 @@ test('settings: the key saved and forgotten, the model, a persona of the user\'s
   assert.equal(s.model, 'gemini-4-carbon');
   assert.equal(s.personaID, 'terse');
   assert.deepEqual(s.personas.map((p) => p.name), ['tinyactors voice', 'Terse']);
-  assert.deepEqual(await store.settings(), { model: 'gemini-4-carbon', personaID: 'terse' });
+  assert.deepEqual(await store.settings(), { model: 'gemini-4-carbon', personaID: 'terse', thinking: 'high' });
 
   page.select('Read the guide');
   await reviewer.dispatch({ type: 'annotate', note: 'x' });
   const request = fetch.requests[1];
   assert.match(request.url, /gemini-4-carbon:generateContent/);
-  assert.match(request.body.systemInstruction.parts[0].text, /^Use five words\./);
+  assert.match(request.body.systemInstruction.parts[0].text, /^Active persona: Terse\nUse five words\./);
 
   await reviewer.dispatch({ type: 'settings.forgetKey' });
   assert.equal(reviewer.getState().settings.hasKey, false);
@@ -108,10 +108,12 @@ function fakeMedia() {
   return { recorder: createRecorder({ mediaDevices, MediaRecorder }), tracks };
 }
 
-test('push-to-talk: the clip goes to the model as inline audio, for an annotation and for the page', async () => {
+test('push-to-talk: the clip is transcribed first, and the transcript is the message, for an annotation and for the page', async () => {
   const { recorder, tracks } = fakeMedia();
   const fetch = fakeFetch(
+    geminiReply('Make it shorter'),
     geminiReply('Heard you.', [['propose_rewrite', { replacement: 'Spoken rewrite', rationale: 'r' }]]),
+    geminiReply('What is vague here?'),
     geminiReply('About the page.'),
   );
   const { reviewer, page, store } = await setup({ fetch, recorder });
@@ -125,15 +127,21 @@ test('push-to-talk: the clip goes to the model as inline audio, for an annotatio
   assert.ok(tracks[0].stopped, 'the microphone is released');
   const a = find(reviewer, id);
   assert.equal(a.state, 'suggested');
-  assert.equal(a.messages[0].text, '(voice message)');
+  assert.deepEqual(a.messages[0], { role: 'user', text: 'Make it shorter', at: a.messages[0].at, spoken: true });
   assert.equal(a.suggestions[0].text, 'Spoken rewrite');
-  const parts = fetch.requests[0].body.contents.at(-1).parts;
-  assert.deepEqual(parts.at(-1), { inlineData: { mimeType: 'audio/webm', data: 'AQID' } });
+  // the transcription: the audio inline, no tools, low thinking
+  const heard = fetch.requests[0].body;
+  assert.deepEqual(heard.contents[0].parts.at(-1), { inlineData: { mimeType: 'audio/webm', data: 'AQID' } });
+  assert.equal(heard.tools, undefined);
+  assert.deepEqual(heard.generationConfig.thinkingConfig, { thinkingLevel: 'low' });
+  assert.match(heard.systemInstruction.parts[0].text, /verbatim/);
+  // the rewrite: the transcript as text, no audio
+  assert.ok(!JSON.stringify(fetch.requests[1].body).includes('AQID'));
+  assert.match(JSON.stringify(fetch.requests[1].body.contents), /Make it shorter/);
 
   await reviewer.dispatch({ type: 'record.start', target: 'page' });
   await reviewer.dispatch({ type: 'record.stop' });
-  assert.deepEqual(reviewer.getState().chat.messages.map((m) => m.text), ['(voice message)', 'About the page.']);
-  assert.deepEqual(fetch.requests[1].body.contents.at(-1).parts.at(-1).inlineData.data, 'AQID');
+  assert.deepEqual(reviewer.getState().chat.messages.map((m) => [m.text, m.spoken]), [['What is vague here?', true], ['About the page.', undefined]]);
   assert.ok(!store.dump().includes('AQID'), 'the audio is not stored');
   await assert.rejects(reviewer.dispatch({ type: 'record.stop' }), /Not recording/);
   reviewer.close();
@@ -152,7 +160,7 @@ test('gemini: contents merge turns, a reply\'s text and calls are read, bad call
     ['set_note', { note: 'Vague.' }],
     ['delete_page', {}],
   ])));
-  assert.deepEqual(read, { text: 'Done.', rewrites: [{ original_text: 'Old', replacement: 'New', rationale: 'why' }], note: 'Vague.' });
+  assert.deepEqual(read, { text: 'Done.', rewrites: [{ original_text: 'Old', replacement: 'New', rationale: 'why' }], note: 'Vague.', personas: [], thoughts: '' });
   assert.throws(() => parse({ promptFeedback: { blockReason: 'SAFETY' } }), /blocked the request \(SAFETY\)/);
 });
 

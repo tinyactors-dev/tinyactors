@@ -42,6 +42,24 @@ one-off Python.
   filtered to models whose `supportedGenerationMethods` include
   `generateContent` and whose name starts with `gemini-`; until it loads,
   or when it fails, the hard-coded list in `src/core/models.mjs` is used.
+- **Thinking.** Every generateContent request sets `generationConfig:
+  {maxOutputTokens: 65536, thinkingConfig}` with the user's level
+  (`settings.thinking`, default `high`): `{thinkingLevel, includeThoughts:
+  true}` for Gemini 3 and 4, where `xhigh` goes only to the models that
+  take it (Gemini 4 Hydrogen and Neon; Carbon, Argon and every 3.x answer
+  400, checked against the API on 2026-11-23) and is `high` elsewhere, and
+  a refused level is tried once more at `high`; `{thinkingBudget}` (1024,
+  8192, 24576) for gemini-2.5, which this key can no longer call (404),
+  so that mapping is Google's documented field, unverified here. Parts
+  marked `thought` are never the answer: the last summary is the model
+  message's `thoughts`, and `seconds` the time the request took. An answer
+  cut at `MAX_TOKENS` keeps what it said; one cut before saying anything
+  is an error that suggests a lower level.
+- **Voice.** A clip is transcribed before it is a message: one
+  generateContent request with the audio inline, an instruction to
+  transcribe verbatim with no commentary, no tools and thinking `low`, on
+  the user's model. The transcript is the user's message (`spoken: true`),
+  sent to the conversation as text and used as the note in exports.
 - **Key (BYOK).** The user's own Google AI Studio key. Extension:
   `chrome.storage.session` by default, `chrome.storage.local` when
   "Remember on this device" is ticked. Embedded: `sessionStorage`, or
@@ -62,7 +80,12 @@ one-off Python.
   clipboard, since a download there is awkward.
 - **Persona.** The default style guide is the website's voice
   (`website/AGENTS.md`, "The voice: short and literal"), editable in
-  Settings; more personas can be added.
+  Settings but never deleted; more personas can be added in Settings or by
+  the model (`define_persona`, `use_persona`, from the page chat or an
+  annotation's conversation), and every persona but the default can be
+  deleted. The system instruction names the active persona, then its
+  instructions, and tells the model it may define one when the reviewer
+  describes an audience or a voice.
 
 ## Layout
 
@@ -72,7 +95,7 @@ copywriter/
   src/core/               platform-free: the host, the processors, Gemini, IndexedDB, export
     reviewer.mjs          createReviewer(adapters) → Reviewer (the facade below)
     models.mjs            the hard-coded model list and the models.list call
-    gemini.mjs            generateContent with tools, audio parts
+    gemini.mjs            generateContent with tools and thinking, transcription
     store.mjs             IndexedDB (and an in-memory store for tests)
     packet.mjs            the work packet: XML, Markdown, ZIP (no dependency)
     charts.mjs            the charts' text, imported by the bundle
@@ -119,31 +142,45 @@ annotation's id.
                                            // sentence, heading or paragraph (another block, or over 600 characters)
   settings: {
     hasKey, rememberKey, model, models: [{ id, label }],
-    personaID, personas: [{ id, name, instructions }],
+    thinking,                              // 'low' | 'medium' | 'high' | 'xhigh'
+    personaID, personas: [{ id, name, instructions,
+      builtIn?,                            // true: the default, which cannot be deleted
+      source? }],                          // 'model': defined by the model (define_persona)
   },
   annotations: [{                          // this page's, newest first
-    id, state,                             // 'draft' | 'asking' | 'suggested' | 'previewing' | 'kept' | 'dismissed' | 'failed'
+    id, state,                             // 'draft' | 'transcribing' | 'asking' | 'suggested' | 'previewing' | 'kept' | 'dismissed' | 'failed'
     original, anchorFound,                 // anchorFound false: the text is no longer on the page
     source,                                // 'typed' | 'model' (made by the page chat)
     note,                                  // the user's note (why)
     suggestions: [{ id, text, rationale, own?, after? }],   // own: the user's text (edit); after: the number of
                                            // messages before it (it follows the reply that brought it)
     chosenID,                              // suggestion previewed or kept
-    messages: [{ role: 'user' | 'model', text, at }],
+    messages: [message],                   // below
     error?, createdAt, updatedAt,
   }],
   activeID: string | null,
   chat: {                                  // page-level conversation
-    messages: [{ role, text, at,
-      annotations?,                        // a model message: the ids of the annotations its rewrites made
-      proposed? }],                        // true: the model said nothing, the text lists its proposals
-    busy, error?,                          // error: the last request failed (until the next message)
-  },
+    messages: [message],                   // below
+    busy, error?,                          // busy while transcribing or asking; error: the last request failed
+  },                                       //   (until the next message), or 'Nothing was heard.'
   recording: { state: 'idle' | 'recording' | 'transcribing', target: annotationID | 'page' | null },
   totals: { kept, open, pages },           // across every page reviewed
   exporting: 'idle' | 'building' | 'done' | 'failed',
 }
+
+message = {
+  role: 'user' | 'model', text, at,
+  spoken?,                                 // a user message: true when it is a clip's transcript
+  annotations?,                            // a page chat's model message: the ids of the annotations its rewrites made
+  proposed?,                               // true: the model said nothing, the text lists its proposals
+  personas?: [{ name, action, id? }],      // a model message: its persona calls ('define' | 'use'); id once saved
+  thoughts?, seconds?,                     // a model message: the summary of its thinking, and the request's seconds
+}
 ```
+
+`recording.state` is `transcribing` from the end of a clip until its
+transcript exists; then the message shows, and the conversation goes on
+(`busy`, or the annotation's `asking`).
 
 ### Commands
 
@@ -160,8 +197,9 @@ annotation's id.
 | `dismiss` / `reopen` / `delete` | `id` | |
 | `note` | `id`, `text` | sets the note |
 | `chat` | `text` | a page-level message; the model may create annotations (`propose_rewrite`) |
-| `record.start` / `record.stop` | `target` | push-to-talk: the clip goes to the model as the next message for `target` |
-| `settings.save` | `apiKey?`, `rememberKey?`, `model?`, `personaID?`, `persona?` | a new key is checked with models.list first: one Google refuses is not saved ("That key was not accepted by Google.") |
+| `record.start` / `record.stop` | `target` | push-to-talk: the clip is transcribed, and the transcript is the next message for `target`; an empty one is not sent ("Nothing was heard.") |
+| `settings.save` | `apiKey?`, `rememberKey?`, `model?`, `personaID?`, `persona?`, `thinking?` | a new key is checked with models.list first: one Google refuses is not saved ("That key was not accepted by Google."); `persona` `{id?, name, instructions}` creates or updates one |
+| `settings.deletePersona` | `id` | any persona but the default; the active one gives way to the default |
 | `settings.forgetKey` | | |
 | `models.refresh` | | |
 | `export` | `scope: 'page' \| 'all'`, `to: 'download' \| 'clipboard'` | |
@@ -233,7 +271,10 @@ from the model.
 
 Charts in `charts/`, one actor per annotation plus one per page session.
 Actors reach the world only through `<send type="...">` to I/O processors
-the core registers: `page`, `model`, `store`, `ui`, and `spawn` (the
+the core registers: `page`, `model`, `store`, `ui`, `settings` (the
+personas the model defines or uses: it saves them and answers
+`persona.saved {name, id, action}` or `persona.refused {name, message}`),
+and `spawn` (the
 package's `Spawner`: the session actor spawns an annotation actor for each
 `propose_rewrite` of the page chat that names `original_text`). When the
 model answers the page chat with function calls only, the `model`
@@ -247,7 +288,16 @@ by a chart directly: a chart sends its datamodel to `ui` and the core folds
 it into ViewState; it sends the same record to `store`, and an actor is
 restored from it (`state` names where it was; a kept one previews its text
 again). The audio of a clip never enters a chart: the core keeps it under
-an id the `ask` or `chat` event carries, and the `model` processor takes it.
+an id the `ask` or `chat` event carries; the actor goes to `transcribing`
+and sends `model` a `transcribe` of that id, which answers
+`model.transcript {text}`.
+
+The model's tools (`src/core/gemini.mjs`, `FUNCTIONS`): `propose_rewrite
+{original_text?, replacement, rationale}`, `set_note {note}`,
+`define_persona {name, instructions, use?}` (create or update by name;
+`use: true` makes it active) and `use_persona {name}`. A reply's persona
+calls go from the actor to `settings`; a reply of persona calls only says
+what was saved.
 
 `src/core/charts.mjs` is generated by `mise run charts` from
 `charts/*.scxml` and `spec/work-packet.xsd` (string constants, so the

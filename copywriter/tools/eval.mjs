@@ -6,14 +6,14 @@
 // and nothing the page does not say (a heuristic: a number, or a word
 // that claims a capability, such as "test" or "trace", the page lacks).
 //
-//   mise run eval [-- --model gemini-4-hydrogen]   (GEMINI_API_KEY through fnox)
+//   mise run eval [-- --model gemini-4-hydrogen --thinking high]   (GEMINI_API_KEY through fnox)
 
 import { parseArgs } from 'node:util';
 import { createReviewer } from '../src/core/reviewer.mjs';
 import { createMemoryStore } from '../src/core/store.mjs';
 import { fakePage, fakeCredentials } from '../test/fakes.mjs';
 
-const { values } = parseArgs({ options: { model: { type: 'string', default: 'gemini-4-hydrogen' } } });
+const { values } = parseArgs({ options: { model: { type: 'string', default: 'gemini-4-hydrogen' }, thinking: { type: 'string', default: 'high' } } });
 const key = process.env.GEMINI_API_KEY;
 if (!key) { console.error('eval: GEMINI_API_KEY is not set (run through fnox)'); process.exit(2); }
 
@@ -49,7 +49,7 @@ const reviewer = await createReviewer({
   download() {}, clipboard() {},
 });
 await reviewer.ready();
-await reviewer.dispatch({ type: 'settings.save', model: values.model });
+await reviewer.dispatch({ type: 'settings.save', model: values.model, thinking: values.thinking });
 
 let failures = 0;
 for (const c of cases) {
@@ -58,7 +58,9 @@ for (const c of cases) {
   const id = await reviewer.dispatch({ type: 'annotate', note: c.note });
   const a = reviewer.getState().annotations.find((x) => x.id === id);
   const seconds = ((performance.now() - started) / 1000).toFixed(1);
-  console.log(`\n[${c.kind}] ${c.original}\n  note: ${c.note}  (${seconds} s, state ${a.state})`);
+  const reply = a.messages.findLast((m) => m.role === 'model');
+  const thought = reply?.thoughts ? `, thought summary ${reply.thoughts.length} characters` : ', no thought summary';
+  console.log(`\n[${c.kind}] ${c.original}\n  note: ${c.note}  (${seconds} s, state ${a.state}${thought})`);
   if (a.state === 'failed') { console.log(`  FAIL ${a.error}`); failures++; continue; }
   if (a.suggestions.length === 0) { console.log(`  FAIL no rewrites; the model said: ${a.messages.at(-1)?.text}`); failures++; continue; }
   for (const s of a.suggestions) {
@@ -80,5 +82,5 @@ for (const c of cases) {
   }
 }
 reviewer.close();
-console.log(`\neval: ${values.model}, ${failures} problem(s)`);
+console.log(`\neval: ${values.model}, thinking ${values.thinking}, ${failures} problem(s)`);
 process.exit(failures ? 1 : 0);

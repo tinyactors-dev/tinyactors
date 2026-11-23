@@ -1,5 +1,5 @@
-// Gemini's generateContent over REST, with the copywriter's two functions
-// and audio clips as inline data. The key goes in the `x-goog-api-key`
+// Gemini's generateContent over REST, with the copywriter's functions,
+// thinking, and audio clips as inline data. The key goes in the `x-goog-api-key`
 // header of each request and nowhere else.
 
 import { BASE, KEY_REFUSED } from './models.mjs';
@@ -31,7 +31,56 @@ export const FUNCTIONS = Object.freeze([
       required: ['note'],
     },
   },
+  {
+    name: 'define_persona',
+    description: 'Create or update a persona: a named voice or audience whose instructions guide every rewrite while it is active. Call it when the reviewer describes an audience, a reader or a voice. A persona of the same name is updated.',
+    parameters: {
+      type: 'object',
+      properties: {
+        name: { type: 'string', description: 'A short name, such as "Skeptical CTO".' },
+        instructions: { type: 'string', description: 'The style guide for this persona, as instructions to a copy editor: who reads, what they need, the voice, what to avoid.' },
+        use: { type: 'boolean', description: 'True to make it the active persona now.' },
+      },
+      required: ['name', 'instructions'],
+    },
+  },
+  {
+    name: 'use_persona',
+    description: 'Make a saved persona the active one, by its name.',
+    parameters: {
+      type: 'object',
+      properties: { name: { type: 'string', description: 'The persona\'s name.' } },
+      required: ['name'],
+    },
+  },
 ]);
+
+/** The thinking levels a reviewer can pick; the default is 'high'. */
+export const THINKING_LEVELS = Object.freeze(['low', 'medium', 'high', 'xhigh']);
+export const DEFAULT_THINKING = 'high';
+
+/** The most tokens an answer may take, thoughts included. */
+export const MAX_OUTPUT_TOKENS = 65536;
+
+// Models that take thinkingLevel 'xhigh' (generateContent, 2026-11-23:
+// Gemini 4 Hydrogen and Neon; Carbon, Argon and every 3.x answer 400).
+const XHIGH = /^gemini-4-(hydrogen|neon)(\b|-)/;
+// gemini-2.5 models take a token budget, not a level.
+const BUDGETS = Object.freeze({ low: 1024, medium: 8192, high: 24576, xhigh: 24576 });
+
+/**
+ * The generationConfig.thinkingConfig for a model and a level: a
+ * thinkingLevel for Gemini 3 and 4 ('xhigh' only where the model takes it,
+ * 'high' elsewhere), a thinkingBudget for gemini-2.5.
+ */
+export function thinkingConfig(model, level = DEFAULT_THINKING, { includeThoughts = true } = {}) {
+  const wanted = THINKING_LEVELS.includes(level) ? level : DEFAULT_THINKING;
+  const config = /^gemini-2\.5/.test(model)
+    ? { thinkingBudget: BUDGETS[wanted] }
+    : { thinkingLevel: wanted === 'xhigh' && !XHIGH.test(model) ? 'high' : wanted };
+  if (includeThoughts) config.includeThoughts = true;
+  return config;
+}
 
 /** A refusal or failure of the Gemini API, with a message for the user. */
 export class GeminiError extends Error {
@@ -82,7 +131,12 @@ export function contents(messages, { prompt, clip } = {}) {
   return turns;
 }
 
-/** The text and the function calls of a generateContent response. */
+/**
+ * The text, the function calls and the thought summary of a
+ * generateContent response. A part marked `thought` is never the answer.
+ * An answer cut at the output limit (`MAX_TOKENS`) keeps what it has; one
+ * cut before it said anything is a GeminiError.
+ */
 export function parse(body) {
   const candidate = (body.candidates || [])[0];
   if (!candidate) {
@@ -90,14 +144,26 @@ export function parse(body) {
     throw new GeminiError(reason ? `Gemini blocked the request (${reason}).` : 'Gemini gave no answer.');
   }
   const texts = [];
+  const thoughts = [];
   const calls = [];
   for (const part of candidate.content?.parts || []) {
-    if (part.thought) continue;
+    if (part.thought) {
+      if (typeof part.text === 'string') thoughts.push(part.text);
+      continue;
+    }
     if (typeof part.text === 'string') texts.push(part.text);
     if (part.functionCall) calls.push({ name: part.functionCall.name, args: part.functionCall.args || {} });
   }
+  const text = texts.join('').trim();
+  const cut = candidate.finishReason === 'MAX_TOKENS';
+  if (cut && !text && calls.length === 0) {
+    throw new GeminiError('Gemini used its whole output budget thinking and gave no answer: try again, or a lower thinking level in Settings.');
+  }
   // the parts as given (thought signatures included), to send back with the calls' results
-  return { text: texts.join('').trim(), calls, parts: candidate.content?.parts || [] };
+  return {
+    text, calls, parts: candidate.content?.parts || [],
+    thoughts: thoughts.join('\n\n').trim(), ...(cut ? { cut: true } : {}),
+  };
 }
 
 /**
@@ -105,23 +171,36 @@ export function parse(body) {
  * as it came, then each call's result. Sent again with the same request,
  * they ask the model for the words it left out.
  */
-export function callResults({ parts, calls }, result = 'Shown to the reviewer as a proposal to preview.') {
+export function callResults({ parts, calls }) {
   return [
     { role: 'model', parts },
-    { role: 'user', parts: calls.map((c) => ({ functionResponse: { name: c.name, response: { result } } })) },
+    { role: 'user', parts: calls.map((c) => ({ functionResponse: { name: c.name, response: { result: CALL_RESULTS[c.name] || 'Done.' } } })) },
   ];
 }
 
+// What each call did, as the model reads it in a functionResponse.
+const CALL_RESULTS = Object.freeze({
+  propose_rewrite: 'Shown to the reviewer as a proposal to preview.',
+  set_note: 'Saved as the note.',
+  define_persona: 'Saved; the reviewer sees it in Settings.',
+  use_persona: 'It is the active persona now.',
+});
+
 /**
- * One generateContent request: `{text, calls}`, or a GeminiError whose
- * message says what to do.
+ * One generateContent request: `{text, calls, parts, thoughts, cut?}`, or
+ * a GeminiError whose message says what to do. `thinking` is a level of
+ * THINKING_LEVELS, mapped per model by thinkingConfig.
  */
-export async function generate({ apiKey, model, system, contents, fetch = globalThis.fetch }) {
+export async function generate({
+  apiKey, model, system, contents, fetch = globalThis.fetch,
+  thinking = DEFAULT_THINKING, includeThoughts = true, tools = FUNCTIONS,
+}) {
   if (!apiKey) throw new GeminiError('No Gemini key: add yours in Settings.');
   const request = {
     systemInstruction: { parts: [{ text: system }] },
     contents,
-    tools: [{ functionDeclarations: FUNCTIONS }],
+    ...(tools.length ? { tools: [{ functionDeclarations: tools }] } : {}),
+    generationConfig: { maxOutputTokens: MAX_OUTPUT_TOKENS, thinkingConfig: thinkingConfig(model, thinking, { includeThoughts }) },
   };
   let response;
   try {
@@ -141,6 +220,10 @@ export async function generate({ apiKey, model, system, contents, fetch = global
       detail = error.message || '';
       reason = [error.status, ...(error.details || []).map((d) => d.reason)].filter(Boolean).join(' ');
     } catch { /* not JSON */ }
+    // A model the table does not know refuses the level: once more at 'high'.
+    if (response.status === 400 && /thinking level/i.test(detail) && thinking !== 'high') {
+      return generate({ apiKey, model, system, contents, fetch, thinking: 'high', includeThoughts, tools });
+    }
     throw new GeminiError(explain(response.status, detail, reason), { status: response.status });
   }
   return parse(await response.json());
@@ -148,12 +231,16 @@ export async function generate({ apiKey, model, system, contents, fetch = global
 
 /**
  * What the copywriter's processors need from a reply: the text, the
- * rewrites (`propose_rewrite`'s arguments) and a note (`set_note`). Calls
- * of other names, or with the wrong types, are dropped.
+ * rewrites (`propose_rewrite`'s arguments), a note (`set_note`), the
+ * persona calls (`define_persona`, `use_persona`, as `{action: 'define'
+ * | 'use', name, instructions?, use?}`) and the thought summary. Calls of
+ * other names, or with the wrong types, are dropped.
  */
-export function reading({ text, calls }) {
+export function reading({ text, calls, thoughts = '' }) {
   const rewrites = [];
+  const personas = [];
   let note = null;
+  const name = (a) => (typeof a.name === 'string' ? a.name.trim().slice(0, 80) : '');
   for (const call of calls) {
     const a = call.args;
     if (call.name === 'propose_rewrite' && typeof a.replacement === 'string' && a.replacement.trim()) {
@@ -162,7 +249,27 @@ export function reading({ text, calls }) {
       rewrites.push(r);
     } else if (call.name === 'set_note' && typeof a.note === 'string') {
       note = a.note.trim();
+    } else if (call.name === 'define_persona' && name(a) && typeof a.instructions === 'string' && a.instructions.trim()) {
+      personas.push({ action: 'define', name: name(a), instructions: a.instructions.trim(), use: a.use === true });
+    } else if (call.name === 'use_persona' && name(a)) {
+      personas.push({ action: 'use', name: name(a) });
     }
   }
-  return { text, rewrites, note };
+  return { text, rewrites, note, personas, thoughts };
+}
+
+/** What the transcription asks of the model. */
+export const TRANSCRIBE = 'Transcribe the speech in this audio verbatim, in the language spoken. Answer with the transcript only: no commentary, no quotation marks, no labels. If nothing is said, answer with nothing.';
+
+/**
+ * A clip ({mimeType, bytes}) written down: one generateContent request
+ * with the audio inline, no tools, low thinking. Resolves to the text
+ * ('' when nothing was heard).
+ */
+export async function transcribe({ apiKey, model, clip, fetch = globalThis.fetch }) {
+  const result = await generate({
+    apiKey, model, fetch, system: TRANSCRIBE, tools: [], thinking: 'low', includeThoughts: false,
+    contents: [{ role: 'user', parts: [{ text: 'Transcribe this.' }, { inlineData: { mimeType: clip.mimeType, data: base64(clip.bytes) } }] }],
+  });
+  return result.text;
 }

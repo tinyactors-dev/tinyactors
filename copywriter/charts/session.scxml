@@ -5,12 +5,17 @@
   with `original_text`, and the anchor the model processor found for it),
   this actor spawns an annotation actor for it, and the model's message
   names the annotations it made (`annotations`; `proposed` when the model
-  said nothing but the proposals).
+  said nothing but the proposals). A spoken message (`chat` with a clip)
+  is transcribed first, and the transcript is the user's message. The
+  persona calls of a reply (`define_persona`, `use_persona`) go to the
+  `settings` processor, and the model's message names them (`personas`).
 
-    model  chat           → model.reply {text, proposed?, rewrites} | model.error {message}
-    spawn  spawn          → spawned {name, address}    (tinyactors' Spawner)
-    store  chat           {page, messages}, after every change
-    ui     chat           {page, messages, busy, error}, after every change
+    model    chat         → model.reply {text, proposed?, rewrites, personas, thoughts?, seconds?} | model.error {message}
+             transcribe   → model.transcript {text} | model.error {message}   (the clip's id)
+    spawn    spawn        → spawned {name, address}    (tinyactors' Spawner)
+    settings persona      → persona.saved {name, id, action} | persona.refused {name, message}
+    store    chat         {page, messages}, after every change
+    ui       chat         {page, messages, busy, error}, after every change
 -->
 <scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0"
        datamodel="ecmascript" name="session" initial="live">
@@ -19,8 +24,8 @@
     <data id="lang" expr="'en'"/>
     <data id="messages" expr="[]"/>
     <data id="busy" expr="false"/>
-    <!-- what the next model request carries besides the messages: {clip} -->
-    <data id="request" expr="null"/>
+    <!-- the id of the clip being transcribed (the core keeps the audio) -->
+    <data id="clip" expr="null"/>
     <data id="spawned" expr="0"/>
     <!-- the last request's failure, until the next message -->
     <data id="error" expr="null"/>
@@ -44,6 +49,18 @@
         },
       };
     }
+
+    // The model's message of a reply: its words, the annotations its
+    // rewrites made, the persona calls and the summary of its thinking.
+    function reply(data, pending) {
+      var m = { role: 'model', text: data.text || 'No change proposed.', at: new Date().toISOString() };
+      if (pending.length) m.annotations = pending.map((p) => p.name);
+      if (data.proposed) m.proposed = true;
+      if (data.personas &amp;&amp; data.personas.length) m.personas = data.personas.map((p) => ({ name: p.name, action: p.action }));
+      if (data.thoughts) m.thoughts = data.thoughts;
+      if (data.seconds) m.seconds = data.seconds;
+      return m;
+    }
   </script>
 
   <state id="live" initial="idle">
@@ -52,13 +69,47 @@
       <send type="ui" event="chat" namelist="page messages busy error"/>
       <send type="store" event="chat" namelist="page messages"/>
     </transition>
+    <!-- the settings processor's answers: a saved persona's id on the chip; a refusal is the error -->
+    <transition event="persona.saved">
+      <assign location="messages" expr="messages.map((m) => m.personas ? Object.assign({}, m, { personas: m.personas.map((p) => (p.name === _event.data.name &amp;&amp; !p.id ? Object.assign({}, p, { id: _event.data.id }) : p)) }) : m)"/>
+      <raise event="changed"/>
+    </transition>
+    <transition event="persona.refused">
+      <assign location="error" expr="_event.data.message"/>
+      <raise event="changed"/>
+    </transition>
 
     <state id="idle">
       <onentry><assign location="busy" expr="false"/><raise event="changed"/></onentry>
+      <transition event="chat" cond="_event.data.clip" target="transcribing">
+        <assign location="error" expr="null"/>
+        <assign location="clip" expr="_event.data.clip"/>
+      </transition>
       <transition event="chat" target="asking">
         <assign location="error" expr="null"/>
-        <assign location="messages" expr="messages.concat([{ role: 'user', text: _event.data.text || '(voice message)', at: new Date().toISOString() }])"/>
-        <assign location="request" expr="({ clip: _event.data.clip || null })"/>
+        <assign location="messages" expr="messages.concat([{ role: 'user', text: _event.data.text, at: new Date().toISOString() }])"/>
+      </transition>
+    </state>
+
+    <!-- A spoken message: the model writes down what was said, and that is the message. -->
+    <state id="transcribing">
+      <onentry>
+        <assign location="busy" expr="true"/>
+        <raise event="changed"/>
+        <send type="model" event="transcribe" namelist="page clip"/>
+      </onentry>
+      <onexit><assign location="clip" expr="null"/></onexit>
+      <transition event="model.transcript" cond="String(_event.data.text || '').trim()" target="asking">
+        <assign location="messages" expr="messages.concat([{ role: 'user', text: String(_event.data.text).trim(), at: new Date().toISOString(), spoken: true }])"/>
+      </transition>
+      <transition event="model.transcript" target="idle">
+        <assign location="error" expr="'Nothing was heard.'"/>
+      </transition>
+      <transition event="model.error" target="idle">
+        <assign location="error" expr="_event.data.message"/>
+      </transition>
+      <transition event="error.communication" target="idle">
+        <assign location="error" expr="'The model could not be reached.'"/>
       </transition>
     </state>
 
@@ -66,26 +117,25 @@
       <onentry>
         <assign location="busy" expr="true"/>
         <raise event="changed"/>
-        <send type="model" event="chat" namelist="page messages request"/>
+        <send type="model" event="chat" namelist="page messages"/>
       </onentry>
       <transition event="model.reply" target="idle">
         <assign location="pending" expr="(_event.data.rewrites || []).filter((r) => r.original_text).map((r, i) => annotation(r, page, lang, spawned + i + 1))"/>
         <assign location="spawned" expr="spawned + pending.length"/>
-        <assign location="messages" expr="messages.concat([Object.assign({ role: 'model', text: _event.data.text || 'No change proposed.', at: new Date().toISOString() },
-          pending.length ? { annotations: pending.map((p) => p.name) } : {}, _event.data.proposed ? { proposed: true } : {})])"/>
+        <assign location="messages" expr="messages.concat([reply(_event.data, pending)])"/>
         <foreach array="pending" item="spawn">
           <send type="spawn" event="spawn"><content expr="spawn"/></send>
         </foreach>
+        <foreach array="_event.data.personas || []" item="call">
+          <send type="settings" event="persona"><content expr="call"/></send>
+        </foreach>
         <assign location="pending" expr="[]"/>
-        <assign location="request" expr="null"/>
       </transition>
       <transition event="model.error" target="idle">
         <assign location="error" expr="_event.data.message"/>
-        <assign location="request" expr="null"/>
       </transition>
       <transition event="error.communication" target="idle">
         <assign location="error" expr="'The model could not be reached.'"/>
-        <assign location="request" expr="null"/>
       </transition>
     </state>
   </state>
