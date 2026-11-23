@@ -206,23 +206,28 @@ export async function mount(root) {
   // the newest message of each room or direct message you have seen, by "you\nroom": a newer one is
   // unread (a screen keeps a conversation's latest messages only, so counting them would stop at the cap)
   const seen = new Map();
+  // Every unread mark derives from it: a room's or direct message's row and badge, and Activity's.
   /**
-   * What is unread in `name` on your screen: whether someone else posted there after the message
-   * you saw last, or after your own last post (you read up to it), and how many of those posts
-   * mention you. Never in the open conversation.
+   * The posts unread in `name` on your screen, newest first: those someone else made after the
+   * message you saw last there, or after your own last post (you read up to it). None in the open
+   * conversation.
    */
-  const unreadOf = (screen, name) => {
-    const found = { unread: false, mentions: 0 };
+  const unreadPosts = (screen, name) => {
+    const found = [];
     if (name === room) return found;
     const last = seen.get(`${you}\n${name}`);
     for (let index = screen.messages.length - 1; index >= 0; index--) {
       const message = screen.messages[index];
       if (message.room !== name) continue;
       if (message === last || message.from === you) break;
-      found.unread = true;
-      if (mentioned(message.text, you)) found.mentions++;
+      found.push(message);
     }
     return found;
+  };
+  /** Whether anything is unread in `name`, and how many of its unread posts mention you. */
+  const unreadOf = (screen, name) => {
+    const posts = unreadPosts(screen, name);
+    return { unread: posts.length > 0, mentions: posts.filter((message) => mentioned(message.text, you)).length };
   };
   const unreadOn = (screen, name) => unreadOf(screen, name).unread;
   const chat = await createChat(tinyactors, { versions: texts, version: LATEST, onChange: () => render() });
@@ -606,13 +611,17 @@ export async function mount(root) {
   const activityView = el('section', { class: 'chatlive__sidebar chatlive__inbox', 'aria-labelledby': 'chatlive-activity', hidden: '' },
     el('div', { class: 'chatlive__inbox-head' }, el('h3', { class: 'chatlive__inbox-title', id: 'chatlive-activity' }, 'Activity'), markRead), activityEmpty, activityRows);
   const columns = { home: sidebar, dms: dmView, activity: activityView };
-  // what each person has read: the messages their screen showed in their conversation, or they opened from Activity
-  const readBy = new Map();
-  const readOf = (name) => readBy.get(name) ?? readBy.set(name, new WeakSet()).get(name);
   let activityItems = new Map(); // the Activity rows' messages, by the page's key
   let picked = null; // the Activity row you opened last
+  // Mark all read: each conversation Activity lists is seen up to its newest message, so its row,
+  // badge and Activity's clear together. A channel with no mention of you stays bold, as in Slack,
+  // whose Activity marks only its own items read.
   markRead.addEventListener('click', () => {
-    for (const message of activityItems.values()) readOf(you).add(message);
+    const screen = chat.screen(you);
+    for (const name of new Set([...activityItems.values()].map((message) => message.room))) {
+      const newest = screen.messages.findLast((message) => message.room === name);
+      if (newest) seen.set(`${you}\n${name}`, newest);
+    }
     render();
   });
 
@@ -1335,9 +1344,6 @@ export async function mount(root) {
     // the rail's views: the one picked shows in the sidebar's place
     for (const [key, column] of Object.entries(columns)) column.hidden = key !== railView;
     back.setAttribute('aria-label', `Back to ${VIEWS[railView]}`);
-    const read = readOf(you);
-    // a conversation on screen is read (on a phone, only while it shows)
-    if (!query && main.getClientRects().length) for (const message of inRoom) read.add(message);
     const unreadIn = (each) => unreadOn(screen, each.room);
     const badge = (key, n, what) => {
       const mark = railTabs[key].querySelector('.chatlive__badge');
@@ -1382,8 +1388,10 @@ export async function mount(root) {
     const current = query ? null
       : picked && activityItems.get(picked)?.room === room ? picked
         : [...activityItems].find(([, message]) => message.room === room)?.[0] ?? null;
-    badge('activity', items.filter((message) => !read.has(message)).length, 'unread');
-    markRead.hidden = items.every((message) => read.has(message));
+    // an item is unread while its conversation is: the same record as the rows' and badges'
+    const unreadItems = new Set([...new Set(items.map((message) => message.room))].flatMap((name) => unreadPosts(screen, name)));
+    badge('activity', items.filter((message) => unreadItems.has(message)).length, 'unread');
+    markRead.hidden = !items.some((message) => unreadItems.has(message));
     setText(activityEmpty, items.length ? '' : `Posts that mention @${you} and direct messages to you show here.`);
     keyed(activityRows, [...activityItems.keys()], (key) => {
       const message = activityItems.get(key);
@@ -1393,14 +1401,13 @@ export async function mount(root) {
         el('time', { class: 'chatlive__row-at' }, clock(message.at)), avatar(message.from, 'large'),
         el('span', { class: 'chatlive__row-name' }, message.from), el('span', { class: 'chatlive__row-text' }, message.text), el('span', { class: 'visually-hidden' }));
       button.addEventListener('click', () => {
-        readOf(you).add(message);
         picked = key;
         openRoom(message.room, true);
       });
       return el('li', {}, button);
     }, (node, key) => {
       const button = node.firstChild;
-      const unread = !read.has(activityItems.get(key));
+      const unread = unreadItems.has(activityItems.get(key));
       button.classList.toggle('chatlive__row--unread', unread);
       button.setAttribute('aria-current', String(key === current));
       setText(button.lastChild, unread ? ', unread' : '');
