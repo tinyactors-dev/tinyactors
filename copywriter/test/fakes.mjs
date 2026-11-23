@@ -124,12 +124,12 @@ export function fakeFetch(...answers) {
 }
 
 /** A reviewer over fakes; returns everything a test pokes. */
-export async function setup({ text = 'Build better products. Actors are cheap. Read the guide.', key = 'AIza-test-key-123', fetch = fakeFetch(), store = createMemoryStore(), page = fakePage({ text }), recorder } = {}) {
+export async function setup({ text = 'Build better products. Actors are cheap. Read the guide.', key = 'AIza-test-key-123', fetch = fakeFetch(), store = createMemoryStore(), page = fakePage({ text }), recorder, starterAudiences = [], retryDelays = [] } = {}) {
   const credentials = fakeCredentials(key);
   const downloads = [];
   const clipboard = [];
   const reviewer = createReviewer({
-    page, credentials, store, fetch, recorder,
+    page, credentials, store, fetch, recorder, starterAudiences, retryDelays,
     download: (name, bytes) => downloads.push({ name, bytes }),
     clipboard: (t) => clipboard.push(t),
   });

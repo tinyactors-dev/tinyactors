@@ -300,3 +300,23 @@ export async function transcribe({ apiKey, model, clip, fetch = globalThis.fetch
   });
   return result.text;
 }
+
+/** How long to wait before each retry of a request Google turned away for
+ * load (429, 500, 503): spikes are usually brief. */
+export const RETRY_DELAYS = Object.freeze([1500, 4000, 9000]);
+
+/**
+ * `fetch`, retried after each of `delays` when Google answers 429, 500 or
+ * 503 (a Retry-After of at most 20 s is honoured); the last answer is
+ * returned as it is. `sleep` is injectable for tests.
+ */
+export function retrying(fetch, delays = RETRY_DELAYS, sleep = (ms) => new Promise((r) => setTimeout(r, ms))) {
+  return async (url, options) => {
+    for (let attempt = 0; ; attempt++) {
+      const response = await fetch(url, options);
+      if (![429, 500, 503].includes(response.status) || attempt >= delays.length) return response;
+      const after = Number(response.headers?.get?.('retry-after'));
+      await sleep(after > 0 && after <= 20 ? after * 1000 : delays[attempt]);
+    }
+  };
+}

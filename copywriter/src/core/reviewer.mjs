@@ -8,9 +8,11 @@ import { init, compileCharts, Host, Spawner } from '@tinyactors/wasm/init';
 import { charts } from './charts.mjs';
 import {
   generate, contents, reading, callResults, transcribe, DEFAULT_THINKING, THINKING_LEVELS, BUILT_IN_TOOLS, DEFAULT_TOOLS,
+  retrying, RETRY_DELAYS,
 } from './gemini.mjs';
 import { DEFAULT_MODEL, MODELS, listModels, checkKey } from './models.mjs';
 import { DEFAULT_VOICE } from './voice.mjs';
+import { STARTER_AUDIENCES } from './audiences.mjs';
 import { createIndexedDBStore, createMemoryStore } from './store.mjs';
 import { createRecorder } from './recorder.mjs';
 import { exportPacket } from './packet.mjs';
@@ -141,7 +143,9 @@ export function createReviewer({
   page, credentials, download, clipboard,
   store = globalThis.indexedDB ? createIndexedDBStore() : createMemoryStore(),
   wasmURL, fetch = (...args) => globalThis.fetch(...args), recorder = createRecorder(),
+  starterAudiences = STARTER_AUDIENCES, retryDelays = RETRY_DELAYS,
 }) {
+  fetch = retrying(fetch, retryDelays);  // Google's brief overloads (503, 429) are retried
   const subscribers = new Set();
   const records = new Map(); // `${page}\n${id}` → the annotation's record, every page
   const pages = {}; // url → {title, lang}, for the export
@@ -345,6 +349,7 @@ export function createReviewer({
   const savedSettings = () => ({
     model: settings.model, thinking: settings.thinking, length: settings.length, tools: settings.tools,
     audienceIDs: settings.audienceIDs, ...(settings.voice ? { voice: settings.voice } : {}),
+    ...(settings.starters ? { starters: settings.starters } : {}),
   });
   const activeAudiences = () => settings.audienceIDs.map((id) => audiences.find((a) => a.id === id)).filter(Boolean);
 
@@ -437,6 +442,13 @@ export function createReviewer({
     settings = { model: DEFAULT_MODEL, thinking: DEFAULT_THINKING, length: DEFAULT_LENGTH, audienceIDs: [], ...stored, tools: { ...DEFAULT_TOOLS, ...stored.tools } };
     if (!LENGTHS[settings.length]) settings.length = DEFAULT_LENGTH;
     if (!THINKING_LEVELS.includes(settings.thinking)) settings.thinking = DEFAULT_THINKING;
+    // The starting audiences go in once: deleted later, they stay deleted.
+    if (!settings.starters) {
+      const have = new Set((await store.audiences()).map((a) => a.id));
+      for (const a of starterAudiences) if (!have.has(a.id)) await store.putAudience({ ...a, source: 'starter' });
+      settings.starters = 1;
+      await store.putSettings(savedSettings());
+    }
     audiences = (await store.audiences()).sort((a, b) => a.name.localeCompare(b.name));
     settings.audienceIDs = (settings.audienceIDs || []).filter((id) => audiences.some((a) => a.id === id));
     hasKey = Boolean(await credentials.get());
