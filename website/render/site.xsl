@@ -158,16 +158,15 @@
           </xsl:call-template>
         </nav>
         <!-- On a phone the links do not fit beside the wordmark: they open
-             from a menu, so the sticky header stays one row. With presence,
-             the ant button is that menu, at every width. -->
-        <xsl:if test="empty($site/s:presence)">
-          <button class="site-menu" type="button" popovertarget="site-menu">Menu</button>
-          <nav class="site-menu__links" id="site-menu" popover="" aria-label="Site">
-            <xsl:call-template name="nav-links">
-              <xsl:with-param name="current" select="$current"/>
-            </xsl:call-template>
-          </nav>
-        </xsl:if>
+             from a menu, so the sticky header stays one row. The ant button
+             (presence) opens the same links, but floats where a reader may
+             not look for them. -->
+        <button class="site-menu" type="button" popovertarget="site-menu">Menu</button>
+        <nav class="site-menu__links" id="site-menu" popover="" aria-label="Site">
+          <xsl:call-template name="nav-links">
+            <xsl:with-param name="current" select="$current"/>
+          </xsl:call-template>
+        </nav>
       </div>
     </header>
   </xsl:template>

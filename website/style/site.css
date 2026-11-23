@@ -469,7 +469,7 @@ ta-tabs { display: block; }
 
 /* The header's links need about 815px in one row (the wordmark, the
    gap, the links and the page's padding): narrower, they move into the
-   menu (the ant button, with presence), as on a phone. */
+   header's menu, as on a phone. */
 @media (max-width: 860px) {
   .site-nav { display: none; }
   .site-menu { display: inline-flex; }
