@@ -206,15 +206,20 @@ export async function mount(root) {
   // the newest message of each room or direct message you have seen, by "you\nroom": a newer one is
   // unread (a screen keeps a conversation's latest messages only, so counting them would stop at the cap)
   const seen = new Map();
+  // Whether you read the open conversation, set at each draw: its posts are on screen (not a phone's
+  // list in its place, not search results), the widget is in the window and the tab is showing.
+  // Posts that come meanwhile stay unread until you look, as a client counts only what it shows.
+  let reading = false;
+  let inWindow = false; // the message list intersects the window
   // Every unread mark derives from it: a room's or direct message's row and badge, and Activity's.
   /**
    * The posts unread in `name` on your screen, newest first: those someone else made after the
    * message you saw last there, or after your own last post (you read up to it). None in the open
-   * conversation.
+   * conversation while you read it.
    */
   const unreadPosts = (screen, name) => {
     const found = [];
-    if (name === room) return found;
+    if (name === room && reading) return found;
     const last = seen.get(`${you}\n${name}`);
     for (let index = screen.messages.length - 1; index >= 0; index--) {
       const message = screen.messages[index];
@@ -675,6 +680,8 @@ export async function mount(root) {
   }
   /** A phone shows the list or the conversation, with a back button. */
   const phone = () => getComputedStyle(back).display !== 'none';
+  /** Whether the open conversation's posts are where you can read them now (`reading`). */
+  const readable = () => inWindow && !document.hidden && !query && !(app.dataset.view === 'list' && phone());
   /** Back from a conversation to the view's list, focus on the row you came from. */
   function goBack() {
     app.dataset.view = 'list';
@@ -689,6 +696,10 @@ export async function mount(root) {
   const banner = el('p', { class: 'chatlive__banner', role: 'status', hidden: '' },
     el('strong', {}, 'Connecting…'), ` The others see you as away, and new messages wait ${GRACE} seconds for you.`);
   const messages = el('ol', { class: 'chatlive__messages', 'aria-label': 'Messages' });
+  // the posts are read when you can see them: the list comes into the window (or a phone's list gives
+  // way to it: a hidden list leaves the window), or the tab shows again
+  new IntersectionObserver((entries) => { inWindow = entries.at(-1).isIntersecting; render(); }).observe(messages);
+  document.addEventListener('visibilitychange', () => render());
   messages.addEventListener('click', (event) => {
     const pill = event.target.closest('.chatlive__mention');
     if (!pill) return;
@@ -1124,6 +1135,7 @@ export async function mount(root) {
       return;
     }
     const screen = chat.screen(you);
+    reading = readable();
     selfState = yours(self);
     const yourStatus = yourStatusNow();
     const reconnecting = yourStatus === 'reconnecting';
@@ -1296,7 +1308,7 @@ export async function mount(root) {
     } else if (atBottom) messages.scrollTop = messages.scrollHeight;
     // the button gone (post 1 is on screen): focus goes to the conversation's title
     if (focusEarlier && !earlier) roomTitle.focus();
-    if (!query && !preview) seen.set(`${you}\n${room}`, inRoom.at(-1)); // what is on screen now is read
+    if (reading && !preview) seen.set(`${you}\n${room}`, inRoom.at(-1)); // what you can read now is read
     // the live region says each message new to this screen and room, not those there when you came
     const view = `${you}\n${room}`;
     const fresh = inRoom.filter((message) => !announced.has(keyOf(message)));
