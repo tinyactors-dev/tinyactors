@@ -410,6 +410,18 @@ export async function createChat(tinyactors, { versions, version = LATEST, seed 
         .filter((dm) => dm.opened || dm.last)
         .sort((a, b) => (b.last?.at ?? -1) - (a.last?.at ?? -1));
     },
+    /**
+     * The latest posts of channel `room` as the store holds them, for a
+     * screen that has not joined it: each { room, seq, from, text, at }.
+     * Reading the store tells no chart, so the room does not know the
+     * reader. Null on step 5, whose charts store no posts; a direct
+     * message is its two members' only, so none for it.
+     */
+    preview: (room) => {
+      if (current !== LATEST) return null;
+      if (directRooms.has(room)) return [];
+      return history.read(room).map((post) => ({ room, seq: post.seq, from: post.from, text: post.text, at: post.at }));
+    },
     /** Asks the workspace for a room: answers [event, data], room.created or room.refused. */
     createRoom: (name) => act(async () => {
       note('input', `workspace ← room.create #${name}`);

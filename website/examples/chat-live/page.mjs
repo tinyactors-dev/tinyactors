@@ -377,8 +377,11 @@ export async function mount(root) {
   const arrived = el('p', { class: 'visually-hidden', 'aria-live': 'polite' });
   const text = el('input', { type: 'text', class: 'chatlive__text', 'aria-label': 'Message', maxlength: '200' });
   const send = el('button', { type: 'submit', class: 'chatlive__send', 'aria-label': 'Send' }, arrow());
-  const join = el('button', { type: 'button', class: 'chatlive__join' });
+  const join = el('button', { type: 'button', class: 'chatlive__join' }, 'Join channel');
   join.addEventListener('click', () => chat.join(you, room));
+  // a channel you have not joined: its posts from the store, and this bar in the composer's place
+  const viewingName = el('strong', {});
+  const viewing = el('div', { class: 'chatlive__signed-out chatlive__viewing' }, el('p', {}, 'You are viewing ', viewingName), join);
   const signIn = el('button', { type: 'button', class: 'chatlive__join' }, 'Sign in');
   signIn.addEventListener('click', () => chat.connect(you));
   const signedOut = el('div', { class: 'chatlive__signed-out' }, el('p', {}, 'You’re signed out. Sign in to send messages.'), signIn);
@@ -413,7 +416,7 @@ export async function mount(root) {
     typed = -Infinity;
     chat.post(you, room, words);
   });
-  const foot = el('div', { class: 'chatlive__foot' }, composer, join, signedOut, typingLine);
+  const foot = el('div', { class: 'chatlive__foot' }, composer, viewing, signedOut, typingLine);
   const main = el('section', { class: 'chatlive__room', 'aria-label': 'Channel' }, el('header', { class: 'chatlive__bar-title' }, back, roomTitle), banner, messages, arrived, foot);
 
   // ---- the debugger: the clock, then its parts behind tabs
@@ -630,10 +633,13 @@ export async function mount(root) {
     return { online: told };
   }
   const asSelf = (value) => (value === 'offline' || value === null ? null : value);
-  // the page's own key for each message it shows: a message object stays the same while on the screen
+  // the page's own key for each message it shows: a numbered post's is its room and the store's
+  // number, so a post previewed and then on your screen after a join is one row; an unnumbered
+  // one's (step 5's) is its object, which stays the same while on the screen
   const messageKeys = new WeakMap();
   let counted = 0;
   const keyOf = (message) => {
+    if (message.seq !== undefined) return `s${message.room}\n${message.seq}`;
     if (!messageKeys.has(message)) messageKeys.set(message, `m${++counted}`);
     return messageKeys.get(message);
   };
@@ -756,12 +762,18 @@ export async function mount(root) {
     }
     if (dm) presence(titleFace, dm.with === you ? yourStatus : STATUS[roster[dm.with]] ?? 'unknown');
     main.setAttribute('aria-label', dm ? 'Direct message' : 'Channel');
-    const inRoom = screen.messages.filter((message) => message.room === room);
+    const connected = Boolean(selfState);
+    // a channel you have not joined shows its latest posts from the store (a preview): they are
+    // not on your screen, so search and Activity, which read your screen, leave them out
+    const preview = connected && !joined && !dm ? chat.preview(room) : null;
+    const inRoom = preview ?? screen.messages.filter((message) => message.room === room);
     const here = query ? screen.messages.filter((message) => message.text.toLowerCase().includes(query)) : inRoom;
     const atBottom = messages.scrollHeight - messages.scrollTop - messages.clientHeight < 40;
     const empty = query ? `No messages on your screen match “${searched}”.`
       : dm && !inRoom.length ? (dm.with === you ? 'Your notes. Only you see what you post here.' : `Your direct messages with ${dm.with} start here. Nobody else sees them.`)
-        : !joined && !inRoom.length ? `You have not joined #${room}.`
+        : !joined && connected && !preview ? `Step ${chat.version()}’s charts keep no history. Join #${room} to see its new messages.`
+          : !joined && connected ? `No messages in #${room} yet.`
+          : !joined && !inRoom.length ? `You have not joined #${room}.`
           : 'No messages on your screen yet.';
     // one row per message, kept while the message stays on the screen; rebuilt only when its
     // header, time or the search's highlight changes
@@ -801,15 +813,14 @@ export async function mount(root) {
     }
     banner.hidden = !reconnecting;
     foot.hidden = Boolean(query); // a list of results has no composer
-    const connected = Boolean(selfState);
     composer.hidden = !(connected && joined);
     composer.classList.toggle('chatlive__composer--off', reconnecting);
     text.disabled = reconnecting;
     send.disabled = reconnecting;
-    join.hidden = !connected || joined;
+    viewing.hidden = !connected || joined;
+    setText(viewingName, `#${room}`);
     join.disabled = reconnecting;
     signedOut.hidden = connected;
-    join.textContent = `Join #${room}`;
     text.placeholder = reconnecting ? 'Connecting…' : dm?.with === you ? 'Jot something down' : `Message ${dm ? dm.with : `#${room}`}`;
     // step 5's charts send no typing notices, and no typing.stopped for those the newest sent before a switch
     const typers = connected && chat.version() === LATEST ? (screen.typing[room] ?? []).filter((name) => name !== you) : [];

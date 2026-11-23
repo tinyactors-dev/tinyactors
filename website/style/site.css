@@ -724,6 +724,7 @@ ta-tabs { display: block; }
 .chatlive__signed-out { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 10px 10px 16px;
   border: 1px solid var(--cl-line); border-radius: 8px; background: var(--cl-hover); }
 .chatlive__signed-out p { margin: 0; color: var(--cl-muted); }
+.chatlive__viewing p { color: var(--cl-fg); }
 
 /* the debugger, a pane at the room's right */
 .chatlive__debug { border-left: 1px solid var(--cl-line); background: var(--cl-pane); }

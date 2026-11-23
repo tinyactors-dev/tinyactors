@@ -85,6 +85,15 @@ number. When a message arrives more than one number ahead, the screen
 reads the gap first. Posts made on step 5 are not in the store, so on
 step 5 a screen catches up on nothing.
 
+A channel a person has not joined shows its latest posts read from the
+store (`preview`), with a bar to join it in place of the composer. Reading
+the store tells no chart, so the room does not know the reader: it sends
+them no posts or typing, and the page reads the store again at each
+redraw. The posts are not on the person's screen, so search and Activity
+leave them out. A join then adds them to the screen under the same
+numbers, one row each. Step 5's charts store no posts, so on step 5 the
+preview says so.
+
 Step 9 adds direct messages: a room of two that the workspace makes once
 per pair (`openDM`), named `dm.` and both names, which no channel name
 can be. The asker's screen hears `dm.opened`, and each member's screen
