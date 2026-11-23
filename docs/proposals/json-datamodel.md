@@ -193,22 +193,46 @@ function   = name                         ; not a reserved word
 
 Every quoted string in the grammar is case-sensitive (RFC 7405's `%s`).
 The reserved words are `true`, `false`, `null`, `undefined`, `In` and
-every name that starts with `_`; a `<data id>` or a registered function
-that uses one is refused, so a token is a literal, a call or a path by
-its first word alone. A map key that is not a name is reached with a
+every name that starts with `_`. A function registered under one is
+refused at registration; a `<data id>` that is one cannot be named by a
+path, so its initialization is `error.execution` (SCXML reserves names
+that start with `_` for the platform, 5.10). A token is therefore a
+literal, a call or a path by its first word alone. A map key that is not a name is reached with a
 string index: `_ioprocessors["http://www.w3.org/TR/scxml/#SCXMLEventProcessor"].location`.
 Nesting is bounded: calls and path indices to 16 levels, literals to 64.
 
 
-The datamodel parses every expression of a chart once, at
-`chart_attach`, and refuses the attach only when one does not parse or
-calls a function nobody registered for the chart. SCXML lets a processor
-reject a document whose expressions are syntactically ill-formed when it
-loads it (5.9.4), and a call of an unknown function is the same mistake
-found by the same pass. The error names the chart, the expression's line
-and column, and what was wrong (`ta_datamodel_json_last_error`). A path
-to a variable the chart does not declare is not refused at attach: it is
-`error.execution` when it is evaluated, as W3C 286 and 311 require.
+Expressions are the datamodel's to read. The compiler gives each one an
+id and keeps its kind, source text and position in the image's expression
+table, and does nothing else with it: a datamodel compiles the table once
+per chart at `chart_attach`, shared by every session, or reads an
+ahead-of-time section the image may carry for it
+(`tinyactors-core/docs/architecture.md`, constraint C8;
+`ta_image_expression`, `include/tinyactors/image.h:95-121`). No image
+format writes such a section today (`ta_image_ahead_of_time_section`,
+`src/image/image.c:515-522`).
+
+So this datamodel parses every expression of a chart once, at
+`chart_attach`, and resolves every call to a function registered for the
+chart. An expression that does not parse, calls an unknown function, or
+holds a decimal it cannot read exactly is kept as that expression's
+error:
+
+> An ill-formed expression MUST NOT refuse the chart. Its evaluation is
+> `error.execution`, with the error's text as the message.
+
+The W3C suite requires it: tests 156, 312 and 487 load a chart with an
+illegal expression and expect `error.execution` when it is evaluated, as
+the quickjs, Python and Node datamodels give. A path to a variable the
+chart does not declare is the same (W3C 286, 311). The attach itself
+fails only for want of memory.
+
+A developer who wants the errors before anything runs calls
+`ta_datamodel_json_check` on a compiled image: every expression of every
+chart on this datamodel, parsed and resolved as at attach, each error with
+its chart, line and column, as warnings a binding's compile call can
+report (as the Node binding reports ECMAScript syntax errors,
+`tinyactors-napi/AGENTS.md`, "Layers and the resolver").
 
 - **No operators.** `hp <= 1` is `weak(hp)`, a function (decision 2).
 - **Calls nest:** `total(addItem(items, _event.data))`. Every call is
@@ -217,11 +241,11 @@ to a variable the chart does not declare is not refused at attach: it is
   the datamodel's memory, made once, never the C stack.
 - **Literals are constant.** An array or map literal holds literals only;
   a value built from paths is built by a function or by `<param>`s.
-- **A decimal literal** is read exactly or refused at attach: the layer
-  is freestanding and core has no correctly rounded reader (only a
+- **A decimal literal** is read exactly or is its expression's error: the
+  layer is freestanding and core has no correctly rounded reader (only a
   duration parser, `src/core/event_pool.c:58`), so a decimal with more
-  than 15 significant digits or an exponent outside Clinger's fast path is
-  an attach error (decision 3).
+  than 15 significant digits or an exponent outside Clinger's fast path
+  cannot be read (decision 3).
 
 ### Reading a path
 
@@ -264,13 +288,13 @@ integer from 0 to 2^32 - 1 a position, anything else `error.execution`.
 |---|---|---|
 | `cond` | any expression | `true` or `false`; any other value is `error.execution` (no truthiness) |
 | `<data expr>`, `<assign expr>`, `<param expr>`, `<content expr>`, `<donedata>` | any expression | the value |
-| `<data>`, `<assign>`, `<content>` with child text (`TA_EXPRESSION_CONTENT`) | text | the literal's value when the text is one; otherwise the text, its whitespace normalized, as a string (as SCXML's ECMAScript data model does with content that is not JSON); XML children refuse the attach |
+| `<data>`, `<assign>`, `<content>` with child text (`TA_EXPRESSION_CONTENT`) | text | the literal's value when the text is one; otherwise the text, its whitespace normalized, as a string (as SCXML's ECMAScript data model does with content that is not JSON); XML children are that expression's error |
 | `eventexpr`, `targetexpr`, `typeexpr`, `srcexpr`, `delayexpr`, `sendidexpr`, `docexpr` | any expression | text; an address gives its text; any other value is `error.execution` |
 | `<log expr>` | any expression | text as it is; any other value in CBOR diagnostic notation (`ta_cbor_diagnostic`, `cbor.h:89`) |
 | `<foreach array>` | any expression | an array, iterated over the document, payload or result it was read from, by reference |
 | `namelist` | paths to variables | a map of each variable's name to its value |
 | a trace's value (`TA_CAPTURE_VALUE`) | a path | the value; a failure leaves it out of the record |
-| `<script>` | refused at attach (decision 1) | |
+| `<script>` | nothing (decision 1) | `error.execution` |
 | the vtable's `custom` | | `TA_ERROR_UNSUPPORTED`, which core makes `error.execution` |
 
 ## Functions
@@ -442,6 +466,11 @@ TA_API ta_status ta_datamodel_json_register(ta_datamodel_json *datamodel,
 TA_API void ta_datamodel_json_free(ta_datamodel_json *datamodel);
 TA_API ta_datamodel_binding ta_datamodel_json_binding(ta_datamodel_json *datamodel);
 TA_API ta_status ta_datamodel_json_last_error(const ta_datamodel_json *datamodel, ta_buffer *out);
+/* Every expression of the image's charts on this datamodel, parsed and
+ * resolved as at attach; each error as a CBOR array of {chart, line,
+ * column, message} in `out`. */
+TA_API ta_status ta_datamodel_json_check(ta_datamodel_json *datamodel, const ta_image *image,
+                                         ta_buffer *out);
 TA_API ta_status ta_datamodel_json_snapshot(ta_datamodel_json *datamodel, ta_buffer *out);
 TA_API ta_status ta_datamodel_json_restore(ta_datamodel_json *datamodel, ta_bytes state);
 ```
@@ -487,8 +516,8 @@ list (XML content, every test of the ECMAScript data model) are
 - **A failed attach leaks the charts attached before it,** in three
   places: `attach_charts` (`src/system/system.c:243-259`), the trace rules
   after it (`:386-388`) and the restore path (`:1267-1268`). This
-  datamodel refuses an attach for every syntax error and unknown function,
-  so the leak needs fixing first, with a test of each.
+  datamodel fails an attach only for want of memory, as the others do, so
+  the leak does not block it; it wants fixing all the same.
 - **Payloads cross between datamodels unchecked.** The event view's data
   is the event's payload whatever its datamodel
   (`src/core/event_pool.c:177`), as are invoke params
@@ -520,25 +549,20 @@ list (XML content, every test of the ECMAScript data model) are
 
 ## Decisions for the maintainer
 
-1. **`<script>`:** refused, since a function cannot change the session; or
+1. **`<script>`:** `error.execution` when run, since a function cannot change the session; or
    a script as a list of assignments.
 2. **No operators.** A few on paths and literals (`==`, `!=`, `<`, `<=`,
    `!`, `+`) would spare small charts a function each, at the cost of
    semantics core must define for every pair of value types.
-3. **Decimal literals:** read exactly or refused, as above; or a correctly
+3. **Decimal literals:** read exactly or an expression's error, as above; or a correctly
    rounded reader in core.
 4. **`max_document_bytes`'s default,** set in one place, as every default
    is.
 5. **A callback in a public header.** `tinyactors-core/AGENTS.md` allows
-   "no callbacks except the datamodel vtable". Accept `ta_json_function` as
-   a datamodel's?
-6. **Where expressions are parsed:** at `chart_attach`, as here; or by the
-   compiler, which runs hosted and could read decimals with the C
-   library's correctly rounded `strtod` and report every error as a
-   compile diagnostic at its line, writing the parsed form into the
-   image's datamodel section (`ta_image_ahead_of_time_section`,
-   `image.h:123`, which no compiler writes today). Function names would
-   still be checked at attach.
+   "no callbacks except the datamodel vtable", and the architecture names
+   two synchronous callback surfaces, the vtable and the allocator
+   (`tinyactors-core/docs/architecture.md`, C6). Accept `ta_json_function`
+   as a third, owned by a datamodel?
 
 ## Review
 
@@ -555,8 +579,14 @@ canonical, with duplicate keys refused; nesting of path indices and
 literals is bounded and the evaluation stack is the datamodel's memory;
 the grammar is case-sensitive with reserved words, defined escapes and
 string indices; loops are rows and in snapshots; the per-actor comparison
-uses measured numbers; the Go example registers `shipsTo`; decision 6
-(parsing in the compiler) is new.
+uses measured numbers; the Go example registers `shipsTo`.
+
+A second look at where expressions are read (2026-11-23) removed the
+attach refusals the first review had kept. The compiler only gives each
+expression an id; reading it is the datamodel's (C8), and W3C 156, 312 and
+487 need an ill-formed expression to load and fail when evaluated. The
+question of parsing in the compiler is gone with it; `ta_datamodel_json_check`
+gives the early diagnostics instead.
 
 ## Appendix A: an order, end to end
 
