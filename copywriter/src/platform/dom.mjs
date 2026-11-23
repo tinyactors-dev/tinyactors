@@ -363,8 +363,17 @@ export function createDOMPage({ doc = document, exclude = () => false, keepSelec
   return {
     info,
     context,
-    /** The selection now, or the last one kept (keepSelection). */
-    selection: () => current() || (keepSelection() ? last : null),
+    /**
+     * The selection now, or the last one kept (keepSelection), for an
+     * annotation: it is used, so the same text selected again is reported
+     * again, and a kept one is not given twice.
+     */
+    selection() {
+      const value = current() || (keepSelection() ? last : null);
+      last = null;
+      reported = null;
+      return value;
+    },
     onSelection(fn) { listeners.add(fn); return () => listeners.delete(fn); },
     locate: (anchor) => Boolean(findRange(anchor, options())),
     preview,

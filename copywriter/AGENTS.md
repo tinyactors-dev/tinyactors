@@ -79,7 +79,8 @@ copywriter/
   src/ui/                 the panel: plain DOM + Lucide icons, renders ViewState, dispatches commands
     panel.mjs             mountPanel(root, reviewer, {layout: 'sidebar'|'sheet'})
     panel-css.mjs         its stylesheet as a string (a ShadowRoot adopts it; no bundler loader)
-  src/platform/extension/ manifest.json, service-worker.mjs, content.mjs (page adapter), sidepanel.html/.mjs
+  src/platform/dom.mjs    the page adapter's DOM side, shared: anchors, locate, preview/revert of Text nodes, highlights
+  src/platform/extension/ manifest.json, service-worker.mjs, content.mjs (page adapter), sidepanel.html/.mjs, mic.html/.mjs
   src/platform/embed/     embed.mjs (launcher, Shadow DOM, page adapter on the live DOM), loader snippet
   site/                   the /copywriter/ page: download the extension, turn the widget on for this device
   test/                   node:test for charts and core; Playwright for the extension and the widget
@@ -180,6 +181,30 @@ clipboard(text)
 
 Only literal text is ever written into a page (`Text` nodes), never HTML
 from the model.
+
+## The platforms
+
+- **Extension.** The reviewer runs in the side panel page. Its `page` is a
+  proxy: `chrome.tabs.sendMessage` to the reviewed tab's content script
+  (`{cw: 'page', method, args}`), injected with `chrome.scripting` where the
+  manifest's did not run (a tab opened before the extension loaded); the
+  content script sends `{cw: 'selection'}` back. The panel follows its
+  window's active tab and that tab's loads (`onNavigate`); `?tab=<id>` binds
+  it to one tab (the tests open it so). Host permissions are every http(s)
+  page: one user, no per-site prompts. On a page no content script can
+  enter (chrome://), the adapter answers empty and the panel stays usable.
+- **Microphone in the side panel.** Chrome shows no permission prompt in a
+  side panel, so `getUserMedia` there fails until the extension's origin
+  holds the grant. The panel's recorder checks
+  `navigator.permissions.query({name: 'microphone'})`; unless it is
+  `granted`, it opens `mic.html` in a tab, which asks (the prompt shows
+  there) and closes itself; the next press records in the panel.
+- **Widget.** `embed.js`, loaded by the site's pages on a device whose
+  `localStorage['tinyactors-copywriter']` is `on` (set at /copywriter/).
+  It boots the reviewer at once, so kept changes show again before the
+  sheet opens. A tap on the sheet clears the page's selection on a phone,
+  so the adapter keeps the last non-empty one while the last press was on
+  the widget; `page.selection()` uses it up.
 
 ## Actors and processors
 

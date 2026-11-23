@@ -42,7 +42,7 @@ test('the /copywriter/ page turns the widget on and off', async () => {
   const page = await context.newPage();
   await page.goto(`${origin(server)}/copywriter/`);
   assert.equal(await page.locator('meta[name=robots]').getAttribute('content'), 'noindex, nofollow');
-  assert.equal(await page.locator('a[data-download]').getAttribute('href'), 'copywriter-extension.zip');
+  assert.equal(await page.locator('a[data-download]').getAttribute('href'), '/copywriter/copywriter-extension.zip');
   const response = await page.request.get(`${origin(server)}/copywriter/copywriter-extension.zip`);
   assert.equal((await response.body()).readUInt32LE(0), 0x04034b50);
   await page.locator('label.switch').click();
@@ -85,6 +85,7 @@ test('on a phone: select, open, annotate, ask, preview, keep; a reload applies i
   assert.equal(await banner.count(), 1, 'the selection is kept after the tap');
   await banner.locator('[data-action=annotate]').tap();
   await sheet.locator('[data-view=detail]').waitFor();
+  assert.equal(await banner.count(), 0, 'the selection was used');
 
   const composer = sheet.locator('textarea[aria-label=Message]');
   await composer.fill('Say what a developer gets');

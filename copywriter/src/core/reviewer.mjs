@@ -347,6 +347,7 @@ export function createReviewer({
           note: note || '', source: 'typed', state: 'new',
         },
       });
+      selection = null; // used: the panel's banner goes until the next selection
       activeID = id;
       publish(); // the panel opens it now, not when the model has answered
       await host.idle();
