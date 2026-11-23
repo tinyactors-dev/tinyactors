@@ -57,7 +57,7 @@ test('the list shows the annotations, filtered', async () => {
   await done.click();
   assert.equal(await panel.locator('.cw-row').count(), 4);
   assert.equal(await panel.locator('.cw-heading').textContent(), 'Actors as a library');
-  assert.equal(await panel.locator('.cw-heading').getAttribute('title'), 'https://www.tinyactors.dev/');
+  assert.equal(await panel.locator('.cw-heading').getAttribute('title'), 'pitch · https://www.tinyactors.dev/', 'the page\'s kind, then its address');
   for (const name of ['Page chat', 'Settings', 'Export']) {
     assert.equal(await panel.locator(`header button[aria-label="${name}"]`).count(), 1, `${name} is an icon with a name`);
   }
@@ -787,6 +787,40 @@ test('on a phone, a swipe moves the side-by-side row a card at a time', async ()
     const { left, second } = await row.evaluate((n) => ({ left: n.scrollLeft, second: n.children[1].offsetLeft - parseFloat(getComputedStyle(n).scrollPaddingLeft) }));
     return Math.abs(left - second) < 2;
   });
+  assert.deepEqual(errors, []);
+  await page.close();
+});
+
+test('a site audience: its chip carries a tiny globe with the file\'s address, one edited here a dot; Settings names the page\'s kind; checklist items their kind of page', async () => {
+  const { page, panel, errors } = await open('diverged=1');
+  const chip = panel.locator('.cw-strip-chip[data-audience=lead]');
+  const globe = chip.locator('.cw-site');
+  assert.equal(await globe.getAttribute('title'), 'https://www.tinyactors.dev/audiences/tech-lead.xml');
+  assert.equal(await chip.locator('.cw-diverged').count(), 1, 'edited here');
+  assert.equal(await panel.locator('.cw-strip-chip[data-audience=student] .cw-site').count(), 0, 'the reviewer\'s own audience has none');
+  assert.equal((await chip.textContent()).replace(/\d+\/\d+$/, ''), 'TL', 'no words beside the initials');
+
+  // the checklist: each item with its kind of page as an icon, its need in the tooltip; a claim in its fold
+  await chip.click();
+  await panel.locator('.cw-menu [data-action=open-reading]').click();
+  const kinds = panel.locator('.cw-need-kind');
+  assert.equal(await kinds.count(), 7);
+  assert.deepEqual(await kinds.evaluateAll((all) => all.map((n) => n.dataset.kind)), ['explanation', 'reference', 'pitch', 'reference', 'tutorial', 'pitch', 'explanation']);
+  assert.match(await kinds.first().getAttribute('title'), /^tech-lead\.when-to-use · Explanation/);
+  assert.equal((await kinds.first().textContent()).trim(), '', 'an icon, no words');
+  const host = panel.locator('.cw-check-item').last();
+  await host.locator('.cw-check-line').click();
+  assert.equal(await host.locator('.cw-claimed').textContent(), 'Claimed by “Production”');
+
+  // Settings: the page's kind, one quiet word; the audience's row its globe and dot
+  await panel.locator('[data-action=settings]').click();
+  const kind = panel.locator('.cw-page-kind');
+  assert.equal((await kind.textContent()).trim(), 'pitch');
+  assert.match(await kind.getAttribute('title'), /^This page: Pitch/);
+  const row = panel.locator('.cw-audience[data-audience=lead]');
+  assert.equal(await row.locator('.cw-site').getAttribute('title'), 'https://www.tinyactors.dev/audiences/tech-lead.xml');
+  assert.equal(await row.locator('.cw-diverged').count(), 1);
+  await page.screenshot({ path: process.env.CW_SHOTS ? `${process.env.CW_SHOTS}/panel-settings-kind.png` : undefined });
   assert.deepEqual(errors, []);
   await page.close();
 });

@@ -3,7 +3,8 @@
 // ?empty=1 (no annotations), ?delay=0.2 (scale the mock's waits),
 // ?bare=1 (the panel alone, filling the viewport), ?shadow=0 (no Shadow DOM),
 // ?read=0 (no reading of the page as an audience yet), ?suggest=1 (the page's
-// audiences suggested, not yet accepted).
+// audiences suggested, not yet accepted), ?diverged=1 (the site audience
+// edited here, so it differs from its file).
 import { mountPanel } from '../src/ui/panel.mjs';
 import { createMockReviewer } from '../src/ui/mock-reviewer.mjs';
 
@@ -15,6 +16,7 @@ const reviewer = createMockReviewer({
   delay: Number(params.get('delay') ?? 1),
   read: params.get('read') !== '0',
   suggest: params.get('suggest') === '1',
+  diverged: params.get('diverged') === '1',
 });
 document.documentElement.dataset.layout = layout;
 if (params.get('bare') === '1') document.documentElement.dataset.bare = '';

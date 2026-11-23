@@ -25,8 +25,10 @@ const REWRITES = {
   ],
 };
 
+// a site audience: from the file the page links (AGENTS.md, "Pages say what they are for")
 const LEAD = {
   id: 'lead', name: 'Tech lead who approves dependencies', description: 'Decides whether the team may depend on tinyactors.',
+  source: 'site', url: 'https://www.tinyactors.dev/audiences/tech-lead.xml', siteID: 'tech-lead', diverged: false,
   wants: 'An honest "use it when"; the license', tasks: 'Decide yes or no, check the license',
   objections: '"Who maintains it?" "What happens when the host dies?"',
 };
@@ -36,13 +38,13 @@ function sampleReading(now) {
   return {
     audienceID: 'lead', state: 'done', at: now - 9 * MINUTE, seconds: 41,
     items: [
-      { field: 'wants', text: 'An honest "use it when"', status: 'missing', explanation: 'The page never says when not to use it.' },
-      { field: 'wants', text: 'The license', status: 'answered', explanation: 'MIT, in the footer.', anchor: { quote: { exact: 'MIT licensed.', prefix: '', suffix: '' }, selector: 'footer p' } },
-      { field: 'tasks', text: 'Decide yes or no', status: 'partial', explanation: 'Facts, but no limits.' },
-      { field: 'tasks', text: 'check the license', status: 'answered', explanation: 'MIT.', anchor: { quote: { exact: 'MIT licensed.', prefix: '', suffix: '' }, selector: 'footer p' } },
-      { field: 'tasks', text: 'npm install and run one chart', status: 'partial', explanation: 'The command is there, the chart is not.' },
-      { field: 'objections', text: '"Who maintains it?"', status: 'missing', explanation: 'No maintainer is named.' },
-      { field: 'objections', text: '"What happens when the host dies?"', status: 'partial', explanation: 'Snapshots, but nothing on a crash.' },
+      { field: 'wants', text: 'An honest "use it when"', status: 'missing', explanation: 'The page never says when not to use it.', needID: 'tech-lead.when-to-use', kind: 'explanation' },
+      { field: 'wants', text: 'The license', status: 'answered', explanation: 'MIT, in the footer.', anchor: { quote: { exact: 'MIT licensed.', prefix: '', suffix: '' }, selector: 'footer p' }, needID: 'tech-lead.license', kind: 'reference' },
+      { field: 'tasks', text: 'Decide yes or no', status: 'partial', explanation: 'Facts, but no limits.', needID: 'tech-lead.decide', kind: 'pitch' },
+      { field: 'tasks', text: 'check the license', status: 'answered', explanation: 'MIT.', anchor: { quote: { exact: 'MIT licensed.', prefix: '', suffix: '' }, selector: 'footer p' }, needID: 'tech-lead.check-portability', kind: 'reference' },
+      { field: 'tasks', text: 'npm install and run one chart', status: 'partial', explanation: 'The command is there, the chart is not.', needID: 'tech-lead.first-chart', kind: 'tutorial' },
+      { field: 'objections', text: '"Who maintains it?"', status: 'missing', explanation: 'No maintainer is named.', needID: 'tech-lead.maintainer', kind: 'pitch' },
+      { field: 'objections', text: '"What happens when the host dies?"', status: 'partial', explanation: 'Snapshots, but nothing on a crash.', needID: 'tech-lead.host-dies', kind: 'explanation', claimed: ['Production'] },
     ],
     findingIDs: ['f1', 'f2'],
   };
@@ -121,7 +123,7 @@ const PER_AUDIENCE = {
   dev: ['Test a week of timeouts in milliseconds', 'The developer wants the simulated clock.'],
 };
 
-export function createMockReviewer({ hasKey = true, delay = 1, empty = false, status = 'ready', read = true, suggest = false } = {}) {
+export function createMockReviewer({ hasKey = true, delay = 1, empty = false, status = 'ready', read = true, suggest = false, diverged = false } = {}) {
   const now = Date.now();
   let seq = 100;
   const listeners = new Set();
@@ -133,7 +135,7 @@ export function createMockReviewer({ hasKey = true, delay = 1, empty = false, st
   let state = {
     status,
     page: {
-      url: 'https://www.tinyactors.dev/', title: 'Actors as a library',
+      url: 'https://www.tinyactors.dev/', title: 'Actors as a library', kind: 'pitch', mainAudienceID: read ? 'lead' : null,
       audienceSuggestion: suggest ? { state: 'ready', audienceIDs: read ? ['lead', 'student'] : ['student'] } : null,
     },
     selection: null,
@@ -149,7 +151,7 @@ export function createMockReviewer({ hasKey = true, delay = 1, empty = false, st
       voice: { instructions: VOICE, custom: false },
       audiences: [
         { id: 'student', name: 'Student', description: 'Learns statecharts for a course.', wants: 'One small example.' },
-        ...(read ? [LEAD] : []),
+        ...(read ? [{ ...LEAD, diverged }] : []),
       ],
       audienceIDs: empty || !read ? [] : ['lead'],
     },

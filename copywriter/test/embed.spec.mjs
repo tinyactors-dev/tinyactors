@@ -428,3 +428,28 @@ test('a database of version 1: the page\'s chat is its first conversation, an ed
   assert.deepEqual(state.settings.audienceIDs, ['site-agent-platform', 'site-tech-lead', 'site-workflow-tester']);
   await context.close();
 });
+
+test('the widget reads the page\'s audiences from its links: the files are fetched, their chips appear with no audience of the copywriter\'s own', async () => {
+  const { context, page, errors, sheet, launcher } = await phone();
+  const state = await page.evaluate(() => tinyactorsCopywriter.reviewer.getState());
+  assert.equal(state.page.kind, 'pitch');
+  assert.equal(state.page.mainAudienceID, 'site-agent-platform');
+  assert.deepEqual(state.settings.audiences.map((a) => [a.id, a.source, a.url.replace(/^http:\/\/[^/]+/, '')]), [
+    ['site-agent-platform', 'site', '/page/audiences/agent-platform.xml'],
+    ['site-tech-lead', 'site', '/page/audiences/tech-lead.xml'],
+    ['site-workflow-tester', 'site', '/page/audiences/workflow-tester.xml'],
+  ], 'parsed with the browser\'s DOMParser');
+  assert.equal(state.settings.audiences[1].items[1].id, 'failure-semantics');
+  assert.deepEqual(state.settings.audienceIDs, ['site-agent-platform', 'site-tech-lead', 'site-workflow-tester']);
+  const purpose = await page.evaluate(() => tinyactorsCopywriter.reviewer.getState().page);
+  assert.equal(purpose.audienceSuggestion, null, 'not asked');
+  await launcher.tap();
+  const chips = sheet.locator('.cw-strip-chip');
+  await chips.first().waitFor();
+  assert.equal(await chips.count(), 3);
+  assert.deepEqual(await chips.locator('.cw-avatar').allTextContents(), ['AP', 'TL', 'WD']);
+  assert.match(await chips.nth(1).locator('.cw-site').getAttribute('title'), /\/page\/audiences\/tech-lead\.xml$/);
+  if (process.env.CW_SHOTS) await page.screenshot({ path: `${process.env.CW_SHOTS}/widget-site-audiences.png` });
+  assert.deepEqual(errors, []);
+  await context.close();
+});

@@ -338,6 +338,14 @@ copywriter/
                           for one audience carries its avatar (no words; the tooltip names it), the one for
                           everyone none; a row that swipes a card at a time (scroll snap, the next peeking)
                           in the sheet, a stack in the sidebar.
+                          Site audiences: an avatar (strip chip, Settings row) of an audience from the page's
+                          files carries a tiny globe at its foot (the tooltip is the file's URL), and a dot at
+                          its shoulder once edited here (diverged). Settings opens with the page's kind, one
+                          quiet word with its icon; the header's tooltip says it before the address. Checklist
+                          items keep the file's order within each field, each ending in its kind of page as a
+                          small icon (pitch megaphone, tutorial cap, how-to route, reference book, explanation
+                          bulb; no words, the tooltip names the need and the kind); a claimed item's fold says
+                          which sections claim it.
   src/platform/dom.mjs    the page adapter's DOM side, shared: anchors, locate, preview/revert of Text nodes, highlights
   src/platform/extension/ manifest.json, service-worker.mjs, content.mjs (page adapter), sidepanel.html/.mjs, mic.html/.mjs
   src/platform/embed/     embed.mjs (launcher, Shadow DOM, page adapter on the live DOM), loader snippet
@@ -345,7 +353,8 @@ copywriter/
   test/                   node:test for charts and core (readings.test.mjs: the reading actors; audiences.test.mjs: pages' sets and side-by-side rewrites; site.test.mjs: what pages say they are for, site audiences; talks.test.mjs:
                           conversations with an audience); Playwright for
                           the panel over src/ui/mock-reviewer.mjs (?read=0: no reading yet; ?suggest=1: the page's
-                          audiences suggested), the extension and the widget
+                          audiences suggested; ?diverged=1: the site audience edited here), the extension and the widget
+                          (test/fixtures/page.html links the audience files of test/fixtures/audiences/)
   mise/tasks/             build, test, charts, eval, read-eval, talk-eval (Ruby)
   tools/                  serve.mjs (the panel's preview), eval.mjs, read-eval.mjs and talk-eval.mjs (the real Gemini)
   dist/                   build output (not in git): extension/, copywriter-extension.zip, site/

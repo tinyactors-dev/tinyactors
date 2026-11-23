@@ -23,7 +23,7 @@ import {
   Ellipsis, Eye, EyeOff, FileArchive, KeyRound, LoaderCircle, MessageSquare, MessagesSquare, Mic, Plus, SquarePen, UsersRound,
   MousePointerClick, Pencil, RefreshCw, RotateCcw, Settings, Sparkles, SquareDashedMousePointer, Trash2, TriangleAlert, Undo2, X,
   ScanEye, ListChecks, CircleCheck, Contrast, Circle, CirclePlus, MessageCircleQuestion, Signpost, ShieldQuestion, BookA, Link2,
-  MessageCircle, UserPen, UserCheck, UserMinus,
+  MessageCircle, UserPen, UserCheck, UserMinus, Globe, Megaphone, GraduationCap, Route, BookOpen, Lightbulb,
 } from 'lucide';
 import { panelCSS } from './panel-css.mjs';
 import { markPaths, markViewBox } from './mark.mjs';
@@ -58,6 +58,14 @@ const COVER = {
   missing: { icon: Circle, label: 'Not answered' },
 };
 const FIELDS = [['wants', 'Wants'], ['tasks', 'Came to'], ['objections', 'Objections']];
+// The kinds of page (a page's meta page-kind; the kind a need belongs on): an icon each, the word in its tooltip.
+const PAGE_KINDS = {
+  pitch: { icon: Megaphone, label: 'Pitch: deciding whether to adopt' },
+  tutorial: { icon: GraduationCap, label: 'Tutorial: learning by doing' },
+  'how-to': { icon: Route, label: 'How-to: reaching a goal' },
+  reference: { icon: BookOpen, label: 'Reference: facts to look up' },
+  explanation: { icon: Lightbulb, label: 'Explanation: reasons and limits' },
+};
 // An audience's initials: the first letters of its first two words.
 const initials = (name) => String(name || '?').split(/[\s-]+/).filter(Boolean).slice(0, 2).map((w) => w[0].toUpperCase()).join('');
 
@@ -961,6 +969,7 @@ export function mountPanel(root, reviewer, { layout = 'sidebar', onTall = null }
           type: 'button', class: 'cw-audience-name', 'aria-expanded': String(open), 'data-action': 'edit-audience', title: a.description,
           onclick: () => { ui.audienceOpen = open ? null : a.id; ui.audienceDraft = null; render(); },
         }, h('span', null, a.name), a.source === 'model' && h('span', { class: 'cw-ok', title: 'Defined by Gemini' }, icon(Sparkles)),
+        a.source === 'site' && h('span', { class: 'cw-site-mark' }, siteMarks(a)),
         icon(ChevronRight, 'cw-chevron')),
         state.settings?.hasKey && iconButton(ScanEye, `Read as ${a.name}`, { 'data-action': 'read-as', onclick: () => readAs([a.id]) })),
       open && audienceEditor(a));
@@ -1071,6 +1080,19 @@ export function mountPanel(root, reviewer, { layout = 'sidebar', onTall = null }
       iconButton(X, 'Not now', { 'data-action': 'dismiss-audiences', onclick: () => send({ type: 'audiences.dismiss' }) }));
   }
 
+  // An audience's avatar: its initials; a site audience carries a tiny
+  // globe (its file's URL in the tooltip), and one edited here a dot.
+  function avatarOf(a, extra = '') {
+    return h('span', { class: `cw-avatar${extra ? ` ${extra}` : ''}` }, initials(a.name), siteMarks(a));
+  }
+  function siteMarks(a) {
+    if (a?.source !== 'site') return null;
+    return [
+      h('span', { class: 'cw-site', 'data-site': a.url ?? '', title: a.url ?? '', role: 'img', 'aria-label': `From ${a.url ?? 'the site'}` }, icon(Globe)),
+      a.diverged && h('span', { class: 'cw-diverged', title: 'Edited here: differs from the site\'s file', role: 'img', 'aria-label': 'Edited here' }),
+    ];
+  }
+
   // A row of small chips, one per audience: its initials and, once read,
   // how much of its checklist the page answers. A tap opens its menu.
   function audienceStrip() {
@@ -1089,7 +1111,7 @@ export function mountPanel(root, reviewer, { layout = 'sidebar', onTall = null }
         type: 'button', class: `cw-strip-chip${active.includes(a.id) ? ' is-active' : ''}`, 'data-menu': name, 'data-audience': a.id,
         'data-reading': r?.state ?? '', 'aria-haspopup': 'menu', 'aria-expanded': String(open), title, 'aria-label': title,
         onclick: () => toggleMenu(name),
-      }, h('span', { class: 'cw-avatar' }, initials(a.name)),
+      }, avatarOf(a),
       r?.state === 'reading' ? icon(LoaderCircle, 'cw-spin')
         : r?.state === 'failed' ? icon(TriangleAlert)
           : r ? h('span', { class: 'cw-cover' }, status) : null);
@@ -1185,7 +1207,8 @@ export function mountPanel(root, reviewer, { layout = 'sidebar', onTall = null }
         render();
         if (!open && x.anchor) send({ type: 'reading.show', audienceID: a.id, index: x.index });
       },
-    }, h('span', { class: 'cw-check-glyph', role: 'img', 'aria-label': c.label }, icon(c.icon)), h('span', { class: 'cw-check-text' }, displayItem(x.text)));
+    }, h('span', { class: 'cw-check-glyph', role: 'img', 'aria-label': c.label }, icon(c.icon)), h('span', { class: 'cw-check-text' }, displayItem(x.text)),
+    PAGE_KINDS[x.kind] && h('span', { class: 'cw-need-kind', 'data-kind': x.kind, role: 'img', 'aria-label': PAGE_KINDS[x.kind].label, title: `${x.needID ? `${x.needID} · ` : ''}${PAGE_KINDS[x.kind].label}` }, icon(PAGE_KINDS[x.kind].icon)));
     const action = x.status === 'answered' ? null : linked
       ? iconButton(Link2, 'Open item', { variant: 'cw-check-act is-linked', 'data-action': 'open-gap', onclick: () => send({ type: 'select', id: linked.id }) })
       : iconButton(Plus, 'Make it an open item', {
@@ -1193,7 +1216,8 @@ export function mountPanel(root, reviewer, { layout = 'sidebar', onTall = null }
         onclick: () => send({ type: 'reading.open', audienceID: a.id, index: x.index }).then((id) => { if (id !== FAILED) toast('Open item added'); }),
       });
     return h('div', { class: `cw-check-item${open ? ' is-open' : ''}`, 'data-status': x.status, 'data-index': x.index },
-      line, action, h('div', { class: 'cw-fold' }, h('div', null, x.explanation && h('div', { class: 'cw-why' }, x.explanation))));
+      line, action, h('div', { class: 'cw-fold' }, h('div', null, x.explanation && h('div', { class: 'cw-why' }, x.explanation),
+        x.claimed?.length > 0 && h('div', { class: 'cw-claimed', 'data-claimed': x.claimed.join('\n') }, `Claimed by ${x.claimed.map((c) => (c === 'the page' ? 'the page' : `“${c}”`)).join(', ')}`))));
   }
 
   function settingsView() {
@@ -1202,6 +1226,9 @@ export function mountPanel(root, reviewer, { layout = 'sidebar', onTall = null }
     const view = h('div', { class: 'cw-view', 'data-view': 'settings' });
     const body = h('div', { class: 'cw-settings' });
     view.append(body);
+    // what the open page declares itself, one quiet word
+    const kind = PAGE_KINDS[state.page?.kind];
+    if (kind) body.append(h('div', { class: 'cw-page-kind', 'data-kind': state.page.kind, title: `This page: ${kind.label}` }, icon(kind.icon), state.page.kind));
 
     // the key
     const key = h('input', {
@@ -1428,7 +1455,8 @@ export function mountPanel(root, reviewer, { layout = 'sidebar', onTall = null }
       heading.classList.remove('is-reader');
       delete heading.dataset.audience;
       heading.textContent = ui.view === 'settings' ? 'Settings' : reader ? reader.name : (state.page?.title || state.page?.url || '');
-      heading.title = ui.view === 'settings' ? '' : reader ? `Read as ${reader.name}: ${state.page?.url ?? ''}` : (state.page?.url ?? '');
+      heading.title = ui.view === 'settings' ? '' : reader ? `Read as ${reader.name}: ${state.page?.url ?? ''}`
+        : [state.page?.kind, state.page?.url].filter(Boolean).join(' · ');
     }
     moreAnchor.hidden = !a;
     chatButton.hidden = !!a;

@@ -552,6 +552,29 @@ export const panelCSS = String.raw`
 }
 .cw-panel[data-layout="sheet"] .cw-avatar { width: 30px; height: 30px; font-size: 11px; }
 .cw-panel .cw-strip-chip.is-active .cw-avatar { background: var(--accent-subtle); color: var(--accent-fg); }
+/* a site audience: a tiny globe at the avatar's foot; edited here: a dot at its shoulder */
+.cw-panel .cw-avatar:has(.cw-site) { position: relative; }
+.cw-panel .cw-site {
+  position: absolute; right: -3px; bottom: -3px; display: grid; place-items: center; width: 11px; height: 11px; border-radius: 50%;
+  background: var(--surface); color: var(--fg-3); box-shadow: 0 0 0 1px var(--border-1);
+}
+.cw-panel .cw-site svg.cw-icon, .cw-panel .cw-strip-chip .cw-site svg.cw-icon { width: 8px; height: 8px; }
+.cw-panel[data-layout="sheet"] .cw-site { width: 13px; height: 13px; }
+.cw-panel[data-layout="sheet"] .cw-site svg.cw-icon { width: 9px; height: 9px; }
+.cw-panel .cw-diverged {
+  position: absolute; right: -1px; top: -1px; width: 6px; height: 6px; border-radius: 50%;
+  background: var(--waiting); box-shadow: 0 0 0 1.5px var(--surface); animation: cw-in var(--base) var(--ease-out);
+}
+.cw-panel .cw-site-mark { position: relative; display: inline-flex; width: 12px; height: 12px; }
+.cw-panel .cw-site-mark .cw-site { right: 0; bottom: 0; }
+.cw-panel .cw-site-mark .cw-diverged { right: -3px; top: -3px; }
+/* a need's kind of page: a small quiet icon at the line's end; the page's own kind in Settings */
+.cw-panel .cw-check-line:has(.cw-need-kind) { grid-template-columns: 16px 1fr 12px; }
+.cw-panel .cw-need-kind { display: flex; padding-top: 3px; color: var(--fg-4); }
+.cw-panel .cw-need-kind svg.cw-icon { width: 12px; height: 12px; }
+.cw-panel .cw-claimed { margin-top: 4px; font-size: 12px; color: var(--fg-3); }
+.cw-panel .cw-page-kind { display: inline-flex; align-items: center; gap: 5px; margin: -2px 0 2px; font-size: 12px; color: var(--fg-3); }
+.cw-panel .cw-page-kind svg.cw-icon { width: 12px; height: 12px; }
 .cw-panel .cw-cover { font: 500 11px/1 var(--mono); color: inherit; font-variant-numeric: tabular-nums; }
 .cw-panel .cw-strip-chip[data-reading="done"] .cw-cover { animation: cw-in var(--base) var(--ease-out); }
 .cw-panel .cw-strip-all { margin-left: auto; }
