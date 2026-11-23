@@ -18,6 +18,12 @@ const BLOCKS = new Set([
   'MAIN', 'NAV', 'OL', 'P', 'PRE', 'SECTION', 'SUMMARY', 'TABLE', 'TBODY', 'TD', 'TFOOT', 'TH', 'THEAD', 'TR', 'UL',
   'BUTTON', 'LABEL', 'IMG',
 ]);
+// The elements one annotation stays within: a sentence, a heading, a
+// paragraph, a list item, a cell, a quote, a caption, a button's or a
+// link's label. A selection across two of them, or longer than MAX_TEXT,
+// does not fit (it would rewrite a section, not copy).
+const UNITS = 'p, li, h1, h2, h3, h4, h5, h6, td, th, blockquote, figcaption, caption, dd, dt, button, a, label, summary';
+export const MAX_TEXT = 600;
 const CONTEXT = 32;              // characters of prefix and suffix an anchor keeps
 const MAX_CONTEXT_TEXT = 20000;  // what context() gives the model
 const HIGHLIGHT = 'tinyactors-copywriter';
@@ -117,6 +123,20 @@ function positionOf(index, node, offset) {
   const i = index.nodes.indexOf(node);
   if (i < 0) return -1;
   return index.starts[i][Math.min(offset, index.starts[i].length - 1)];
+}
+
+const elementOf = (node) => (node.nodeType === 1 ? node : node.parentElement);
+const unitOf = (node) => elementOf(node)?.closest(UNITS) ?? null;
+
+/**
+ * Whether a range stays within one unit (UNITS): its common ancestor is
+ * in one, or its two ends are in none and in the same block.
+ */
+export function withinOneUnit(range) {
+  if (unitOf(range.commonAncestorContainer)) return true;
+  const [sn] = textBoundary(range.startContainer, range.startOffset, { end: false });
+  const [en] = textBoundary(range.endContainer, range.endOffset, { end: true });
+  return !unitOf(sn) && !unitOf(en) && blockOf(sn) === blockOf(en);
 }
 
 /** A CSS path to `el`: its id when unique, else tag:nth-of-type steps from the nearest one. */
@@ -224,12 +244,16 @@ function textParts(range) {
  * The adapter's DOM methods over `doc`. `exclude(node)` names what is not
  * the page (the widget). `keepSelection(event)` says whether a selection
  * that went empty keeps the last one (the widget: a tap on the sheet
- * clears the page's selection on a phone). `scrollBlock` is where
- * highlight() scrolls the text to ('center', or 'start' under a sheet).
+ * clears the page's selection on a phone). `band()`, when given, is the
+ * part of the viewport the reader sees, `{top?, bottom?, left?, right?}`
+ * in viewport pixels (the widget: above its sheet, left of its drawer;
+ * calling it may lower the sheet): highlight() and a preview with
+ * `reveal` scroll their text to its middle, below a sticky header. Without
+ * it, they scroll the text to the viewport's middle.
  */
-export function createDOMPage({ doc = document, exclude = () => false, keepSelection = () => false, scrollBlock = () => 'center' } = {}) {
+export function createDOMPage({ doc = document, exclude = () => false, keepSelection = () => false, band = null } = {}) {
   const win = doc.defaultView;
-  const previews = new Map(); // id → {parts: [{node, before, after}], range}
+  const previews = new Map(); // id → {parts: [{node, before, after}], range, exact}
   let last = null;            // the last non-empty selection, {text, anchor}
   const listeners = new Set();
   let timer = 0;
@@ -246,7 +270,9 @@ export function createDOMPage({ doc = document, exclude = () => false, keepSelec
     const text = normalize(selection.toString());
     if (!text) return null;
     const anchor = anchorOf(range, options());
-    return anchor ? { text: anchor.quote.exact, anchor } : null;
+    if (!anchor) return null;
+    const fits = anchor.quote.exact.length <= MAX_TEXT && withinOneUnit(range);
+    return { text: anchor.quote.exact, anchor, fits };
   }
 
   function onSelectionChange() {
@@ -257,7 +283,7 @@ export function createDOMPage({ doc = document, exclude = () => false, keepSelec
       else if (keepSelection()) return;
       else last = null;
       const value = now || null;
-      if ((value && value.text) === (reported && reported.text)) return;
+      if ((value && value.text) === (reported && reported.text) && (value && value.fits) === (reported && reported.fits)) return;
       reported = value;
       for (const fn of listeners) fn(value);
     }, 120);
@@ -302,10 +328,44 @@ export function createDOMPage({ doc = document, exclude = () => false, keepSelec
     return { headings, text: index.text.slice(0, MAX_CONTEXT_TEXT) };
   }
 
-  function preview({ id, anchor, text }) {
+  // The height a sticky or fixed header covers at the top of the viewport.
+  function headerBottom() {
+    let el = doc.elementFromPoint?.(win.innerWidth / 2, 1);
+    for (; el && el !== doc.body && el !== doc.documentElement; el = el.parentElement) {
+      if (exclude(el)) return 0;
+      const position = win.getComputedStyle(el).position;
+      if (position === 'sticky' || position === 'fixed') return Math.max(0, el.getBoundingClientRect().bottom);
+    }
+    return 0;
+  }
+
+  // Scrolls `range` into the middle of what the reader sees, unless it is
+  // in view already.
+  function reveal(range) {
+    const behavior = win.matchMedia?.('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth';
+    const area = band ? band() || {} : {};
+    const top = Math.max(area.top ?? 0, headerBottom());
+    const bottom = area.bottom ?? win.innerHeight;
+    const left = area.left ?? 0;
+    const right = area.right ?? win.innerWidth;
+    const rect = range.getBoundingClientRect();
+    const inside = rect.top >= top && rect.bottom <= bottom && rect.left >= left && rect.right <= right;
+    if (inside) return;
+    if (!band) {
+      elementOf(range.startContainer)?.scrollIntoView({ block: 'center', behavior });
+      return;
+    }
+    const dy = rect.height > bottom - top - 16
+      ? rect.top - top - 8
+      : (rect.top + rect.bottom) / 2 - (top + bottom) / 2;
+    const dx = rect.right > right ? Math.min(rect.left - left - 8, rect.right - right + 8) : (rect.left < left ? rect.left - left - 8 : 0);
+    win.scrollBy({ top: rect.top >= top && rect.bottom <= bottom ? 0 : dy, left: dx, behavior });
+  }
+
+  function preview({ id, anchor, text, reveal: show = false }) {
     if (previews.has(id)) revert({ id });
     const range = findRange(anchor, options());
-    if (!range) return false;
+    if (!range || !withinOneUnit(range)) return false;
     const parts = textParts(range);
     if (!parts.length) return false;
     const replacement = String(text ?? '');
@@ -320,8 +380,9 @@ export function createDOMPage({ doc = document, exclude = () => false, keepSelec
     const shown = doc.createRange();
     shown.setStart(first.node, first.from);
     shown.setEnd(first.node, first.from + replacement.length);
-    previews.set(id, { parts: done, range: shown });
+    previews.set(id, { parts: done, range: shown, exact: normalize(anchor?.quote?.exact) });
     showPreviews();
+    if (show) reveal(shown);
     return true;
   }
 
@@ -345,19 +406,27 @@ export function createDOMPage({ doc = document, exclude = () => false, keepSelec
       return true;
     }
     const range = findRange(anchor, options());
-    if (!range) { registry?.delete(HIGHLIGHT); return false; }
+    if (!range) {
+      // previewed: the page shows the replacement where the text was
+      const exact = normalize(anchor?.quote?.exact);
+      const shown = [...previews.values()].find((p) => p.exact === exact && p.range && !p.range.collapsed);
+      registry?.delete(HIGHLIGHT);
+      if (!shown) return false;
+      reveal(shown.range);
+      return true;
+    }
     if (registry) {
       style();
       registry.set(HIGHLIGHT, new win.Highlight(range));
     }
-    const rect = range.getBoundingClientRect();
-    const block = scrollBlock();
-    const visible = rect.top >= 0 && rect.bottom <= (block === 'start' ? win.innerHeight * 0.35 : win.innerHeight);
-    if (!visible) {
-      const el = range.startContainer.parentElement;
-      el?.scrollIntoView({ block, behavior: 'smooth' });
-    }
+    reveal(range);
     return true;
+  }
+
+  /** The anchor of the first place `text` is on the page, or null. */
+  function anchor(text) {
+    const range = findRange({ quote: { exact: text } }, options());
+    return range ? anchorOf(range, options()) : null;
   }
 
   return {
@@ -376,6 +445,7 @@ export function createDOMPage({ doc = document, exclude = () => false, keepSelec
     },
     onSelection(fn) { listeners.add(fn); return () => listeners.delete(fn); },
     locate: (anchor) => Boolean(findRange(anchor, options())),
+    anchor,
     preview,
     revert,
     highlight,

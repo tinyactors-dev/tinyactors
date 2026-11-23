@@ -27,7 +27,7 @@ test('annotate, ask, two rewrites, preview, keep; a reload re-applies the kept t
   const fetch = fakeFetch(twoRewrites);
   const { reviewer, page } = await setup({ store, fetch });
   page.select('Build better products');
-  assert.deepEqual(reviewer.getState().selection, { text: 'Build better products' });
+  assert.deepEqual(reviewer.getState().selection, { text: 'Build better products', fits: true });
 
   const id = await reviewer.dispatch({ type: 'annotate' });
   assert.equal(find(reviewer, id).state, 'draft');
@@ -115,7 +115,7 @@ test('edit: the user\'s own text is a suggestion, previewed at once; note sets t
   const a = find(reviewer, id);
   assert.equal(a.state, 'previewing');
   assert.equal(a.note, 'Which guide?');
-  assert.deepEqual(a.suggestions, [{ id: 's1', text: 'Read the hibernation guide', rationale: 'Your own text', own: true }]);
+  assert.deepEqual(a.suggestions, [{ id: 's1', text: 'Read the hibernation guide', rationale: 'Your own text', own: true, after: 0 }]);
   assert.match(page.text, /Read the hibernation guide\./);
   await reviewer.dispatch({ type: 'keep', id });
   assert.equal(find(reviewer, id).state, 'kept');
@@ -164,15 +164,19 @@ test('no key: the annotation fails and says where to add one', async () => {
   reviewer.close();
 });
 
-test('a 403 and a 400 say what to check', async () => {
-  const fetch = fakeFetch({ status: 403, body: { error: { message: 'API key not valid.' } } },
+test('a refused key, a 403 and a 400 say what to check', async () => {
+  const fetch = fakeFetch(
+    { status: 400, body: { error: { code: 400, message: 'API key not valid. Please pass a valid API key.', status: 'INVALID_ARGUMENT', details: [{ reason: 'API_KEY_INVALID' }] } } },
+    { status: 403, body: { error: { message: 'Permission denied.' } } },
     { status: 400, body: { error: { message: 'Bad model.' } } });
   const { reviewer, page } = await setup({ fetch });
   page.select('Build better products');
   const id = await reviewer.dispatch({ type: 'annotate', note: 'x' });
+  assert.equal(find(reviewer, id).error, 'That key was not accepted by Google. Check it in Settings.', 'not "check the model"');
+  await reviewer.dispatch({ type: 'ask', id, text: 'again' });
   assert.match(find(reviewer, id).error, /refused the key \(403\)/);
   await reviewer.dispatch({ type: 'ask', id, text: 'again' });
-  assert.match(find(reviewer, id).error, /\(400\)/);
+  assert.match(find(reviewer, id).error, /\(400\): check the model/);
   reviewer.close();
 });
 
@@ -266,5 +270,55 @@ test('commands do not wait for each other: a note and a selection go through whi
   release();
   await asking;
   assert.equal(find(reviewer, id).state, 'suggested');
+  reviewer.close();
+});
+
+test('a selection across blocks, or over 600 characters, is not annotated', async () => {
+  const long = `${'A sentence of copy that goes on. '.repeat(20)}End.`;
+  const { reviewer, page } = await setup({ text: `Build better products. ${long}` });
+  page.select('Build better products', { fits: false });
+  assert.deepEqual(reviewer.getState().selection, { text: 'Build better products', fits: false });
+  await assert.rejects(reviewer.dispatch({ type: 'annotate' }), /^Error: Select one sentence, heading or paragraph\.$/);
+  page.select(long);
+  assert.equal(reviewer.getState().selection.fits, false, `${long.length} characters`);
+  await assert.rejects(reviewer.dispatch({ type: 'annotate' }), /Select one sentence/);
+  assert.deepEqual(reviewer.getState().annotations, []);
+  reviewer.close();
+});
+
+test('the page chat: a reply of function calls only shows the proposals, and names the annotations it made', async () => {
+  const fetch = fakeFetch(geminiReply('', [
+    ['propose_rewrite', { original_text: 'Actors are cheap', replacement: 'An actor costs 287 bytes', rationale: 'A number.' }],
+  ]));
+  const { reviewer, page } = await setup({ fetch });
+  await reviewer.dispatch({ type: 'chat', text: 'Weakest sentence?' });
+  const s = reviewer.getState();
+  const reply = s.chat.messages.at(-1);
+  assert.equal(reply.text, '“Actors are cheap” → An actor costs 287 bytes');
+  assert.equal(reply.proposed, true);
+  assert.equal(reply.annotations.length, 1);
+  const made = find(reviewer, reply.annotations[0]);
+  assert.equal(made.original, 'Actors are cheap');
+  assert.equal(made.suggestions[0].after, 0);
+  assert.match(JSON.stringify(fetch.requests[0].body.systemInstruction), /Always answer the reviewer in one or two sentences/);
+  // the anchor is the page adapter's (page.anchor): the text around it too
+  await reviewer.dispatch({ type: 'select', id: made.id });
+  assert.deepEqual(page.highlighted.at(-1), page.anchor('Actors are cheap'));
+  assert.notEqual(page.highlighted.at(-1).quote.prefix, '');
+  reviewer.close();
+});
+
+test('the page chat: a failure is the chat\'s error, not a message; the next message clears it', async () => {
+  const fetch = fakeFetch({ status: 429, body: { error: { message: 'Slow down.' } } }, geminiReply('Fine now.'));
+  const { reviewer } = await setup({ fetch });
+  await reviewer.dispatch({ type: 'chat', text: 'Hello?' });
+  let chat = reviewer.getState().chat;
+  assert.deepEqual(chat.messages.map((m) => m.role), ['user']);
+  assert.match(chat.error, /429/);
+  await reviewer.dispatch({ type: 'chat', text: 'Again?' });
+  chat = reviewer.getState().chat;
+  assert.equal(chat.error, undefined);
+  assert.equal(chat.messages.at(-1).text, 'Fine now.');
+  assert.equal(chat.messages.at(-1).proposed, undefined);
   reviewer.close();
 });

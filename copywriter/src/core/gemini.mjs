@@ -2,7 +2,7 @@
 // and audio clips as inline data. The key goes in the `x-goog-api-key`
 // header of each request and nowhere else.
 
-import { BASE } from './models.mjs';
+import { BASE, KEY_REFUSED } from './models.mjs';
 
 /** The functions the model may call (model-tools.xml, adapted). */
 export const FUNCTIONS = Object.freeze([
@@ -43,8 +43,9 @@ export class GeminiError extends Error {
 }
 
 // What the user reads for each refusal, then Google's own message.
-function explain(status, detail) {
+function explain(status, detail, reason = '') {
   const said = detail ? ` Google said: ${detail}` : '';
+  if (/API_KEY_INVALID/.test(reason) || /API key not valid/i.test(detail)) return `${KEY_REFUSED} Check it in Settings.`;
   if (status === 400) return `Gemini refused the request (400): check the model in Settings.${said}`;
   if (status === 401 || status === 403) return `Gemini refused the key (${status}): check it in Settings.${said}`;
   if (status === 404) return `Gemini does not know this model (404): pick another in Settings.${said}`;
@@ -121,8 +122,13 @@ export async function generate({ apiKey, model, system, contents, fetch = global
   }
   if (!response.ok) {
     let detail = '';
-    try { detail = (await response.json()).error?.message || ''; } catch { /* not JSON */ }
-    throw new GeminiError(explain(response.status, detail), { status: response.status });
+    let reason = '';
+    try {
+      const error = (await response.json()).error || {};
+      detail = error.message || '';
+      reason = [error.status, ...(error.details || []).map((d) => d.reason)].filter(Boolean).join(' ');
+    } catch { /* not JSON */ }
+    throw new GeminiError(explain(response.status, detail, reason), { status: response.status });
   }
   return parse(await response.json());
 }

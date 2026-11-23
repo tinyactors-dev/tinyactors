@@ -87,6 +87,7 @@ function createTabPage() {
     selection: () => call('selection'),
     onSelection: (fn) => selectionListeners.add(fn),
     locate: async (anchor) => Boolean(await call('locate', anchor)),
+    anchor: (text) => call('anchor', text),
     preview: async (request) => Boolean(await call('preview', request)),
     revert: async (request) => Boolean(await call('revert', request)),
     highlight: (anchor) => call('highlight', anchor),

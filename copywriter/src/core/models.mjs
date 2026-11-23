@@ -24,6 +24,34 @@ const NOT_FOR_COPY = /tts|image|transcribe|robotics|computer-use|customtools|nan
 /** Newer generations first: gemini-4-* before gemini-3.8-* before 2.5. */
 const generation = (id) => Number((id.match(/^gemini-(\d+(?:\.\d+)?)/) || [])[1] || 0);
 
+/** What a refused key says, from models.list and from generateContent. */
+export const KEY_REFUSED = 'That key was not accepted by Google.';
+
+// Every page of models.list: the chat models, the default first. Throws
+// an Error with the response's `status` when Google refuses.
+async function fetchModels(apiKey, fetch) {
+  const models = [];
+  let pageToken = '';
+  for (let pages = 0; pages < 10; pages++) {
+    const url = `${BASE}/models?pageSize=1000${pageToken ? `&pageToken=${encodeURIComponent(pageToken)}` : ''}`;
+    const response = await fetch(url, { headers: { 'x-goog-api-key': apiKey } });
+    if (!response.ok) throw Object.assign(new Error(`models.list answered ${response.status}`), { status: response.status });
+    const body = await response.json();
+    for (const m of body.models || []) {
+      const id = String(m.name || '').replace(/^models\//, '');
+      if (!id.startsWith('gemini-')) continue;
+      if (!(m.supportedGenerationMethods || []).includes('generateContent')) continue;
+      if (NOT_FOR_COPY.test(id)) continue;
+      models.push({ id, label: m.displayName || id });
+    }
+    pageToken = body.nextPageToken;
+    if (!pageToken) break;
+  }
+  models.sort((a, b) => (b.id === DEFAULT_MODEL) - (a.id === DEFAULT_MODEL)
+    || generation(b.id) - generation(a.id) || a.id.localeCompare(b.id));
+  return models;
+}
+
 /**
  * Lists the `gemini-*` models that support generateContent, with the
  * user's key: `{models: [{id, label}], fallback}`, the default first when
@@ -33,28 +61,24 @@ const generation = (id) => Number((id.match(/^gemini-(\d+(?:\.\d+)?)/) || [])[1]
 export async function listModels(apiKey, { fetch = globalThis.fetch } = {}) {
   if (!apiKey) return { models: MODELS, fallback: true };
   try {
-    const models = [];
-    let pageToken = '';
-    for (let pages = 0; pages < 10; pages++) {
-      const url = `${BASE}/models?pageSize=1000${pageToken ? `&pageToken=${encodeURIComponent(pageToken)}` : ''}`;
-      const response = await fetch(url, { headers: { 'x-goog-api-key': apiKey } });
-      if (!response.ok) throw new Error(`models.list answered ${response.status}`);
-      const body = await response.json();
-      for (const m of body.models || []) {
-        const id = String(m.name || '').replace(/^models\//, '');
-        if (!id.startsWith('gemini-')) continue;
-        if (!(m.supportedGenerationMethods || []).includes('generateContent')) continue;
-        if (NOT_FOR_COPY.test(id)) continue;
-        models.push({ id, label: m.displayName || id });
-      }
-      pageToken = body.nextPageToken;
-      if (!pageToken) break;
-    }
-    if (models.length === 0) return { models: MODELS, fallback: true };
-    models.sort((a, b) => (b.id === DEFAULT_MODEL) - (a.id === DEFAULT_MODEL)
-      || generation(b.id) - generation(a.id) || a.id.localeCompare(b.id));
-    return { models, fallback: false };
+    const models = await fetchModels(apiKey, fetch);
+    return models.length ? { models, fallback: false } : { models: MODELS, fallback: true };
   } catch {
     return { models: MODELS, fallback: true };
+  }
+}
+
+/**
+ * Checks a key before it is saved: models.list with it. Rejects with
+ * KEY_REFUSED when Google refuses it (400, 401, 403); resolves to the
+ * models it lists, or to null when Google could not be asked (offline),
+ * so the key is saved and the next request says what is wrong.
+ */
+export async function checkKey(apiKey, { fetch = globalThis.fetch } = {}) {
+  try {
+    return { models: await fetchModels(apiKey, fetch), fallback: false };
+  } catch (error) {
+    if ([400, 401, 403].includes(error.status)) throw new Error(KEY_REFUSED);
+    return null;
   }
 }

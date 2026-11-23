@@ -6,13 +6,15 @@
 
     model  rewrite        → model.reply {text, rewrites, note} | model.error {message}
     page   locate         → page.located {found}
-           preview        → page.previewed {ok}
+           preview        → page.previewed {ok}   (reveal: the page scrolls to it, a kept one restored does not)
            revert         (no answer)
     store  save, delete   (no answer)
     ui     changed        its record, after every change
            removed        {id, page}, when it is deleted
 
-  The record is the datamodel but `request`. `state` names the decision for
+  A suggestion's `after` is the number of messages before it: the panel
+  shows it after the message that brought it. The record is the datamodel
+  but `request`. `state` names the decision for
   the store; an actor spawned with a stored record starts from it.
 -->
 <scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0"
@@ -111,7 +113,7 @@
         <assign location="request" expr="({ more: true })"/>
       </transition>
       <transition event="edit" target="previewing">
-        <assign location="suggestions" expr="suggestions.concat([{ id: 's' + (suggestions.length + 1), text: _event.data.text, rationale: 'Your own text', own: true }])"/>
+        <assign location="suggestions" expr="suggestions.concat([{ id: 's' + (suggestions.length + 1), text: _event.data.text, rationale: 'Your own text', own: true, after: messages.length }])"/>
         <assign location="chosenID" expr="suggestions[suggestions.length - 1].id"/>
       </transition>
       <transition event="preview" cond="suggestions.some((s) => s.id === _event.data.suggestionID)" target="previewing">
@@ -129,8 +131,8 @@
         <send type="model" event="rewrite" namelist="id page original note messages suggestions request"/>
       </onentry>
       <transition event="model.reply" target="opening">
-        <assign location="suggestions" expr="suggestions.concat((_event.data.rewrites || []).map((r, i) => ({ id: 's' + (suggestions.length + i + 1), text: r.replacement, rationale: r.rationale || '' })))"/>
-        <assign location="messages" expr="messages.concat([{ role: 'model', text: _event.data.text || 'Rewrites proposed: ' + (_event.data.rewrites || []).length + '.', at: new Date().toISOString() }])"/>
+        <assign location="messages" expr="messages.concat([{ role: 'model', text: _event.data.text || 'No change proposed.', at: new Date().toISOString() }])"/>
+        <assign location="suggestions" expr="suggestions.concat((_event.data.rewrites || []).map((r, i) => ({ id: 's' + (suggestions.length + i + 1), text: r.replacement, rationale: r.rationale || '', after: messages.length })))"/>
         <if cond="_event.data.note &amp;&amp; !note"><assign location="note" expr="_event.data.note"/></if>
         <assign location="request" expr="null"/>
       </transition>
@@ -151,7 +153,7 @@
         <assign location="error" expr="null"/>
         <raise event="changed"/>
         <send type="page" event="preview">
-          <content expr="({ id, anchor, text: suggestions.find((s) => s.id === chosenID).text })"/>
+          <content expr="({ id, anchor, text: suggestions.find((s) => s.id === chosenID).text, reveal: true })"/>
         </send>
       </onentry>
       <transition event="page.previewed" cond="!_event.data.ok" target="suggested">
@@ -163,7 +165,7 @@
         <assign location="chosenID" expr="_event.data.suggestionID"/>
       </transition>
       <transition event="edit" target="previewing">
-        <assign location="suggestions" expr="suggestions.concat([{ id: 's' + (suggestions.length + 1), text: _event.data.text, rationale: 'Your own text', own: true }])"/>
+        <assign location="suggestions" expr="suggestions.concat([{ id: 's' + (suggestions.length + 1), text: _event.data.text, rationale: 'Your own text', own: true, after: messages.length }])"/>
         <assign location="chosenID" expr="suggestions[suggestions.length - 1].id"/>
       </transition>
       <transition event="keep" target="kept"/>

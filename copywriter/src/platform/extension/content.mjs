@@ -33,6 +33,7 @@ function alive(runtime) {
     context: () => page.context(),
     selection: () => page.selection(),
     locate: (anchor) => page.locate(anchor),
+    anchor: (text) => page.anchor(text),
     preview: (request) => page.preview(request),
     revert: (request) => page.revert(request),
     highlight: (anchor) => page.highlight(anchor),

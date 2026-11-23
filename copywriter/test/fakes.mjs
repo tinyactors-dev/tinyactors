@@ -36,17 +36,22 @@ export function fakePage({ url = 'https://www.tinyactors.dev/', title = 'tinyact
       return true;
     },
     highlight(anchor) { fake.highlighted.push(anchor); },
-    /** Selects `exact` (it must be on the page) and tells the reviewer. */
-    select(exact) {
+    anchor(exact) {
       const at = fake.text.indexOf(exact);
-      if (at < 0) throw new Error(`not on the page: ${exact}`);
-      fake.selected = {
-        text: exact,
-        anchor: {
-          quote: { exact, prefix: fake.text.slice(Math.max(0, at - 16), at), suffix: fake.text.slice(at + exact.length, at + exact.length + 16) },
-          selector: 'main > p',
-        },
+      if (at < 0) return null;
+      return {
+        quote: { exact, prefix: fake.text.slice(Math.max(0, at - 16), at), suffix: fake.text.slice(at + exact.length, at + exact.length + 16) },
+        selector: 'main > p',
       };
+    },
+    /**
+     * Selects `exact` (it must be on the page) and tells the reviewer;
+     * `fits: false` as the DOM adapter says of a selection across blocks.
+     */
+    select(exact, { fits } = {}) {
+      const anchor = fake.anchor(exact);
+      if (!anchor) throw new Error(`not on the page: ${exact}`);
+      fake.selected = { text: exact, anchor, ...(fits === undefined ? {} : { fits }) };
       for (const fn of listeners) fn(fake.selected);
     },
     /** Loads another page (or the same again) and tells the reviewer. */

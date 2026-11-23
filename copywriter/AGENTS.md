@@ -114,7 +114,8 @@ annotation's id.
 {
   status: 'booting' | 'ready' | 'error', error?: string,   // error also when the store failed to save
   page: { url, title },
-  selection: { text } | null,              // the page's current selection, if any
+  selection: { text, fits } | null,        // the page's current selection, if any; fits false: more than one
+                                           // sentence, heading or paragraph (another block, or over 600 characters)
   settings: {
     hasKey, rememberKey, model, models: [{ id, label }],
     personaID, personas: [{ id, name, instructions }],
@@ -124,13 +125,19 @@ annotation's id.
     original, anchorFound,                 // anchorFound false: the text is no longer on the page
     source,                                // 'typed' | 'model' (made by the page chat)
     note,                                  // the user's note (why)
-    suggestions: [{ id, text, rationale, own? }],   // own: the user's text (edit)
+    suggestions: [{ id, text, rationale, own?, after? }],   // own: the user's text (edit); after: the number of
+                                           // messages before it (it follows the reply that brought it)
     chosenID,                              // suggestion previewed or kept
     messages: [{ role: 'user' | 'model', text, at }],
     error?, createdAt, updatedAt,
   }],
   activeID: string | null,
-  chat: { messages: [{ role, text, at }], busy },   // page-level conversation
+  chat: {                                  // page-level conversation
+    messages: [{ role, text, at,
+      annotations?,                        // a model message: the ids of the annotations its rewrites made
+      proposed? }],                        // true: the model said nothing, the text lists its proposals
+    busy, error?,                          // error: the last request failed (until the next message)
+  },
   recording: { state: 'idle' | 'recording' | 'transcribing', target: annotationID | 'page' | null },
   totals: { kept, open, pages },           // across every page reviewed
   exporting: 'idle' | 'building' | 'done' | 'failed',
@@ -141,7 +148,7 @@ annotation's id.
 
 | `type` | fields | what it does |
 |---|---|---|
-| `annotate` | `note?` | an annotation of the current selection; with a note, it asks the model at once |
+| `annotate` | `note?` | an annotation of the current selection; with a note, it asks the model at once. A selection that does not fit (`fits` false) is refused: "Select one sentence, heading or paragraph." |
 | `select` / `deselect` | `id` | the active annotation; highlights its text in the page |
 | `ask` | `id`, `text` | a message about one annotation; the model answers and may propose rewrites |
 | `suggest` | `id` | more alternatives, no message |
@@ -153,7 +160,7 @@ annotation's id.
 | `note` | `id`, `text` | sets the note |
 | `chat` | `text` | a page-level message; the model may create annotations (`propose_rewrite`) |
 | `record.start` / `record.stop` | `target` | push-to-talk: the clip goes to the model as the next message for `target` |
-| `settings.save` | `apiKey?`, `rememberKey?`, `model?`, `personaID?`, `persona?` | |
+| `settings.save` | `apiKey?`, `rememberKey?`, `model?`, `personaID?`, `persona?` | a new key is checked with models.list first: one Google refuses is not saved ("That key was not accepted by Google.") |
 | `settings.forgetKey` | | |
 | `models.refresh` | | |
 | `export` | `scope: 'page' \| 'all'`, `to: 'download' \| 'clipboard'` | |
@@ -164,12 +171,18 @@ annotation's id.
 page = {
   info(),                        // → { url, title, lang }
   context(),                     // → { headings: [text], text }  (visible text, at most 20,000 characters)
-  selection(),                   // → { text, anchor } | null
-  onSelection(fn),               // fn({ text, anchor } | null) when the selection changes
+  selection(),                   // → { text, anchor, fits? } | null   fits false: it spans blocks (p, li, h1-h6, td,
+                                 //   blockquote, figcaption, dd, dt, a button's or a link's label) or is over 600 characters
+  onSelection(fn),               // fn({ text, anchor, fits? } | null) when the selection changes
   locate(anchor),                // → boolean: the anchor's text is on the page
-  preview({ id, anchor, text }), // replace the anchor's text with text, reversibly; → boolean
+  anchor?(text),                 // → anchor | null: the first place text is on the page, with its context
+                                 //   (the page chat's rewrites name text, not a selection); without it, a bare quote
+  preview({ id, anchor, text, reveal? }), // replace the anchor's text with text, reversibly; → boolean. Refused
+                                 //   (false) across blocks; the first Text node takes the text, the others lose
+                                 //   only their selected part. reveal: scroll it to where the reader sees it
   revert({ id }),                // put the original back; → boolean
-  highlight(anchor | null),      // outline (and scroll to) the text, or clear
+  highlight(anchor | null),      // outline the text and scroll it to where the reader sees it (a previewed one:
+                                 //   its replacement), or clear
   onNavigate?(fn),               // optional: fn() when the panel follows another page (tab switch, navigation);
                                  // the reviewer ends the old page's actors and starts the new one's
 }
@@ -204,7 +217,11 @@ from the model.
   It boots the reviewer at once, so kept changes show again before the
   sheet opens. A tap on the sheet clears the page's selection on a phone,
   so the adapter keeps the last non-empty one while the last press was on
-  the widget; `page.selection()` uses it up.
+  the widget; `page.selection()` uses it up. "Where the reader sees it"
+  is the DOM adapter's `band()`: above the sheet, which a preview or a
+  highlight lowers to its half height first, and left of the drawer,
+  below a sticky header; the extension's content script has no band and
+  scrolls the text to the viewport's middle.
 
 ## Actors and processors
 

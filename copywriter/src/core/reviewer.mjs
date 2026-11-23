@@ -6,13 +6,22 @@
 import { init, compileCharts, Host, Spawner } from '@tinyactors/wasm/init';
 import { charts } from './charts.mjs';
 import { generate, contents, reading } from './gemini.mjs';
-import { DEFAULT_MODEL, MODELS, listModels } from './models.mjs';
+import { DEFAULT_MODEL, MODELS, listModels, checkKey } from './models.mjs';
 import { DEFAULT_PERSONA } from './personas.mjs';
 import { createIndexedDBStore, createMemoryStore } from './store.mjs';
 import { createRecorder } from './recorder.mjs';
 import { exportPacket } from './packet.mjs';
 
 const OPEN_STATES = new Set(['draft', 'asking', 'suggested', 'previewing', 'failed']);
+
+/** The most text one annotation takes (the page adapter's MAX_TEXT too). */
+export const MAX_TEXT = 600;
+/** What annotate says of a selection that does not fit. */
+export const TOO_MUCH = 'Select one sentence, heading or paragraph.';
+
+// Whether a selection fits one annotation: the adapter says so of the
+// elements it spans (fits), the length is checked here too.
+const fits = (s) => s.fits !== false && s.text.length <= MAX_TEXT;
 
 function deepFreeze(value) {
   if (value && typeof value === 'object' && !Object.isFrozen(value)) {
@@ -27,13 +36,36 @@ function view(r) {
   const a = {
     id: r.id, state: r.state, original: r.original, anchorFound: r.anchorFound !== false,
     note: r.note || '', source: r.source,
-    suggestions: (r.suggestions || []).map((s) => ({ id: s.id, text: s.text, rationale: s.rationale || '', ...(s.own ? { own: true } : {}) })),
+    suggestions: (r.suggestions || []).map((s) => ({
+      id: s.id, text: s.text, rationale: s.rationale || '', ...(s.own ? { own: true } : {}), ...(s.after !== undefined ? { after: s.after } : {}),
+    })),
     chosenID: r.chosenID ?? null,
     messages: (r.messages || []).map((m) => ({ role: m.role, text: m.text, at: m.at })),
     createdAt: r.createdAt, updatedAt: r.updatedAt,
   };
   if (r.error) a.error = r.error;
   return a;
+}
+
+/**
+ * What the system instruction asks of every answer, after the persona:
+ * words for the reviewer besides the function calls, and copy that keeps
+ * to what the page says.
+ */
+export const RULES = Object.freeze([
+  'Always answer the reviewer in one or two sentences of text, as well as calling functions: name the sentence you change and say why.',
+  'Never add a claim, number, name or capability that the original or the page does not state. Keep the original\'s point.',
+  'Write sentence case. No serial comma: "a, b and c", never "a, b, and c".',
+]);
+
+// A model message of rewrites only: the proposals themselves.
+function proposals(event, rewrites) {
+  if (event === 'chat') {
+    const lines = rewrites.filter((r) => r.original_text).map((r) => `“${r.original_text}” → ${r.replacement}`);
+    return lines.join('\n') || (rewrites.length ? rewrites.map((r) => `→ ${r.replacement}`).join('\n') : 'No change proposed.');
+  }
+  const why = rewrites.map((r) => r.rationale).find(Boolean);
+  return why || (rewrites.length ? rewrites.map((r) => `→ ${r.replacement}`).join('\n') : 'No change proposed.');
 }
 
 const stamp = (date) => date.toISOString().replace(/[-:]/g, '').replace('T', '-').slice(0, 13);
@@ -83,7 +115,7 @@ export function createReviewer({
     state = deepFreeze({
       status, ...(error ? { error } : {}),
       page: { url: current.url, title: current.title },
-      selection: selection ? { text: selection.text } : null,
+      selection: selection ? { text: selection.text, fits: fits(selection) } : null,
       settings: {
         hasKey, rememberKey, model: settings.model,
         models: models.map((m) => ({ id: m.id, label: m.label })),
@@ -92,7 +124,7 @@ export function createReviewer({
       },
       annotations: mine.map(view),
       activeID,
-      chat: { messages: chat.messages.map((m) => ({ ...m })), busy: chat.busy },
+      chat: { messages: chat.messages.map((m) => ({ ...m })), busy: chat.busy, ...(chat.error ? { error: chat.error } : {}) },
       recording: { ...recording },
       totals: {
         kept: all.filter((r) => r.state === 'kept').length,
@@ -118,7 +150,7 @@ export function createReviewer({
         records.delete(key(data.page, data.id));
         if (activeID === data.id) activeID = null;
       } else if (send.event === 'chat') {
-        if (data.page === current.url) chat = { messages: data.messages, busy: data.busy };
+        if (data.page === current.url) chat = { messages: data.messages, busy: data.busy, error: data.error || null };
       }
       publish();
     },
@@ -151,7 +183,7 @@ export function createReviewer({
         let ok = false;
         try {
           if (previewed.has(data.id)) { await page.revert({ id: data.id }); previewed.delete(data.id); }
-          ok = Boolean(await page.preview({ id: data.id, anchor: data.anchor, text: data.text }));
+          ok = Boolean(await page.preview({ id: data.id, anchor: data.anchor, text: data.text, ...(data.reveal ? { reveal: true } : {}) }));
           if (ok) previewed.add(data.id);
         } catch { ok = false; }
         send.answer('page.previewed', { ok });
@@ -194,11 +226,13 @@ export function createReviewer({
       context.headings?.length ? `Headings:\n${context.headings.map((h) => `- ${h}`).join('\n')}` : '',
       `Visible text:\n"""\n${String(context.text || '').slice(0, 20000)}\n"""`,
       '',
+      ...RULES,
+      '',
     ];
     let messages = data.messages || [];
     let prompt;
     if (event === 'rewrite') {
-      intro.push('The reviewer selected one piece of the text. Answer in one or two short sentences.',
+      intro.push('The reviewer selected one piece of the text.',
         'To propose a replacement, call propose_rewrite once per alternative (at most three), plain text only.',
         'When the reviewer has not said what is wrong, call set_note with the problem.');
       const selected = `Selected text:\n"""\n${data.original}\n"""${data.note ? `\nMy note: ${data.note}` : ''}`;
@@ -210,15 +244,26 @@ export function createReviewer({
         prompt = 'Propose rewrites.';
       }
     } else {
-      intro.push('Answer the reviewer in a few short sentences.',
-        'To propose a change to a piece of the page\'s text, call propose_rewrite with original_text copied exactly from the page.');
+      intro.push('To propose a change to a piece of the page\'s text, call propose_rewrite with original_text copied exactly from the page:',
+        'one sentence, heading or paragraph, never more.');
     }
     const result = await generate({
       apiKey, fetch, model: settings.model, system: intro.filter((l) => l !== null).join('\n'),
       contents: contents(messages, { prompt, clip }),
     });
     const { text, rewrites, note } = reading(result);
-    return { text, rewrites, note };
+    if (event === 'chat') {
+      // The text the model names, anchored where it is on the page.
+      for (const r of rewrites) {
+        if (!r.original_text) continue;
+        let anchor = null;
+        try { anchor = (await page.anchor?.(r.original_text)) || null; } catch { /* not found */ }
+        if (anchor) { r.anchor = anchor; r.original_text = anchor.quote.exact; }
+      }
+    }
+    if (text) return { text, rewrites, note };
+    // The model only called functions: the message says what it proposed.
+    return { text: proposals(event, rewrites), proposed: true, rewrites, note };
   }
 
   // ---- booting and pages -----------------------------------------------
@@ -339,6 +384,7 @@ export function createReviewer({
     async annotate({ note }) {
       const s = (await page.selection()) || selection;
       if (!s || !s.text || !s.text.trim()) throw new Error('Select some text on the page first.');
+      if (!fits(s)) throw new Error(TOO_MUCH);
       const id = nextID('a');
       host.spawn('annotation', {
         name: id,
@@ -400,6 +446,11 @@ export function createReviewer({
       }
     },
     async 'settings.save'({ apiKey, rememberKey: remember, model: id, personaID, persona }) {
+      let listed = null;
+      if (apiKey !== undefined && String(apiKey).trim()) {
+        // a key Google refuses is not saved: the user hears it now, not at the first request
+        listed = await checkKey(String(apiKey).trim(), { fetch });
+      }
       if (apiKey !== undefined || remember !== undefined) {
         const keyText = apiKey !== undefined ? String(apiKey).trim() : await credentials.get();
         if (keyText) await credentials.set(keyText, { remember: remember ?? rememberKey });
@@ -412,8 +463,8 @@ export function createReviewer({
       if (personaID !== undefined) settings.personaID = String(personaID);
       await store.putSettings({ model: settings.model, personaID: settings.personaID });
       await loadSettings();
+      if (listed?.models.length) models = listed.models;
       publish();
-      if (apiKey) await refreshModels();
     },
     async 'settings.forgetKey'() {
       await credentials.forget();

@@ -66,6 +66,24 @@ test('settings: the key saved and forgotten, the model, a persona of the user\'s
   reviewer.close();
 });
 
+test('settings: a key Google refuses is not saved, and says so', async () => {
+  const refused = { status: 400, body: { error: { code: 400, message: 'API key not valid. Please pass a valid API key.', status: 'INVALID_ARGUMENT', details: [{ reason: 'API_KEY_INVALID' }] } } };
+  const { reviewer, credentials } = await setup({ key: null, fetch: fakeFetch(refused) });
+  await assert.rejects(reviewer.dispatch({ type: 'settings.save', apiKey: 'AIza-wrong', rememberKey: true }), /^Error: That key was not accepted by Google\.$/);
+  assert.equal(reviewer.getState().settings.hasKey, false);
+  assert.equal(credentials.get(), null);
+  reviewer.close();
+});
+
+test('settings: a key is saved when Google cannot be asked (offline)', async () => {
+  const offline = async () => { throw new TypeError('fetch failed'); };
+  const { reviewer, credentials } = await setup({ key: null, fetch: offline });
+  await reviewer.dispatch({ type: 'settings.save', apiKey: 'AIza-later' });
+  assert.equal(reviewer.getState().settings.hasKey, true);
+  assert.equal(credentials.get(), 'AIza-later');
+  reviewer.close();
+});
+
 // A microphone and a MediaRecorder that record three bytes.
 function fakeMedia() {
   const tracks = [];
@@ -146,6 +164,7 @@ test('set_note: the model writes the note when the user gave none', async () => 
   await reviewer.dispatch({ type: 'suggest', id });
   const a = find(reviewer, id);
   assert.equal(a.note, 'Says nothing measurable.');
-  assert.equal(a.messages.at(-1).text, 'Rewrites proposed: 1.');
+  assert.equal(a.messages.at(-1).text, 'A number.', 'no text from the model: the rewrite\'s reason');
+  assert.equal(a.suggestions[0].after, a.messages.length, 'the card comes after the reply that brought it');
   reviewer.close();
 });

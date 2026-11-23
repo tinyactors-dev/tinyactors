@@ -177,7 +177,14 @@ function start() {
   const page = createDOMPage({
     exclude: inside,
     keepSelection: () => pressedInside || document.activeElement === host,
-    scrollBlock: () => (open && !wide.matches ? 'start' : 'center'),
+    // What the reader sees of the page: above the sheet, lowered to its
+    // half height so the text shows; left of the drawer.
+    band() {
+      if (!open) return null;
+      if (wide.matches) return { right: innerWidth - sheet.getBoundingClientRect().width };
+      if (snap === 'full') { snap = 'half'; show(true); }
+      return { bottom: innerHeight * (1 - SNAPS.half) };
+    },
   });
 
   const reviewer = createReviewer({
