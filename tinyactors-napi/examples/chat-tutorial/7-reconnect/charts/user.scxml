@@ -6,9 +6,9 @@
      Typing tells the room once every 3 seconds at most; another member's
      typing shows on the screen until that member posts, 5 seconds pass
      after the last notice, or this user disconnects or loses the connection.
-     A lost connection is not yet offline: the user reconnects within 30
-     seconds without the others seeing a change, and gets the messages
-     that came meanwhile and the roster as it is now. -->
+     A lost connection shows the user as away at once, and offline after
+     30 seconds. A reconnect before then brings back the status from
+     before, the messages that came meanwhile and the roster as it is now. -->
 <scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0"
        datamodel="ecmascript" name="user" initial="offline">
   <datamodel>
@@ -59,6 +59,11 @@
     </history>
     <transition event="disconnect" target="offline"/>
     <transition event="connection.lost" target="reconnecting"/>
+    <!-- back from a lost connection, once resume has reported the status again:
+         the screen missed the roster's changes, so the workspace sends it whole -->
+    <transition event="reconnected">
+      <send target="tinyactors://chat/@workspace" event="roster.get"/>
+    </transition>
 
     <!-- this user types: the room hears of it at most once every 3 seconds -->
     <transition event="typing" cond="!quiet[_event.data.room]">
@@ -187,11 +192,19 @@
     </state>
   </state>
   <state id="reconnecting">
-    <onentry><send id="grace" event="grace.over" delay="30s"/></onentry>
+    <onentry>
+      <!-- the others see the user as away at once -->
+      <send target="tinyactors://chat/@workspace" event="status">
+        <param name="user" expr="name"/>
+        <param name="status" expr="'away'"/>
+      </send>
+      <send id="grace" event="grace.over" delay="30s"/>
+    </onentry>
     <onexit><cancel sendid="grace"/></onexit>
-    <!-- back: the screen missed the roster's changes, so the workspace sends it whole -->
+    <!-- back: resume enters active or away, whose entry reports the status;
+         "reconnected" comes after it -->
     <transition event="connect" target="resume">
-      <send target="tinyactors://chat/@workspace" event="roster.get"/>
+      <raise event="reconnected"/>
     </transition>
     <transition event="disconnect" target="offline"/>
     <transition event="grace.over" target="offline"/>

@@ -538,7 +538,7 @@ export async function mount(root) {
   const back = el('button', { type: 'button', class: 'chatlive__back', 'aria-label': 'Back to Home' }, icon('back'));
   back.addEventListener('click', goBack);
   const banner = el('p', { class: 'chatlive__banner', role: 'status', hidden: '' },
-    el('strong', {}, 'Connecting…'), ` For ${GRACE} seconds, new messages wait for you.`);
+    el('strong', {}, 'Connecting…'), ` The others see you as away, and new messages wait ${GRACE} seconds for you.`);
   const messages = el('ol', { class: 'chatlive__messages', 'aria-label': 'Messages' });
   // the list is updated in place; this region alone announces each message that reaches the screen
   const arrived = el('p', { class: 'visually-hidden', 'aria-live': 'polite' });
@@ -685,7 +685,7 @@ export async function mount(root) {
     el('p', { class: 'chatlive__hint' }, 'A switch migrates every running actor to the other charts, without a restart.'), versionNote,
     el('h4', { class: 'chatlive__subheading' }, 'Scenarios'), scenarioList,
     el('h4', { class: 'chatlive__subheading' }, 'People'),
-    el('p', { class: 'chatlive__hint' }, `Step ${LATEST} waits ${GRACE} s before a lost connection is offline: ${within.join(' and ')} come back in time, ${past.join(' and ')} does not.`),
+    el('p', { class: 'chatlive__hint' }, `Step ${LATEST} shows a lost connection as away at once and offline after ${GRACE} s: ${within.join(' and ')} come back in time, ${past.join(' and ')} does not.`),
     personList);
 
   // the actors, and one actor's chart
@@ -785,8 +785,8 @@ export async function mount(root) {
   // Your actor's state value. While it is in the store (its state is in
   // its blob), what the workspace last told another person online about
   // you; with nobody online to tell, the last state read. A lost
-  // connection on the newest charts shows no change to the others, so while the
-  // agenda still holds your reconnect, the last state read stands.
+  // connection on the newest charts shows as away to the others, so while the
+  // agenda still holds your reconnect, the last state read (reconnecting) stands.
   const known = new Map();
   function yours(self) {
     if (!self.stored) { known.set(you, self.value); return asSelf(self.value); }

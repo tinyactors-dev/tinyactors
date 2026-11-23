@@ -29,7 +29,7 @@ export const GRACE = 30;
 /** The versions of the charts the chat runs: the tutorial's steps. */
 export const VERSIONS = {
   5: 'Step 5: no typing indicator; a lost connection is offline at once; a late joiner sees no history',
-  9: `Step 9: typing indicators; a lost connection has ${GRACE} seconds to come back; a late joiner sees the history; direct messages`,
+  9: `Step 9: typing indicators; a lost connection shows as away, with ${GRACE} seconds to come back; a late joiner sees the history; direct messages`,
 };
 /** The newest version: what steps 6 to 9 added is there. */
 export const LATEST = 9;

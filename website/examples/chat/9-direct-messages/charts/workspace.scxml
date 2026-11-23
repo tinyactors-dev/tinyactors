@@ -112,7 +112,7 @@
       <script>delete opening[_event.sendid];</script>
     </transition>
 
-    <!-- a status that did not change (a user back from a lost connection) tells nobody -->
+    <!-- a status that did not change (an away user back from a lost connection) tells nobody -->
     <transition event="status" cond="roster[_event.data.user] === _event.data.status"/>
     <transition event="status">
       <assign location="arriving" expr="cameOnline(roster, _event)"/>
