@@ -485,7 +485,7 @@ export async function mount(root) {
     const told = PEOPLE.filter((name) => name !== you && ['active', 'away'].includes(mine[name]))
       .map((name) => chat.screen(name).roster[you]).find(Boolean);
     if (told === 'offline') return null;
-    if (last === 'reconnecting' && chat.agenda().some((entry) => entry.what === `${you} reconnects`)) return last;
+    if (last === 'reconnecting' && chat.reconnects(you) !== null) return last;
     if (!told) return asSelf(last);
     return { online: told };
   }
@@ -612,9 +612,16 @@ export async function mount(root) {
       }
       for (const row of personList.children) {
         const name = row.dataset.key;
-        const returns = agenda.find((entry) => entry.what === `${name} reconnects`);
-        row.querySelector('.chatlive__lab-note').textContent = returns ? `Reconnects at ${clock(returns.at)}` : name === you ? 'you' : '';
-        row.classList.toggle('chatlive__lab-person--lost', Boolean(returns));
+        // a connection is the application's: only a person who has one can lose it
+        const returns = chat.reconnects(name), connected = chat.connected(name);
+        row.querySelector('.chatlive__lab-note').textContent = returns !== null ? `Reconnects at ${clock(returns)}`
+          : name === you ? (connected ? 'you' : 'you, signed out') : connected ? '' : 'Signed out';
+        row.classList.toggle('chatlive__lab-person--lost', returns !== null);
+        for (const button of row.querySelectorAll('.chatlive__speed')) {
+          button.disabled = !connected;
+          if (connected) button.removeAttribute('title');
+          else button.title = returns !== null ? 'Already lost' : 'Signed out';
+        }
         const fault = chat.faults(name);
         const [drop, delay] = row.querySelectorAll('select');
         if (document.activeElement !== drop) drop.value = String(fault.drop);

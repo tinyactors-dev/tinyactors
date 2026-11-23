@@ -25,3 +25,6 @@ scout's screen got: A | B | on step 5 | C | D | E
 forager's screen got: A | B | on step 5 | C | D | E
 queen joined late and got: A | B | C | D | E
 queen's posts carry the store's numbers: 1, 2, 3, 4, 5
+-- losing the connection of someone signed out, on each version
+step 5: queen has no connection to lose; queen was told nothing; signed in: nobody
+step 8: queen has no connection to lose; queen was told nothing; signed in: nobody

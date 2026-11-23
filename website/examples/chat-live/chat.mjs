@@ -87,6 +87,7 @@ export async function createChat(tinyactors, { versions, version = LATEST, seed 
   const store = new Store();
   const clock = new SimulatedClock();
   const now = () => clock.now / 1000;
+  const minutes = (seconds) => `${Math.floor(seconds / 60)}:${String(Math.floor(seconds % 60)).padStart(2, '0')}`;
   const random = generator(seed);
 
   // ---- what happened, newest last: inputs, what reached a screen, faults, versions
@@ -99,8 +100,10 @@ export async function createChat(tinyactors, { versions, version = LATEST, seed 
   // ---- the simulated clock's own agenda: what the application does later
   const agenda = []; // { at (ms), what, run }
   const later = (seconds, what, work) => {
-    agenda.push({ at: clock.now + seconds * 1000, what, run: work });
+    const entry = { at: clock.now + seconds * 1000, what, run: work };
+    agenda.push(entry);
     agenda.sort((a, b) => a.at - b.at);
+    return entry;
   };
 
   // ---- each user's screen, and the faults between the charts and it
@@ -234,6 +237,51 @@ export async function createChat(tinyactors, { versions, version = LATEST, seed 
     user(name).send(event, data);
   };
 
+  // ---- the connections: each the socket a person's page would hold. The
+  // application opens one when the person signs in and closes it when they
+  // sign out; a lost one is gone until the reconnect the agenda holds.
+  const connections = new Set(); // people with a connection
+  const losses = new Map(); // person -> the agenda's entry that reconnects them
+  /** Cancels `name`'s pending reconnect, if any, saying why. */
+  const cancelReconnect = (name, why) => {
+    const entry = losses.get(name);
+    if (!entry) return;
+    losses.delete(name);
+    agenda.splice(agenda.indexOf(entry), 1);
+    note('fault', `${name}'s reconnect at ${minutes(entry.at / 1000)} is off: ${why}`);
+  };
+  /** `name` signs in: a connection opens (early, if a lost one was to come back later). */
+  const open = (name) => {
+    cancelReconnect(name, `${name} signed in again first`);
+    connections.add(name);
+    tell(name, 'connect');
+  };
+  /** `name` signs out: the connection closes, and a lost one does not come back. */
+  const close = (name) => {
+    cancelReconnect(name, `${name} signed out`);
+    connections.delete(name);
+    tell(name, 'disconnect');
+  };
+  /**
+   * `name`'s connection drops, and comes back `seconds` later. Step 8's
+   * charts get `connection.lost`; step 5's know only `disconnect`, so an
+   * application on them can say nothing else. A person with no connection
+   * (signed out, or lost already) has none to lose.
+   */
+  const lose = (name, seconds) => {
+    if (!connections.has(name)) {
+      note('fault', losses.has(name) ? `${name}'s connection is lost already` : `${name} has no connection to lose`);
+      return;
+    }
+    connections.delete(name);
+    tell(name, current === LATEST ? 'connection.lost' : 'disconnect');
+    losses.set(name, later(seconds, `${name} reconnects`, () => {
+      losses.delete(name);
+      connections.add(name);
+      tell(name, 'connect');
+    }));
+  };
+
   const workspace = host.spawn('workspace', { name: 'workspace' });
   for (const name of PEOPLE) host.spawn('user', { name: `user.${name}`, params: { name } });
   await host.idle();
@@ -259,8 +307,12 @@ export async function createChat(tinyactors, { versions, version = LATEST, seed 
     screen,
     /** The simulated time, in seconds. */
     now,
-    connect: (name) => act(() => tell(name, 'connect')),
-    disconnect: (name) => act(() => tell(name, 'disconnect')),
+    connect: (name) => act(() => open(name)),
+    disconnect: (name) => act(() => close(name)),
+    /** Whether `name` has a connection: signed in, and not lost. */
+    connected: (name) => connections.has(name),
+    /** When `name`'s lost connection comes back (simulated seconds), or null when none is lost. */
+    reconnects: (name) => (losses.has(name) ? losses.get(name).at / 1000 : null),
     /** Typing: on step 8 the room hears of it; on both the user's away timer starts again. */
     typing: (name, room) => act(() => tell(name, current === LATEST ? 'typing' : 'activity', current === LATEST ? { room } : undefined)),
     join: (name, room) => act(() => tell(name, 'join', { room })),
@@ -276,15 +328,8 @@ export async function createChat(tinyactors, { versions, version = LATEST, seed 
     advance: (ms) => act(() => advance(ms)),
 
     // ---- experiments
-    /**
-     * `name`'s connection drops, and comes back `seconds` later. Step 8's
-     * charts get `connection.lost`; step 5's know only `disconnect`, so an
-     * application on them can say nothing else.
-     */
-    loseConnection: (name, seconds) => act(() => {
-      tell(name, current === LATEST ? 'connection.lost' : 'disconnect');
-      later(seconds, `${name} reconnects`, () => tell(name, 'connect'));
-    }),
+    /** `name`'s connection drops, and comes back `seconds` later; nothing happens to a person with none. */
+    loseConnection: (name, seconds) => act(() => lose(name, seconds)),
     /** Faults between the charts and `name`'s screen: a share of deliveries dropped, and a delay in seconds. */
     setFaults: (name, { drop = 0, delay = 0 } = {}) => act(() => {
       if (drop === 0 && delay === 0) faults.delete(name);
@@ -298,7 +343,7 @@ export async function createChat(tinyactors, { versions, version = LATEST, seed 
       const scenario = SCENARIOS[id];
       note('scenario', `${scenario.title}: ${scenario.about}`);
       for (const name of ONLINE_FOR[id]) {
-        tell(name, 'connect');
+        open(name);
         tell(name, 'join', { room: 'general' });
       }
       await host.idle();
@@ -370,10 +415,7 @@ export async function createChat(tinyactors, { versions, version = LATEST, seed 
   // What the agenda runs is inside an action already (advance's): these
   // send at once, without queueing behind the action that runs them.
   const direct = {
-    loseConnection: (name, seconds) => {
-      tell(name, current === LATEST ? 'connection.lost' : 'disconnect');
-      later(seconds, `${name} reconnects`, () => tell(name, 'connect'));
-    },
+    loseConnection: lose,
     post: (name, room, text) => tell(name, 'post', { room, text }),
     typing: (name, room) => tell(name, current === LATEST ? 'typing' : 'activity', current === LATEST ? { room } : undefined),
   };

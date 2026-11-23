@@ -1,11 +1,12 @@
 // The live chat, run in Node.js: what the page's controls do, printed as
 // the screens show it. The same scenario on step 5's charts and on step
 // 8's, a live migration between them (and from 8 to 5 and back, with posts
-// on each side and a late joiner), and a screen that loses deliveries.
+// on each side and a late joiner), a screen that loses deliveries, and a
+// lost connection of someone who has none.
 // Run: node main.mjs
 import * as tinyactors from '@tinyactors/wasm';
 import { readFileSync } from 'node:fs';
-import { createChat } from './chat.mjs';
+import { createChat, PEOPLE } from './chat.mjs';
 
 const read = (step) => Object.fromEntries(['workspace.scxml', 'room.scxml', 'user.scxml']
   .map((name) => [name, readFileSync(new URL(`./charts/step-${step}/${name}`, import.meta.url), 'utf8')]));
@@ -95,3 +96,14 @@ console.log(`forager's screen got: ${messages(trip, 'forager')}`);
 console.log(`queen joined late and got: ${messages(trip, 'queen')}`);
 console.log(`queen's posts carry the store's numbers: ${trip.screen('queen').messages.map((m) => m.seq).join(', ')}`);
 trip.close();
+
+console.log('-- losing the connection of someone signed out, on each version');
+for (const version of [5, 8]) {
+  const quiet = await createChat(tinyactors, { versions, version });
+  await quiet.loseConnection('queen', 5); // nobody is signed in: queen has no connection to lose
+  await quiet.advance(10_000);
+  const told = quiet.log().filter((e) => e.kind === 'input' && e.text.startsWith('queen ←')).map((e) => e.text);
+  const signedIn = PEOPLE.filter((name) => quiet.connected(name));
+  console.log(`step ${version}: ${quiet.log().find((e) => e.kind === 'fault').text}; queen was told ${told.join(', ') || 'nothing'}; signed in: ${signedIn.join(', ') || 'nobody'}`);
+  quiet.close();
+}

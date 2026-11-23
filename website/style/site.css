@@ -705,6 +705,7 @@ ta-tabs { display: block; }
 .chatlive__lab-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; margin-top: 6px; }
 .chatlive__lab-label { width: 96px; color: var(--cl-muted); }
 .chatlive__lab-row .chatlive__speed { height: 24px; padding: 0 8px; font-weight: 400; }
+.chatlive__lab-row .chatlive__speed:disabled { cursor: not-allowed; }
 .chatlive__field { display: flex; align-items: center; gap: 4px; color: var(--cl-muted); }
 .chatlive__select { height: 24px; padding: 0 4px; border: 1px solid var(--cl-line); border-radius: 6px; background: var(--cl-pane); color: var(--cl-fg); font: inherit; font-size: 13px; }
 .chatlive__log-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 0 20px 6px 0; }

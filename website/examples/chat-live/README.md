@@ -11,7 +11,9 @@ https://www.tinyactors.dev/chat/. The page starts on step 8.
   host with a simulated clock and a store that keeps at most four actors in
   memory. Each person's screen is built only from what the charts send to
   `chat:client` for that person. Its experiments are what an application
-  around the charts does to them: a lost connection that comes back later,
+  around the charts does to them: a lost connection that comes back later
+  (the connections are the application's, as a page's sockets: a person
+  signed out has none to lose),
   a screen that drops or delays what reaches it, two scripted scenarios on
   the simulated clock's agenda, a log of what happened, and a switch
   between the two versions by a live migration of every actor.
