@@ -1,7 +1,8 @@
 # The JSON datamodel: one document per session, data paths, registered functions
 
-**Status:** Sketch (2026-11-23). Blocked on core: payloads cross between
-datamodels unchecked ("Prerequisites in core"). It replaces "A struct
+**Status:** Sketch (2026-11-23), validated by a spike on the branch
+`ccr-6b4276e2-wq2zzh` ("Validation"). Blocked on core: payloads cross
+between datamodels unchecked ("Prerequisites in core"). It replaces "A struct
 datamodel" and "An application datamodel"
 ([application-datamodel.md](application-datamodel.md), dropped); "History"
 says why.
@@ -72,7 +73,7 @@ leaves the computation to the application's functions.
   - per event on other datamodels: nothing.
 - **Out of scope:** an expression language. Paths, literals, calls and
   `In()` are the whole grammar; arithmetic and comparison are functions
-  (decision 2). The datamodels of Python and Node, which run their
+  (settled: no operators). The datamodels of Python and Node, which run their
   language already.
 
 ## Conventions and terms
@@ -233,7 +234,9 @@ function   = name                       ; not a reserved word
   `In('...')` of a state the chart lacks.
 - **A key that is not a name** is reached by a string index:
   `_ioprocessors["http://www.w3.org/TR/scxml/#SCXMLEventProcessor"].location`.
-- **No operators.** `hp <= 1` is `weak(hp)` (decision 2).
+- **No operators** (the maintainer, 2026-11-23: "just JSON and function
+  calls"). `hp <= 1` is `weak(hp)`. The W3C suite needed no more than 18
+  small functions for that ("Validation").
 - **Calls nest** (`total(addItem(items, _event.data))`), evaluated
   innermost first, left to right, stopping at the first failure.
 - **Nesting is bounded:** calls and path indices to 16 levels, literals to
@@ -577,16 +580,89 @@ skip list (XML content, the ECMAScript data model's tests), are
   The events queued for a session and its delayed sends' payloads are
   bounded by the host's pools.
 
+## Validation
+
+A spike on the branch `ccr-6b4276e2-wq2zzh` (2026-11-23) built the
+datamodel as `tinyactors-core/src/datamodel_json` (1,956 lines),
+offered it in `ta-conform` with a C library of the conf: notation's
+functions, and measured it beside quickjs. The raw numbers, the machine
+and the commands are in `tinyactors-core/tools/jsonbench/RESULTS.md`.
+
+**What it answered:**
+
+| Question | Answer |
+|---|---|
+| Does it conform? | Scenarios 10 of 10 (spawn, send, time, invoke, hibernation, migration, snapshots, send errors, outcome canaries). W3C: 167 of 167 translated tests pass; 24 are skipped: 19 of the ECMAScript data model (as `skip-python.txt`), 3 that need `<script>` to change state (302, 303, 304), 530 (XML in `<assign>`) and 567 (a form field `'2'` against the number 2, no coercion). `mise run conform` runs it beside quickjs and the test datamodel, unchanged |
+| Is it freestanding? | `check:freestanding` builds and links it for wasm32, x86_64, thumb and riscv32 |
+| How big is it? | 31 KB of code at `-Os`, 67 KB at `-O2`; the quickjs engine is 974 KB, its wrapper 63 KB |
+| Memory per actor, 10,000 of Appendix A's order | 679 B idle and 874 B after the order's three events (the datamodel's share 361 and 515 B), against quickjs's 1,127 and 2,260 B (809 and 1,771 B) |
+| Time per event (min to max of three runs) | a guard alone 494 to 505 ns against 1,389 to 1,796; a guard and an assignment 1,213 to 1,227 against 2,027 to 2,339; the order's `add` and `address` 1,723 to 2,489 against 3,119 to 3,256 |
+| An assignment as the document grows | 636 ns at 64 B, 716 to 1,307 at 1 KB, 1,136 to 2,008 at 16 KB, 5,106 to 5,559 at 60 KB; quickjs stays at 1,257 to 2,500 throughout |
+| How many functions did the W3C suite need? | 18 (`eq` 130 uses, `add` 55, `isDefined` 21, `has` 14, `and` 12, `not` 7, `contains` 6, `concat` 5, `append` 2, `lt`, `or`, `startsWith`, ...) |
+
+**A function call, per language** (ns per call, 1,000,000 calls, the
+least of 5 runs; arguments `[[two items]]` for `hasItems` and
+`[[two items], {"sku", "qty"}]` for `addItem`, which returns three items):
+
+| | empty | `hasItems` | `addItem` | allocations per call |
+|---|---|---|---|---|
+| C (`ta_cbor_reader`, `ta_cbor_writer`) | 22 | 201 | 577 | 0 |
+| Go (cgo, `fxamacker/cbor`) | 161 | 1,341 | 3,170 | 5 and 9 |
+| Kotlin (JNI, kotlinx-serialization) | 175 | 676 | 2,072 | about 1.2 and 3 KB (a sanity run) |
+| Swift (a Codable decoder over core's reader) | 34 | 2,404 | 4,892 | 8 and 14 |
+| Swift (the SwiftCBOR package) | | 71,651 | 110,423 | 458 and 739 |
+
+**What it changes:**
+
+1. **A function should hand back bytes, not write through
+   `ta_cbor_writer`.** A language encodes its result with its own library
+   and C then walks those bytes and writes them again, item by item, since
+   the writer takes no encoded item: 566 ns for `addItem`'s result, as
+   much as the whole C function. In Go each write is also a second
+   crossing into C (90 ns). The function should fill a `ta_buffer` the
+   datamodel lends (the result room), as the repository's rule for bytes
+   out says, and the datamodel check and canonicalize it once (decision 6).
+2. **The language's decoding is the cost of a call,** not the crossing:
+   Go's crossing is 90 ns and Kotlin's round trip 175, against 1.3 to 3.2
+   µs to decode and encode. Kotlin on the JIT is the fastest of the three;
+   Swift's Codable is the slowest, because keyed access reads each item
+   three or four times and the runtime instantiates generic metadata
+   (callgrind: 48 % reading, 22 % metadata). A Swift binding needs a
+   streaming decoder of its own (or Codable over a reader that keeps what
+   it read), and must not use SwiftCBOR.
+3. **Copying the document on each assignment is cheap to 16 KB and not
+   at 60 KB** (4 times quickjs). `max_document_bytes`'s default should be
+   16 KB, or an assignment that changes a value of the same size should
+   write in place (decision 4).
+4. **kotlinx-serialization writes indefinite lengths by default,** which
+   core's reader refuses: a Kotlin binding sets
+   `Cbor { useDefiniteLengthEncoding = true }`. kotlinx decodes only a
+   whole `ByteArray`, so the arguments are copied into one of their exact
+   length on each call.
+5. **Swift imports core's anonymous-enum constants as `Int` and
+   `TA_CBOR_COUNT_LATER` (a `UINT32_C` macro) not at all:** a binding
+   casts and redefines them.
+
+**What the spike simplified,** so a real layer differs: `_event` is built
+at `bind_event` as one map with its data copied in (the proposal keeps a
+reference); a `<foreach>` copies its array (the proposal keeps a
+reference); `_ioprocessors` is kept per session (the proposal keeps it per
+chart: an estimate, not measured, puts about a third of the datamodel's
+361 B idle per actor in those copies); duplicate keys are not refused; a
+document's depth is not checked on writes; the parser recurses (to 16
+levels). None of these changes a conformance result; the first three
+overstate the memory and the time per event.
+
 ## Decisions for the maintainer
 
 1. **`<script>`:** `error.execution`, since a function cannot change the
    session; or a script as a list of assignments.
-2. **No operators.** A few on paths and literals (`==`, `!=`, `<`, `<=`,
-   `!`, `+`) would spare small charts a function each, at the cost of
-   semantics core must define for every pair of value types.
+2. **No operators:** settled by the maintainer (2026-11-23).
 3. **Decimal literals:** read exactly or the expression's error; or a
    correctly rounded reader in core.
-4. **`max_document_bytes`'s default,** in `ta_datamodel_json_config_normalize`.
+4. **`max_document_bytes`'s default,** in `ta_datamodel_json_config_normalize`:
+   16 KB, where the spike measured an assignment within 2 µs, unless
+   assignments write in place ("Validation", item 3).
 5. **The callback rule's wording.** `tinyactors-core/AGENTS.md` says "no
    callbacks except the datamodel vtable" in the public ABI; its letter is
    already broken by the allocator (`allocator.h:26-27`) and the compiler's
@@ -595,6 +671,8 @@ skip list (XML content, the ECMAScript data model's tests), are
    `ta_json_function` is called only inside a vtable entry, under the same
    rules. Accept it as part of the datamodel's callback surface, and update
    the rule and C6 to say which callbacks the public headers hold?
+6. **A function's result as bytes** in a `ta_buffer` the datamodel lends,
+   in place of `ta_cbor_writer` ("Validation", item 1).
 
 ## Appendix A: an order, end to end
 
