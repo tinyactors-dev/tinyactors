@@ -1,9 +1,10 @@
 // The live chat's page: the tutorial's charts (charts/step-5 and
 // charts/step-9) on @tinyactors/wasm in this tab, behind a chat window laid out as team
-// chat clients are: a top bar with search, a rail of tabs with your avatar
+// chat clients are: a top bar with search, a rail of views with your avatar
 // at its foot (its menu signs you in or out and switches the person you
-// are), the rooms, your direct messages and the people in a sidebar (a
-// person opens your direct message with them), and the room or direct
+// are), the view in a sidebar (Home: the rooms, your direct messages and the
+// people, a person opening your direct message with them; DMs: your direct
+// messages; Activity: what mentions you), and the room or direct
 // message with its messages and composer. You are one of the people at a time; what the window shows
 // is that person's screen, built only from what the charts sent to them
 // (chat.mjs). A debugger pane, closed at first, holds the demo's own
@@ -29,13 +30,14 @@ const TYPED = 2; // simulated seconds between two typing notices the page sends
 const GROUP = 300; // simulated seconds within which one author's messages share a header
 const COLOURS = ['#c5405b', '#d2722a', '#2e8b57', '#1f7f8f', '#3567a8', '#7a4fa3', '#a8457e', '#6b7d2a', '#9a6a12']; // avatars', one picked by the name
 const SVG = 'http://www.w3.org/2000/svg';
+const VIEWS = { home: 'Home', dms: 'DMs', activity: 'Activity' }; // the rail's views
+const count = (n) => (n > 9 ? '9+' : String(n)); // a badge's number
 
 // The icons, drawn for this page on a 20-unit grid: [stroked paths, filled circles].
 const ICONS = {
   home: [['M3.5 9 10 3.5 16.5 9v7.5a1 1 0 0 1-1 1H12v-5H8v5H4.5a1 1 0 0 1-1-1z']],
   dms: [['M2.5 4.5h10v7h-5l-3 2.5v-2.5h-2z', 'M14.5 7.5h3v7h-1.5V17l-3-2.5H9']],
   activity: [['M10 3a4.5 4.5 0 0 0-4.5 4.5v3.2L4 13.5h12l-1.5-2.8V7.5A4.5 4.5 0 0 0 10 3z', 'M8 16a2 2 0 0 0 4 0']],
-  more: [[], [[4.5, 10], [10, 10], [15.5, 10]]],
   search: [['M8.5 3.5a5 5 0 1 0 0 10 5 5 0 0 0 0-10z', 'm12.2 12.2 4.3 4.3']],
   bug: [['M6.5 10a3.5 3.5 0 0 1 7 0v2.5a3.5 3.5 0 0 1-7 0z', 'M8 6.8a2 2 0 0 1 4 0', 'M8.6 5 7.6 3.2M11.4 5l1-1.8', 'M6.5 11H3.5M13.5 11h3M6.8 14.2 4.2 15.6M13.2 14.2l2.6 1.4M6.9 8.4 4.5 7M13.1 8.4 15.5 7']],
   chevron: [['m6 8 4 4 4-4']],
@@ -173,7 +175,7 @@ export async function mount(root) {
   // ---- the top bar: search, and the debugger's switch
   const search = el('input', { type: 'search', class: 'chatlive__search-field', placeholder: `Search ${WORKSPACE}`, 'aria-label': `Search ${WORKSPACE}`, maxlength: '80' });
   search.addEventListener('input', () => { query = search.value.trim().toLowerCase(); app.dataset.view = 'room'; render(); });
-  search.addEventListener('keydown', (event) => { if (event.key === 'Escape' && search.value) { clearSearch(); render(); } });
+  search.addEventListener('keydown', (event) => { if (event.key === 'Escape' && search.value) { event.preventDefault(); clearSearch(); render(); } });
   function clearSearch() {
     search.value = '';
     query = '';
@@ -186,7 +188,7 @@ export async function mount(root) {
   // a result's channel or direct message, which opens it
   const channelLink = (name) => {
     const link = el('button', { type: 'button', class: 'chatlive__in', title: `Open ${placeName(name)}` }, placeName(name));
-    link.addEventListener('click', () => { room = name; app.dataset.view = 'room'; clearSearch(); render(); });
+    link.addEventListener('click', () => openRoom(name));
     return link;
   };
   const debugToggle = el('button', { type: 'button', class: 'chatlive__top-button', 'aria-label': 'Debugger', 'aria-pressed': 'false', title: 'Debugger and experiments' },
@@ -196,20 +198,33 @@ export async function mount(root) {
     el('label', { class: 'chatlive__search' }, icon('search'), search),
     debugToggle);
 
-  // ---- the rail: the workspace, the tabs, you
-  const tab = (name, label, current) => {
-    const button = el('button', { type: 'button', class: 'chatlive__tab' }, el('span', { class: 'chatlive__tab-icon' }, icon(name)), el('span', { class: 'chatlive__tab-label' }, label));
-    if (current) button.setAttribute('aria-current', 'page');
-    else button.setAttribute('aria-disabled', 'true');
-    return button;
-  };
-  const home = tab('home', 'Home', true);
-  home.addEventListener('click', () => { app.dataset.view = 'list'; });
+  // ---- the rail: the workspace, the views, you. Each view takes the sidebar's place:
+  // Home the channels, direct messages and people; DMs your direct messages; Activity
+  // the posts that mention you and the direct messages to you. A client's More holds
+  // what this chat does not have (saved items, files, canvases), so there is none.
+  let railView = 'home';
+  const railTabs = Object.fromEntries(Object.entries(VIEWS).map(([key, label]) => {
+    const button = el('button', { type: 'button', class: 'chatlive__tab', 'data-key': key },
+      el('span', { class: 'chatlive__tab-icon' }, icon(key), el('span', { class: 'chatlive__badge', 'aria-hidden': 'true', hidden: '' })),
+      el('span', { class: 'chatlive__tab-label' }, label));
+    if (key === railView) button.setAttribute('aria-current', 'page');
+    button.addEventListener('click', () => showView(key));
+    return [key, button];
+  }));
+  function showView(key) {
+    railView = key;
+    for (const [name, button] of Object.entries(railTabs)) {
+      if (name === key) button.setAttribute('aria-current', 'page');
+      else button.removeAttribute('aria-current');
+    }
+    app.dataset.view = 'list'; // a phone shows the view in place of the conversation
+    render();
+  }
   const meFace = face(you, 'rail');
   const me = el('button', { type: 'button', class: 'chatlive__me', 'aria-haspopup': 'menu', 'aria-expanded': 'false', 'aria-controls': 'chatlive-menu' }, meFace);
-  const rail = el('nav', { class: 'chatlive__rail', 'aria-label': 'Tabs' },
+  const rail = el('nav', { class: 'chatlive__rail', 'aria-label': 'Views' },
     el('span', { class: 'chatlive__tile', title: WORKSPACE, 'aria-hidden': 'true' }, WORKSPACE.replace(/^The /, '')[0]),
-    home, tab('dms', 'DMs'), tab('activity', 'Activity'), tab('more', 'More'),
+    ...Object.values(railTabs),
     me);
 
   // ---- your menu: who you are, signing in or out, switching person
@@ -306,17 +321,55 @@ export async function mount(root) {
       peopleNote.textContent = `Sign in to message ${name}.`;
       return;
     }
-    room = made;
-    app.dataset.view = 'room';
-    clearSearch();
+    openRoom(made);
+  }
+
+  // ---- the rail's other views, each in the sidebar's place
+  // DMs: your direct messages, newest first, each with its last message
+  const dmRows = el('ul', { class: 'chatlive__inbox-list', 'aria-label': 'Direct messages' });
+  const dmEmpty = el('p', { class: 'chatlive__inbox-empty' });
+  const dmView = el('section', { class: 'chatlive__sidebar chatlive__inbox', 'aria-labelledby': 'chatlive-dms', hidden: '' },
+    el('div', { class: 'chatlive__inbox-head' }, el('h3', { class: 'chatlive__inbox-title', id: 'chatlive-dms' }, 'Direct messages')), dmEmpty, dmRows);
+  // Activity: the posts that mention you and the direct messages to you, newest first
+  const activityRows = el('ul', { class: 'chatlive__inbox-list', 'aria-label': 'Activity' });
+  const activityEmpty = el('p', { class: 'chatlive__inbox-empty' });
+  const markRead = el('button', { type: 'button', class: 'chatlive__mark' }, 'Mark all read');
+  const activityView = el('section', { class: 'chatlive__sidebar chatlive__inbox', 'aria-labelledby': 'chatlive-activity', hidden: '' },
+    el('div', { class: 'chatlive__inbox-head' }, el('h3', { class: 'chatlive__inbox-title', id: 'chatlive-activity' }, 'Activity'), markRead), activityEmpty, activityRows);
+  const columns = { home: sidebar, dms: dmView, activity: activityView };
+  // what each person has read: the messages their screen showed in their conversation, or they opened from Activity
+  const readBy = new Map();
+  const readOf = (name) => readBy.get(name) ?? readBy.set(name, new WeakSet()).get(name);
+  let activityItems = new Map(); // the Activity rows' messages, by the page's key
+  let picked = null; // the Activity row you opened last
+  markRead.addEventListener('click', () => {
+    for (const message of activityItems.values()) readOf(you).add(message);
     render();
+  });
+
+  /** Shows `name`'s conversation; on a phone, in place of the list, with focus on its title. */
+  function openRoom(name) {
+    room = name;
+    peopleNote.textContent = '';
+    clearSearch();
+    const narrow = app.dataset.view === 'list' && phone();
+    app.dataset.view = 'room';
+    render();
+    if (narrow) roomTitle.focus();
+  }
+  /** A phone shows the list or the conversation, with a back button. */
+  const phone = () => getComputedStyle(back).display !== 'none';
+  /** Back from a conversation to the view's list, focus on the row you came from. */
+  function goBack() {
+    app.dataset.view = 'list';
+    (columns[railView].querySelector('[aria-current="true"]') ?? railTabs[railView]).focus();
   }
 
   // ---- the room you look at
-  const roomTitle = el('h3', { class: 'chatlive__title' });
+  const roomTitle = el('h3', { class: 'chatlive__title', tabindex: '-1' });
   const titleFace = face(you, 'small');
-  const back = el('button', { type: 'button', class: 'chatlive__back', 'aria-label': 'Channels' }, icon('back'));
-  back.addEventListener('click', () => { app.dataset.view = 'list'; });
+  const back = el('button', { type: 'button', class: 'chatlive__back', 'aria-label': 'Back to Home' }, icon('back'));
+  back.addEventListener('click', goBack);
   const banner = el('p', { class: 'chatlive__banner', role: 'status', hidden: '' },
     el('strong', {}, 'Connecting…'), ` For ${GRACE} seconds, new messages wait for you.`);
   const messages = el('ol', { class: 'chatlive__messages', 'aria-label': 'Messages' });
@@ -546,7 +599,14 @@ export async function mount(root) {
     render();
   }
 
-  app.append(top, rail, sidebar, el('div', { class: 'chatlive__pane' }, main, debug), menu);
+  app.append(top, rail, sidebar, dmView, activityView, el('div', { class: 'chatlive__pane' }, main, debug), menu);
+  // Escape on a phone goes back from a conversation to its list, as the back button does
+  app.addEventListener('keydown', (event) => {
+    if (event.key !== 'Escape' || event.defaultPrevented || app.dataset.view !== 'room' || !debug.hidden || !menu.hidden || !phone()) return;
+    if (event.target.matches('input') && event.target.value) return;
+    event.preventDefault();
+    goBack();
+  });
   root.replaceChildren(app, status);
   status.textContent = '';
   ready = true;
@@ -636,7 +696,7 @@ export async function mount(root) {
       // a long name ends in an ellipsis, the whole of it in the title
       const button = el('button', { type: 'button', class: 'chatlive__room-link', title: `#${name}` },
         el('span', { class: 'chatlive__hash', 'aria-hidden': 'true' }, '#'), el('span', { class: 'chatlive__room-name' }, name));
-      button.addEventListener('click', () => { room = name; app.dataset.view = 'room'; clearSearch(); render(); });
+      button.addEventListener('click', () => openRoom(name));
       return el('li', {}, button);
     }, (node, name) => {
       const button = node.firstChild;
@@ -661,7 +721,7 @@ export async function mount(root) {
     // keyed by the room and the other person: switching person keeps no row of someone else's
     const dmKey = (each) => `${each.room}\n${each.with}`;
     keyed(dmList, dms.map(dmKey), (key) => personButton(key.split('\n')[1],
-      () => { room = key.split('\n')[0]; app.dataset.view = 'room'; clearSearch(); peopleNote.textContent = ''; render(); }), (node, key) => {
+      () => openRoom(key.split('\n')[0])), (node, key) => {
       const each = dms.find((one) => dmKey(one) === key);
       const count = screen.messages.filter((message) => message.room === each.room).length;
       const unread = each.room !== room && count > (seen.get(`${you}\n${each.room}`) ?? 0);
@@ -757,6 +817,76 @@ export async function mount(root) {
       : typers.length === 1 ? `${typers[0]} is typing…`
         : typers.length === 2 ? `${typers[0]} and ${typers[1]} are typing…`
           : 'Several people are typing…');
+
+    // the rail's views: the one picked shows in the sidebar's place
+    for (const [key, column] of Object.entries(columns)) column.hidden = key !== railView;
+    back.setAttribute('aria-label', `Back to ${VIEWS[railView]}`);
+    const read = readOf(you);
+    // a conversation on screen is read (on a phone, only while it shows)
+    if (!query && main.getClientRects().length) for (const message of inRoom) read.add(message);
+    const unreadIn = (each) => each.room !== room && screen.messages.filter((message) => message.room === each.room).length > (seen.get(`${you}\n${each.room}`) ?? 0);
+    const badge = (key, n, what) => {
+      const mark = railTabs[key].querySelector('.chatlive__badge');
+      mark.hidden = !n;
+      setText(mark, count(n));
+      if (n) railTabs[key].setAttribute('aria-label', `${VIEWS[key]}, ${n} ${what}`);
+      else railTabs[key].removeAttribute('aria-label');
+    };
+    badge('dms', dms.filter(unreadIn).length, 'unread');
+    // DMs: on step 5 there are none to list
+    setText(dmEmpty, chat.version() !== LATEST ? `Step ${chat.version()}’s charts have no direct messages. Switch to step ${LATEST} in the debugger.`
+      : dms.length ? '' : 'No direct messages yet. Click a person in Home to start one.');
+    keyed(dmRows, dms.map(dmKey), (key) => {
+      const [dmRoom, name] = key.split('\n');
+      const button = el('button', { type: 'button', class: 'chatlive__row chatlive__row--dm' }, face(name, 'large'),
+        el('span', { class: 'chatlive__row-name' }, name === you ? `${you} (you)` : name), el('time', { class: 'chatlive__row-at' }),
+        el('span', { class: 'chatlive__row-text' }), el('span', { class: 'visually-hidden' }));
+      button.addEventListener('click', () => openRoom(dmRoom));
+      return el('li', {}, button);
+    }, (node, key) => {
+      const each = dms.find((one) => dmKey(one) === key);
+      const button = node.firstChild;
+      const state = each.with === you ? yourStatus : STATUS[roster[each.with]] ?? 'unknown';
+      const unread = unreadIn(each);
+      presence(button.firstChild, state);
+      button.classList.toggle('chatlive__row--unread', unread);
+      button.setAttribute('aria-current', String(!query && each.room === room));
+      const [, , at, last, note] = button.children;
+      setText(at, each.last ? clock(each.last.at) : '');
+      setText(last, each.last ? `${each.last.from === you ? 'You: ' : ''}${each.last.text}` : 'No messages yet');
+      setText(note, `${state === 'unknown' ? '' : `, ${LABEL[state].toLowerCase()}`}${unread ? ', unread' : ''}`);
+    });
+    // Activity: a post that mentions you by "@name" (a bare name is too often a word: "the scout's trail"),
+    // and each post someone else made in a direct message with you; newest first
+    const mention = new RegExp(`(^|[^\\w@])@${you}\\b`, 'i');
+    const direct = new Set(screen.dms.map((each) => each.room));
+    const items = screen.messages.filter((message) => message.from !== you
+      && (direct.has(message.room) ? chat.version() === LATEST : mention.test(message.text)))
+      .reverse().sort((a, b) => b.at - a.at);
+    activityItems = new Map(items.map((message) => [keyOf(message), message]));
+    badge('activity', items.filter((message) => !read.has(message)).length, 'unread');
+    markRead.hidden = items.every((message) => read.has(message));
+    setText(activityEmpty, items.length ? '' : `Posts that mention @${you} and direct messages to you show here.`);
+    keyed(activityRows, [...activityItems.keys()], (key) => {
+      const message = activityItems.get(key);
+      const where = direct.has(message.room) ? 'Direct message' : `Mention in #${message.room}`;
+      const button = el('button', { type: 'button', class: 'chatlive__row chatlive__row--activity' },
+        el('span', { class: 'chatlive__row-where' }, el('span', { 'aria-hidden': 'true' }, direct.has(message.room) ? '' : '@ '), where),
+        el('time', { class: 'chatlive__row-at' }, clock(message.at)), avatar(message.from, 'large'),
+        el('span', { class: 'chatlive__row-name' }, message.from), el('span', { class: 'chatlive__row-text' }, message.text), el('span', { class: 'visually-hidden' }));
+      button.addEventListener('click', () => {
+        readOf(you).add(message);
+        picked = key;
+        openRoom(message.room);
+      });
+      return el('li', {}, button);
+    }, (node, key) => {
+      const button = node.firstChild;
+      const unread = !read.has(activityItems.get(key));
+      button.classList.toggle('chatlive__row--unread', unread);
+      button.setAttribute('aria-current', String(!query && key === picked && activityItems.get(key).room === room));
+      setText(button.lastChild, unread ? ', unread' : '');
+    });
 
     // the debugger
     if (debug.hidden) return;

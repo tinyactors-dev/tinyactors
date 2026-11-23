@@ -27,11 +27,13 @@ https://www.tinyactors.dev/chat/. The page starts on step 9.
 
 - `page.mjs` draws it as a team chat client looks (`.chatlive` in
   `style/site.css`, in Lato): a top bar whose search filters the room's
-  messages on your screen; a rail of tabs with your avatar at its foot,
-  whose menu signs you in or out and switches the person you are; a
-  sidebar with the rooms, your direct messages and the people (your
-  screen; a person opens your direct message with them, yourself your
-  notes); and the room or direct message with
+  messages on your screen; a rail of views (Home, DMs, Activity) with
+  your avatar at its foot, whose menu signs you in or out and switches
+  the person you are; in the sidebar's place, the view picked: Home's
+  rooms, direct messages and people (your screen; a person opens your
+  direct message with them, yourself your notes), DMs' list of your
+  direct messages with each one's last message, or Activity's posts that
+  mention you and direct messages to you; and the room or direct message with
   each message's simulated time, who else is typing under the composer,
   and a "Connecting…" banner while your connection is lost on step 9 (on
   step 5 you are signed out). The Debugger button in the top bar opens a
@@ -95,3 +97,10 @@ so. Step 5's workspace keeps no direct messages and its room no `direct`,
 so before a switch to step 5 the program ends each direct message's room,
 its posts kept in the store, and after the switch back the workspace makes
 each again.
+
+Activity is read from the screen too: the posts on it that someone else
+made in your direct messages, and those that mention you as `@` and your
+name (a bare name is too often a word: "the forager trail"). An item is
+unread until its conversation showed it, you opened it, or you marked all
+read. Team chat clients put saved items, files and canvases under More;
+this chat has none of them, so the rail has no More.
