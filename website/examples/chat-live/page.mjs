@@ -1,14 +1,16 @@
-// The live chat's page: the tutorial's finished charts (charts/, step 5's)
-// on @tinyactors/wasm in this tab, behind a chat window laid out as team
+// The live chat's page: the tutorial's charts (charts/step-5 and
+// charts/step-7) on @tinyactors/wasm in this tab, behind a chat window laid out as team
 // chat clients are: a top bar with search, a rail of tabs with your avatar
 // at its foot (its menu signs you in or out and switches the person you
 // are), the rooms and people in a sidebar, and the room with its messages
 // and composer. You are one of the people at a time; what the window shows
 // is that person's screen, built only from what the charts sent to them
 // (chat.mjs). A debugger pane, closed at first, holds the demo's own
-// controls: the simulated clock, and any actor's chart lit in the states
-// its host reports (components/live-chart.mjs).
-import { createChat, PEOPLE, WORKSPACE } from './chat.mjs';
+// controls: the simulated clock; experiments (the charts' version, switched
+// by a live migration, scripted scenarios, lost connections and faulty
+// screens); any actor's chart lit in the states its host reports
+// (components/live-chart.mjs); and the log of what happened.
+import { createChat, PEOPLE, SCENARIOS, VERSIONS, WORKSPACE } from './chat.mjs';
 import { liveChart, statePath } from '/assets/components/live-chart.mjs';
 
 const CHARTS = ['workspace.scxml', 'room.scxml', 'user.scxml'];
@@ -16,8 +18,13 @@ const SPEEDS = [1, 10, 60];
 const TICK = 250; // wall milliseconds between clock steps while it runs
 const AWAY = 300_000; // the user chart's timer
 const clock = (seconds) => `${Math.floor(seconds / 60)}:${String(Math.floor(seconds % 60)).padStart(2, '0')}`;
-const STATUS = { active: 'active', away: 'away', offline: 'offline' };
-const LABEL = { active: 'Active', away: 'Away', offline: 'Offline' };
+const STATUS = { active: 'active', away: 'away', offline: 'offline', reconnecting: 'reconnecting' };
+const LABEL = { active: 'Active', away: 'Away', offline: 'Offline', reconnecting: 'Connecting…' };
+const LOSSES = [[5, '5 s'], [30, '30 s'], [120, '2 min']]; // how long a lost connection lasts
+const DROPS = [0, 0.25, 0.5, 1]; // the share of deliveries a faulty screen loses
+const DELAYS = [0, 2, 10]; // seconds a faulty screen gets each delivery late
+const KINDS = { input: 'Input', screen: 'Screen', lost: 'Lost', late: 'Late', fault: 'Fault', scenario: 'Scenario', version: 'Version' };
+const TYPED = 2; // simulated seconds between two typing notices the page sends
 const GROUP = 300; // simulated seconds within which one author's messages share a header
 const COLOURS = ['#c5405b', '#d2722a', '#2e8b57', '#1f7f8f', '#3567a8', '#7a4fa3', '#a8457e', '#6b7d2a', '#9a6a12']; // avatars', one picked by the name
 const SVG = 'http://www.w3.org/2000/svg';
@@ -121,17 +128,22 @@ export async function mount(root) {
   root.classList.add('chatlive');
   const status = el('p', { class: 'chatlive__status', 'aria-live': 'polite' }, 'Loading tinyactors…');
   root.append(status);
-  const base = new URL('./charts/', import.meta.url);
-  const texts = Object.fromEntries(await Promise.all(CHARTS.map(async (name) => [name, await (await fetch(new URL(name, base))).text()])));
+  // both versions of the charts: file name to text, by the tutorial's step
+  const texts = Object.fromEntries(await Promise.all(Object.keys(VERSIONS).map(async (step) => {
+    const base = new URL(`./charts/step-${step}/`, import.meta.url);
+    return [step, Object.fromEntries(await Promise.all(CHARTS.map(async (name) => [name, await (await fetch(new URL(name, base))).text()])))];
+  })));
   const tinyactors = await import('@tinyactors/wasm');
 
   let you = 'forager', room = 'general', speed = 1, playing = true, rendering = false, again = false;
   let ready = false; // the page draws once its parts are made
   let inspected = null; // the actor whose chart is shown
-  let selfState = null; // your user actor's state value; null: offline
+  let selfState = null; // your user actor's state value: { online: ... }, 'reconnecting', or null (offline)
   let shownStored = null; // whether the inspected actor was in the store when last drawn
   let query = ''; // the search, lowercased
-  const chat = await createChat(tinyactors, { charts: texts, onChange: () => render() });
+  let part = 'experiments'; // the debugger's tab
+  let migrating = false; // a version switch is under way
+  const chat = await createChat(tinyactors, { versions: texts, version: 7, onChange: () => render() });
   // The people already talking: scout and forager in general, scout's find.
   await chat.connect('scout');
   await chat.connect('forager');
@@ -145,7 +157,8 @@ export async function mount(root) {
   const search = el('input', { type: 'search', class: 'chatlive__search-field', placeholder: `Search ${WORKSPACE}`, 'aria-label': 'Search this channel', maxlength: '80' });
   search.addEventListener('input', () => { query = search.value.trim().toLowerCase(); render(); });
   search.addEventListener('keydown', (event) => { if (event.key === 'Escape' && search.value) { search.value = ''; query = ''; render(); } });
-  const debugToggle = el('button', { type: 'button', class: 'chatlive__top-button', 'aria-label': 'Debugger', 'aria-pressed': 'false', title: 'Debugger' }, icon('bug'));
+  const debugToggle = el('button', { type: 'button', class: 'chatlive__top-button', 'aria-label': 'Debugger', 'aria-pressed': 'false', title: 'Debugger and experiments' },
+    icon('bug'), el('span', { class: 'chatlive__top-label' }, 'Debugger'));
   debugToggle.addEventListener('click', () => openDebugger(debugToggle.getAttribute('aria-pressed') !== 'true'));
   const top = el('div', { class: 'chatlive__top' },
     el('label', { class: 'chatlive__search' }, icon('search'), search),
@@ -172,7 +185,7 @@ export async function mount(root) {
   const menuName = el('strong', { class: 'chatlive__menu-name' });
   const menuStatus = el('span', { class: 'chatlive__menu-status' });
   const sign = el('button', { type: 'button', role: 'menuitem', tabindex: '-1', class: 'chatlive__item' });
-  sign.addEventListener('click', () => { closeMenu(true); return online(you) ? chat.disconnect(you) : chat.connect(you); });
+  sign.addEventListener('click', () => { closeMenu(true); return selfState ? chat.disconnect(you) : chat.connect(you); });
   const switchList = el('div', { role: 'group', 'aria-labelledby': 'chatlive-switch', class: 'chatlive__switch' },
     ...PEOPLE.map((name) => {
       const item = el('button', { type: 'button', role: 'menuitemradio', tabindex: '-1', class: 'chatlive__item chatlive__item--person', 'data-key': name },
@@ -246,6 +259,8 @@ export async function mount(root) {
   const roomTitle = el('h3', { class: 'chatlive__title' });
   const back = el('button', { type: 'button', class: 'chatlive__back', 'aria-label': 'Channels' }, icon('back'));
   back.addEventListener('click', () => { app.dataset.view = 'list'; });
+  const banner = el('p', { class: 'chatlive__banner', role: 'status', hidden: '' },
+    el('strong', {}, 'Connecting…'), ' For 30 seconds, new messages wait for you.');
   const messages = el('ol', { class: 'chatlive__messages', 'aria-live': 'polite', 'aria-label': 'Messages' });
   const text = el('input', { type: 'text', class: 'chatlive__text', 'aria-label': 'Message', maxlength: '200' });
   const send = el('button', { type: 'submit', class: 'chatlive__send', 'aria-label': 'Send' }, arrow());
@@ -255,42 +270,44 @@ export async function mount(root) {
   signIn.addEventListener('click', () => chat.connect(you));
   const signedOut = el('div', { class: 'chatlive__signed-out' }, el('p', {}, 'You’re signed out. Sign in to send messages.'), signIn);
   const composer = el('form', { class: 'chatlive__composer' }, text, send);
-  const seen = new Map(); // each message's simulated time, when the page first saw it
-  let typed = -Infinity; // the simulated time of the last activity sent for typing
+  const typingLine = el('p', { class: 'chatlive__typing', 'aria-live': 'polite' });
+  let typed = -Infinity; // the simulated time of the last typing notice sent
   text.addEventListener('input', () => {
     send.classList.toggle('chatlive__send--ready', text.value.trim() !== '');
-    if (!online(you) || chat.now() - typed < 5) return; // one activity per 5 simulated seconds of typing
+    if (!selfState?.online || chat.now() - typed < TYPED) return; // the chart throttles too: one notice to the room per 3 s
     typed = chat.now();
-    chat.activity(you);
+    chat.typing(you, room);
   });
   composer.addEventListener('submit', (event) => {
     event.preventDefault();
     const words = text.value.trim();
-    if (!words) return;
+    if (!words || text.disabled) return;
     text.value = '';
     send.classList.remove('chatlive__send--ready');
+    typed = -Infinity;
     chat.post(you, room, words);
   });
-  const main = el('section', { class: 'chatlive__room', 'aria-label': 'Channel' }, el('header', { class: 'chatlive__bar-title' }, back, roomTitle), messages,
-    el('div', { class: 'chatlive__foot' }, composer, join, signedOut));
+  const main = el('section', { class: 'chatlive__room', 'aria-label': 'Channel' }, el('header', { class: 'chatlive__bar-title' }, back, roomTitle), banner, messages,
+    el('div', { class: 'chatlive__foot' }, composer, join, signedOut, typingLine));
 
-  // ---- the debugger: the clock, and any actor's chart lit in its states
+  // ---- the debugger: the clock, then its parts behind tabs
   const play = el('button', { type: 'button', class: 'chatlive__control' });
   const speeds = el('div', { class: 'chatlive__speeds', role: 'radiogroup', 'aria-label': 'Clock speed' });
   for (const value of SPEEDS) {
-    const button = el('button', { type: 'button', role: 'radio', class: 'chatlive__speed', 'aria-checked': String(value === speed) }, `${value}×`);
-    button.addEventListener('click', () => {
-      speed = value;
-      for (const other of speeds.children) other.setAttribute('aria-checked', String(other === button));
-    });
+    const button = el('button', { type: 'button', role: 'radio', class: 'chatlive__speed', 'aria-checked': String(value === speed), 'data-speed': String(value) }, `${value}×`);
+    button.addEventListener('click', () => setClock(playing, value));
     speeds.append(button);
   }
   const skip = el('button', { type: 'button', class: 'chatlive__control' }, 'Skip 5 minutes');
   const time = el('output', { class: 'chatlive__time' });
-  const memory = el('p', { class: 'chatlive__memory' });
-  const showPlay = () => { play.textContent = playing ? 'Pause' : 'Run'; };
-  play.addEventListener('click', () => { playing = !playing; showPlay(); });
-  showPlay();
+  function setClock(run, value) {
+    playing = run;
+    speed = value;
+    play.textContent = playing ? 'Pause' : 'Run';
+    for (const button of speeds.children) button.setAttribute('aria-checked', String(Number(button.dataset.speed) === speed));
+  }
+  play.addEventListener('click', () => setClock(!playing, speed));
+  setClock(playing, speed);
   skip.addEventListener('click', () => chat.advance(AWAY));
   let ticking = false;
   setInterval(async () => {
@@ -299,27 +316,141 @@ export async function mount(root) {
     try { await chat.advance(TICK * speed); } finally { ticking = false; }
   }, TICK);
 
+  // the version of the charts, switched by a live migration
+  const versionPick = el('div', { class: 'chatlive__speeds chatlive__versions', role: 'radiogroup', 'aria-label': 'Charts' },
+    ...Object.keys(VERSIONS).map((step) => {
+      const button = el('button', { type: 'button', role: 'radio', class: 'chatlive__speed', 'data-step': step }, `Step ${step}`);
+      button.addEventListener('click', () => useVersion(Number(step)));
+      return button;
+    }));
+  const versionAbout = el('p', { class: 'chatlive__hint' });
+  const versionNote = el('p', { class: 'chatlive__result', 'aria-live': 'polite' });
+  async function useVersion(step) {
+    if (migrating || step === chat.version()) return;
+    migrating = true;
+    versionNote.textContent = `Migrating every actor to step ${step}…`;
+    render();
+    try {
+      const result = await chat.useVersion(step);
+      const pending = Array.isArray(result?.pending) ? result.pending.length : (result?.pending ?? 0);
+      versionNote.textContent = `Migrated ${result?.migrated ?? 0} actors live, ${result?.failed?.length ?? 0} failed${pending ? `, ${pending} pending` : ''}`;
+    } catch (error) {
+      versionNote.textContent = `The migration stopped: ${error.message}`;
+    } finally {
+      migrating = false;
+    }
+    showChart();
+    render();
+  }
+
+  // the scripted scenarios
+  const scenarioList = el('ul', { class: 'chatlive__scenarios' },
+    ...Object.entries(SCENARIOS).map(([id, scenario]) => {
+      const run = el('button', { type: 'button', class: 'chatlive__control' }, 'Run');
+      run.addEventListener('click', () => {
+        setClock(true, 1);
+        chat.scenario(id);
+      });
+      return el('li', { class: 'chatlive__card', 'data-key': id },
+        el('div', { class: 'chatlive__card-text' }, el('strong', {}, scenario.title), el('span', {}, scenario.about), el('span', { class: 'chatlive__card-note' })),
+        run);
+    }));
+
+  // each person: a lost connection, and the faults of their screen
+  const select = (label, values, show, change) => {
+    const field = el('select', { class: 'chatlive__select' }, ...values.map((value) => el('option', { value: String(value) }, show(value))));
+    field.addEventListener('change', () => change(Number(field.value)));
+    return el('label', { class: 'chatlive__field' }, label, field);
+  };
+  const personList = el('ul', { class: 'chatlive__lab-people', 'aria-label': 'People' },
+    ...PEOPLE.map((name) => {
+      const faults = () => chat.faults(name);
+      return el('li', { class: 'chatlive__lab-person', 'data-key': name },
+        el('div', { class: 'chatlive__lab-head' }, avatar(name, 'small'), el('span', { class: 'chatlive__name' }, name), el('span', { class: 'chatlive__lab-note' })),
+        el('div', { class: 'chatlive__lab-row' }, el('span', { class: 'chatlive__lab-label' }, 'Lose connection'),
+          el('div', { class: 'chatlive__speeds', role: 'group', 'aria-label': `Lose ${name}’s connection for` },
+            ...LOSSES.map(([seconds, label]) => {
+              const button = el('button', { type: 'button', class: 'chatlive__speed', 'aria-label': `Lose ${name}’s connection for ${label}` }, label);
+              button.addEventListener('click', () => chat.loseConnection(name, seconds));
+              return button;
+            }))),
+        el('div', { class: 'chatlive__lab-row' }, el('span', { class: 'chatlive__lab-label' }, 'Screen'),
+          select('drops', DROPS, (value) => `${Math.round(value * 100)}%`, (drop) => chat.setFaults(name, { ...faults(), drop })),
+          select('delay', DELAYS, (value) => `${value} s`, (delay) => chat.setFaults(name, { ...faults(), delay }))));
+    }));
+
+  const experiments = el('div', { class: 'chatlive__panel', role: 'tabpanel', id: 'chatlive-experiments', 'aria-labelledby': 'chatlive-tab-experiments' },
+    el('h4', { class: 'chatlive__subheading' }, 'Charts'), versionPick, versionAbout,
+    el('p', { class: 'chatlive__hint' }, 'A switch migrates every running actor to the other charts, without a restart.'), versionNote,
+    el('h4', { class: 'chatlive__subheading' }, 'Scenarios'), scenarioList,
+    el('h4', { class: 'chatlive__subheading' }, 'People'), personList);
+
+  // the actors, and one actor's chart
+  const memory = el('p', { class: 'chatlive__memory' });
   const actorList = el('ul', { class: 'chatlive__actors', 'aria-label': 'Actors' });
   const frame = el('div', { class: 'chatlive__chart' });
   const stateLine = el('p', { class: 'chatlive__state', 'aria-live': 'polite' });
+  const actorsPart = el('div', { class: 'chatlive__panel', role: 'tabpanel', id: 'chatlive-actors', 'aria-labelledby': 'chatlive-tab-actors', hidden: '' },
+    memory, actorList, frame, stateLine);
+
+  // the log, newest first
+  const kindPick = el('select', { class: 'chatlive__select', 'aria-label': 'Kind' },
+    el('option', { value: '' }, 'Every kind'), ...Object.entries(KINDS).map(([kind, label]) => el('option', { value: kind }, label)));
+  kindPick.addEventListener('change', () => render());
+  const logList = el('ol', { class: 'chatlive__log', 'aria-label': 'Log' });
+  let logDrawn = '';
+  const logPart = el('div', { class: 'chatlive__panel', role: 'tabpanel', id: 'chatlive-log', 'aria-labelledby': 'chatlive-tab-log', hidden: '' },
+    el('div', { class: 'chatlive__log-head' }, el('p', { class: 'chatlive__hint' }, 'The newest 200 entries, at simulated time.'), kindPick), logList);
+
+  const parts = { experiments, actors: actorsPart, log: logPart };
+  const tabs = el('div', { class: 'chatlive__tabs', role: 'tablist', 'aria-label': 'Debugger' },
+    ...Object.entries({ experiments: 'Experiments', actors: 'Actors', log: 'Log' }).map(([key, label]) => {
+      const button = el('button', { type: 'button', role: 'tab', class: 'chatlive__debug-tab', id: `chatlive-tab-${key}`, 'aria-controls': `chatlive-${key}`,
+        'aria-selected': String(key === part), tabindex: key === part ? '0' : '-1', 'data-key': key }, label);
+      button.addEventListener('click', () => showPart(key));
+      return button;
+    }));
+  tabs.addEventListener('keydown', (event) => {
+    const keys = Object.keys(parts);
+    const step = { ArrowRight: 1, ArrowLeft: -1 }[event.key];
+    if (!step) return;
+    event.preventDefault();
+    const next = keys[(keys.indexOf(part) + step + keys.length) % keys.length];
+    showPart(next);
+    tabs.querySelector(`[data-key="${next}"]`).focus();
+  });
+  function showPart(key) {
+    part = key;
+    for (const button of tabs.children) {
+      button.setAttribute('aria-selected', String(button.dataset.key === key));
+      button.tabIndex = button.dataset.key === key ? 0 : -1;
+    }
+    for (const [name, panel] of Object.entries(parts)) panel.hidden = name !== key;
+    logDrawn = '';
+    showChart();
+    render();
+  }
+
   const closeDebugger = el('button', { type: 'button', class: 'chatlive__close', 'aria-label': 'Close debugger' }, icon('close'));
   closeDebugger.addEventListener('click', () => { openDebugger(false); debugToggle.focus(); });
   const debug = el('aside', { class: 'chatlive__debug', 'aria-label': 'Debugger', hidden: '' },
     el('header', { class: 'chatlive__bar-title' }, el('h3', { class: 'chatlive__title' }, 'Debugger'), closeDebugger),
     el('div', { class: 'chatlive__details' },
-      el('h4', { class: 'chatlive__subheading' }, 'Clock'),
-      el('p', { class: 'chatlive__clock' }, 'Simulated time ', time),
-      el('div', { class: 'chatlive__controls' }, play, speeds, skip),
-      el('h4', { class: 'chatlive__subheading' }, 'Actors'), memory, actorList,
-      frame, stateLine));
+      el('div', { class: 'chatlive__clockbar' },
+        el('p', { class: 'chatlive__clock' }, 'Simulated time ', time),
+        el('div', { class: 'chatlive__controls' }, play, speeds, skip)),
+      tabs, experiments, actorsPart, logPart));
+
+  // the inspected actor's chart, in the version the chat runs now
   const charts = {};
+  const chartKey = () => `${chat.version()}/${inspected?.split('.')[0]}.scxml`;
   function showChart() {
-    if (!inspected || debug.hidden) return; // a chart is drawn in a pane that shows
-    const chartName = `${inspected.split('.')[0]}.scxml`;
-    for (const [key, chart] of Object.entries(charts)) chart.view.hidden = key !== chartName;
-    charts[chartName] ??= liveChart(texts[chartName], frame);
-    charts[chartName].view.hidden = false;
-    charts[chartName].restart();
+    if (!inspected || debug.hidden || part !== 'actors') return; // a chart is drawn in a part that shows
+    const key = chartKey();
+    for (const [other, chart] of Object.entries(charts)) chart.view.hidden = other !== key;
+    charts[key] ??= liveChart(texts[chat.version()][key.split('/')[1]], frame);
+    charts[key].view.hidden = false;
+    charts[key].restart();
     shownStored = null;
   }
   function inspect(name) {
@@ -331,7 +462,7 @@ export async function mount(root) {
     debug.hidden = !open;
     debugToggle.setAttribute('aria-pressed', String(open));
     app.classList.toggle('chatlive__app--debug', open);
-    if (open) showChart();
+    if (open) { logDrawn = ''; showChart(); }
     render();
   }
 
@@ -343,17 +474,23 @@ export async function mount(root) {
   // ---- what each part shows, after every change
   // Your actor's state value. While it is in the store (its state is in
   // its blob), what the workspace last told another person online about
-  // you; with nobody online to tell, the last state read.
+  // you; with nobody online to tell, the last state read. A lost
+  // connection on step 7 shows no change to the others, so while the
+  // agenda still holds your reconnect, the last state read stands.
   const known = new Map();
   function yours(self) {
-    if (!self.stored) { known.set(you, self.value); return self.value; }
+    if (!self.stored) { known.set(you, self.value); return asSelf(self.value); }
+    const last = known.get(you) ?? null;
     const mine = chat.screen(you).roster;
     const told = PEOPLE.filter((name) => name !== you && ['active', 'away'].includes(mine[name]))
       .map((name) => chat.screen(name).roster[you]).find(Boolean);
-    if (!told) return known.get(you) ?? null;
-    return told === 'offline' ? null : { online: told };
+    if (told === 'offline') return null;
+    if (last === 'reconnecting' && chat.agenda().some((entry) => entry.what === `${you} reconnects`)) return last;
+    if (!told) return asSelf(last);
+    return { online: told };
   }
-  function online(name) { return name === you ? Boolean(selfState?.online) : chat.screen(you).roster[name] !== undefined && chat.screen(you).roster[name] !== 'offline'; }
+  const asSelf = (value) => (value === 'offline' || value === null ? null : value);
+  const statusOf = (state) => (state === 'reconnecting' ? 'reconnecting' : state?.online ?? 'offline');
 
   async function render() {
     if (!ready) return;
@@ -369,10 +506,12 @@ export async function mount(root) {
 
   async function draw() {
     const screen = chat.screen(you);
-    const [actors, stats, self, shown] = await Promise.all([chat.actors(), chat.stats(), chat.state(`user.${you}`),
-      inspected && !debug.hidden ? chat.state(inspected) : null]);
+    const showActors = !debug.hidden && part === 'actors';
+    const [actors, stats, self, shown] = await Promise.all([chat.actors(), showActors ? chat.stats() : null, chat.state(`user.${you}`),
+      inspected && showActors ? chat.state(inspected) : null]);
     selfState = yours(self);
-    const yourStatus = selfState?.online ?? 'offline';
+    const yourStatus = statusOf(selfState);
+    const reconnecting = yourStatus === 'reconnecting';
     const roster = { ...screen.roster, [you]: yourStatus };
 
     // you, on the rail and in your menu
@@ -383,7 +522,7 @@ export async function mount(root) {
     presence(menuFace, yourStatus);
     menuName.textContent = you;
     menuStatus.textContent = LABEL[yourStatus];
-    sign.textContent = selfState?.online ? `Sign out of ${WORKSPACE}` : `Sign in to ${WORKSPACE}`;
+    sign.textContent = selfState ? `Sign out of ${WORKSPACE}` : `Sign in to ${WORKSPACE}`;
     for (const item of switchList.children) {
       const name = item.dataset.key;
       const state = STATUS[roster[name]] ?? 'unknown';
@@ -411,13 +550,12 @@ export async function mount(root) {
       return el('li', { class: `chatlive__person chatlive__person--${state}` }, node,
         el('span', { class: 'chatlive__name' }, name),
         name === you ? el('span', { class: 'chatlive__you-mark' }, 'you') : '',
-        el('span', { class: 'chatlive__presence' }, state === 'unknown' ? 'not on your screen' : state));
+        el('span', { class: 'chatlive__presence' }, state === 'unknown' ? 'not on your screen' : LABEL[state].toLowerCase()));
     }));
 
     // the room
     const joined = screen.rooms.includes(room);
     roomTitle.replaceChildren(el('span', { class: 'chatlive__hash', 'aria-hidden': 'true' }, '#'), room);
-    for (const name of PEOPLE) for (const message of chat.screen(name).messages) if (!seen.has(message)) seen.set(message, chat.now());
     const inRoom = screen.messages.filter((message) => message.room === room);
     const here = query ? inRoom.filter((message) => message.text.toLowerCase().includes(query)) : inRoom;
     const atBottom = messages.scrollHeight - messages.scrollTop - messages.clientHeight < 40;
@@ -425,11 +563,10 @@ export async function mount(root) {
       : query && inRoom.length ? `No messages in #${room} match “${search.value.trim()}”.`
         : 'No messages on your screen yet.';
     messages.replaceChildren(...(here.length ? here.map((message, index) => {
-      const at = seen.get(message);
       const before = here[index - 1];
-      const stamp = el('time', { class: 'chatlive__at' }, clock(at));
+      const stamp = el('time', { class: 'chatlive__at' }, clock(message.at));
       const body = el('p', { class: 'chatlive__body' }, ...marked(message.text, query));
-      if (before && before.from === message.from && at - seen.get(before) < GROUP) {
+      if (before && before.from === message.from && message.at - before.at < GROUP) {
         return el('li', { class: 'chatlive__message chatlive__message--more' }, stamp, body);
       }
       return el('li', { class: 'chatlive__message' }, avatar(message.from, 'large'),
@@ -438,38 +575,85 @@ export async function mount(root) {
       : [el('li', { class: 'chatlive__empty' }, empty)]),
       ...screen.notices.slice(-1).map((notice) => el('li', { class: 'chatlive__notice' }, notice)));
     if (atBottom) messages.scrollTop = messages.scrollHeight;
-    const canPost = Boolean(selfState?.online) && joined;
-    composer.hidden = !canPost;
-    join.hidden = canPost || !selfState?.online;
-    signedOut.hidden = Boolean(selfState?.online);
+    banner.hidden = !reconnecting;
+    const connected = Boolean(selfState);
+    composer.hidden = !(connected && joined);
+    composer.classList.toggle('chatlive__composer--off', reconnecting);
+    text.disabled = reconnecting;
+    send.disabled = reconnecting;
+    join.hidden = !connected || joined;
+    join.disabled = reconnecting;
+    signedOut.hidden = connected;
     join.textContent = `Join #${room}`;
-    text.placeholder = `Message #${room}`;
+    text.placeholder = reconnecting ? 'Connecting…' : `Message #${room}`;
+    // step 5's charts send no typing notices, and no typing.stopped for those step 7 sent before a switch
+    const typers = connected && chat.version() === 7 ? (screen.typing[room] ?? []).filter((name) => name !== you) : [];
+    typingLine.textContent = typers.length === 0 ? ''
+      : typers.length === 1 ? `${typers[0]} is typing…`
+        : typers.length === 2 ? `${typers[0]} and ${typers[1]} are typing…`
+          : 'Several people are typing…';
 
     // the debugger
     if (debug.hidden) return;
     time.textContent = clock(chat.now());
-    memory.textContent = `${stats.actors} actors · ${stats.inMemory} in memory · ${stats.stored} in the store`;
-    keyed(actorList, actors.map((actor) => actor.name), (name) => {
-      const button = el('button', { type: 'button', class: 'chatlive__actor' },
-        el('span', { class: 'chatlive__dot', 'aria-hidden': 'true' }), el('code', {}, name), el('span', { class: 'chatlive__where' }));
-      button.addEventListener('click', () => inspect(name));
-      return el('li', {}, button);
-    }, (node, name) => {
-      const actor = actors.find((each) => each.name === name);
-      const button = node.firstChild;
-      button.setAttribute('aria-current', String(name === inspected));
-      button.classList.toggle('chatlive__actor--stored', actor.stored);
-      button.lastChild.textContent = actor.stored ? 'in the store' : 'in memory';
-    });
-    const chart = charts[`${inspected?.split('.')[0]}.scxml`];
-    if (shown?.stored) {
-      if (shownStored !== true) chart?.restart(); // nothing lit: the actor's state is in its blob
-      shownStored = true;
-      stateLine.textContent = `${inspected} waits in the store; its next event loads it.`;
-    } else if (shown) {
-      shownStored = false;
-      chart?.show(shown.value);
-      stateLine.replaceChildren(el('code', {}, inspected), ' is in ', el('code', {}, statePath(shown.value)));
+    if (part === 'experiments') {
+      const version = chat.version();
+      for (const button of versionPick.children) {
+        button.setAttribute('aria-checked', String(Number(button.dataset.step) === version));
+        button.disabled = migrating;
+      }
+      versionAbout.textContent = VERSIONS[version].replace(/^Step \d+: /, '').replace(/^./, (first) => first.toUpperCase());
+      const agenda = chat.agenda();
+      for (const card of scenarioList.children) {
+        const { title } = SCENARIOS[card.dataset.key];
+        const left = agenda.filter((entry) => entry.what === title).length;
+        card.querySelector('.chatlive__card-note').textContent = left ? `Running: ${left} ${left === 1 ? 'step' : 'steps'} to go` : '';
+      }
+      for (const row of personList.children) {
+        const name = row.dataset.key;
+        const returns = agenda.find((entry) => entry.what === `${name} reconnects`);
+        row.querySelector('.chatlive__lab-note').textContent = returns ? `Reconnects at ${clock(returns.at)}` : name === you ? 'you' : '';
+        row.classList.toggle('chatlive__lab-person--lost', Boolean(returns));
+        const fault = chat.faults(name);
+        const [drop, delay] = row.querySelectorAll('select');
+        if (document.activeElement !== drop) drop.value = String(fault.drop);
+        if (document.activeElement !== delay) delay.value = String(fault.delay);
+      }
+    } else if (part === 'log') {
+      const kind = kindPick.value;
+      const entries = chat.log().filter((entry) => !kind || entry.kind === kind).reverse();
+      const signature = `${kind}\n${entries.length}\n${entries[0]?.at}\n${entries[0]?.text}`;
+      if (signature !== logDrawn) {
+        logDrawn = signature;
+        logList.replaceChildren(...(entries.length ? entries.map((entry) => el('li', { class: `chatlive__entry chatlive__entry--${entry.kind}` },
+          el('time', { class: 'chatlive__at' }, clock(entry.at)), el('span', { class: 'chatlive__kind' }, KINDS[entry.kind] ?? entry.kind),
+          el('span', { class: 'chatlive__entry-text' }, entry.text)))
+          : [el('li', { class: 'chatlive__empty' }, 'Nothing yet. Post a message or run a scenario.')]));
+      }
+    } else if (part === 'actors') {
+      memory.textContent = `${stats.actors} actors · ${stats.inMemory} in memory · ${stats.stored} in the store`;
+      keyed(actorList, actors.map((actor) => actor.name), (name) => {
+        const button = el('button', { type: 'button', class: 'chatlive__actor' },
+          el('span', { class: 'chatlive__dot', 'aria-hidden': 'true' }), el('code', {}, name), el('span', { class: 'chatlive__where' }));
+        button.addEventListener('click', () => inspect(name));
+        return el('li', {}, button);
+      }, (node, name) => {
+        const actor = actors.find((each) => each.name === name);
+        const button = node.firstChild;
+        button.setAttribute('aria-current', String(name === inspected));
+        button.classList.toggle('chatlive__actor--stored', actor.stored);
+        button.lastChild.textContent = actor.stored ? 'in the store' : 'in memory';
+      });
+      const chart = charts[chartKey()];
+      if (shown?.stored) {
+        if (shownStored !== true) chart?.restart(); // nothing lit: the actor's state is in its blob
+        shownStored = true;
+        stateLine.textContent = `${inspected} waits in the store; its next event loads it.`;
+      } else if (shown) {
+        shownStored = false;
+        chart?.show(shown.value);
+        stateLine.replaceChildren(el('code', {}, inspected), ' is in ', el('code', {}, statePath(shown.value)), ` (step ${chat.version()})`);
+      }
     }
   }
 

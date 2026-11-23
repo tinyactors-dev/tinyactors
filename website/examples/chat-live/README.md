@@ -1,15 +1,20 @@
 # The live chat
 
-The chat tutorial's finished charts (`charts/`, a copy of
-`examples/chat/5-hibernation/charts`, which `mise run test` checks byte for
+The chat tutorial's charts of steps 5 and 7 (`charts/step-5` and
+`charts/step-7`, copies of `examples/chat/5-hibernation/charts` and
+`examples/chat/7-reconnect/charts`, which `mise run test` checks byte for
 byte) running in the reader's browser on `@tinyactors/wasm`, at the top of
-https://www.tinyactors.dev/chat/.
+https://www.tinyactors.dev/chat/. The page starts on step 7.
 
 - `chat.mjs` is what it does: the workspace (The Hill), two rooms and six people (an ant colony's
   castes: queen, scout, forager, nurse, guard, drone) on a
   host with a simulated clock and a store that keeps at most four actors in
   memory. Each person's screen is built only from what the charts send to
-  `chat:client` for that person.
+  `chat:client` for that person. Its experiments are what an application
+  around the charts does to them: a lost connection that comes back later,
+  a screen that drops or delays what reaches it, two scripted scenarios on
+  the simulated clock's agenda, a log of what happened, and a switch
+  between the two versions by a live migration of every actor.
 - `main.mjs` runs it in Node.js, the page's buttons in order, and prints
   what `output.txt` holds:
 
@@ -23,13 +28,22 @@ https://www.tinyactors.dev/chat/.
   messages on your screen; a rail of tabs with your avatar at its foot,
   whose menu signs you in or out and switches the person you are; a
   sidebar with the rooms and the people (your screen); and the room with
-  each message's simulated time. The bug button in the top bar opens a
-  debugger pane with the clock's controls, every actor, in memory or in
-  the store, and any actor's chart lit in the state its host reports
-  (`components/live-chart.mjs`).
+  each message's simulated time, who else is typing under the composer,
+  and a "Connecting…" banner while your connection is lost on step 7 (on
+  step 5 you are signed out). The Debugger button in the top bar opens a
+  pane with the clock's controls and three tabs: Experiments (the charts'
+  version, the scenarios, and per person a lost connection and the
+  screen's faults), Actors (every actor, in memory or in the store, and
+  any actor's chart, of the version running, lit in the state its host
+  reports: `components/live-chart.mjs`) and Log (the newest entries first,
+  filtered by kind).
 
 The roster a person's screen holds leaves out their own changes (the
 workspace sends a change to the other people online), so the page shows
 your own status from your actor's state. While your actor is in the
 store, its state is in its blob, so the page shows what the workspace
 last told another person online about you.
+
+On step 5 the page shows no typing indicator: those charts send none,
+and after a switch from step 7 they never send the `typing.stopped` that
+would clear one step 7 started.

@@ -1,14 +1,18 @@
-6 people, 2 rooms: 9 actors, 4 in memory, 5 in the store
-scout and forager connect, join general and talk: 9 actors, 4 in memory, 5 in the store
-scout sees: scout in general: Found sugar by the old oak. Who can carry?
-scout's roster: queen offline, scout active, forager active, nurse offline, guard offline, drone offline
-forager sees: scout in general: Found sugar by the old oak. Who can carry?
-forager's roster: queen offline, scout active, forager active, nurse offline, guard offline, drone offline
-create general again: room.refused (exists)
-forager joins tunnels: no such room
-300 seconds pass: 9 actors, 4 in memory, 5 in the store
-forager's roster: queen offline, scout away, forager active, nurse offline, guard offline, drone offline
-workspace: "ready"
-room.general: "open"
-user.scout: {"online":"away"}
-user.queen: in the store
+-- step 5, scout in the tunnel
+forager sees scout as offline
+scout's screen got: nothing
+scout went offline on forager's screen 3 times
+-- step 7, scout in the tunnel
+forager sees scout as active
+scout's screen got: scout, are you there? | the sugar is by the oak
+scout went offline on forager's screen once
+-- step 5, migrated live to step 7 and back
+on step 5 queen sees typing: nobody
+to step 7: 9 migrated, 0 failed
+on step 7 queen sees typing: scout
+back to step 5, scout reconnecting: 9 migrated, 0 failed
+scout is "offline"; queen's screen shows scout as active
+-- forager's screen loses half of what reaches it
+scout's screen got: one | two | three | four | five | six
+forager's screen got: three | four | five
+lost on the way: 3

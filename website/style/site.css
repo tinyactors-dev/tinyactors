@@ -506,6 +506,7 @@ ta-tabs { display: block; }
   --cl-link: #1264a3; --cl-pick: #ebf5fb; --cl-send: #007a5a; --cl-active: #1d885f; --cl-off: #cacaca;
   --cl-chart: #fbfaf7; --cl-mark: #fcefc4; --cl-shadow: 0 0 0 1px rgba(29, 28, 29, .13), 0 4px 12px rgba(0, 0, 0, .12);
   --cl-ring: #3a1c3c; --cl-hollow: var(--cl-side-fg); --cl-gone: var(--cl-side-muted);
+  --cl-warn: #fdf3d0; --cl-warn-fg: #5a4400; --cl-lost: #c01e4f; --cl-late: #9a6a00; --cl-fault: #7a4fa3; --cl-input: var(--cl-muted);
   position: relative;
   display: grid; grid-template-columns: 74px 266px minmax(0, 1fr); grid-template-rows: 40px minmax(0, 1fr);
   grid-template-areas: "top top top" "rail side pane";
@@ -524,6 +525,7 @@ ta-tabs { display: block; }
   --cl-link: #1d9bd1; --cl-pick: #1c2b3a; --cl-send: #007a5a; --cl-active: #2bac76; --cl-off: #616061;
   --cl-chart: #222529; --cl-mark: #5c4a12; --cl-shadow: 0 0 0 1px #35373b, 0 4px 12px rgba(0, 0, 0, .5);
   --cl-ring: #1f1023;
+  --cl-warn: #3b3215; --cl-warn-fg: #f2d77c; --cl-lost: #f2668b; --cl-late: #ecb22e; --cl-fault: #b48ae0;
 }
 .chatlive__app button, .chatlive__app input { font: inherit; color: inherit; }
 .chatlive__app :focus-visible { outline: 2px solid var(--cl-link); outline-offset: 1px; }
@@ -542,10 +544,12 @@ ta-tabs { display: block; }
 .chatlive__app .chatlive__search-field:focus-visible { outline: 0; }
 .chatlive__search-field::placeholder { color: rgba(255, 255, 255, .85); opacity: 1; }
 .chatlive__search:focus-within .chatlive__search-field::placeholder { color: var(--cl-muted); }
-.chatlive__top-button { position: absolute; right: 10px; top: 6px; display: grid; place-items: center; width: 28px; height: 28px; padding: 0; border: 0;
+.chatlive__top-button { position: absolute; right: 10px; top: 6px; display: flex; align-items: center; gap: 6px; height: 28px; padding: 0 8px 0 6px; border: 0;
   border-radius: 6px; background: transparent; color: #fff !important; cursor: pointer; }
 .chatlive__top-button:hover { background: var(--cl-top-field); }
 .chatlive__top-button[aria-pressed="true"] { background: rgba(255, 255, 255, .3); }
+.chatlive__top-label { font-size: 13px; font-weight: 700; }
+.chatlive__top { padding-right: 130px; padding-left: 130px; }
 
 /* the rail: the workspace's tile, the tabs, you */
 .chatlive__rail { grid-area: rail; display: flex; flex-direction: column; align-items: center; gap: 14px; padding: 8px 0 16px; min-height: 0; }
@@ -571,6 +575,7 @@ ta-tabs { display: block; }
 .chatlive__face:has(.chatlive__avatar--rail) .chatlive__dot, .chatlive__face:has(.chatlive__avatar--large) .chatlive__dot { width: 14px; height: 14px; right: -4px; bottom: -4px; border-width: 3px; box-shadow: inset 0 0 0 2px var(--cl-hollow); }
 .chatlive__face--active .chatlive__dot { background: var(--cl-active) !important; box-shadow: none !important; }
 .chatlive__face--offline .chatlive__dot { --cl-hollow: var(--cl-gone); }
+.chatlive__face--reconnecting .chatlive__dot { --cl-hollow: var(--cl-late); }
 .chatlive__face--unknown .chatlive__dot { display: none; }
 
 /* your menu, beside your avatar */
@@ -630,7 +635,7 @@ ta-tabs { display: block; }
 
 /* the pane: the room, and the debugger beside it */
 .chatlive__pane { grid-area: pane; display: grid; grid-template-columns: minmax(0, 1fr); min-height: 0; background: var(--cl-pane); border-radius: 0 8px 8px 0; overflow: hidden; }
-.chatlive__app--debug .chatlive__pane { grid-template-columns: minmax(0, 1fr) 340px; }
+.chatlive__app--debug .chatlive__pane { grid-template-columns: minmax(0, 1fr) 360px; }
 .chatlive__room, .chatlive__debug { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
 .chatlive__bar-title { display: flex; align-items: center; gap: 8px; flex: none; height: 49px; box-sizing: border-box; padding: 0 20px; border-bottom: 1px solid var(--cl-line); }
 .chatlive__title { margin: 0; font: 900 18px/1.2 "Lato", -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; color: var(--cl-fg); }
@@ -649,7 +654,13 @@ ta-tabs { display: block; }
 .chatlive__message--more .chatlive__at { visibility: hidden; justify-self: end; align-self: center; font-size: 11px; }
 .chatlive__message--more:hover .chatlive__at { visibility: visible; }
 .chatlive__empty, .chatlive__notice { padding: 4px 20px; color: var(--cl-muted); font-style: italic; }
-.chatlive__foot { flex: none; padding: 0 20px 20px; }
+.chatlive__foot { flex: none; padding: 0 20px 2px; }
+.chatlive__typing { min-height: 18px; margin: 2px 0 0 2px; font-size: 12px; line-height: 18px; color: var(--cl-muted); }
+.chatlive__banner { flex: none; margin: 0; padding: 8px 20px; background: var(--cl-warn); color: var(--cl-warn-fg); font-size: 13px; line-height: 20px; }
+.chatlive__composer--off { background: var(--cl-hover); }
+.chatlive__composer--off .chatlive__text { cursor: not-allowed; }
+.chatlive__composer--off .chatlive__send { background: transparent; color: var(--cl-off); cursor: not-allowed; }
+.chatlive__join:disabled { opacity: .5; cursor: not-allowed; }
 .chatlive__composer { display: flex; align-items: center; gap: 8px; min-height: 44px; padding: 6px 6px 6px 12px;
   border: 1px solid var(--cl-line); border-radius: 8px; background: var(--cl-pane); }
 .chatlive__composer:focus-within { border-color: var(--cl-muted); }
@@ -668,6 +679,49 @@ ta-tabs { display: block; }
 
 /* the debugger, a pane at the room's right */
 .chatlive__debug { border-left: 1px solid var(--cl-line); background: var(--cl-pane); }
+.chatlive__clockbar { padding-bottom: 8px; }
+.chatlive__tabs { display: flex; gap: 4px; flex: none; margin: 4px 0 0; padding: 0 16px; border-bottom: 1px solid var(--cl-line); }
+.chatlive__debug-tab { height: 34px; padding: 0 8px; border: 0; border-bottom: 2px solid transparent; margin-bottom: -1px; background: none; cursor: pointer;
+  font-size: 13px !important; font-weight: 700; color: var(--cl-muted) !important; }
+.chatlive__debug-tab:hover { color: var(--cl-fg) !important; }
+.chatlive__debug-tab[aria-selected="true"] { color: var(--cl-fg) !important; border-bottom-color: var(--cl-link); }
+.chatlive__panel { display: flex; flex-direction: column; padding-top: 4px; }
+.chatlive__hint, .chatlive__result { margin: 6px 20px 0; font-size: 13px; line-height: 18px; color: var(--cl-muted); }
+.chatlive__result { color: var(--cl-fg); font-weight: 700; min-height: 18px; }
+.chatlive__result:empty { display: none; }
+.chatlive__versions { margin: 0 20px; }
+.chatlive__speed:disabled { opacity: .6; cursor: progress; }
+.chatlive__scenarios, .chatlive__lab-people, .chatlive__log { margin: 0; padding: 0; list-style: none; }
+.chatlive__card { display: flex; align-items: flex-start; gap: 12px; margin: 0 20px 8px; padding: 10px 12px; border: 1px solid var(--cl-line); border-radius: 8px; }
+.chatlive__card-text { display: flex; flex-direction: column; gap: 2px; flex: 1; min-width: 0; font-size: 13px; line-height: 18px; color: var(--cl-muted); }
+.chatlive__card-text strong { font-size: 15px; line-height: 20px; color: var(--cl-fg); }
+.chatlive__card-note { color: var(--cl-link); font-weight: 700; }
+.chatlive__card-note:empty { display: none; }
+.chatlive__lab-person { margin: 0 20px; padding: 8px 0; border-top: 1px solid var(--cl-line); font-size: 13px; }
+.chatlive__lab-person:first-child { border-top: 0; }
+.chatlive__lab-head { display: flex; align-items: center; gap: 8px; font-size: 15px; font-weight: 700; }
+.chatlive__lab-note { margin-left: auto; font-size: 13px; font-weight: 400; color: var(--cl-muted); font-variant-numeric: tabular-nums; }
+.chatlive__lab-person--lost .chatlive__lab-note { color: var(--cl-lost); font-weight: 700; }
+.chatlive__lab-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; margin-top: 6px; }
+.chatlive__lab-label { width: 96px; color: var(--cl-muted); }
+.chatlive__lab-row .chatlive__speed { height: 24px; padding: 0 8px; font-weight: 400; }
+.chatlive__field { display: flex; align-items: center; gap: 4px; color: var(--cl-muted); }
+.chatlive__select { height: 24px; padding: 0 4px; border: 1px solid var(--cl-line); border-radius: 6px; background: var(--cl-pane); color: var(--cl-fg); font: inherit; font-size: 13px; }
+.chatlive__log-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 0 20px 6px 0; }
+.chatlive__log-head .chatlive__hint { margin-top: 0; }
+.chatlive__entry { display: grid; grid-template-columns: 34px 62px minmax(0, 1fr); gap: 6px; padding: 3px 20px; font-size: 13px; line-height: 18px; }
+.chatlive__entry:hover { background: var(--cl-hover); }
+.chatlive__entry .chatlive__at { font-size: 12px; }
+.chatlive__kind { justify-self: start; align-self: start; padding: 0 5px; border-radius: 4px; font-size: 11px; font-weight: 700; line-height: 18px; text-transform: uppercase; letter-spacing: .02em;
+  color: var(--cl-input); box-shadow: inset 0 0 0 1px currentColor; }
+.chatlive__entry-text { overflow-wrap: anywhere; }
+.chatlive__entry--lost .chatlive__kind { color: #fff; background: var(--cl-lost); box-shadow: none; }
+.chatlive__entry--late .chatlive__kind { color: #1d1c1d; background: var(--cl-late); box-shadow: none; }
+.chatlive__entry--lost .chatlive__entry-text { color: var(--cl-lost); }
+.chatlive__entry--fault .chatlive__kind { color: var(--cl-fault); }
+.chatlive__entry--scenario .chatlive__kind { color: var(--cl-link); }
+.chatlive__entry--version .chatlive__kind { color: var(--cl-active); }
+.chatlive__entry--scenario, .chatlive__entry--version { font-weight: 700; }
 .chatlive__debug .chatlive__bar-title { justify-content: space-between; padding-right: 12px; }
 .chatlive__close { display: grid; place-items: center; width: 28px; height: 28px; padding: 0; border: 0; border-radius: 6px; background: none; cursor: pointer; color: var(--cl-muted) !important; }
 .chatlive__close:hover { background: var(--cl-hover); color: var(--cl-fg) !important; }
@@ -704,7 +758,7 @@ ta-tabs { display: block; }
   .chatlive__app { grid-template-columns: 74px 220px minmax(0, 1fr); }
   .chatlive__pane { position: relative; }
   .chatlive__app--debug .chatlive__pane { grid-template-columns: minmax(0, 1fr); }
-  .chatlive__debug { position: absolute; top: 0; right: 0; bottom: 0; z-index: 2; width: min(340px, 100%); box-shadow: -4px 0 12px rgba(0, 0, 0, .12); }
+  .chatlive__debug { position: absolute; top: 0; right: 0; bottom: 0; z-index: 2; width: min(360px, 100%); box-shadow: -4px 0 12px rgba(0, 0, 0, .12); }
 }
 /* A phone: the tabs and your avatar in a bar at the bottom, the channel
    list or the channel in between (the back button and Home switch them),
@@ -713,6 +767,8 @@ ta-tabs { display: block; }
   .chatlive__app { grid-template-columns: minmax(0, 1fr); grid-template-rows: 44px minmax(0, 1fr) 60px; grid-template-areas: "top" "main" "rail";
     height: 640px; padding: 0 4px; }
   .chatlive__top { padding: 0 44px 0 8px; justify-content: flex-start; }
+  .chatlive__top-label { display: none; }
+  .chatlive__top-button { padding: 0; width: 28px; justify-content: center; }
   .chatlive__top-button { top: 8px; right: 6px; }
   .chatlive__search { width: 100%; }
   .chatlive__rail { flex-direction: row; justify-content: space-around; align-items: center; gap: 0; padding: 0; }
@@ -729,8 +785,11 @@ ta-tabs { display: block; }
   .chatlive__app--debug[data-view] .chatlive__pane { display: grid; }
   .chatlive__menu { left: auto; right: 8px; bottom: 64px; }
   .chatlive__bar-title, .chatlive__foot, .chatlive__message, .chatlive__empty, .chatlive__notice { padding-left: 12px; padding-right: 12px; }
-  .chatlive__foot { padding-bottom: 12px; }
+  .chatlive__foot { padding-bottom: 2px; }
   .chatlive__signed-out { flex-wrap: wrap; }
-  .chatlive__subheading, .chatlive__state, .chatlive__clock, .chatlive__controls, .chatlive__memory { margin-left: 12px; margin-right: 12px; }
+  .chatlive__subheading, .chatlive__state, .chatlive__clock, .chatlive__controls, .chatlive__memory, .chatlive__hint, .chatlive__result,
+  .chatlive__versions, .chatlive__card, .chatlive__lab-person { margin-left: 12px; margin-right: 12px; }
+  .chatlive__entry { padding-left: 12px; padding-right: 12px; }
+  .chatlive__tabs { padding: 0 8px; }
   .chatlive__chart { margin: 0 12px; height: 300px; }
 }

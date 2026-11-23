@@ -1,38 +1,61 @@
-// The live chat, run in Node.js: what the page's buttons do, in order,
-// printed as each screen shows it. Run: node main.mjs
+// The live chat, run in Node.js: what the page's controls do, printed as
+// the screens show it. The same scenario on step 5's charts and on step
+// 7's, a live migration between them, and a screen that loses deliveries.
+// Run: node main.mjs
 import * as tinyactors from '@tinyactors/wasm';
 import { readFileSync } from 'node:fs';
 import { createChat } from './chat.mjs';
 
-const charts = Object.fromEntries(['workspace.scxml', 'room.scxml', 'user.scxml']
-  .map((name) => [name, readFileSync(new URL(`./charts/${name}`, import.meta.url), 'utf8')]));
-const chat = await createChat(tinyactors, { charts });
-const show = async (what) => {
-  const { actors, inMemory, stored } = await chat.stats();
-  console.log(`${what}: ${actors} actors, ${inMemory} in memory, ${stored} in the store`);
-};
+const read = (step) => Object.fromEntries(['workspace.scxml', 'room.scxml', 'user.scxml']
+  .map((name) => [name, readFileSync(new URL(`./charts/step-${step}/${name}`, import.meta.url), 'utf8')]));
+const versions = { 5: read(5), 7: read(7) };
+const messages = (chat, name) => chat.screen(name).messages.map((m) => m.text).join(' | ') || 'nothing';
 
-await show('6 people, 2 rooms');
-await chat.connect('scout');
-await chat.connect('forager');
-await chat.join('scout', 'general');
-await chat.join('forager', 'general');
-await chat.post('scout', 'general', 'Found sugar by the old oak. Who can carry?');
-await show('scout and forager connect, join general and talk');
-for (const name of ['scout', 'forager']) {
-  const screen = chat.screen(name);
-  console.log(`${name} sees: ${screen.messages.map((m) => `${m.from} in ${m.room}: ${m.text}`).join(' | ')}`);
-  console.log(`${name}'s roster: ${Object.entries(screen.roster).map(([who, status]) => `${who} ${status}`).join(', ')}`);
+for (const version of [5, 7]) {
+  const chat = await createChat(tinyactors, { versions, version });
+  await chat.scenario('tunnel');
+  await chat.advance(2_000);
+  console.log(`-- step ${version}, scout in the tunnel`);
+  console.log(`forager sees scout as ${chat.screen('forager').roster.scout}`);
+  await chat.advance(118_000);
+  console.log(`scout's screen got: ${messages(chat, 'scout')}`);
+  const offline = chat.log().filter((e) => e.text === 'forager sees scout is offline').length;
+  console.log(`scout went offline on forager's screen ${offline === 1 ? 'once' : `${offline} times`}`);
+  chat.close();
 }
-const [event, data] = await chat.createRoom('general');
-console.log(`create general again: ${event} (${data.reason})`);
-await chat.join('forager', 'tunnels');
-console.log(`forager joins tunnels: ${chat.screen('forager').notices.at(-1)}`);
-await chat.advance(300_000);
-await show('300 seconds pass');
-console.log(`forager's roster: ${Object.entries(chat.screen('forager').roster).map(([who, status]) => `${who} ${status}`).join(', ')}`);
-for (const name of ['workspace', 'room.general', 'user.scout', 'user.queen']) {
-  const state = await chat.state(name);
-  console.log(`${name}: ${state.stored ? 'in the store' : JSON.stringify(state.value)}`);
+
+console.log('-- step 5, migrated live to step 7 and back');
+const chat = await createChat(tinyactors, { versions, version: 5 });
+for (const name of ['queen', 'scout']) {
+  await chat.connect(name);
+  await chat.join(name, 'general');
 }
+await chat.typing('scout', 'general');
+console.log(`on step 5 queen sees typing: ${chat.screen('queen').typing.general?.join(', ') || 'nobody'}`);
+const there = await chat.useVersion(7);
+console.log(`to step 7: ${there.migrated} migrated, ${there.failed.length} failed`);
+await chat.typing('scout', 'general');
+console.log(`on step 7 queen sees typing: ${chat.screen('queen').typing.general?.join(', ') || 'nobody'}`);
+await chat.loseConnection('scout', 60);
+const back = await chat.useVersion(5);
+console.log(`back to step 5, scout reconnecting: ${back.migrated} migrated, ${back.failed.length} failed`);
+// step 5 has no reconnecting: the migration puts scout in the chart's initial state, offline,
+// and nothing tells the workspace, so queen's screen still shows scout active
+await chat.advance(1_000); // an event loads scout from the store
+await chat.typing('scout', 'general');
+const scout = await chat.state('user.scout');
+console.log(`scout is ${scout.stored ? 'in the store' : JSON.stringify(scout.value)}; queen's screen shows scout as ${chat.screen('queen').roster.scout}`);
 chat.close();
+
+console.log('-- forager\'s screen loses half of what reaches it');
+const flaky = await createChat(tinyactors, { versions, seed: 7 });
+for (const name of ['scout', 'forager']) {
+  await flaky.connect(name);
+  await flaky.join(name, 'general');
+}
+await flaky.setFaults('forager', { drop: 0.5 });
+for (const text of ['one', 'two', 'three', 'four', 'five', 'six']) await flaky.post('scout', 'general', text);
+console.log(`scout's screen got: ${messages(flaky, 'scout')}`);
+console.log(`forager's screen got: ${messages(flaky, 'forager')}`);
+console.log(`lost on the way: ${flaky.log().filter((e) => e.kind === 'lost').length}`);
+flaky.close();

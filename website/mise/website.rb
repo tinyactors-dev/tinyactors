@@ -186,8 +186,8 @@ module Website
       dir = EXAMPLES.join(name)
       run('npm', 'ci', '--no-audit', '--no-fund', chdir: dir) unless dir.join('node_modules/.package-lock.json').file?
       FileUtils.mkdir_p(SITE.join('examples', name))
-      # its modules and charts, and those of a charts/ beside them (the live chat's)
-      dir.glob('{*,charts/*}.{mjs,scxml}').each do |file|
+      # its modules and charts, and those under a charts/ beside them (the live chat's)
+      dir.glob('{*,charts/**/*}.{mjs,scxml}').each do |file|
         target = SITE.join('examples', name, file.relative_path_from(dir))
         FileUtils.mkdir_p(target.dirname)
         FileUtils.cp(file, target)
