@@ -232,6 +232,10 @@ module Core
     Program.new(name: 'ta-conform', uses: %w[host runtime compile basic_http test_datamodel datamodel_json] + ECMASCRIPT,
                 sources: %w[conform.c datamodel.c json_functions.c vectors.c scenario.c w3c.c].map { |s| "tools/conform/#{s}" },
                 defines: {}),
+    # The json datamodel beside quickjs: bytes per actor, time per event
+    # (tools/jsonbench; a spike for docs/proposals/json-datamodel.md).
+    Program.new(name: 'json-bench', uses: %w[host runtime compile datamodel_json] + ECMASCRIPT,
+                sources: %w[tools/jsonbench/bench.c], defines: {}),
     # The torture chamber's host (tools/torture/README.md).
     Program.new(name: 'torture-bench', uses: %w[host runtime compile otlp] + ECMASCRIPT,
                 sources: %w[bench.c net.c loop.c].map { |s| "tools/torture/#{s}" },
