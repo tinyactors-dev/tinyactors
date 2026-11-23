@@ -33,6 +33,7 @@ content and runs the stylesheet. Node.js runs the examples and wrangler.
 | `package.json` | what the pages load in the browser, vendored by the build into `vendor/`: `@tinyactors/scxmljs` (`<scxml-view>`, with its QuickJS) and highlight.js's browser modules; one import map on every page names them |
 | `test/` | documents the schema must refuse, and a site the build must refuse |
 | `tools/serve.mjs` | the local server |
+| `../copywriter/` | not the site's: the copywriter's build (`dist/site`) is copied to `/copywriter/` (the extension's ZIP, a switch that loads its widget on every page of a device; not indexed) |
 | `wrangler.jsonc` | the Cloudflare Worker: `build/site` as static assets on www.tinyactors.dev |
 | `mise/` | the tasks (Ruby) and what they share (`website.rb`) |
 

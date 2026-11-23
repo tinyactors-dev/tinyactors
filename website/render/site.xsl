@@ -124,6 +124,8 @@
         </xsl:if>
         <!-- The design system's dark theme is [data-theme="dark"]; follow the reader's setting. -->
         <script>if (matchMedia('(prefers-color-scheme: dark)').matches) document.documentElement.dataset.theme = 'dark';</script>
+        <!-- The copywriter's widget, on a device that turned it on at /copywriter/ (mise/website.rb, copywriter!). -->
+        <script type="module" xsl:expand-text="no">try{if(localStorage.getItem('tinyactors-copywriter')==='on')import('/copywriter/embed.js')}catch(e){}</script>
       </head>
       <body>
         <a class="skip" href="#main">Skip to content</a>

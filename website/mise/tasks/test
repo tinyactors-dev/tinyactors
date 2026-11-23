@@ -90,8 +90,9 @@ puts "website: #{links} links and assets in #{pages.size} pages resolve"
 #     and the Markdown resolves to a file of the build, and its #anchor to
 #     an id there (a Markdown file's ids are its <a id> anchors); and each
 #     page's Markdown holds a fence for every code block of its content.
+#     /copywriter/ is the copywriter's own page, not indexed: no Markdown.
 origin = Website::ORIGIN
-markdown = pages.keys.reject { |file| file.basename.to_s == '404.html' }.to_h { |file| [file, file.sub_ext('.md')] }
+markdown = pages.keys.reject { |file| file.basename.to_s == '404.html' || file.dirname.basename.to_s == 'copywriter' }.to_h { |file| [file, file.sub_ext('.md')] }
 llms = Website::SITE.join('llms.txt').read
 agent_files = [Website::SITE.join('llms.txt'), Website::SITE.join('llms-full.txt'), *markdown.values.select(&:file?)]
 markdown.each do |html, md|

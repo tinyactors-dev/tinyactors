@@ -65,6 +65,7 @@ module Website
     assets!
     vendor!
     live!
+    copywriter!
     puts "website: built #{SITE.relative_path_from(ROOT)} (#{SITE.glob('**/*').count(&:file?)} files)"
   end
 
@@ -103,7 +104,7 @@ module Website
       'ant.svg' => 'assets/ant-resting.svg', # the anthill's sprites: rigged, legs pivot
       'logo-mark-dark.svg' => 'assets/brand/svg/tinyactors-symbol-parchment.svg'
     }.each { |name, source| FileUtils.cp(DESIGN.join(source), assets.join('brand', name)) }
-    SITE.join('robots.txt').write("User-agent: *\nAllow: /\n\nSitemap: #{ORIGIN}/sitemap.xml\n")
+    SITE.join('robots.txt').write("User-agent: *\nAllow: /\nDisallow: /copywriter/\n\nSitemap: #{ORIGIN}/sitemap.xml\n")
     # Only the fonts are cached long: their names never change content.
     # Everything else keeps Cloudflare's default (revalidated by its ETag),
     # so a deploy is seen at once, and a response from before it (a 404 of
@@ -213,6 +214,15 @@ module Website
     fail!('presence needs @tinyactors/wasm, which only a live example vendors') unless vendored
     FileUtils.mkdir_p(SITE.join('assets/presence'))
     PRESENCE_BROWSER.each { |file| FileUtils.cp(file, SITE.join('assets/presence')) }
+  end
+
+  # The copywriter (copywriter/, an application of its own): its build's
+  # site/ at /copywriter/: the page, the widget a page loads on a device
+  # that turned it on (render/site.xsl), the extension's ZIP. Not indexed.
+  COPYWRITER = REPO.join('copywriter')
+  def copywriter!
+    run('mise', 'run', 'build', chdir: COPYWRITER)
+    FileUtils.cp_r(COPYWRITER.join('dist/site'), SITE.join('copywriter'))
   end
 
   # A deterministic .tar.gz of build/site as `website-<version>/`: sorted
