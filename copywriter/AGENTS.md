@@ -194,7 +194,17 @@ one-off Python.
   belongs on another kind of page gets a link, not a paragraph, and the
   rationale says so). The export prints each page's kind beside its
   audiences ("Kind: pitch. For: …"), each finding's and gap's need, and
-  each gap's kind.
+  each gap's kind. Checked against the API on 2026-11-23 (`mise run
+  read-eval`, which now reads a page as the audiences it links and sorts
+  the sections' claims into confirmed and doubted; Gemini 4 Hydrogen,
+  readings at medium): the home page (pitch, three audiences, 34 needs)
+  in 42 s side by side, 27 to 42 s a reading, 6 to 8 findings each, every
+  need given a kind; of its 11 claims 6 were confirmed and 5 doubted, each
+  doubted claim with a `doubt` finding naming its need
+  (agent-platform.memory, .idle-sessions, .agent-charts;
+  tech-lead.failure-semantics, .test-suite); /guides/testing/ (how-to, two
+  audiences) in 33 s, 2 claims confirmed and workflow-tester.test-timeouts
+  doubted (no CI command).
 - **Rewrites side by side** (the maintainer, 2026-11-23). With two or
   more audiences active, an annotation's rewrites (a message, Suggest, a
   note that asks at once) are one per active audience, each a

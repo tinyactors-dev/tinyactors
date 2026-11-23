@@ -1,9 +1,12 @@
 // A reading eval against the real Gemini: the live home page in Chromium
 // (the DOM page adapter's context() and anchor(), as the widget has them),
-// read as each saved starting audience. It prints each reading's time, its
-// findings per kind and placement, the checklist, and checks that every
-// anchored finding quotes text on the page and every rewrite adds no
-// number the page lacks.
+// read as each audience the page links (its <link rel="audience"> files,
+// which seed the store as they would in the widget). It prints each
+// reading's time, its findings per kind and placement, the checklist with
+// each need's id and kind, the claims the page's sections make
+// (data-answers) as confirmed or doubted, and checks that every anchored
+// finding quotes text on the page and every rewrite adds no number the
+// page lacks.
 //
 //   mise run read-eval [-- --url URL --model M --thinking T]   (GEMINI_API_KEY through fnox; READ_EVAL_RAW=1 prints the calls)
 
@@ -56,7 +59,12 @@ const { text } = await call('context');
 const pageNumbers = new Set(text.match(/\d[\d.,]*/g)?.map((n) => n.replace(/[.,]$/, '')));
 
 let problems = 0;
-const audiences = reviewer.getState().settings.audiences.filter((a) => !values.only || a.name.includes(values.only));
+const linkedIDs = reviewer.getState().settings.audienceIDs;
+const audiences = linkedIDs.map((id) => reviewer.getState().settings.audiences.find((a) => a.id === id))
+  .filter((a) => a && (!values.only || a.name.includes(values.only)));
+console.log(`page kind: ${reviewer.getState().page.kind ?? '(none)'}; linked audiences: ${audiences.map((a) => `${a.siteID} (${a.items?.length ?? 0} needs)`).join(', ') || '(none)'}`);
+if (!audiences.length) { console.error('read-eval: the page links no audience'); process.exit(2); }
+const claims = { confirmed: [], doubted: [] };
 const started = performance.now();
 await reviewer.dispatch({ type: 'read', audienceIDs: audiences.map((a) => a.id) });
 console.log(`read ${audiences.length} audience(s) side by side in ${((performance.now() - started) / 1000).toFixed(1)} s (${values.model}, thinking ${values.thinking})`);
@@ -81,8 +89,19 @@ for (const r of state.readings) {
   const statuses = { answered: 0, partial: 0, missing: 0 };
   for (const x of r.items) statuses[x.status]++;
   console.log(`checklist ${statuses.answered}/${r.items.length} answered, ${statuses.partial} partial, ${statuses.missing} missing; answered with an anchor: ${r.items.filter((x) => x.status === 'answered' && x.anchor).length}`);
-  for (const x of r.items) console.log(`  ${{ answered: '✓', partial: '◐', missing: '○' }[x.status]} [${x.field}] ${x.text}${x.anchor ? `  ⟶ “${x.anchor.quote.exact.slice(0, 60)}”` : ''}\n      ${x.explanation}`);
+  for (const x of r.items) console.log(`  ${{ answered: '✓', partial: '◐', missing: '○' }[x.status]} [${x.field}${x.kind ? `, ${x.kind}` : ''}] ${x.needID ?? ''} ${x.text}${x.claimed ? `  (claimed by ${x.claimed.join(', ')})` : ''}${x.anchor ? `  ⟶ “${x.anchor.quote.exact.slice(0, 60)}”` : ''}\n      ${x.explanation}`);
+  const kinds2 = {};
+  for (const x of r.items) kinds2[x.kind ?? '?'] = (kinds2[x.kind ?? '?'] || 0) + 1;
+  console.log(`needs by kind of page: ${JSON.stringify(kinds2)}; without a kind: ${r.items.filter((x) => !x.kind).length}`);
+  for (const x of r.items.filter((y) => y.claimed)) {
+    const doubt = found.find((a) => a.finding.kind === 'doubt' && a.finding.needID === x.needID);
+    const entry = { need: x.needID, sections: x.claimed, status: x.status, explanation: x.explanation, ...(doubt ? { doubt: doubt.finding.explanation } : {}) };
+    (x.status === 'answered' && !doubt ? claims.confirmed : claims.doubted).push(entry);
+  }
 }
+console.log(`\n=== claims (data-answers): ${claims.confirmed.length} confirmed, ${claims.doubted.length} doubted`);
+for (const c of claims.confirmed) console.log(`  ✓ ${c.need} by ${c.sections.join(', ')}`);
+for (const c of claims.doubted) console.log(`  ? ${c.need} by ${c.sections.join(', ')}: ${c.status}. ${c.explanation}${c.doubt ? `\n      doubt: ${c.doubt}` : ''}`);
 reviewer.close();
 await browser.close();
 console.log(`\nread-eval: ${problems} problem(s)`);

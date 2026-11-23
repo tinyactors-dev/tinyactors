@@ -1,5 +1,5 @@
 #!/usr/bin/env ruby
-#MISE description="A reading eval against the real Gemini: the live home page in Chromium, read as each starting audience (tools/read-eval.mjs)"
+#MISE description="A reading eval against the real Gemini: the live home page in Chromium, read as each audience it links (tools/read-eval.mjs)"
 #USAGE flag "--model <model>" default="gemini-4-hydrogen" help="The Gemini model to evaluate"
 #USAGE flag "--thinking <level>" default="high" help="The thinking level: low, medium, high or xhigh"
 #USAGE flag "--url <url>" default="https://www.tinyactors.dev/" help="The page to read"
