@@ -1,20 +1,20 @@
-# The CBOR datamodel: one document per session, data paths, registered functions
+# The JSON datamodel: one document per session, data paths, registered functions
 
 **Status:** Sketch (2026-11-23). It replaces two earlier sketches, "A
 struct datamodel" and "An application datamodel"
 ([application-datamodel.md](application-datamodel.md), marked dropped);
 "History" says what each got wrong.
 **Touches:** tinyactors-core (a new freestanding layer,
-`src/datamodel_cbor`, and its header); every binding that offers it
+`src/datamodel_json`, and its header); every binding that offers it
 (Swift, Kotlin and Go when they exist; `@tinyactors/wasm`; `ta-conform`);
 tinyactors-test (a stylesheet and a function library for the W3C suite).
 **Not a plan:** nothing here is decided or scheduled. ADRs and roadmaps win.
 
 ## Abstract
 
-This document specifies a datamodel for tinyactors in which each
-session's variables are one CBOR document, read and written by data paths
-in the style of JSONPath, and in which every computation is a function the
+This document specifies a datamodel for tinyactors, named `"json"`, in
+which each session's variables are one JSON value, stored as CBOR and
+read and written by data paths in the style of JSONPath, and in which every computation is a function the
 application registers by name and implements in its own language. The
 datamodel is one freestanding C layer in core. A binding adds only the
 calls between that layer and its language's functions.
@@ -34,17 +34,20 @@ them in each language and resolved names against them. Both made every
 application describe its types a second time, by offsets or by resolvers,
 and both left each binding with a datamodel of its own to write.
 
-This datamodel keeps the data in the one form core already reads, writes,
-validates and stores: the value table of
+This datamodel keeps the data in JSON's value model, the one SCXML
+already uses for data (its ECMAScript data model reads `<data>` content
+as JSON, Appendix B.2), and stores it in the form core already reads,
+writes, validates and keeps: the value table of
 [`tinyactors-core/docs/protocol.md`](../../tinyactors-core/docs/protocol.md#values),
-as CBOR. A chart addresses that data by paths. Anything a path cannot
+encoded as CBOR. CBOR is the representation, not the model: a chart
+author sees JSON, and nothing in a chart depends on the encoding. A chart addresses that data by paths. Anything a path cannot
 express (a comparison, a sum, a lookup in a catalog) is a function the
 application registers, which takes values and returns one. The
 application's types appear where they are useful, at a function's
 parameters, decoded by the language's own serialization.
 
-> The chart owns the data; the application owns the computation; CBOR is
-> the only thing they share.
+> The chart owns the data; the application owns the computation; JSON
+> values are the only thing they share.
 
 ## Whom it serves, and who pays
 
@@ -73,7 +76,7 @@ parameters, decoded by the language's own serialization.
   - per event on other datamodels: nothing.
 - **Out of scope:** an expression language. Paths, literals and calls are
   the whole grammar; arithmetic and comparison belong to functions
-  (decision 3). Python's and Node's datamodels, which run their language
+  (decision 2). Python's and Node's datamodels, which run their language
   already.
 
 ## Conventions and terms
@@ -82,19 +85,36 @@ The key words MUST, MUST NOT, SHOULD and MAY are to be interpreted as
 described in BCP 14 (RFC 2119, RFC 8174) when, and only when, they appear
 in capitals.
 
-A *session document* is the CBOR map holding one session's variables. A
-*path* names one value inside a session document, an event, or a system
-variable. A *function* is a named computation the application registers.
-The *datamodel* is this layer, registered with a host as `"cbor"`
-(decision 1). Other terms (host, session, payload, hibernation, snapshot,
+A *session document* is the JSON object holding one session's variables,
+stored as one CBOR map. A *path* names one value inside a session
+document, an event, or a system variable. A *function* is a named
+computation the application registers. The *datamodel* is this layer,
+matched by a chart's `datamodel="json"`. Other terms (host, session, payload, hibernation, snapshot,
 migration) are the [glossary's](../../GLOSSARY.md).
+
+## Values
+
+A value is a JSON value (RFC 8259): an object, an array, a string, a
+number, `true`, `false` or `null`. It is stored as the CBOR the value
+table writes for it (RFC 8949, section 6.2): an object as a map with text
+keys, a number as an integer when it is one and as a float otherwise.
+
+The value table has three values JSON lacks, and this datamodel keeps
+them, because core hands them to a datamodel and a chart needs them:
+
+| Value | Why | In a chart |
+|---|---|---|
+| `undefined` | a declared variable before its initialization (SCXML 5.2.2), and `actor.context`'s answer for one | the literal `undefined` |
+| an actor's address (tag 32) | `_event.origin`, a `Spawner`'s answer, a target to send to | a value read from an event or returned by a function; it converts to its text wherever text is wanted |
+| a byte string | data from another system that is bytes | a value read from an event or returned by a function; no literal |
+
+Integers are exact to 64 bits, beyond JSON's usual 2^53, as the value
+table keeps them.
 
 ## The session document
 
-A session's variables are one CBOR map. Its keys are the chart's `<data>`
-ids, in document order, and its values are values of the value table:
-integers, floats, text, byte strings, arrays, maps with text keys,
-`false`, `true`, `null`, `undefined`, and an actor's address as tag 32.
+A session's variables are one JSON object, stored as one CBOR map. Its
+keys are the chart's `<data>` ids, in document order.
 
 - **Every `<data>` is a key from `create` on,** holding `undefined` until
   its initialization (SCXML 5.2.2, early or late binding as the chart
@@ -148,9 +168,9 @@ The datamodel parses every expression of a chart once, at
 function nobody registered, or names a variable the chart does not
 declare. SCXML lets a processor reject such a document when it loads it
 (5.9.4); the error names the chart, the expression's line and column, and
-what was wrong (`ta_datamodel_cbor_last_error`).
+what was wrong (`ta_datamodel_json_last_error`).
 
-- **No operators.** `hp <= 1` is `weak(hp)`, a function (decision 3).
+- **No operators.** `hp <= 1` is `weak(hp)`, a function (decision 2).
 - **Calls nest,** to a depth of 16: `total(addItem(items, _event.data))`.
   Every call is evaluated innermost first, left to right, and an
   evaluation stops at the first failure.
@@ -160,7 +180,7 @@ what was wrong (`ta_datamodel_cbor_last_error`).
   is freestanding and core has no correctly rounded reader (only a
   duration parser, `src/core/event_pool.c:58`), so a decimal with more
   than 15 significant digits or an exponent outside Clinger's fast path is
-  an attach error (decision 4).
+  an attach error (decision 3).
 
 ### Reading a path
 
@@ -207,7 +227,7 @@ array by position (`[2]`, or a path whose value is an integer).
 | `<foreach array>` | a path | an array, iterated over the document or payload it was read from |
 | `namelist` | paths to variables | a map of each variable's name to its value |
 | a trace's value (`TA_CAPTURE_VALUE`) | a path | the value; a failure leaves it out of the record |
-| `<script>` | refused at attach (decision 2) | |
+| `<script>` | refused at attach (decision 1) | |
 
 ## Functions
 
@@ -230,16 +250,16 @@ trusted code, as a native chart's ECMAScript is.
 Every function has one signature, in C:
 
 ```c
-typedef struct ta_cbor_call {
+typedef struct ta_json_call {
     uint32_t size;
     uint32_t argument_count;
     void *context;           /* the function's own, as registered */
     ta_bytes arguments;      /* one CBOR array of the arguments, valid during the call */
     ta_cbor_writer *result;  /* write exactly one item */
     ta_string_view message;  /* a failing function sets it; copied by the datamodel */
-} ta_cbor_call;
+} ta_json_call;
 
-typedef ta_status (*ta_cbor_function)(ta_cbor_call *call);
+typedef ta_status (*ta_json_function)(ta_json_call *call);
 ```
 
 | Field | Meaning |
@@ -322,35 +342,35 @@ most three parameters, and every struct the application fills starts with
 its `size`.
 
 ```c
-/* include/tinyactors/datamodel_cbor.h */
-typedef struct ta_cbor_function_entry {
+/* include/tinyactors/datamodel_json.h */
+typedef struct ta_json_function_entry {
     uint32_t size;
     uint32_t pad;
     ta_string_view name;
-    ta_cbor_function function;
+    ta_json_function function;
     void *context;
-} ta_cbor_function_entry;
+} ta_json_function_entry;
 
-typedef struct ta_datamodel_cbor_config {
+typedef struct ta_datamodel_json_config {
     uint32_t size;
-    uint32_t max_document_bytes;   /* 0: the default (decision 5) */
+    uint32_t max_document_bytes;   /* 0: the default (decision 4) */
     ta_allocator allocator;        /* documents, payloads, rows, the result room */
-} ta_datamodel_cbor_config;
+} ta_datamodel_json_config;
 
-TA_API ta_status ta_datamodel_cbor_new(const ta_datamodel_cbor_config *config,
-                                       ta_datamodel_cbor **out);
-TA_API ta_status ta_datamodel_cbor_register(ta_datamodel_cbor *datamodel,
-                                            const ta_cbor_function_entry *entry);
-TA_API void ta_datamodel_cbor_free(ta_datamodel_cbor *datamodel);
-TA_API ta_datamodel_binding ta_datamodel_cbor_binding(ta_datamodel_cbor *datamodel);
-TA_API ta_status ta_datamodel_cbor_last_error(const ta_datamodel_cbor *datamodel, ta_buffer *out);
-TA_API ta_status ta_datamodel_cbor_snapshot(ta_datamodel_cbor *datamodel, ta_buffer *out);
-TA_API ta_status ta_datamodel_cbor_restore(ta_datamodel_cbor *datamodel, ta_bytes state);
+TA_API ta_status ta_datamodel_json_new(const ta_datamodel_json_config *config,
+                                       ta_datamodel_json **out);
+TA_API ta_status ta_datamodel_json_register(ta_datamodel_json *datamodel,
+                                            const ta_json_function_entry *entry);
+TA_API void ta_datamodel_json_free(ta_datamodel_json *datamodel);
+TA_API ta_datamodel_binding ta_datamodel_json_binding(ta_datamodel_json *datamodel);
+TA_API ta_status ta_datamodel_json_last_error(const ta_datamodel_json *datamodel, ta_buffer *out);
+TA_API ta_status ta_datamodel_json_snapshot(ta_datamodel_json *datamodel, ta_buffer *out);
+TA_API ta_status ta_datamodel_json_restore(ta_datamodel_json *datamodel, ta_bytes state);
 ```
 
-- **`ta_datamodel_cbor_register`** copies the name; a name registered twice
+- **`ta_datamodel_json_register`** copies the name; a name registered twice
   is `TA_ERROR_INVALID`. The function and its context MUST stay valid until
-  `ta_datamodel_cbor_free`. Registering after an image's charts attached
+  `ta_datamodel_json_free`. Registering after an image's charts attached
   affects only charts attached later.
 - A host passes the binding beside its other datamodels
   (`ta_host_environment.datamodels`, at most 8, `include/tinyactors/host.h:112`).
@@ -360,8 +380,8 @@ TA_API ta_status ta_datamodel_cbor_restore(ta_datamodel_cbor *datamodel, ta_byte
 
 | Object | Owner | Created | Ends |
 |---|---|---|---|
-| a function's name | the datamodel (copied) | `ta_datamodel_cbor_register` | `ta_datamodel_cbor_free` |
-| a function and its context | the application | before registering | after `ta_datamodel_cbor_free`, which follows `ta_host_free` |
+| a function's name | the datamodel (copied) | `ta_datamodel_json_register` | `ta_datamodel_json_free` |
+| a function and its context | the application | before registering | after `ta_datamodel_json_free`, which follows `ta_host_free` |
 | a chart's parsed expressions | the chart's row | `chart_attach` | `chart_detach` |
 | a session document | its block, by reference | `create`, an assignment, `deserialize` | the next assignment, or `destroy`, and the last `<foreach>` over it |
 | `_event`: a payload reference, ids, sendid, origin | the session's row | `bind_event` | the next `bind_event`, or `destroy` |
@@ -374,7 +394,7 @@ TA_API ta_status ta_datamodel_cbor_restore(ta_datamodel_cbor *datamodel, ta_byte
 
 The W3C suite's charts use the `conf:` notation, which a stylesheet per
 language translates (`tinyactors-test/suites/w3c`, `confPython.xsl`). A
-`confCBOR.xsl` writes variables as `<data>`, paths and literals, and each
+`confJSON.xsl` writes variables as `<data>`, paths and literals, and each
 comparison or arithmetic operation as a call of a small library (`eq`,
 `lt`, `add`, `isBound`, ...) that `ta-conform` registers in C and each
 binding registers in its language. Core's `mise run conform` then holds
@@ -415,19 +435,17 @@ list (XML content, every test of the ECMAScript data model) are
 
 ## Decisions for the maintainer
 
-1. **The name** `"cbor"`, which names the representation; or one that
-   names what a chart author sees (`"data"`, `"values"`).
-2. **`<script>`:** refused, since a function cannot change the session; or
+1. **`<script>`:** refused, since a function cannot change the session; or
    a script as a list of assignments.
-3. **No operators.** A few on paths and literals (`==`, `!=`, `<`, `<=`,
+2. **No operators.** A few on paths and literals (`==`, `!=`, `<`, `<=`,
    `!`, `+`) would spare small charts a function each, at the cost of
    semantics core must define for every pair of value types.
-4. **Decimal literals:** read exactly or refused, as above; or a correctly
+3. **Decimal literals:** read exactly or refused, as above; or a correctly
    rounded reader in core.
-5. **`max_document_bytes`'s default,** set in one place, as every default
+4. **`max_document_bytes`'s default,** set in one place, as every default
    is.
-6. **A callback in a public header.** `tinyactors-core/AGENTS.md` allows
-   "no callbacks except the datamodel vtable". Accept `ta_cbor_function` as
+5. **A callback in a public header.** `tinyactors-core/AGENTS.md` allows
+   "no callbacks except the datamodel vtable". Accept `ta_json_function` as
    a datamodel's?
 
 ## Appendix A: an order, end to end
@@ -436,7 +454,7 @@ The chart:
 
 ```xml
 <scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0"
-       datamodel="cbor" name="order" initial="open">
+       datamodel="json" name="order" initial="open">
   <datamodel>
     <data id="items" expr="[]"/>
     <data id="address" expr="{}"/>
@@ -484,7 +502,7 @@ struct Item: Codable { var sku: String; var qty: Int; var cents: Int }
 struct Add: Codable { var sku: String; var qty: Int }
 
 let catalog = ["tea": 450, "mug": 1200]
-let functions = CBORFunctions()
+let functions = JSONFunctions()
 functions.register("knownItem") { (add: Add) in catalog[add.sku] != nil && (1...99).contains(add.qty) }
 functions.register("addItem") { (items: [Item], add: Add) throws -> [Item] in
     guard let cents = catalog[add.sku] else { throw ChartError("unknown item \(add.sku)") }
@@ -500,7 +518,7 @@ functions.register("total") { (items: [Item]) in items.reduce(0) { $0 + $1.cents
 @Serializable data class Add(val sku: String, val qty: Int)
 
 val catalog = mapOf("tea" to 450L, "mug" to 1200L)
-val functions = cborFunctions {
+val functions = jsonFunctions {
     function("knownItem") { add: Add -> add.sku in catalog && add.qty in 1..99 }
     function("addItem") { items: List<Item>, add: Add ->
         val cents = catalog[add.sku] ?: throw ChartException("unknown item ${add.sku}")
@@ -553,7 +571,7 @@ result with `ta_cbor_writer`:
 
 ```c
 /* hasItems(items): true when the array has an item */
-static ta_status has_items(ta_cbor_call *call) {
+static ta_status has_items(ta_json_call *call) {
     ta_cbor_reader reader;
     ta_cbor_item item;
     ta_cbor_reader_init(&reader, call->arguments);

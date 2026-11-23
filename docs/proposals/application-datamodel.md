@@ -1,6 +1,6 @@
 # An application datamodel: charts over the application's own types and functions
 
-**Status:** Dropped (2026-11-23): replaced by [the CBOR datamodel](cbor-datamodel.md), which keeps the data in the value table and the application's types at its functions' parameters; a datamodel per binding over the application's types needed every field named again, by reflection or by hand. It replaced "A struct datamodel" (this file's history).
+**Status:** Dropped (2026-11-23): replaced by [the JSON datamodel](json-datamodel.md), which keeps the data in the value table and the application's types at its functions' parameters; a datamodel per binding over the application's types needed every field named again, by reflection or by hand. It replaced "A struct datamodel" (this file's history).
 **Touches:** each binding that offers it (Swift, Kotlin and Go when they
 exist; `@tinyactors/wasm` for side modules written in C); tinyactors-core
 only for a parser of the expression grammar, if the bindings share one;

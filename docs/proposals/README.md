@@ -37,8 +37,8 @@ Every proposal starts with a status line:
 | [staticjs: the compiler and evaluator, from scratch](staticjs-compiler.md) | Sketch | staticjs (the compiler) |
 | [staticjs: exceptions, and async functions over host promises](staticjs-exceptions-and-async.md) | Sketch | staticjs (every stage), staticjs-js |
 | [A JavaScript API for staticjs.wasm](staticjs-js-api.md) | Adopted → [ADR 0013](../adr/0013-staticjs-javascript-package.md) | a new staticjs-js, staticjs's release packaging |
-| [The CBOR datamodel: one document per session, data paths, registered functions](cbor-datamodel.md) | Sketch | tinyactors-core (a new datamodel layer), every binding, tinyactors-test |
-| [An application datamodel](application-datamodel.md) | Dropped: replaced by the CBOR datamodel | — |
+| [The JSON datamodel: one document per session, data paths, registered functions](json-datamodel.md) | Sketch | tinyactors-core (a new datamodel layer), every binding, tinyactors-test |
+| [An application datamodel](application-datamodel.md) | Dropped: replaced by the JSON datamodel | — |
 | [SQLite host](sqlite-host.md) | Sketch | tinyactors-core, a new tinyactors-sqlite |
 | [PostgreSQL host](postgres-host.md) | Sketch | tinyactors-core, a new tinyactors-postgres |
 | [Host kernel](host-kernel.md) | Adopted → [kernel ADRs](../../tinyactors-host/docs/adr/README.md), [roadmap](../../ROADMAP.md) | tinyactors-napi, tinyactors-test, a new tinyactors-host |
