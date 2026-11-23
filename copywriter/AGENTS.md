@@ -167,9 +167,32 @@ one-off Python.
 - **Conversations.** The page chat has any number of conversations per
   page; a new one starts empty and the model reads only the open one.
   Each is an actor of `charts/conversation.scxml` while it is open (the
-  core ends it and starts another on `chat.new` and `chat.open`), and a
-  record in the store. A page opens on its newest. The database's version
-  2 made a page's one chat its conversation `c0`.
+  core ends it and starts another on `chat.new`, `chat.open` and `talk`),
+  and a record in the store (`{page, id, audienceID?, messages,
+  updatedAt}`). A page opens on its newest. The database's version 2 made
+  a page's one chat its conversation `c0`.
+- **Talking to an audience** (the maintainer, 2026-11-23). A conversation
+  is held with the editor (`audienceID` null) or with one audience, set
+  when it starts: the `talk` command (an audience chip's menu, the
+  checklist), or the editor's `talk_to {audience}` tool when the reviewer
+  asks for it ("let me talk to the tech lead"), which opens the new
+  conversation at once (its message keeps a chip that opens it again).
+  The model then speaks in the first person as that reader, from the
+  audience's description, knowledge, wants, tasks and objections, its last
+  reading of this page (the checklist with its statuses and where it got
+  stuck), and the page's text (`TALK_RULES`, `TALK_LENGTHS` in
+  `src/core/reviewer.mjs`): it never invents facts about the product, and
+  says what the page does not answer as the reader would ("The page
+  doesn't tell me whether…"). Its tools are `TALK_FUNCTIONS` only, no
+  rewrites and no built-in tools (it answers from the page): `update_audience
+  {name, description?, knows?, wants?, tasks?, objections?}` when the
+  reviewer corrects who it is (the `model` processor keeps only the fields
+  that change, as `changes` `[{field, before, after}]`; `settings` saves
+  them, so later readings and conversations use them), and `note_gap
+  {item, explanation}`, which becomes a page-level open item of kind
+  `missing`, the audience's finding, as a reading's gap does. Back to the
+  editor is any other conversation: `chat.new` starts one with the editor.
+  Use: checking and sharpening the audience itself.
 
 ## Layout
 
@@ -209,7 +232,8 @@ copywriter/
   src/platform/extension/ manifest.json, service-worker.mjs, content.mjs (page adapter), sidepanel.html/.mjs, mic.html/.mjs
   src/platform/embed/     embed.mjs (launcher, Shadow DOM, page adapter on the live DOM), loader snippet
   site/                   the /copywriter/ page: download the extension, turn the widget on for this device
-  test/                   node:test for charts and core (readings.test.mjs: the reading actors); Playwright for
+  test/                   node:test for charts and core (readings.test.mjs: the reading actors; talks.test.mjs:
+                          conversations with an audience); Playwright for
                           the panel over src/ui/mock-reviewer.mjs (?read=0: no reading yet), the extension and the widget
   mise/tasks/             build, test, charts, eval, read-eval (Ruby)
   tools/                  serve.mjs (the panel's preview), eval.mjs and read-eval.mjs (the real Gemini)
@@ -284,8 +308,9 @@ annotation's id.
   activeID: string | null,
   chat: {                                  // the page chat's open conversation
     id, messages: [message],               // below
-    conversations: [{ id, title, at }],    // this page's conversations with a message, newest first; title: the
-                                           //   first message, cut at 60 characters
+    audienceID,                            // the audience it is held with; null: the editor
+    conversations: [{ id, title, at, audienceID }],  // this page's conversations with a message, newest first;
+                                           //   title: the first message, cut at 60 characters
     busy, error?,                          // busy while transcribing or asking; error: the last request failed
   },                                       //   (until the next message), or 'Nothing was heard.'
   recording: { state: 'idle' | 'recording' | 'transcribing', target: annotationID | 'page' | null },
@@ -296,9 +321,12 @@ annotation's id.
 message = {
   role: 'user' | 'model', text, at,
   spoken?,                                 // a user message: true when it is a clip's transcript
-  annotations?,                            // a page chat's model message: the ids of the annotations its rewrites made
+  annotations?,                            // a page chat's model message: the ids of the annotations its rewrites
+                                           //   (or, with an audience, its note_gap calls) made
   proposed?,                               // true: the model said nothing, the text lists its proposals
-  audiences?: [{ name, action, id? }],     // a model message: its audience calls ('define' | 'use' | 'read'); id once saved
+  audiences?: [{ name, action, id?, chat?, changes? }],  // a model message: its audience calls ('define' | 'use' |
+                                           //   'read' | 'talk' | 'update'); id once saved; chat: the conversation a
+                                           //   'talk' opened; changes: an update's [{field, before, after}]
   sources?: [{ title, uri }],              // a model message: the web pages it was grounded on (search, URL context)
   thoughts?, seconds?,                     // a model message: the summary of its thinking, and the request's seconds
 }
@@ -324,8 +352,9 @@ transcript exists; then the message shows, and the conversation goes on
 | `dismiss` / `reopen` / `delete` | `id` | |
 | `note` | `id`, `text` | sets the note |
 | `chat` | `text` | a message in the open conversation; the model may create annotations (`propose_rewrite`) |
-| `chat.new` | | a new, empty conversation (none when the open one is empty) |
-| `chat.open` | `id` | opens an earlier conversation of this page |
+| `chat.new` | | a new, empty conversation with the editor (none when the open one is that already) |
+| `chat.open` | `id` | opens an earlier conversation of this page (an empty one only when it is held with an audience) |
+| `talk` | `audienceID` | a new conversation with that audience (the open one when it is empty and held with it); resolves to its id |
 | `record.start` / `record.stop` | `target` | push-to-talk: the clip is transcribed, and the transcript is the next message for `target`; an empty one is not sent ("Nothing was heard.") |
 | `settings.save` | `apiKey?`, `rememberKey?`, `model?`, `thinking?`, `length?`, `tools?` (`{search?, url?, code?}`, merged), `voice?`, `audience?`, `audienceIDs?` | a new key is checked with models.list first: one Google refuses is not saved ("That key was not accepted by Google."); `voice` is the instructions ('' for the default); `audience` `{id?, name, description, knows?, wants?, tasks?, objections?}` creates or updates one; `audienceIDs` sets the active ones |
 | `settings.deleteAudience` | `id` | deletes an audience (it stops being active) |
@@ -439,8 +468,15 @@ The model's tools (`src/core/gemini.mjs`, `FUNCTIONS`): `propose_rewrite
 {original_text?, replacement, rationale}`, `set_note {note}`,
 `define_audience {name, description, knows?, wants?, tasks?, objections?,
 use?}` (create or update by name; `use: true` makes it active) and
-`use_audiences {names}` (the active ones) and `read_as {audience}` (the
-`model` processor plans the reading; the conversation spawns it). A
+`use_audiences {names}` (the active ones), `read_as {audience}` (the
+`model` processor plans the reading; the conversation spawns it) and
+`talk_to {audience}` (the `model` processor names the new conversation;
+the conversation spawns it with `from`, and the core opens it when it
+first reports and ends the one that opened it). A conversation held with
+an audience sends `model` a `talk {page, audienceID, messages}` and asks
+with `TALK_FUNCTIONS` only: `update_audience` and `note_gap` (`reading`
+reads them as `updates` and `gaps`); the reply's `audiences` are
+`{action: 'update', id, name, fields, changes}`, which go to `settings`. A
 reply's audience calls go from the actor to `settings`; a reply of
 audience calls only says what was saved. A reading asks with
 `READING_FUNCTIONS` only: `report_finding {kind, original_text?, need,

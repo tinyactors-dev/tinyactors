@@ -266,7 +266,7 @@ test('audiences: the page chat proposes one and uses it; the chip names it; rewr
   assert.deepEqual((await store.settings()).audienceIDs, [engineer.id]);
   // the tools and the system instruction: the voice is how, the audiences who
   const first = fetch.requests[0].body;
-  assert.deepEqual(first.tools[0].functionDeclarations.map((f) => f.name), ['propose_rewrite', 'set_note', 'define_audience', 'read_as', 'use_audiences']);
+  assert.deepEqual(first.tools[0].functionDeclarations.map((f) => f.name), ['propose_rewrite', 'set_note', 'define_audience', 'read_as', 'talk_to', 'use_audiences']);
   assert.match(first.systemInstruction.parts[0].text, /^The voice \(how to write\):\nYou edit the copy/);
   assert.match(first.systemInstruction.parts[0].text, /No audience is chosen\./);
   assert.match(first.systemInstruction.parts[0].text, /who the page is for.*define_audience/);

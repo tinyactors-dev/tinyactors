@@ -58,6 +58,15 @@ export const FUNCTIONS = Object.freeze([
     },
   },
   {
+    name: 'talk_to',
+    description: 'Open a new conversation with one saved audience: the reviewer then talks with that reader, who answers in the first person from what the page says. Call it when the reviewer asks to talk to, hear from or question an audience.',
+    parameters: {
+      type: 'object',
+      properties: { audience: { type: 'string', description: 'The saved audience\'s name.' } },
+      required: ['audience'],
+    },
+  },
+  {
     name: 'use_audiences',
     description: 'Set the active audiences, by their names: the rewrites are then written for them. An empty list writes for no audience in particular.',
     parameters: {
@@ -67,6 +76,45 @@ export const FUNCTIONS = Object.freeze([
     },
   },
 ]);
+
+/**
+ * The functions of a conversation held with an audience: the model speaks
+ * as that reader, proposes no rewrite, and refines the audience when the
+ * reviewer corrects it, or notes a need the page misses.
+ */
+export const TALK_FUNCTIONS = Object.freeze([
+  {
+    name: 'update_audience',
+    description: 'Change who you are, the reader, when the editor corrects you: what you know, want, came to do or object to. Give only the fields that change, each written out whole as it should read from now on. Later readings of the page use it.',
+    parameters: {
+      type: 'object',
+      properties: {
+        name: { type: 'string', description: 'Your name as an audience; a new one only when the editor renames you.' },
+        description: { type: 'string', description: 'Who you are, in one or two sentences.' },
+        knows: { type: 'string', description: 'What you already know.' },
+        wants: { type: 'string', description: 'The information you want from the page.' },
+        tasks: { type: 'string', description: 'The tasks you came to the page to do.' },
+        objections: { type: 'string', description: 'Your doubts and objections.' },
+      },
+      required: ['name'],
+    },
+  },
+  {
+    name: 'note_gap',
+    description: 'Note one thing you need that the page does not give you, for the editor\'s list of open items.',
+    parameters: {
+      type: 'object',
+      properties: {
+        item: { type: 'string', description: 'What the page should add, as a short instruction to the writer, at most 12 words.' },
+        explanation: { type: 'string', description: 'One sentence in your own terms: why you need it.' },
+      },
+      required: ['item', 'explanation'],
+    },
+  },
+]);
+
+/** The fields of an audience update_audience may change, in order. */
+export const AUDIENCE_FIELDS = Object.freeze(['name', 'description', 'knows', 'wants', 'tasks', 'objections']);
 
 /**
  * Google's built-in tools a reviewer can turn on, by setting:
@@ -215,6 +263,9 @@ const CALL_RESULTS = Object.freeze({
   define_audience: 'Saved; the reviewer sees it in Settings.',
   use_audiences: 'They are the active audiences now.',
   read_as: 'The reading started; its findings and checklist appear in the reviewer\'s list when it ends.',
+  talk_to: 'The conversation with that audience opens for the reviewer now.',
+  update_audience: 'Saved: you are this reader from now on, and later readings use it.',
+  note_gap: 'Added to the editor\'s open items.',
 });
 
 /**
@@ -269,13 +320,19 @@ export async function generate({
  * audience calls (`define_audience` as `{action: 'define', name,
  * description, knows?, wants?, tasks?, objections?, use}`, `use_audiences`
  * as `{action: 'use', names}`), the audiences to read the page as
- * (`read_as`, `reads`: names) and the thought summary. Calls of other
- * names, or with the wrong types, are dropped.
+ * (`read_as`, `reads`: names), the audiences to talk to (`talk_to`,
+ * `talks`: names), an audience's corrections (`update_audience`,
+ * `updates`: the fields given) and its gaps (`note_gap`, `gaps`: {item,
+ * explanation}) and the thought summary. Calls of other names, or with
+ * the wrong types, are dropped.
  */
 export function reading({ text, calls, thoughts = '', sources = [] }) {
   const rewrites = [];
   const audiences = [];
   const reads = [];
+  const talks = [];
+  const updates = [];
+  const gaps = [];
   let note = null;
   const clean = (value, max = 600) => (typeof value === 'string' ? value.trim().slice(0, max) : '');
   for (const call of calls) {
@@ -294,9 +351,17 @@ export function reading({ text, calls, thoughts = '', sources = [] }) {
       audiences.push({ action: 'use', names: a.names.map((n) => clean(n, 80)).filter(Boolean) });
     } else if (call.name === 'read_as' && clean(a.audience, 80)) {
       reads.push(clean(a.audience, 80));
+    } else if (call.name === 'talk_to' && clean(a.audience, 80)) {
+      talks.push(clean(a.audience, 80));
+    } else if (call.name === 'update_audience') {
+      const update = {};
+      for (const field of AUDIENCE_FIELDS) if (clean(a[field], field === 'name' ? 80 : 600)) update[field] = clean(a[field], field === 'name' ? 80 : 600);
+      if (Object.keys(update).length) updates.push(update);
+    } else if (call.name === 'note_gap' && clean(a.item, 160)) {
+      gaps.push({ item: clean(a.item, 160), explanation: clean(a.explanation) });
     }
   }
-  return { text, rewrites, note, audiences, reads, thoughts, sources };
+  return { text, rewrites, note, audiences, reads, talks, updates, gaps, thoughts, sources };
 }
 
 /** What the transcription asks of the model. */
