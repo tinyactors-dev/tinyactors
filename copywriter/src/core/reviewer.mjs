@@ -348,6 +348,7 @@ export function createReviewer({
         },
       });
       activeID = id;
+      publish(); // the panel opens it now, not when the model has answered
       await host.idle();
       publish();
       return id;

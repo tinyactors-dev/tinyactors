@@ -78,7 +78,7 @@ copywriter/
     charts.mjs            the charts' text, imported by the bundle
   src/ui/                 the panel: plain DOM + Lucide icons, renders ViewState, dispatches commands
     panel.mjs             mountPanel(root, reviewer, {layout: 'sidebar'|'sheet'})
-    panel.css
+    panel-css.mjs         its stylesheet as a string (a ShadowRoot adopts it; no bundler loader)
   src/platform/extension/ manifest.json, service-worker.mjs, content.mjs (page adapter), sidepanel.html/.mjs
   src/platform/embed/     embed.mjs (launcher, Shadow DOM, page adapter on the live DOM), loader snippet
   site/                   the /copywriter/ page: download the extension, turn the widget on for this device
