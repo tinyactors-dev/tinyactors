@@ -484,13 +484,18 @@ export async function createChat(tinyactors, { versions, version = LATEST, seed 
         : `${name}'s screen${drop ? ` loses ${Math.round(drop * 100)}%` : ''}${drop && delay ? ' and' : ''}${delay ? ` gets each delivery ${delay} s late` : ''}`);
     }),
     faults: (name) => faults.get(name) ?? { drop: 0, delay: 0 },
-    /** Runs scenario `id` (SCENARIOS): its people come online in #general, then its steps go on the agenda. */
+    /**
+     * Runs scenario `id` (SCENARIOS): its people come online in #general, then
+     * its steps go on the agenda. Each does what a person would: signs in
+     * unless signed in, and joins #general unless their screen shows it
+     * joined (the `joined` the charts sent it), so no room adds a member twice.
+     */
     scenario: (id) => act(async () => {
       const scenario = SCENARIOS[id];
       note('scenario', `${scenario.title}: ${scenario.about}`);
       for (const name of ONLINE_FOR[id]) {
-        open(name);
-        tell(name, 'join', { room: 'general' });
+        if (!connections.has(name)) open(name);
+        if (!screen(name).rooms.includes('general')) tell(name, 'join', { room: 'general' });
       }
       await host.idle();
       for (const [at, step] of scenario.steps) later(at, scenario.title, () => step(direct));
