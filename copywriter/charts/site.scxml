@@ -1,0 +1,191 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  A reading of the site ("Read the site", and "Check changes" of one
+  page): the coordinator of many readings. The core gives it the jobs, in
+  order, already made (it knows the stored readings each replaces):
+
+    read      {id, kind: 'read', page, audienceID, spawn}   spawn: the Spawner's request
+              for a reading actor (charts/reading.scxml) whose `coordinator` is this one
+    criteria  {id, kind: 'criteria', page, criteria}       the acceptance criteria the
+              accepted plans set for that page, checked against its text
+
+  It runs at most `concurrency` jobs at a time (3), each to its end, and
+  starts the next as one finishes, until every job has; a job that fails
+  is counted and named, and the others go on. Cancelling stops starting
+  jobs and tells each running reading to `cancel`; a criteria check that
+  answers later is dropped.
+
+    running ──every job finished──▶ done
+       │
+       │ cancel
+       ▼
+    cancelled
+
+    spawn    spawn             a reading actor per read job → spawned {name, address}
+    model    criteria          {page, criteria, coordinator} → model.criteria {page, results, seconds?} | model.error {message, page},
+                               answered by name, later: the panel never waits for a site reading
+    (actors) reading.finished  {page, audienceID, state, error?}   from each reading it started
+             cancel            to each reading still running, when it is cancelled
+    store    site, check       its record, after every change; each page's criteria checked
+    ui       site, check       the same
+
+  A check's record: {page, at, results: [{id, text, needID?, page, from,
+  met: true | false | null, quote?}]}.
+
+  `state` names where it was for the store; an actor spawned with a
+  stored record starts from it (one stored while running was cut off:
+  cancelled).
+-->
+<scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0"
+       datamodel="ecmascript" name="site" initial="live">
+  <datamodel>
+    <!-- the actor's own name; the origin of the site it reads -->
+    <data id="name"/>
+    <data id="origin"/>
+    <data id="lang" expr="'en'"/>
+    <data id="state" expr="'new'"/>
+    <data id="started" expr="null"/>
+    <!-- when every job had finished, or it was cancelled -->
+    <data id="at" expr="null"/>
+    <data id="jobs" expr="[]"/>
+    <data id="concurrency" expr="3"/>
+    <!-- the ids of the jobs started, of those running, of those finished -->
+    <data id="started_ids" expr="[]"/>
+    <data id="running" expr="[]"/>
+    <data id="finished" expr="[]"/>
+    <!-- the jobs that failed: {id, page, audienceID?, error} -->
+    <data id="failed" expr="[]"/>
+    <!-- the jobs to start now -->
+    <data id="starting" expr="[]"/>
+    <data id="error" expr="null"/>
+  </datamodel>
+
+  <script>
+    // An actor's local address in this system, by its name.
+    function address(name) {
+      return 'tinyactors://copywriter/@' + encodeURIComponent(name);
+    }
+
+    // The jobs to start: the next ones not started, while fewer than
+    // `concurrency` run.
+    function next(jobs, started, running, concurrency) {
+      var room = Math.max(0, concurrency - running.length);
+      return jobs.filter(function (j) { return started.indexOf(j.id) &lt; 0; }).slice(0, room);
+    }
+
+    // The read job of a finished reading, or the criteria job of a page.
+    function jobOf(jobs, running, kind, page, audienceID) {
+      return jobs.find(function (j) {
+        return running.indexOf(j.id) >= 0 &amp;&amp; j.kind === kind &amp;&amp; j.page === page
+          &amp;&amp; (kind !== 'read' || j.audienceID === audienceID);
+      }) || null;
+    }
+
+    // The reading actors still running, by name.
+    function runningReadings(jobs, running) {
+      return jobs.filter(function (j) { return j.kind === 'read' &amp;&amp; running.indexOf(j.id) >= 0; })
+        .map(function (j) { return j.spawn.name; });
+    }
+  </script>
+
+  <state id="live" initial="restore">
+    <!-- Every state raises `changed`: the record goes to the panel and to the store. -->
+    <transition event="changed">
+      <send type="ui" event="site" namelist="name origin lang state started at jobs concurrency started_ids running finished failed error"/>
+      <send type="store" event="site" namelist="name origin lang state started at jobs concurrency started_ids running finished failed error"/>
+    </transition>
+    <!-- a spawn's answer, a cancel to a reading that ended: nothing to do -->
+    <transition event="spawned error.communication"/>
+
+    <!-- A new actor, or one the store gave back: go to the state it was in. -->
+    <state id="restore">
+      <transition cond="state === 'done'" target="done"/>
+      <transition cond="state === 'cancelled'" target="cancelled"/>
+      <transition cond="state === 'running'" target="cancelled">
+        <assign location="error" expr="'The reading of the site was cut off: read it again.'"/>
+      </transition>
+      <transition target="running"/>
+    </state>
+
+    <!-- Jobs start, a few at a time, until every one has finished. -->
+    <state id="running">
+      <onentry>
+        <assign location="state" expr="'running'"/>
+        <assign location="started" expr="new Date().toISOString()"/>
+        <raise event="fill"/>
+      </onentry>
+
+      <!-- start what there is room for; with nothing left to run, it is done -->
+      <transition event="fill" cond="running.length === 0 &amp;&amp; next(jobs, started_ids, running, concurrency).length === 0" target="done"/>
+      <transition event="fill">
+        <assign location="starting" expr="next(jobs, started_ids, running, concurrency)"/>
+        <assign location="started_ids" expr="started_ids.concat(starting.map((j) => j.id))"/>
+        <assign location="running" expr="running.concat(starting.map((j) => j.id))"/>
+        <foreach array="starting" item="job">
+          <if cond="job.kind === 'read'">
+            <send type="spawn" event="spawn"><content expr="job.spawn"/></send>
+          <else/>
+            <send type="model" event="criteria"><content expr="({ page: job.page, criteria: job.criteria, coordinator: name })"/></send>
+          </if>
+        </foreach>
+        <assign location="starting" expr="[]"/>
+        <raise event="changed"/>
+      </transition>
+
+      <!-- a reading it started answered or failed -->
+      <transition event="reading.finished">
+        <assign location="starting" expr="[jobOf(jobs, running, 'read', _event.data.page, _event.data.audienceID)].filter(Boolean)"/>
+        <assign location="running" expr="running.filter((id) => !starting.some((j) => j.id === id))"/>
+        <assign location="finished" expr="finished.concat(starting.map((j) => j.id))"/>
+        <if cond="_event.data.state !== 'done'">
+          <assign location="failed" expr="failed.concat(starting.map((j) => ({ id: j.id, page: j.page, audienceID: j.audienceID, error: _event.data.error || 'The reading failed.' })))"/>
+        </if>
+        <assign location="starting" expr="[]"/>
+        <raise event="fill"/>
+      </transition>
+
+      <!-- a page's criteria were checked -->
+      <transition event="model.criteria">
+        <assign location="starting" expr="[jobOf(jobs, running, 'criteria', _event.data.page)].filter(Boolean)"/>
+        <assign location="running" expr="running.filter((id) => !starting.some((j) => j.id === id))"/>
+        <assign location="finished" expr="finished.concat(starting.map((j) => j.id))"/>
+        <assign location="starting" expr="[]"/>
+        <send type="ui" event="check"><content expr="({ page: _event.data.page, at: new Date().toISOString(), results: _event.data.results || [] })"/></send>
+        <send type="store" event="check"><content expr="({ page: _event.data.page, at: new Date().toISOString(), results: _event.data.results || [] })"/></send>
+        <raise event="fill"/>
+      </transition>
+      <!-- a criteria check failed -->
+      <transition event="model.error">
+        <assign location="starting" expr="[jobOf(jobs, running, 'criteria', _event.data.page)].filter(Boolean)"/>
+        <assign location="running" expr="running.filter((id) => !starting.some((j) => j.id === id))"/>
+        <assign location="finished" expr="finished.concat(starting.map((j) => j.id))"/>
+        <assign location="failed" expr="failed.concat(starting.map((j) => ({ id: j.id, page: j.page, error: _event.data.message })))"/>
+        <assign location="starting" expr="[]"/>
+        <raise event="fill"/>
+      </transition>
+
+      <transition event="cancel" target="cancelled">
+        <foreach array="runningReadings(jobs, running)" item="reading">
+          <send targetexpr="address(reading)" event="cancel"/>
+        </foreach>
+        <assign location="running" expr="[]"/>
+      </transition>
+    </state>
+
+    <state id="done">
+      <onentry>
+        <assign location="state" expr="'done'"/>
+        <assign location="at" expr="new Date().toISOString()"/>
+        <raise event="changed"/>
+      </onentry>
+    </state>
+
+    <state id="cancelled">
+      <onentry>
+        <assign location="state" expr="'cancelled'"/>
+        <assign location="at" expr="new Date().toISOString()"/>
+        <raise event="changed"/>
+      </onentry>
+    </state>
+  </state>
+</scxml>

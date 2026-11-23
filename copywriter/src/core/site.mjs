@@ -293,7 +293,7 @@ export const MAX_SITE_PAGES = 60;
 /**
  * A site's map: its pages from `${origin}/llms.txt`, each page's head read
  * from its Markdown, `[{url, path, title, kind, audiences: [id],
- * description}]`, at most MAX_SITE_PAGES, six fetches at a time. A site
+ * audienceURLs: [absolute URL of each audience file], description}]`, at most MAX_SITE_PAGES, six fetches at a time. A site
  * without llms.txt has none ([]); a page whose Markdown cannot be read
  * keeps its title, with no kind. `fetchText(url) → text`.
  */
@@ -310,7 +310,8 @@ export async function siteMap(origin, fetchText) {
       const url = head.url || htmlOf(entry.md);
       let path = url;
       try { path = new URL(url).pathname; } catch { /* as it is */ }
-      pages[i] = { url, path, title: entry.title, kind: head.kind, audiences: head.audiences.map((a) => a.id), description: entry.description };
+      const files = head.audiences.map((a) => { try { return new URL(a.url, entry.md).href; } catch { return null; } }).filter(Boolean);
+      pages[i] = { url, path, title: entry.title, kind: head.kind, audiences: head.audiences.map((a) => a.id), audienceURLs: files, description: entry.description };
     }
   };
   await Promise.all(Array.from({ length: Math.min(6, listed.length) }, work));

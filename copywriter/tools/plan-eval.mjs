@@ -3,8 +3,9 @@
 // then planned ("Revise page") with the site map of its origin (llms.txt).
 // It prints the plan's items by action and target, the conflicts it
 // resolved and how, the proposed pages, each criterion, and flags every
-// number in the plan's copy that neither the page nor the site map states
-// (an invented fact), with the times of the readings and the plan.
+// number, proper noun, product or package name and URL in the plan's copy
+// that no page of the site states (an invented fact; tools/facts.mjs), with
+// the times of the readings and the plan.
 //
 //   mise run plan-eval [-- --url URL --model M --thinking T]   (GEMINI_API_KEY through fnox)
 
@@ -17,6 +18,7 @@ import { createReviewer } from '../src/core/reviewer.mjs';
 import { createMemoryStore } from '../src/core/store.mjs';
 import { siteMap } from '../src/core/site.mjs';
 import { fakeCredentials } from '../test/fakes.mjs';
+import { siteText, inventedFacts, factLine } from './facts.mjs';
 
 const { values } = parseArgs({ options: {
   url: { type: 'string', default: 'https://www.tinyactors.dev/' },
@@ -69,20 +71,19 @@ const plan = reviewer.getState().plan;
 const short = (t) => (t === 'here' || t === 'new' ? t : new URL(t).pathname);
 console.log(`\nplanned in ${seconds.toFixed(1)} s (${values.model}, thinking ${values.thinking}), with ${plan.sitePages} pages of the site map: ${plan.items.length} items, ${plan.newPages.length} new pages`);
 
-// the facts the plan may use: the page's text and the site map's titles and descriptions
+// the facts the plan may use: the page's text and every page of the site
 const { text } = await call('context');
-const map = await siteMap(new URL(values.url).origin, async (u) => { const r = await fetch(u); if (!r.ok) throw new Error(r.status); return r.text(); });
-const known = `${text}\n${map.map((p) => `${p.title} ${p.description}`).join('\n')}`;
-const numbers = (t) => (String(t).match(/\d[\d.,]*/g) || []).map((n) => n.replace(/[.,]$/, ''));
-const knownNumbers = new Set(numbers(known));
+const fetchText = async (u) => { const r = await fetch(u); if (!r.ok) throw new Error(r.status); return r.text(); };
+const map = await siteMap(new URL(values.url).origin, fetchText);
+const known = `${text}\n${map.map((p) => `${p.title} ${p.description}`).join('\n')}\n${await siteText(new URL(values.url).origin, fetchText)}`;
 let invented = 0;
 
 const byAction = {};
 for (const x of plan.items) byAction[`${x.action} → ${short(x.target)}`] = (byAction[`${x.action} → ${short(x.target)}`] || 0) + 1;
 console.log(`by action and target: ${JSON.stringify(byAction)}`);
 for (const x of plan.items) {
-  const extra = [...new Set([...numbers(x.text), ...numbers(x.targetText || '')].filter((n) => !knownNumbers.has(n)))];
-  if (extra.length) invented += 1;
+  const extra = factLine(inventedFacts(`${x.text}\n${x.targetText || ''}`, known));
+  if (extra) invented += 1;
   console.log(`\n- [${x.action} → ${short(x.target)}${x.targetTitle ? ` (${x.targetTitle})` : ''}${x.routed ? ', routed by the core' : ''}] ${x.needs.join(' ') || '(no need)'}`);
   if (x.original) console.log(`    on the page: “${x.original.slice(0, 120)}”${x.anchored ? '' : ' (NOT FOUND ON THE PAGE)'}`);
   console.log(`    text: ${x.text.slice(0, 240)}`);
@@ -91,7 +92,7 @@ for (const x of plan.items) {
   console.log(`    why: ${x.reason}`);
   if (x.conflict) console.log(`    conflict: ${x.conflict}`);
   for (const c of x.criteria) console.log(`    ✓? ${c.text}${c.page && c.page !== values.url ? `  [${short(c.page)}]` : ''}`);
-  if (extra.length) console.log(`    !! numbers neither the page nor the site map states: ${extra.join(', ')}`);
+  if (extra) console.log(`    ${extra}`);
 }
 for (const p of plan.newPages) {
   console.log(`\n+ new ${p.kind} page “${p.title}” for ${p.audiences.join(', ')}: ${p.needs.join(' ')}\n    ${p.outline.join(' / ')}${p.reason ? `\n    why: ${p.reason}` : ''}`);
@@ -99,7 +100,7 @@ for (const p of plan.newPages) {
 const conflicts = plan.items.filter((x) => x.conflict);
 console.log(`\nconflicts resolved: ${conflicts.length} (${conflicts.filter((x) => x.routed).length} routed by the core, ${conflicts.filter((x) => !x.routed).length} by the model)`);
 console.log(`items with an original not found on the page: ${plan.items.filter((x) => x.original && !x.anchored).length}`);
-console.log(`plan-eval: ${invented} item(s) with numbers the site does not state`);
+console.log(`plan-eval: ${invented} item(s) with facts the site does not state (numbers, names, URLs)`);
 reviewer.close();
 await browser.close();
 process.exit(0);

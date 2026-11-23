@@ -89,6 +89,12 @@ const gapRequest = (g) => `${GAP_VERBS[g.field] || 'Address'}: ${g.text} (${STAT
 // What a task says of its page's kind: the kind wins, other needs are routed.
 const kindNote = (pages, url) => (pages[url]?.kind ? ` The page is a ${pages[url].kind}: a need that belongs on another kind of page gets a link to where it is answered.` : '');
 
+// Whether the copywriter's last check of `url` found criterion `c` met.
+const metOf = (items, url, c) => (items.met || []).find((m) => m.text === c.text && (m.page === url || pathOf(m.page) === pathOf(url)));
+// A criterion's box in CHANGES.md: ticked when it is met already.
+const box = (items, url, c) => (metOf(items, url, c) ? '- [x]' : '- [ ]');
+const metNote = (items, url, c) => { const m = metOf(items, url, c); return m ? ` Met already${m.quote ? `: “${m.quote}”` : ''}.` : ''; };
+
 // The need an annotation is about (a reading's finding, or a gap made an open item).
 const needOf = (a) => a.finding?.needID || a.finding?.item?.needID || '';
 
@@ -109,8 +115,10 @@ function summary(a) {
  * to `{title, lang, audiences?}` where known (audiences: the names of the
  * page's own set, which its section in CHANGES.md says it is for). Throws when there is nothing to export.
  */
-export async function buildPacket({ annotations, gaps = [], audiences = [], plans = [], pages = {}, title = 'Copy review', at = new Date().toISOString() }) {
+export async function buildPacket({ annotations, gaps = [], audiences = [], plans = [], pages = {}, met = [], title = 'Copy review', at = new Date().toISOString() }) {
   const items = packetItems(annotations, gaps, plans);
+  // the criteria the copywriter's last check of their page found met: {page, text, quote?}
+  items.met = met;
   // the site audiences the reviewer edited: {siteID, url, name, differences: [{field, site, yours}]}
   items.audiences = audiences.filter((a) => a.differences?.length);
   if (items.changes.length === 0 && items.notes.length === 0 && items.gaps.length === 0 && items.audiences.length === 0
@@ -204,7 +212,7 @@ export async function buildPacket({ annotations, gaps = [], audiences = [], plan
     entries.push(`<design-task id="task-item-${i + 1}" observationRef="task-observation-${i + 1}" status="open">`
       + `<summary>${escapeText(taskSummary(t))}</summary>`
       + `<instructions>${escapeText(`${t.what}${t.reason ? ` (${t.reason})` : ''} Planned while revising ${t.from}.`)}</instructions>`
-      + `<acceptance>${escapeText(t.criteria.map((c) => c.text).join(' ') || `${t.page} answers ${t.needs.join(', ')}.`)}</acceptance>`
+      + `<acceptance>${escapeText(t.criteria.map((c) => `${metOf(items, t.page, c) ? 'Met already: ' : ''}${c.text}`).join(' ') || `${t.page} answers ${t.needs.join(', ')}.`)}</acceptance>`
       + '</design-task>');
   });
   items.newPages.forEach((p, i) => {
@@ -320,7 +328,7 @@ function changesMarkdown(items, pages, at) {
     }
     const criteria = items.criteria.get(url) || [];
     if (criteria.length) {
-      lines.push('### Acceptance criteria', '', ...criteria.map((c) => `- [ ] ${sentence(c.text)}${c.needID && !c.text.includes(c.needID) ? ` (${c.needID})` : ''}`), '');
+      lines.push('### Acceptance criteria', '', ...criteria.map((c) => `${box(items, url, c)} ${sentence(c.text)}${c.needID && !c.text.includes(c.needID) ? ` (${c.needID})` : ''}${metNote(items, url, c)}`), '');
     }
   }
   if (items.tasks.length) {
@@ -330,7 +338,7 @@ function changesMarkdown(items, pages, at) {
       lines.push(`### ${target}${mine[0].title ? ` (${mine[0].title})` : ''}`, '');
       for (const t of mine) {
         lines.push(`- ${t.needs.length ? `${t.needs.join(', ')}: ` : ''}${t.what}`, `  From the plan of ${t.from}.${t.reason ? ` ${t.reason}` : ''}`);
-        for (const c of t.criteria) lines.push(`  - [ ] ${sentence(c.text)}`);
+        for (const c of t.criteria) lines.push(`  ${box(items, t.page, c)} ${sentence(c.text)}${metNote(items, t.page, c)}`);
       }
       lines.push('');
     }
@@ -394,7 +402,8 @@ function readme(items, at) {
     '',
     `The plan of a page gives acceptance criteria (${[...items.criteria.values()].reduce((n, c) => n + c.length, 0)} here), each under the page`,
     'it names in CHANGES.md, and the tasks for other pages carry their own. Check each',
-    'criterion against the built site and report which hold.',
+    'criterion against the built site and report which hold. One ticked ([x], "Met',
+    'already") held when the copywriter last read its page: confirm it, nothing more.',
     '',
     'A need is named `audience.need` (`tech-lead.host-dies`): the audience\'s id and the',
     'need\'s, from the site\'s audience files. The site says which needs each page',

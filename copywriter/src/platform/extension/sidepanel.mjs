@@ -15,6 +15,7 @@
 import { createReviewer } from '../../core/reviewer.mjs';
 import { createRecorder } from '../../core/recorder.mjs';
 import { mountPanel } from '../../ui/panel.mjs';
+import { readHTML } from '../dom.mjs';
 
 const KEY = 'geminiKey';
 const params = new URLSearchParams(location.search);
@@ -111,6 +112,15 @@ function createTabPage() {
     },
     onPickEnd: (fn) => pickEndListeners.add(fn),
     onNavigate: (fn) => navigateListeners.add(fn),
+    // another page: a tab of this window that shows it, else a new one (a panel bound to one tab loads it there)
+    async open(url) {
+      if (fixedTab !== null) { await chrome.tabs.update(fixedTab, { url }); return; }
+      const bare = (u) => u.replace(/#.*$/, '');
+      const tabs = await chrome.tabs.query({ currentWindow: true });
+      const shown = tabs.find((t) => t.url && bare(t.url) === bare(url));
+      if (shown) await chrome.tabs.update(shown.id, { active: true });
+      else await chrome.tabs.create({ url, active: true });
+    },
   };
 }
 
@@ -184,6 +194,12 @@ const reviewer = createReviewer({
   clipboard,
   recorder: createPanelRecorder(),
   wasmURL: chrome.runtime.getURL('tinyactors.wasm'),
+  // a page as served (the host permissions cover http(s)), read as the content script reads one
+  fetchPage: async (url) => {
+    const response = await fetch(url, { cache: 'no-cache', signal: AbortSignal.timeout?.(10000) });
+    if (!response.ok) throw new Error(`${url}: ${response.status}`);
+    return readHTML(await response.text(), url);
+  },
 });
 const panel = mountPanel(document.body, reviewer, { layout: 'sidebar' });
 addEventListener('pagehide', () => { panel.unmount?.(); reviewer.close(); });

@@ -152,7 +152,7 @@
         chart: 'reading', name: r.name,
         params: {
           name: r.name, page: page, lang: lang, audienceID: r.audienceID, audience: r.audience,
-          previous: r.previous || [], replaces: r.replaces || null, state: 'new',
+          previous: r.previous || [], replaces: r.replaces || null, history: r.history || [], state: 'new',
         },
       };
     }

@@ -96,7 +96,9 @@ one-off Python.
   page's own set of audiences (`pages`, by URL; the database's version 4
   added it: the settings' `audienceIDs` stay as the last set used, the set
   of every page without its own, and no page gets one by the upgrade),
-  and each page's revision plan (`plans`, by page URL; version 5). Kept changes
+  and each page's revision plan (`plans`, by page URL; version 5), the
+  last reading of each site (`sites`, by origin) and each page's last
+  criteria check (`checks`, by page URL; version 6). Kept changes
   are re-applied to a page when it is opened again.
 - **Export.** A ZIP with `packet.xml` (valid against `spec/work-packet.xsd`,
   copied into the ZIP), `CHANGES.md` (a prompt a coding agent can follow:
@@ -353,7 +355,57 @@ one-off Python.
   the widget (Pixel 7, the deployed site): read as the three audiences in
   37 s, planned in 118 s (12 items, 3 new pages), a rewrite and a link
   accepted, the rewrite previewed in the hero. The site map leaves the
-  page out by its path, so a URL with a query does not list itself.
+  page out by its path, so a URL with a query does not list itself. A
+  plan thinks at `medium` unless the reviewer picked `low` or `xhigh`
+  (`planThinking`; high is the default, not a choice), measured below.
+- **The site view** (the maintainer, 2026-11-23: the last step of the
+  audience work). Every need of the site's audiences against the pages
+  (`siteGrid` in `src/core/grid.mjs`, from the store's readings and plans
+  of every page of this origin and the site map): per audience, its needs
+  (the file's order) and the pages the site map gives it (the pages it is
+  the main audience of first, then those that name it, then any other read
+  as it), each cell the status of that page's latest reading as that
+  audience, or unknown when it was never read; a need also shows the
+  accepted plan items that route it to a page (`routes`) and the new pages
+  not rejected that answer it. "Read the site" (`site.read {urls?}`; every
+  page of the site map with audiences when none are named) reads each page
+  as its own audiences in the background: a coordinator actor
+  (`charts/site.scxml`) given the jobs, at most `SITE_CONCURRENCY` (3)
+  readings at once, each its own reading actor, a failed one counted and
+  named while the others go on, cancellable (`site.cancel`: a reading
+  under way ends as cancelled and the one it replaced is back). A page
+  that is not the open one is fetched as served (`fetchPage`, the
+  platform's: the HTML parsed with DOMParser and read as `context()` reads
+  the live page, `readHTML` in `src/platform/dom.mjs`, with its head's
+  kind and audiences), read without findings (they could not be placed on
+  a page the panel does not show; the last reading's stay), and its
+  answers come by name, so neither a command nor opening a page waits for
+  a reading of the site. A page's audiences not in the store yet are added
+  from the site map's links to their files, as a page's own links are.
+  `site.open {url}` opens a page (`page.open`: the widget navigates, the
+  side panel activates the page's tab or opens one).
+- **Verification** (the maintainer, 2026-11-23). A reading keeps its
+  history: the summaries of the readings it replaced (`history`, newest
+  first, at most `MAX_HISTORY` (5): when, the hash of the text, each
+  item's status). A reading records the hash of the page's text as served
+  (`textHash`; the open page's is read when it is opened, from its HTML
+  as served, so the reviewer's previews never count), and a page whose
+  hash now differs from its last readings' is `changed`: the panel offers
+  "Check changes" (`verify`), which reads the page again as the same
+  audiences and checks the acceptance criteria the accepted plans set for
+  it (`criteriaFor`: every page's accepted items whose criterion names
+  this page; an item whose annotation was dismissed or deleted does not
+  count), as a site reading of one page. The comparison (`compare`):
+  each need whose status rose (missing → partial → answered) improved,
+  each that fell regressed, the rest unchanged, and before → after
+  answered counts per audience. A criteria check is one cheap request
+  (thinking low, no thoughts, `report_criterion {number, met, quote}`
+  forced; `CHECK_FUNCTIONS`, `CHECK_RULES`, `checksOf` in `src/core/plan.mjs`)
+  over the page's text and its links (`text → path`), a quote not on the
+  page dropped; criteria for other pages are checked when those pages are
+  read (each site reading checks every page it reads). The export ticks
+  the criteria the last check found met ("- [x] … Met already: “quote”.",
+  "Met already:" in `packet.xml`'s acceptance).
 
 ## Layout
 
@@ -367,7 +419,10 @@ copywriter/
     store.mjs             IndexedDB (and an in-memory store for tests)
     packet.mjs            the work packet: XML, Markdown, ZIP (no dependency)
     site.mjs              what a page says it is for: audience files (parse, items, edits, divergence), page kinds, the site map
-    plan.mjs              the revision plan: its functions and rules, planOf (read and route the items), bestPage
+    plan.mjs              the revision plan: its functions and rules, planOf (read and route the items), bestPage;
+                          the criteria check's function, rules and checksOf
+    grid.mjs              the site view (siteGrid), a reading's history and comparison (summaryOf, historyOf,
+                          compare), the criteria accepted plans set for a page (criteriaFor), textHash
     charts.mjs            the charts' text, imported by the bundle
   src/ui/                 the panel: plain DOM + Lucide icons, renders ViewState, dispatches commands
     panel.mjs             mountPanel(root, reviewer, {layout: 'sidebar'|'sheet', onTall?}); its scrolling area is a div, so
@@ -443,16 +498,22 @@ copywriter/
                           built by the real packet code, `reviewer.exported()`), the extension and the widget
                           (test/fixtures/page.html links the audience files of test/fixtures/audiences/)
   mise/tasks/             build, test, charts, eval, read-eval, talk-eval, plan-eval (Ruby)
-  tools/                  serve.mjs (the panel's preview), eval.mjs, read-eval.mjs, talk-eval.mjs and plan-eval.mjs (the real Gemini)
+  tools/                  serve.mjs (the panel's preview), eval.mjs, read-eval.mjs, talk-eval.mjs, plan-eval.mjs and
+                          site-eval.mjs (the real Gemini); facts.mjs (the evals' check for invented facts: numbers, names,
+                          packages and URLs no page of the site states, from every page's Markdown in llms.txt)
   dist/                   build output (not in git): extension/, copywriter-extension.zip, site/
 ```
 
 ## The facade: `Reviewer`
 
-`createReviewer({page, credentials, download, clipboard, store?, wasmURL?, fetch?, fetchFile?, recorder?})`
+`createReviewer({page, credentials, download, clipboard, store?, wasmURL?, fetch?, fetchFile?, fetchPage?, recorder?})`
 (`src/core/reviewer.mjs`; `store` defaults to IndexedDB, `wasmURL` to the
 package's own `tinyactors.wasm`, `fetchFile(url) → text` (an audience
-file, llms.txt, a page's Markdown) to the platform's `fetch`; `fetch` (Gemini's) and `recorder` are for tests)
+file, llms.txt, a page's Markdown) to the platform's `fetch`;
+`fetchPage(url) → {url, title, lang, headings, text, links, kind,
+audiences}` (a page as served: the platforms fetch it and read it with
+`readHTML`; without it no other page is read and the open page's hash is
+of its live text); `fetch` (Gemini's) and `recorder` are for tests)
 returns:
 
 ```js
@@ -480,6 +541,7 @@ annotation's id.
     audienceSuggestion,                    // a page with no set of its own: { state: 'asking', audienceIDs: [] } while the
                                            //   model is asked which audiences read it, { state: 'ready', audienceIDs } until
                                            //   accepted, adjusted or dismissed; else null
+    changed,                               // true: its text as served differs from what its last readings read
   },
   selection: { text, fits } | null,        // the page's current selection or pick, if any; fits false: more than one
                                            // sentence, heading or paragraph (another block, or over 600 characters)
@@ -527,7 +589,22 @@ annotation's id.
                                            //   need's reference; kind: the kind of page it belongs on
     findingIDs,                            // the annotations its findings made, while they exist
     error?, seconds?,
+    history: [{ at, answered, total }],    // the readings it replaced, newest first
+    compared?: { before: { at, answered, total }, after: { answered, total },
+      improved: [{ needID?, text, from, to }], regressed: [...], unchanged },  // against the last of its history
   }],
+  criteria: {                              // the acceptance criteria the accepted plans set for the open page; else null
+    at,                                    // the last check (null: never checked)
+    items: [{ id, text, needID?, page, from: { page, itemID }, met: true | false | null, quote? }],
+  } | null,
+  site: {                                  // the site view of the open page's origin
+    state,                                 // 'none' (no site map) | 'idle' | 'reading' | 'done' | 'cancelled'
+    progress: { done, failed, total } | null, running: [url], failures: [{ page, audienceID?, error }], error?,
+    pages: [{ url, path, title, kind, audiences: [audienceID], read, at, here? }],
+    audiences: [{ id, name, siteID, pages: [url], answered,   // pages: its columns; answered: needs answered somewhere
+      needs: [{ id, field, text, answered: [url], cells: [{ url, status: 'answered' | 'partial' | 'missing' | null, explanation? }],
+        routes: [{ url, title, from }], newPages: [{ title, decision }] }] }],
+  },
   plan: {                                  // the open page's revision plan, once asked for; else null
     state,                                 // 'planning' | 'planned' | 'failed'
     at, seconds?, error?, sitePages,       // sitePages: the other pages of the site map it was made with
@@ -601,6 +678,10 @@ transcript exists; then the message shows, and the conversation goes on
 | `plan` | | plans the page ("Revise page"); refused without a key, while planning, and before any reading or finding ("Read the page as an audience first."); settles when the plan answered, rejecting with its error |
 | `plan.accept` / `plan.reject` | `id` | decides an item or a new page of the plan; an accepted rewrite, cut, add or link makes its annotation |
 | `plan.acceptAll` | | accepts every item and new page not decided yet |
+| `site.read` | `urls?` | reads the site's pages (those named, else every page of the site map with audiences) as their own audiences, in the background, at most three at a time, and checks each page's acceptance criteria; resolves to the jobs' count at once. Refused without a key, a site map or `fetchPage`, and while one runs |
+| `site.cancel` | | stops the site reading: no job starts, the readings under way end and the ones they replaced are back |
+| `site.open` | `url` | opens that page (`page.open`) |
+| `verify` | | "Check changes": reads the open page again as its audiences (those it links and those read) and checks its criteria, as a site reading of one page |
 | `export` | `scope: 'page' \| 'all'`, `to: 'download' \| 'clipboard'` | the kept changes, the open items, the checklist gaps not made into open items, and the accepted plan: criteria, tasks for other pages, proposed pages |
 
 ## Platform adapters (what each platform gives the core)
@@ -608,7 +689,8 @@ transcript exists; then the message shows, and the conversation goes on
 ```js
 page = {
   info(),                        // → { url, title, lang }
-  context(),                     // → { headings: [text], text }  (visible text, at most 20,000 characters)
+  context(),                     // → { headings: [text], text, links? }  (visible text, at most 20,000 characters;
+                                 //   links [{text, href}], an href on the page's origin as its path)
   selection(),                   // → { text, anchor, fits? } | null   fits false: it spans blocks (p, li, h1-h6, td,
                                  //   blockquote, figcaption, dd, dt, a button's or a link's label) or is over 600 characters
   onSelection(fn),               // fn({ text, anchor, fits? } | null) when the selection changes
@@ -628,6 +710,8 @@ page = {
   onPickEnd?(fn),                // fn() when the page ended pick mode itself (Escape)
   purpose?(),                    // → { kind | null, audiences: [absolute URL] }: what the head's meta page-kind
                                  //   and link rel=audience (in order) say
+  open?(url),                    // shows another page of the site: the widget navigates to it, the side panel
+                                 //   activates a tab that shows it or opens one
 }
 anchor = { quote: { exact, prefix, suffix }, selector }   // W3C text quote + CSS path of the nearest element
 credentials = { get(), set(key, { remember }), forget(), remembered() }
@@ -690,7 +774,14 @@ revision plan (`charts/plan.scxml`: idle → planning → planned, failed;
 sitePages}`; `accept`, `reject` and `acceptAll` decide items, an accepted
 rewrite, cut, add or link spawning an annotation of source `plan` whose
 `plan` names the item, its needs and criteria; a re-plan keeps the decided
-items; its header draws the flow). A reading's checklist items
+items; its header draws the flow), and one per reading of the site
+(`charts/site.scxml`: running → done, cancelled; the core gives it its
+jobs, each a reading actor's spawn or a page's criteria check; it spawns
+at most `concurrency` at a time, each reading telling it
+`reading.finished`, and sends `model` a `criteria {page, criteria,
+coordinator}`, answered by name with `model.criteria {page, results}`,
+whose results go to `ui` and `store` as a `check`; `cancel` tells the
+readings under way to `cancel`). A reading's checklist items
 of a site audience carry `needID` (`audience.need`) and `kind` (the kind
 of page the need belongs on); a finding about one carries its `needID`, and so does an open item
 made of a gap. An annotation's `ask` and `suggest` carry the page's

@@ -53,7 +53,7 @@ test('opening a page that links audiences adds them to the store, in its order, 
   const store = createMemoryStore();
   const { reviewer } = await setup({ page: homePage(), fetch, fetchFile, store });
   const state = reviewer.getState();
-  assert.deepEqual(fetchFile.asked, HOME.audiences);
+  assert.deepEqual(fetchFile.asked.filter((u) => u.endsWith('.xml')), HOME.audiences);
   assert.deepEqual(state.settings.audienceIDs, ['site-agent-platform', 'site-tech-lead', 'site-workflow-tester'], 'the links\' order');
   assert.equal(state.page.kind, 'pitch');
   assert.equal(state.page.mainAudienceID, 'site-agent-platform');
@@ -100,7 +100,7 @@ test('a page without links keeps the store as it is and is asked for a suggestio
   const { reviewer } = await setup({ store, fetch, fetchFile, text: TEXT });
   for (let i = 0; i < 200 && reviewer.getState().page.audienceSuggestion?.state !== 'ready'; i++) await new Promise((r) => setTimeout(r, 5));
   assert.deepEqual(reviewer.getState().page.audienceSuggestion, { state: 'ready', audienceIDs: ['mine'] });
-  assert.deepEqual(fetchFile.asked, []);
+  assert.deepEqual(fetchFile.asked.filter((u) => u.endsWith('.xml')), []);
   assert.deepEqual(ids(reviewer), ['mine']);
   assert.equal(reviewer.getState().page.kind, null);
   reviewer.close();

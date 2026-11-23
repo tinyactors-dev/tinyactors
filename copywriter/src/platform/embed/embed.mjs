@@ -15,7 +15,7 @@
 import { createElement, MessageSquarePlus, PenLine, X } from 'lucide';
 import { createReviewer } from '../../core/reviewer.mjs';
 import { mountPanel } from '../../ui/panel.mjs';
-import { createDOMPage } from '../dom.mjs';
+import { createDOMPage, readHTML } from '../dom.mjs';
 
 const HOST_ID = 'tinyactors-copywriter';
 const KEY = 'tinyactors-copywriter-key';
@@ -210,9 +210,17 @@ function start() {
     },
   });
 
+  // another page of the site: the widget goes there (it boots again on it)
+  page.open = (url) => { location.assign(url); };
   const reviewer = createReviewer({
     page, credentials, download, clipboard,
     wasmURL: new URL('tinyactors.wasm', import.meta.url).href,
+    // a page of the site as served, read as context() reads this one
+    fetchPage: async (url) => {
+      const response = await fetch(url, { cache: 'no-cache', signal: AbortSignal.timeout?.(10000) });
+      if (!response.ok) throw new Error(`${url}: ${response.status}`);
+      return readHTML(await response.text(), url);
+    },
   });
   // With a selection the launcher annotates it: it stays in view, and a
   // tap opens the sheet on the new annotation.

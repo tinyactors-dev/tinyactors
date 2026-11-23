@@ -127,11 +127,11 @@ test('routing: a need of another kind than the page\'s becomes one line and a li
   assert.deepEqual(newPages.map((p) => [p.kind, p.audiences, p.needs]), [['tutorial', ['agent-platform'], ['agent-platform.memory']]], 'no tutorial page: a new one');
 });
 
-test('plan the page: one request at the reviewer\'s level with everything gathered and the site map; the items routed and anchored', async () => {
+test('plan the page: one request at medium with everything gathered and the site map; the items routed and anchored', async () => {
   const { reviewer, fetch, fetchFile } = await planned();
   const request = fetch.requests[1];
   assert.deepEqual(request.body.tools[0].functionDeclarations.map((f) => f.name), ['plan_item', 'new_page']);
-  assert.equal(request.body.generationConfig.thinkingConfig.thinkingLevel, 'high', 'the reviewer\'s level');
+  assert.equal(request.body.generationConfig.thinkingConfig.thinkingLevel, 'medium', 'a plan thinks at medium when the reviewer is at high (planThinking)');
   const asked = system(request);
   assert.match(asked, /Its kind: pitch: the reader is deciding whether to adopt it/);
   assert.match(asked, /Its audiences, the main one first:\n- Agent-platform engineer/);

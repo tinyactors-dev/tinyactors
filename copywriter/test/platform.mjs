@@ -19,7 +19,8 @@ const TYPES = {
 
 /**
  * Serves `routes`: a map of URL path prefix → a directory, or of exact
- * path → a file. A directory's path serves its index.html. Port 0.
+ * path → a file. A directory's path serves its index.html; /llms.txt,
+ * unless routed, is an empty site map. Port 0.
  */
 export function serve(routes) {
   const server = createServer(async (request, response) => {
@@ -37,6 +38,8 @@ export function serve(routes) {
       }
       return;
     }
+    // a site with no pages in its map, unless a route serves one: the panel asks every origin for it
+    if (path === '/llms.txt') { response.writeHead(200, { 'content-type': 'text/plain' }).end('# Fixture\n'); return; }
     response.writeHead(404).end();
   });
   return new Promise((resolve) => server.listen(0, '127.0.0.1', () => resolve(server)));

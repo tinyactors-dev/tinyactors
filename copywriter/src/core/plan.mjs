@@ -245,3 +245,47 @@ export function planOf({ calls }, { url, kind, needs = new Map(), pages = [], id
   }
   return { items: items.slice(0, MAX_PLAN_ITEMS * 2), newPages };
 }
+
+// ---- checking acceptance criteria ------------------------------------------
+
+/** The one function of a criteria check: whether the page meets each criterion. */
+export const CHECK_FUNCTIONS = Object.freeze([
+  {
+    name: 'report_criterion',
+    description: 'Report whether the page meets one acceptance criterion. Call it once for every criterion.',
+    parameters: {
+      type: 'object',
+      properties: {
+        number: { type: 'integer', description: 'The criterion\'s number in the list.' },
+        met: { type: 'boolean', description: 'True when the page, as given, meets it.' },
+        quote: { type: 'string', description: 'The exact text on the page (or a link of the page, as listed) that shows it is met, or that comes closest; copied verbatim, one sentence. Empty when nothing does.' },
+      },
+      required: ['number', 'met', 'quote'],
+    },
+  },
+]);
+
+/** What a criteria check asks of the model, after the page and the criteria. */
+export const CHECK_RULES = Object.freeze([
+  'Check each acceptance criterion against this page alone: its text and its links as listed. A criterion about a link is met only when the page has a link to that page.',
+  'Call report_criterion once for every criterion, by its number: met true or false, and the quote that shows it.',
+  'Judge strictly: a criterion is met when the page says it, not when the page hints at it. Answer with function calls only.',
+]);
+
+/**
+ * A criteria check's answer, against the criteria asked and the page's
+ * text: `[{...criterion, met: true | false | null, quote?}]`, one per
+ * criterion (null: the model said nothing of it; a quote not on the page,
+ * whitespace and case aside, is dropped).
+ */
+export function checksOf({ calls }, criteria, text = '') {
+  const flat = String(text).replace(/\s+/g, ' ').toLowerCase();
+  const said = new Map();
+  for (const { name, args: a } of calls) {
+    const n = Number(a?.number);
+    if (name !== 'report_criterion' || !Number.isInteger(n) || n < 1 || n > criteria.length || typeof a.met !== 'boolean') continue;
+    const quote = clean(a.quote, 400);
+    said.set(n - 1, { met: a.met, ...(quote && flat.includes(quote.replace(/\s+/g, ' ').toLowerCase()) ? { quote } : {}) });
+  }
+  return criteria.map((c, i) => ({ ...c, ...(said.get(i) || { met: null }) }));
+}

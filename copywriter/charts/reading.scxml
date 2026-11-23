@@ -22,10 +22,26 @@
   about stays) and the previous reading that it is `superseded` (it ends).
   Both go by name, to the actors' local addresses.
 
-    model    read        {page, audienceID}
+  History: the core gives a new reading the last one's summary and its
+  history (`history`, newest first, at most five: {at, hash, items:
+  [{field, text, status, needID?}]}), so the panel can compare a page
+  before and after a change ("Check changes"). `hash` is the hash of the
+  page's text the model read (src/core/grid.mjs `textHash`), which tells
+  when the page changed since.
+
+  A reading of the site (charts/site.scxml) names its `coordinator`,
+  which it tells when it answered or failed (`reading.finished {page,
+  audienceID, state}`) and which may `cancel` it while it reads (it ends
+  as `cancelled`: the core puts the reading it replaced back). One of a
+  page that is not the open one has `findings` false: it keeps the last
+  reading's findings (`findingIDs`) and spawns none, since its annotations
+  could not be placed on a page the panel does not show.
+
+    model    read        {name, page, audienceID, coordinator}   (a site reading's is answered by name, later)
                          → model.reading {items, findings, thoughts?, seconds?} | model.error {message}
     spawn    spawn       an annotation per finding, and per gap opened → spawned {name, address}
     (actors) retire      to each previous finding;  superseded  to the previous reading
+             reading.finished {page, audienceID, state}   to the coordinator, when it answers or fails
     store    reading     its record, after every change
     ui       reading     its record, after every change
 
@@ -66,6 +82,12 @@
     <data id="seconds" expr="null"/>
     <!-- the Spawner's requests of the answer being handled -->
     <data id="pending" expr="[]"/>
+    <!-- the hash of the text read, and the earlier readings' summaries, newest first -->
+    <data id="hash" expr="null"/>
+    <data id="history" expr="[]"/>
+    <!-- the site reading that started it (its name), and whether its findings become annotations -->
+    <data id="coordinator" expr="null"/>
+    <data id="findings" expr="true"/>
   </datamodel>
 
   <script>
@@ -116,8 +138,8 @@
   <state id="live" initial="restore">
     <!-- Every state raises `changed`: the record goes to the panel and to the store. -->
     <transition event="changed">
-      <send type="ui" event="reading" namelist="name page lang audienceID audience state started at items findingIDs previous replaces error thoughts seconds"/>
-      <send type="store" event="reading" namelist="name page lang audienceID audience state started at items findingIDs previous replaces error thoughts seconds"/>
+      <send type="ui" event="reading" namelist="name page lang audienceID audience state started at items findingIDs previous replaces error thoughts seconds hash history coordinator findings"/>
+      <send type="store" event="reading" namelist="name page lang audienceID audience state started at items findingIDs previous replaces error thoughts seconds hash history coordinator findings"/>
     </transition>
     <!-- a newer reading of the same audience answered: this one ends -->
     <transition event="superseded" target="ended"/>
@@ -127,7 +149,7 @@
     <!-- A new actor, or one the store gave back: go to the state it was in. -->
     <state id="restore">
       <transition cond="state === 'done'" target="done"/>
-      <transition cond="state === 'failed'" target="failed"/>
+      <transition cond="state === 'failed' || state === 'cancelled'" target="failed"/>
       <transition cond="state === 'reading'" target="failed">
         <assign location="error" expr="'The reading was cut off: read again.'"/>
       </transition>
@@ -141,12 +163,14 @@
         <assign location="started" expr="new Date().toISOString()"/>
         <assign location="error" expr="null"/>
         <raise event="changed"/>
-        <send type="model" event="read" namelist="page audienceID"/>
+        <send type="model" event="read" namelist="name page audienceID coordinator"/>
       </onentry>
       <transition event="model.reading" target="done">
         <assign location="items" expr="_event.data.items || []"/>
-        <assign location="pending" expr="(_event.data.findings || []).map((f, i) => finding(f, { page, lang, audienceID, audience }, i + 1))"/>
-        <assign location="findingIDs" expr="pending.map((p) => p.name)"/>
+        <assign location="hash" expr="_event.data.hash || null"/>
+        <assign location="pending" expr="findings ? (_event.data.findings || []).map((f, i) => finding(f, { page, lang, audienceID, audience }, i + 1)) : []"/>
+        <!-- a reading without findings keeps the last one's -->
+        <assign location="findingIDs" expr="findings ? pending.map((p) => p.name) : previous"/>
         <assign location="at" expr="new Date().toISOString()"/>
         <assign location="thoughts" expr="_event.data.thoughts || null"/>
         <assign location="seconds" expr="_event.data.seconds || null"/>
@@ -154,21 +178,38 @@
           <send type="spawn" event="spawn"><content expr="spawn"/></send>
         </foreach>
         <!-- the previous reading's findings: the untouched ones delete themselves -->
-        <foreach array="previous" item="old">
-          <send targetexpr="address(old)" event="retire"/>
-        </foreach>
+        <if cond="findings">
+          <foreach array="previous" item="old">
+            <send targetexpr="address(old)" event="retire"/>
+          </foreach>
+        </if>
         <if cond="replaces">
           <send targetexpr="address(replaces)" event="superseded"/>
         </if>
         <assign location="previous" expr="[]"/>
         <assign location="replaces" expr="null"/>
         <assign location="pending" expr="[]"/>
+        <if cond="coordinator">
+          <send targetexpr="address(coordinator)" event="reading.finished"><content expr="({ page, audienceID, state: 'done' })"/></send>
+        </if>
       </transition>
       <transition event="model.error" target="failed">
         <assign location="error" expr="_event.data.message"/>
+        <if cond="coordinator">
+          <send targetexpr="address(coordinator)" event="reading.finished"><content expr="({ page, audienceID, state: 'failed', error })"/></send>
+        </if>
       </transition>
       <transition event="error.communication" target="failed">
         <assign location="error" expr="'The model could not be reached.'"/>
+        <if cond="coordinator">
+          <send targetexpr="address(coordinator)" event="reading.finished"><content expr="({ page, audienceID, state: 'failed', error })"/></send>
+        </if>
+      </transition>
+      <!-- the site reading was cancelled: this one ends, and the core puts back the one it replaced -->
+      <transition event="cancel" target="ended">
+        <assign location="state" expr="'cancelled'"/>
+        <send type="ui" event="reading" namelist="name page lang audienceID audience state started at items findingIDs previous replaces error thoughts seconds hash history coordinator findings"/>
+        <send type="store" event="reading" namelist="name page lang audienceID audience state started at items findingIDs previous replaces error thoughts seconds hash history coordinator findings"/>
       </transition>
     </state>
 

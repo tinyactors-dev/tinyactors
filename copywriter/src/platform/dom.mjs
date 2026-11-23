@@ -283,6 +283,64 @@ export function parentBlock(el, options) {
  * `reveal` scroll their text to its middle, below a sticky header. Without
  * it, they scroll the text to the viewport's middle.
  */
+/**
+ * A document's text as the model reads it: its headings (h1 to h3), its
+ * visible text (at most 20,000 characters) and its links (`{text, href}`,
+ * the href as a path on the page's own origin), leaving out what
+ * `exclude(el)` names.
+ */
+export function contextOf(doc, exclude = () => false) {
+  const headings = [...doc.querySelectorAll('h1, h2, h3')]
+    .filter((h) => !exclude(h)).map((h) => normalize(h.textContent)).filter(Boolean).slice(0, 60);
+  const index = indexText(doc.body, exclude);
+  const origin = (() => { try { return new URL(doc.baseURI).origin; } catch { return ''; } })();
+  const links = [];
+  for (const a of doc.querySelectorAll('a[href]')) {
+    if (exclude(a) || links.length >= 200) continue;
+    const text = normalize(a.textContent);
+    let href;
+    try {
+      const u = new URL(a.getAttribute('href'), doc.baseURI);
+      href = u.origin === origin ? `${u.pathname}${u.hash}` : u.href;
+    } catch { continue; }
+    if (text && !links.some((l) => l.text === text && l.href === href)) links.push({ text, href });
+  }
+  return { headings, text: index.text.slice(0, MAX_CONTEXT_TEXT), links };
+}
+
+/** What a page's head says it is for: its kind and the audience files it links, in order. */
+export function purposeOf(doc) {
+  const head = doc.head || doc.documentElement;
+  const kind = head.querySelector('meta[name="page-kind"]')?.getAttribute('content')?.trim() || null;
+  const audiences = [];
+  for (const link of head.querySelectorAll('link[rel~="audience"][href]')) {
+    try {
+      const url = new URL(link.getAttribute('href'), doc.baseURI).href;
+      if (!audiences.includes(url)) audiences.push(url);
+    } catch { /* not a URL */ }
+  }
+  return { kind, audiences };
+}
+
+/**
+ * A page the panel does not show, from its HTML (the site reading):
+ * parsed with DOMParser, read as `context()` reads the live page (hidden
+ * elements and the copywriter's own left out; nothing is rendered, so
+ * nothing else is), with its head's purpose. →
+ * `{url, title, lang, headings, text, links, kind, audiences}`.
+ */
+export function readHTML(html, url, { DOMParser = globalThis.DOMParser } = {}) {
+  const doc = new DOMParser().parseFromString(String(html), 'text/html');
+  if (!doc.querySelector('base')) {
+    const base = doc.createElement('base');
+    base.setAttribute('href', url);
+    doc.head.prepend(base);
+  }
+  const hidden = (el) => el.hidden || el.getAttribute('aria-hidden') === 'true' || el.id === 'tinyactors-copywriter';
+  const { headings, text, links } = contextOf(doc, hidden);
+  return { url, title: normalize(doc.title), lang: doc.documentElement.lang || 'en', headings, text, links, ...purposeOf(doc) };
+}
+
 export function createDOMPage({ doc = document, exclude = () => false, keepSelection = () => false, band = null } = {}) {
   const win = doc.defaultView;
   const previews = new Map(); // id → {parts: [{node, before, after}], range, exact}
@@ -355,11 +413,8 @@ export function createDOMPage({ doc = document, exclude = () => false, keepSelec
   }
 
   function context() {
-    const headings = [...doc.querySelectorAll('h1, h2, h3')]
-      .filter((h) => !exclude(h) && (h.checkVisibility ? h.checkVisibility() : true))
-      .map((h) => normalize(h.textContent)).filter(Boolean).slice(0, 60);
-    const index = indexText(doc.body, (el) => exclude(el) || (el.checkVisibility ? !el.checkVisibility() : false));
-    return { headings, text: index.text.slice(0, MAX_CONTEXT_TEXT) };
+    const visible = (el) => (el.checkVisibility ? el.checkVisibility() : true);
+    return contextOf(doc, (el) => exclude(el) || !visible(el));
   }
 
   // The height a sticky or fixed header covers at the top of the viewport.
@@ -575,18 +630,7 @@ export function createDOMPage({ doc = document, exclude = () => false, keepSelec
    * kinds: the convention"): its kind and the audience files it links
    * (absolute URLs, in order: the first is its main audience).
    */
-  function purpose() {
-    const head = doc.head || doc.documentElement;
-    const kind = head.querySelector('meta[name="page-kind"]')?.getAttribute('content')?.trim() || null;
-    const audiences = [];
-    for (const link of head.querySelectorAll('link[rel~="audience"][href]')) {
-      try {
-        const url = new URL(link.getAttribute('href'), doc.baseURI).href;
-        if (!audiences.includes(url)) audiences.push(url);
-      } catch { /* not a URL */ }
-    }
-    return { kind, audiences };
-  }
+  const purpose = () => purposeOf(doc);
 
   /** The anchor of the first place `text` is on the page, or null. */
   function anchor(text) {

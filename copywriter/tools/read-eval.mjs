@@ -7,8 +7,8 @@
 // `answers` of its purpose and sections in website/content/, read with
 // sxml: the HTML no longer carries them) as confirmed or doubted by the
 // readings, and checks that every anchored
-// finding quotes text on the page and every rewrite adds no number the
-// page lacks.
+// finding quotes text on the page and every rewrite adds no number, name,
+// package or URL that no page of the site states (tools/facts.mjs).
 //
 //   mise run read-eval [-- --url URL --model M --thinking T]   (GEMINI_API_KEY through fnox; READ_EVAL_RAW=1 prints the calls)
 
@@ -21,6 +21,7 @@ import * as esbuild from 'esbuild';
 import { createReviewer } from '../src/core/reviewer.mjs';
 import { createMemoryStore } from '../src/core/store.mjs';
 import { fakeCredentials } from '../test/fakes.mjs';
+import { siteText, inventedFacts, factLine } from './facts.mjs';
 
 const { values } = parseArgs({ options: {
   url: { type: 'string', default: 'https://www.tinyactors.dev/' },
@@ -81,7 +82,8 @@ const reviewer = createReviewer({ page, credentials: fakeCredentials(key), store
 await reviewer.ready();
 await reviewer.dispatch({ type: 'settings.save', model: values.model, thinking: values.thinking });
 const { text } = await call('context');
-const pageNumbers = new Set(text.match(/\d[\d.,]*/g)?.map((n) => n.replace(/[.,]$/, '')));
+const fetchText = async (u) => { const r = await fetch(u); if (!r.ok) throw new Error(r.status); return r.text(); };
+const known = `${text}\n${await siteText(new URL(values.url).origin, fetchText)}`;
 
 let problems = 0;
 const linkedIDs = reviewer.getState().settings.audienceIDs;
@@ -104,13 +106,17 @@ for (const r of state.readings) {
   console.log(`findings: ${found.length} ${JSON.stringify(kinds)}; placed ${found.filter((a) => !a.pageLevel).length}, page-level ${found.filter((a) => a.pageLevel).length}`);
   for (const a of found) {
     const flags = [];
+    const notes = [];
     if (!a.pageLevel && !text.includes(a.original)) flags.push('ANCHOR NOT IN TEXT');
     for (const s of a.suggestions) {
-      const extra = (s.text.match(/\d[\d.,]*/g) || []).map((n) => n.replace(/[.,]$/, '')).filter((n) => !pageNumbers.has(n));
-      if (extra.length) flags.push(`NEW NUMBER ${extra.join(',')}`);
+      const facts = inventedFacts(s.text, known);
+      if (facts.numbers.length) flags.push(`NEW NUMBER ${facts.numbers.join(',')}`);
+      // names and URLs are a heuristic: reported, never a problem
+      const heuristic = factLine({ numbers: [], names: facts.names, urls: facts.urls });
+      if (heuristic) notes.push(heuristic);
     }
     if (flags.length) problems += 1;
-    console.log(`- [${a.finding.kind}${a.pageLevel ? ', page' : ''}] ${a.original.slice(0, 110)}\n    ${a.finding.explanation}${a.finding.need ? `\n    need: ${a.finding.need}` : ''}${a.suggestions[0] ? `\n    → ${a.suggestions[0].text}` : ''}${flags.length ? `\n    !! ${flags.join('; ')}` : ''}`);
+    console.log(`- [${a.finding.kind}${a.pageLevel ? ', page' : ''}] ${a.original.slice(0, 110)}\n    ${a.finding.explanation}${a.finding.need ? `\n    need: ${a.finding.need}` : ''}${a.suggestions[0] ? `\n    → ${a.suggestions[0].text}` : ''}${flags.length ? `\n    !! ${flags.join('; ')}` : ''}${notes.length ? `\n    ${notes.join('\n    ')}` : ''}`);
   }
   const statuses = { answered: 0, partial: 0, missing: 0 };
   for (const x of r.items) statuses[x.status]++;
