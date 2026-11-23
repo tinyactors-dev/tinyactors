@@ -33,6 +33,14 @@ export const VERSIONS = {
 };
 /** The newest version: what steps 6 to 9 added is there. */
 export const LATEST = 9;
+/**
+ * The order every list of messages newest first uses (the DMs view, Activity,
+ * search results): by time, newest first, then by `order`, the place a
+ * message took on its screen, latest first. A time is to the second, so posts
+ * of one second tie on it; the stores number their posts per room, so their
+ * numbers do not order posts of two rooms, and step 5's posts have none.
+ */
+export const newestFirst = (a, b) => b.at - a.at || b.order - a.order;
 // The newest messages a screen keeps of each conversation, and entries the log keeps. Per
 // conversation, so one busy channel cannot push another's posts off the screen; four times what
 // a join reads from the store (history.read), so a screen holds what it read and what came since.
@@ -118,8 +126,9 @@ export async function createChat(tinyactors, { versions, version = LATEST, seed 
     let found = screens.get(user);
     // newest: room -> the newest post number the screen has of it (step 9's), from a join on;
     // dms: the direct messages the charts told it of, { room, with, opened } (opened: by this person);
-    // limits: room -> the messages of it the screen keeps, KEEP until the person loads earlier ones
-    if (!found) screens.set(user, (found = { rooms: [], messages: [], newest: {}, limits: {}, roster: {}, typing: {}, notices: [], dms: [] }));
+    // limits: room -> the messages of it the screen keeps, KEEP until the person loads earlier ones;
+    // last and first: the order (newestFirst) the screen gave the message it added after all and before all
+    if (!found) screens.set(user, (found = { rooms: [], messages: [], newest: {}, limits: {}, roster: {}, typing: {}, notices: [], dms: [], last: 0, first: 0 }));
     return found;
   };
   /** Drops the oldest messages of `room` from a screen past what it keeps of that room. */
@@ -141,7 +150,10 @@ export async function createChat(tinyactors, { versions, version = LATEST, seed 
     const here = target.messages.filter((m) => m.room === room);
     for (const post of missing) {
       const index = here.findIndex((m) => m.seq !== undefined && m.seq > post.seq);
-      here.splice(index < 0 ? here.length : index, 0, { room, seq: post.seq, from: post.from, text: post.text, at: post.at });
+      // a post read after the newest comes last; one read before (an earlier page) takes a place
+      // before the post it precedes, so two posts of one room and one second keep the store's order
+      const order = index < 0 ? ++target.last : index === 0 ? --target.first : (here[index - 1].order + here[index].order) / 2;
+      here.splice(index < 0 ? here.length : index, 0, { room, seq: post.seq, from: post.from, text: post.text, at: post.at, order });
     }
     target.messages = [...others, ...here];
     trim(target, room);
@@ -189,7 +201,7 @@ export async function createChat(tinyactors, { versions, version = LATEST, seed 
       }
       // step 9's posts carry the time the store recorded, so one held or delayed on the way shows
       // when it was posted; step 5's are not stored and carry none: the screen shows when it came
-      target.messages.push({ room: data.room, seq: data.seq, from: data.from, text: data.text, at: data.at ?? now() });
+      target.messages.push({ room: data.room, seq: data.seq, from: data.from, text: data.text, at: data.at ?? now(), order: ++target.last });
       trim(target, data.room);
     } else if (event === 'roster') target.roster = { ...data.roster };
     else if (event === 'roster.update') target.roster = { ...target.roster, [data.user]: data.status };
@@ -418,9 +430,10 @@ export async function createChat(tinyactors, { versions, version = LATEST, seed 
      */
     directMessages: (name) => {
       const target = screen(name);
+      // one with no message yet (opened) goes last, in the order it was opened
       return target.dms.map((dm) => ({ room: dm.room, with: dm.with, opened: dm.opened, last: target.messages.findLast((m) => m.room === dm.room) ?? null }))
         .filter((dm) => dm.opened || dm.last)
-        .sort((a, b) => (b.last?.at ?? -1) - (a.last?.at ?? -1));
+        .sort((a, b) => (a.last && b.last ? newestFirst(a.last, b.last) : Boolean(b.last) - Boolean(a.last)));
     },
     /**
      * `name`'s screen reads from the store the posts of `room` before the

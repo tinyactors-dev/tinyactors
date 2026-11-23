@@ -12,7 +12,7 @@
 // by a live migration, scripted scenarios, lost connections and faulty
 // screens); any actor's chart lit in the states its host reports
 // (components/live-chart.mjs); and the log of what happened.
-import { createChat, GRACE, LATEST, PEOPLE, SCENARIOS, VERSIONS, WORKSPACE } from './chat.mjs';
+import { createChat, GRACE, LATEST, newestFirst, PEOPLE, SCENARIOS, VERSIONS, WORKSPACE } from './chat.mjs';
 import { liveChart, statePath } from '/assets/components/live-chart.mjs';
 
 const CHARTS = ['workspace.scxml', 'room.scxml', 'user.scxml'];
@@ -1234,7 +1234,8 @@ export async function mount(root) {
     // a search looks through every channel on your screen, as a client searches its workspace
     const searched = search.value.trim();
     const heading = query ? `search\n${searched}` : `room\n${room}\n${dm?.with === you ? 'you' : dm?.with}`;
-    if (roomTitle.dataset.heading !== heading) {
+    const newHeading = roomTitle.dataset.heading !== heading;
+    if (newHeading) {
       roomTitle.dataset.heading = heading;
       // a direct message's title is the other person, with their presence, as a client's is
       if (query) roomTitle.replaceChildren(`Results for “${searched}”`);
@@ -1253,7 +1254,8 @@ export async function mount(root) {
     // not on your screen, so search and Activity, which read your screen, leave them out
     const preview = connected && !joined && !dm ? chat.preview(room) : null;
     const inRoom = preview ?? screen.messages.filter((message) => message.room === room);
-    const here = query ? screen.messages.filter((message) => message.text.toLowerCase().includes(query)) : inRoom;
+    // search results newest first, as a client lists them sorted by date
+    const here = query ? screen.messages.filter((message) => message.text.toLowerCase().includes(query)).sort(newestFirst) : inRoom;
     const atBottom = messages.scrollHeight - messages.scrollTop - messages.clientHeight < 40;
     // the conversation's beginning, above its first post, as a client shows it: only where the
     // store's numbers say the oldest post shown is the first (step 5's posts have none)
@@ -1305,6 +1307,8 @@ export async function mount(root) {
     } else if (scrollTo !== undefined) {
       messages.scrollTop = scrollTo ?? messages.scrollHeight; // a person's view brought back where they left it
       scrollTo = undefined;
+    } else if (query) {
+      if (newHeading) messages.scrollTop = 0; // search results start at the newest, on top
     } else if (atBottom) messages.scrollTop = messages.scrollHeight;
     // the button gone (post 1 is on screen): focus goes to the conversation's title
     if (focusEarlier && !earlier) roomTitle.focus();
@@ -1393,7 +1397,7 @@ export async function mount(root) {
     const direct = new Set(screen.dms.map((each) => each.room));
     const items = screen.messages.filter((message) => message.from !== you
       && (direct.has(message.room) ? chat.version() === LATEST : mentioned(message.text, you)))
-      .reverse().sort((a, b) => b.at - a.at);
+      .sort(newestFirst);
     activityItems = new Map(items.map((message) => [keyOf(message), message]));
     // the row current while its conversation is open, however it was opened: the one you
     // picked there, else the conversation's newest
