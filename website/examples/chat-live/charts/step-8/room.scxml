@@ -1,16 +1,16 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!-- A room. A user actor joins it, and it sends each post to each member.
      It tells the other members when one of them types.
-     It numbers each post and appends it to the channel's history, which
-     the application stores (chat:history); it keeps only the last number.
-     A member who joins gets that number, to read the history up to it from
-     the store, and a join from a member already in it adds nobody. -->
+     It sends each post to the channel's history, which the application
+     stores (chat:history); the store numbers the post and answers, and the
+     room sends the numbered post to each member. A post the store refuses
+     (error.communication) is neither stored nor delivered.
+     A join from a member already in the room adds nobody. -->
 <scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0"
        datamodel="ecmascript" name="room" initial="open">
   <datamodel>
     <data id="name"/>
     <data id="members" expr="[]"/>
-    <data id="seq" expr="0"/>        <!-- the number of the last post -->
   </datamodel>
   <state id="open">
     <transition event="join">
@@ -19,7 +19,6 @@
       </if>
       <send targetexpr="_event.origin" event="joined">
         <param name="room" expr="name"/>
-        <param name="seq" expr="seq"/>
       </send>
     </transition>
     <transition event="typing">
@@ -33,18 +32,20 @@
       </foreach>
     </transition>
     <transition event="post">
-      <assign location="seq" expr="seq + 1"/>
+      <!-- the store numbers the post and answers "appended"; if it fails
+           the send, this room gets error.communication and the post is lost -->
       <send type="chat:history" event="append">
         <param name="room" expr="name"/>
-        <param name="seq" expr="seq"/>
         <param name="from" expr="_event.data.user"/>
         <param name="text" expr="_event.data.text"/>
       </send>
+    </transition>
+    <transition event="appended">
       <foreach array="members" item="member">
         <send targetexpr="'tinyactors://chat/@user.' + member" event="message">
-          <param name="seq" expr="seq"/>
+          <param name="seq" expr="_event.data.seq"/>
           <param name="room" expr="name"/>
-          <param name="from" expr="_event.data.user"/>
+          <param name="from" expr="_event.data.from"/>
           <param name="text" expr="_event.data.text"/>
         </send>
       </foreach>

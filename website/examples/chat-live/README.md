@@ -49,8 +49,10 @@ and a switch to them clears the indicators, since they never send the
 `typing.stopped` that would end one step 8 started.
 
 On step 8 a channel's history is data this program stores (`chat.mjs`,
-`history`: the `chat:history` I/O processor the room chart appends each
-numbered post to). A join brings the number of the room's last post; the
-screen reads the posts up to it from the store, adds those it lacks,
-shown as "earlier" since they reached it as data with no time of their
-own, and shows each numbered post once.
+`history`: the `chat:history` I/O processor the room chart sends each
+post to). The store numbers each channel's posts and answers the room with
+the number, which the room puts on the post to each member; a switch of
+chart versions never starts the numbers again. A join reads the channel's
+latest 50 posts from the store; the screen adds those it lacks, shown as
+"earlier" since they reached it as data with no time of their own, and
+shows each numbered post once. Posts made on step 5 are not in the store.

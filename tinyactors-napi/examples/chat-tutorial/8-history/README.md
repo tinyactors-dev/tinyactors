@@ -3,18 +3,22 @@
 A member who joins a room late saw nothing said before: the room sent
 each post only to the members it had then. And a member who joined twice
 was added twice, so every post reached them twice. A channel's history is
-data, so the application stores it; the room only numbers the posts.
+data, so the application stores it, and the store numbers the posts.
 
-## Posts as data, numbered by the room
+## Posts as data, numbered by the store
 
-- The room numbers each post (`seq`), keeps only the last number, and
-  sends the post once to `chat:history`: an I/O processor the
-  application gives the host, which appends it to the channel's records.
+- The room sends each post once to `chat:history`: an I/O processor the
+  application gives the host. It appends the post to the channel's
+  records, numbers it and answers `appended` with the number.
   [main.mjs](main.mjs) keeps them in a `Map`; a real one writes a table.
-- Each `message` to a member carries its number.
-- `joined` carries the number of the room's last post. The screen reads
-  the channel's posts up to it from the store, and shows each numbered
-  post once, whether it came from the store or from a `message`.
+- On `appended` the room sends the numbered `message` to each member.
+  The room keeps no counter, so no new chart version or migration can
+  start the numbers again.
+- If the store fails the send, the room gets `error.communication`. The
+  post is then neither stored nor delivered.
+- `joined` tells the screen it joined. The screen reads the channel's
+  latest 50 posts from the store, and shows each numbered post once,
+  whether it came from the store or from a `message`.
 - A `join` from a member already in the room adds nobody: the room
   answers it as any join.
 - The user chart keeps `seq` on the messages it holds while

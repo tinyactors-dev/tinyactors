@@ -19,3 +19,9 @@ lost on the way: 3
 -- a late joiner, on each version
 step 5: nurse's screen got: bring a friend; scout's: sugar by the oak | bring a friend | bring a friend
 step 8: nurse's screen got: sugar by the oak | bring a friend; scout's: sugar by the oak | bring a friend
+-- step 8 to step 5 and back, with posts on each side and a late joiner
+to step 5: 9 migrated, 0 failed; back to step 8: 9 migrated, 0 failed
+scout's screen got: A | B | on step 5 | C | D | E
+forager's screen got: A | B | on step 5 | C | D | E
+queen joined late and got: A | B | C | D | E
+queen's posts carry the store's numbers: 1, 2, 3, 4, 5

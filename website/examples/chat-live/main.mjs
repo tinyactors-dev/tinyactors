@@ -1,6 +1,7 @@
 // The live chat, run in Node.js: what the page's controls do, printed as
 // the screens show it. The same scenario on step 5's charts and on step
-// 8's, a live migration between them, and a screen that loses deliveries.
+// 8's, a live migration between them (and from 8 to 5 and back, with posts
+// on each side and a late joiner), and a screen that loses deliveries.
 // Run: node main.mjs
 import * as tinyactors from '@tinyactors/wasm';
 import { readFileSync } from 'node:fs';
@@ -73,3 +74,24 @@ for (const version of [5, 8]) {
   console.log(`step ${version}: nurse's screen got: ${messages(late, 'nurse')}; scout's: ${messages(late, 'scout')}`);
   late.close();
 }
+
+console.log('-- step 8 to step 5 and back, with posts on each side and a late joiner');
+const trip = await createChat(tinyactors, { versions, version: 8 });
+for (const name of ['scout', 'forager']) {
+  await trip.connect(name);
+  await trip.join(name, 'general');
+}
+await trip.post('forager', 'general', 'A');
+await trip.post('scout', 'general', 'B');
+const to5 = await trip.useVersion(5);
+await trip.post('forager', 'general', 'on step 5');
+const to8 = await trip.useVersion(8);
+console.log(`to step 5: ${to5.migrated} migrated, ${to5.failed.length} failed; back to step 8: ${to8.migrated} migrated, ${to8.failed.length} failed`);
+for (const text of ['C', 'D', 'E']) await trip.post('forager', 'general', text);
+await trip.connect('queen');
+await trip.join('queen', 'general');
+console.log(`scout's screen got: ${messages(trip, 'scout')}`);
+console.log(`forager's screen got: ${messages(trip, 'forager')}`);
+console.log(`queen joined late and got: ${messages(trip, 'queen')}`);
+console.log(`queen's posts carry the store's numbers: ${trip.screen('queen').messages.map((m) => m.seq).join(', ')}`);
+trip.close();

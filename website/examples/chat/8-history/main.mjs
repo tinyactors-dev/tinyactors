@@ -2,26 +2,35 @@
 import { compileDir, Host, MemoryStore, SimulatedClock, Spawner } from '@tinyactors/node';
 
 // The channels' history: data the application stores, one list of posts a
-// channel. The room chart appends each post (chat:history); a screen reads
-// a channel's posts up to the number its join brought. A real one is a
-// table in a database.
-class History {
+// channel. The room chart sends each post here (chat:history); the store
+// numbers it, keeps it and answers `appended` with the number, which the
+// room puts on the post it sends each member. The numbers count per
+// channel, as a channel's posts are read together, and never start again:
+// the store, not an actor, holds the count. A screen reads a channel's
+// latest posts when it joins. A real store is a table in a database.
+export class History {
   posts = new Map(); // room -> [{ seq, from, text }]
 
   receive(send) {
-    const { room, seq, from, text } = send.data;
+    const { room, from, text } = send.data;
     if (!this.posts.has(room)) this.posts.set(room, []);
-    this.posts.get(room).push({ seq, from, text });
+    const posts = this.posts.get(room);
+    const seq = posts.length + 1;
+    posts.push({ seq, from, text });
+    send.answer('appended', { seq, room, from, text });
   }
 
-  /** The posts of `room` numbered up to `seq`, the last `limit` of them. */
-  read(room, seq, limit = 50) {
-    return (this.posts.get(room) ?? []).filter((post) => post.seq <= seq).slice(-limit);
+  /** The latest `limit` posts of `room`. */
+  read(room, limit = 50) {
+    return (this.posts.get(room) ?? []).slice(-limit);
   }
 }
 
+// What reaches each user's screen, as lines. A screen shows a numbered post
+// once: one the join read from the store may reach it as a message too.
 class Client {
   lines = [];
+  shown = new Set(); // "user room seq"
 
   constructor(history) {
     this.history = history;
@@ -30,15 +39,21 @@ class Client {
   receive(send) {
     const { data } = send;
     if (send.event === 'joined') {
-      const posts = this.history.read(data.room, data.seq).map((post) => `${post.from}: ${post.text}`).join(' | ') || 'nothing yet';
-      this.lines.push(`${data.to} joins ${data.room} and reads ${posts}`);
+      const posts = this.history.read(data.room);
+      for (const post of posts) this.shown.add(`${data.to} ${data.room} ${post.seq}`);
+      const text = posts.map((post) => `${post.from}: ${post.text}`).join(' | ') || 'nothing yet';
+      this.lines.push(`${data.to} joins ${data.room} and reads ${text}`);
     }
-    if (send.event === 'message') this.lines.push(`${data.to} sees post ${data.seq} from ${data.from}: ${data.text}`);
+    if (send.event === 'message') {
+      const key = `${data.to} ${data.room} ${data.seq}`;
+      if (this.shown.has(key)) return;
+      this.shown.add(key);
+      this.lines.push(`${data.to} sees post ${data.seq} from ${data.from}: ${data.text}`);
+    }
   }
 }
 
-export async function run(options = {}) {
-  const history = new History();
+export async function run({ history = new History(), ...options } = {}) {
   const client = new Client(history);
   const clock = new SimulatedClock();
   const compiled = compileDir(new URL('./charts/', import.meta.url));
