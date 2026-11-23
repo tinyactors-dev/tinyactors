@@ -8,7 +8,7 @@ const phases = (lines) => lines.join('\n').split(/^(?=-- )/m).map((phase) => pha
 
 for (const datamodel of ['native', 'quickjs']) {
   test(`8-history, ${datamodel}: a member who joins late reads the channel's history from the store, and a second join adds nobody`, async () => {
-    assert.deepEqual(phases(await run({ datamodel })), phases([
+    assert.deepEqual(phases(await run({ datamodel })).slice(0, 2), phases([
       '-- ada and bob join and talk',
       'ada joins general and reads nothing yet',
       'bob joins general and reads nothing yet',
@@ -26,6 +26,17 @@ for (const datamodel of ['native', 'quickjs']) {
   });
 }
 
+for (const datamodel of ['native', 'quickjs']) {
+  test(`8-history, ${datamodel}: a user who signs out reads the posts made meanwhile from the store when their connection opens`, async () => {
+    assert.deepEqual(phases(await run({ datamodel })).at(-1), phases([
+      '-- cat signs out, and back in',
+      'ada sees post 4 from bob: lunch at noon',
+      'bob sees post 4 from bob: lunch at noon',
+      'cat connects and reads in general: bob: lunch at noon',
+    ])[0]);
+  });
+}
+
 // A store that refuses bob's post: the room gets error.communication for
 // it, so the post is neither stored nor delivered, and the next one takes
 // the number it would have had.
@@ -38,7 +49,7 @@ class Refusing extends History {
 
 for (const datamodel of ['native', 'quickjs']) {
   test(`8-history, ${datamodel}: a post the store refuses is neither stored nor delivered`, async () => {
-    assert.deepEqual(phases(await run({ datamodel, history: new Refusing() })), phases([
+    assert.deepEqual(phases(await run({ datamodel, history: new Refusing() })).slice(0, 2), phases([
       '-- ada and bob join and talk',
       'ada joins general and reads nothing yet',
       'bob joins general and reads nothing yet',

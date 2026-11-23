@@ -4,7 +4,7 @@ scout's screen got: nothing
 scout went offline on forager's screen 3 times
 -- step 8, scout in the tunnel
 forager sees scout as active
-scout's screen got: scout, are you there? | the sugar is by the oak
+scout's screen got: scout, are you there? | the sugar is by the oak | bring two more
 scout went offline on forager's screen once
 -- step 5, migrated live to step 8 and back
 on step 5 queen sees typing: nobody
@@ -14,8 +14,12 @@ back to step 5, scout reconnecting: 9 migrated, 0 failed
 scout is "offline"; queen's screen shows scout as active
 -- forager's screen loses half of what reaches it
 scout's screen got: one | two | three | four | five | six
-forager's screen got: three | four | five
+forager's screen got: one | two | three | four | five
 lost on the way: 3
+-- step 8: what nurse's screen missed, read from the store
+signed out and back: while you were out
+lost for 2 minutes and back: while you were out | in the grace | after the grace
+a dropped delivery, then the next post: while you were out | in the grace | after the grace | dropped | the next one
 -- a late joiner, on each version
 step 5: nurse's screen got: bring a friend; scout's: sugar by the oak | bring a friend | bring a friend
 step 8: nurse's screen got: sugar by the oak | bring a friend; scout's: sugar by the oak | bring a friend

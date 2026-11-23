@@ -11,3 +11,7 @@ bob joins general and reads ada: hi bob | bob: hi ada
 ada sees post 3 from ada: welcome, cat
 bob sees post 3 from ada: welcome, cat
 cat sees post 3 from ada: welcome, cat
+-- cat signs out, and back in
+ada sees post 4 from bob: lunch at noon
+bob sees post 4 from bob: lunch at noon
+cat connects and reads in general: bob: lunch at noon

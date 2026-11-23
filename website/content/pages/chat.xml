@@ -117,9 +117,11 @@
     <code src="../../examples/chat/8-history/main.mjs" lines="4-27" language="javascript" file="main.mjs"/>
     <p>A join adds the member only once, and answers <code>joined</code> so the screen reads the store.</p>
     <code src="../../examples/chat/8-history/charts/room.scxml" lines="16-23" language="scxml" file="charts/room.scxml"/>
-    <p>Cat joins after two posts and reads both; bob joins a second time, and the third post reaches him once.</p>
+    <p>A member who signs out misses the posts made meanwhile: the room sends them, but an offline user drops them. When the connection opens, the screen reads what it lacks from the store.</p>
+    <code src="../../examples/chat/8-history/main.mjs" lines="58-66" language="javascript" file="main.mjs"/>
+    <p>Cat joins after two posts and reads both; bob joins a second time, and the third post reaches him once. Cat signs out for the fourth post and reads it when he signs back in.</p>
     <example>
-      <code src="../../examples/chat/8-history/main.mjs" lines="85-90" language="javascript" file="main.mjs"/>
+      <code src="../../examples/chat/8-history/main.mjs" lines="98-112" language="javascript" file="main.mjs"/>
       <code src="../../examples/chat/8-history/output.txt" language="text" role="output"/>
     </example>
   </section>

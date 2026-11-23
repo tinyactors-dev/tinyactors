@@ -28,9 +28,11 @@ export class History {
 
 // What reaches each user's screen, as lines. A screen shows a numbered post
 // once: one the join read from the store may reach it as a message too.
+// When a user's connection opens, their screen reads the posts it lacks.
 class Client {
   lines = [];
   shown = new Set(); // "user room seq"
+  rooms = new Map(); // user -> the rooms their screen joined
 
   constructor(history) {
     this.history = history;
@@ -39,6 +41,7 @@ class Client {
   receive(send) {
     const { data } = send;
     if (send.event === 'joined') {
+      this.rooms.set(data.to, new Set(this.rooms.get(data.to)).add(data.room));
       const posts = this.history.read(data.room);
       for (const post of posts) this.shown.add(`${data.to} ${data.room} ${post.seq}`);
       const text = posts.map((post) => `${post.from}: ${post.text}`).join(' | ') || 'nothing yet';
@@ -49,6 +52,16 @@ class Client {
       if (this.shown.has(key)) return;
       this.shown.add(key);
       this.lines.push(`${data.to} sees post ${data.seq} from ${data.from}: ${data.text}`);
+    }
+  }
+
+  /** `user`'s connection opens: for each room joined, the screen reads the posts it lacks. */
+  opened(user) {
+    for (const room of this.rooms.get(user) ?? []) {
+      const posts = this.history.read(room).filter((post) => !this.shown.has(`${user} ${room} ${post.seq}`));
+      if (posts.length === 0) continue;
+      for (const post of posts) this.shown.add(`${user} ${room} ${post.seq}`);
+      this.lines.push(`${user} connects and reads in ${room}: ${posts.map((post) => `${post.from}: ${post.text}`).join(' | ')}`);
     }
   }
 }
@@ -87,6 +100,15 @@ export async function run({ history = new History(), ...options } = {}) {
   bob.send('join', { room: 'general' });
   await host.idle();
   ada.send('post', { room: 'general', text: 'welcome, cat' });
+  await host.idle();
+
+  client.lines.push('-- cat signs out, and back in');
+  cat.send('disconnect');
+  await host.idle();
+  bob.send('post', { room: 'general', text: 'lunch at noon' });
+  await host.idle();
+  client.opened('cat'); // cat's connection opens: the screen catches up,
+  cat.send('connect'); // then cat's actor hears of it
   await host.idle();
 
   host.close();

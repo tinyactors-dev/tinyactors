@@ -1,8 +1,9 @@
 // The live chat, run in Node.js: what the page's controls do, printed as
 // the screens show it. The same scenario on step 5's charts and on step
 // 8's, a live migration between them (and from 8 to 5 and back, with posts
-// on each side and a late joiner), a screen that loses deliveries, and a
-// lost connection of someone who has none.
+// on each side and a late joiner), a screen that loses deliveries, what a
+// screen missed read from the store on step 8, and a lost connection of
+// someone who has none.
 // Run: node main.mjs
 import * as tinyactors from '@tinyactors/wasm';
 import { readFileSync } from 'node:fs';
@@ -61,6 +62,30 @@ console.log(`scout's screen got: ${messages(flaky, 'scout')}`);
 console.log(`forager's screen got: ${messages(flaky, 'forager')}`);
 console.log(`lost on the way: ${flaky.log().filter((e) => e.kind === 'lost').length}`);
 flaky.close();
+
+console.log('-- step 8: what nurse\'s screen missed, read from the store');
+const away = await createChat(tinyactors, { versions });
+for (const name of ['forager', 'nurse']) {
+  await away.connect(name);
+  await away.join(name, 'general');
+}
+await away.disconnect('nurse');
+await away.post('forager', 'general', 'while you were out');
+await away.connect('nurse'); // the connection opens: the screen reads what it lacks
+console.log(`signed out and back: ${messages(away, 'nurse')}`);
+await away.loseConnection('nurse', 120);
+await away.advance(10_000);
+await away.post('forager', 'general', 'in the grace');
+await away.advance(30_000); // the 30 s grace is over: nurse is offline
+await away.post('forager', 'general', 'after the grace');
+await away.advance(80_000); // the connection comes back
+console.log(`lost for 2 minutes and back: ${messages(away, 'nurse')}`);
+await away.setFaults('nurse', { drop: 1 });
+await away.post('forager', 'general', 'dropped');
+await away.setFaults('nurse');
+await away.post('forager', 'general', 'the next one');
+console.log(`a dropped delivery, then the next post: ${messages(away, 'nurse')}`);
+away.close();
 
 console.log('-- a late joiner, on each version');
 for (const version of [5, 8]) {

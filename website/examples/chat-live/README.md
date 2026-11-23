@@ -57,4 +57,12 @@ the number, which the room puts on the post to each member; a switch of
 chart versions never starts the numbers again. A join reads the channel's
 latest 50 posts from the store; the screen adds those it lacks, shown as
 "earlier" since they reached it as data with no time of their own, and
-shows each numbered post once. Posts made on step 5 are not in the store.
+shows each numbered post once.
+
+A screen also misses posts: those made while its person was signed out or
+offline, and deliveries a fault dropped. Catching up is the program's
+job, not a chart's. When a person's connection opens, their screen reads
+from the store, for each room it joined, the posts after its newest
+number. When a message arrives more than one number ahead, the screen
+reads the gap first. Posts made on step 5 are not in the store, so on
+step 5 a screen catches up on nothing.

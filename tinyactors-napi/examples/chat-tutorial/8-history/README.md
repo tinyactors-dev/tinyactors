@@ -28,6 +28,21 @@ No chart holds the history: an actor keeps what decides its behaviour,
 and the posts decide nothing. The store can page, search and keep
 everything; the actors stay small.
 
+## Catching up when a connection opens
+
+A member who signs out misses the posts made meanwhile. The room still
+sends them, but the user chart drops them while offline. So does a member
+whose lost connection outlived the 30-second grace (step 7).
+
+- The program opens a member's connection and then sends `connect`. Right
+  there, the screen catches up: `opened` in [main.mjs](main.mjs).
+- For each room the screen joined, it reads the latest posts from the
+  store and shows those it lacks, in the store's order.
+- Messages held while reconnecting still arrive after `connect`. The
+  screen has read them already, so it shows each number once.
+
+Catching up is the application's job: no chart changes.
+
 ## Run it
 
 ```sh
@@ -48,7 +63,12 @@ bob joins general and reads ada: hi bob | bob: hi ada
 ada sees post 3 from ada: welcome, cat
 bob sees post 3 from ada: welcome, cat
 cat sees post 3 from ada: welcome, cat
+-- cat signs out, and back in
+ada sees post 4 from bob: lunch at noon
+bob sees post 4 from bob: lunch at noon
+cat connects and reads in general: bob: lunch at noon
 ```
 
 Cat joined after two posts and read both from the store; bob's second
-join added him once, so the third post reached him once.
+join added him once, so the third post reached him once. Cat was signed
+out for the fourth post, and read it when the connection opened.

@@ -111,14 +111,59 @@ export async function createChat(tinyactors, { versions, version = LATEST, seed 
   const faults = new Map(); // user -> { drop: 0..1, delay: seconds }
   const screen = (user) => {
     let found = screens.get(user);
-    if (!found) screens.set(user, (found = { rooms: [], messages: [], roster: {}, typing: {}, notices: [] }));
+    // newest: room -> the newest post number the screen has of it (step 8's), from a join on
+    if (!found) screens.set(user, (found = { rooms: [], messages: [], newest: {}, roster: {}, typing: {}, notices: [] }));
     return found;
+  };
+  /**
+   * Adds to `user`'s screen the posts of `room` it lacks, in the store's
+   * order: each before the first numbered post after it. `at` is when they
+   * reached the screen; null for a join's history, which shows as earlier.
+   * Answers the posts it added.
+   */
+  const fill = (user, room, posts, at) => {
+    const target = screen(user);
+    const missing = posts.filter((post) => !target.messages.some((m) => m.room === room && m.seq === post.seq));
+    for (const post of posts) target.newest[room] = Math.max(target.newest[room] ?? 0, post.seq);
+    if (missing.length === 0) return missing;
+    const others = target.messages.filter((m) => m.room !== room);
+    const here = target.messages.filter((m) => m.room === room);
+    for (const post of missing) {
+      const index = here.findIndex((m) => m.seq !== undefined && m.seq > post.seq);
+      here.splice(index < 0 ? here.length : index, 0, { room, seq: post.seq, from: post.from, text: post.text, at });
+    }
+    target.messages = [...others, ...here].slice(-KEEP);
+    return missing;
+  };
+  /** Reads from the store the posts of `room` numbered after `after` and before `before` that `user`'s screen lacks. */
+  const recover = (user, room, after, before = Infinity) => {
+    const added = fill(user, room, history.read(room).filter((post) => post.seq > after && post.seq < before), now());
+    if (added.length > 0) note('data', `${user}'s screen reads from the store what it lacks of #${room}: ${added.map((post) => `post ${post.seq}`).join(', ')}`);
+  };
+  /**
+   * When `name`'s connection opens, their screen reads from the store, for
+   * each room it has joined, the posts it lacks: those made while they
+   * were signed out or offline, and those a fault dropped. Step 5's posts
+   * are not in the store, so on step 5 there is nothing to read.
+   */
+  const catchUp = (name) => {
+    if (current !== LATEST) return;
+    const target = screen(name);
+    for (const room of target.rooms) {
+      if (target.newest[room] !== undefined) recover(name, room, target.newest[room]);
+    }
   };
   const show = (event, data) => {
     const target = screen(data.to);
     if (event === 'message') {
       // step 8 numbers each post: a screen shows one once (it came with a join's history too)
       if (data.seq !== undefined && target.messages.some((m) => m.room === data.room && m.seq === data.seq)) return;
+      // and a screen more than one post behind reads the gap from the store first
+      if (data.seq !== undefined) {
+        const newest = target.newest[data.room];
+        if (newest !== undefined && data.seq > newest + 1) recover(data.to, data.room, newest, data.seq);
+        target.newest[data.room] = Math.max(newest ?? 0, data.seq);
+      }
       target.messages.push({ room: data.room, seq: data.seq, from: data.from, text: data.text, at: now() });
       if (target.messages.length > KEEP) target.messages.shift();
     } else if (event === 'roster') target.roster = { ...data.roster };
@@ -129,16 +174,9 @@ export async function createChat(tinyactors, { versions, version = LATEST, seed 
       if (!target.rooms.includes(data.room)) target.rooms = [...target.rooms, data.room];
       // on step 8 a join reads the channel's latest posts from the store, and the screen adds those it
       // lacks, by the store's numbers, with no time of their own (they reached it as data); step 5 keeps none
-      const stored = current === LATEST ? history.read(data.room) : [];
-      const missing = stored.filter((post) => !target.messages.some((m) => m.room === data.room && m.seq === post.seq));
-      if (missing.length > 0) {
-        const others = target.messages.filter((m) => m.room !== data.room);
-        const here = target.messages.filter((m) => m.room === data.room);
-        for (const post of missing) { // in the store's order, before the first numbered post after it
-          const at = here.findIndex((m) => m.seq !== undefined && m.seq > post.seq);
-          here.splice(at < 0 ? here.length : at, 0, { room: data.room, seq: post.seq, from: post.from, text: post.text, at: null });
-        }
-        target.messages = [...others, ...here].slice(-KEEP);
+      if (current === LATEST) {
+        target.newest[data.room] ??= 0;
+        fill(data.to, data.room, history.read(data.room), null);
       }
     }
     else if (event === 'error') target.notices.push(data.reason);
@@ -254,6 +292,7 @@ export async function createChat(tinyactors, { versions, version = LATEST, seed 
   const open = (name) => {
     cancelReconnect(name, `${name} signed in again first`);
     connections.add(name);
+    catchUp(name);
     tell(name, 'connect');
   };
   /** `name` signs out: the connection closes, and a lost one does not come back. */
@@ -278,6 +317,7 @@ export async function createChat(tinyactors, { versions, version = LATEST, seed 
     losses.set(name, later(seconds, `${name} reconnects`, () => {
       losses.delete(name);
       connections.add(name);
+      catchUp(name);
       tell(name, 'connect');
     }));
   };
