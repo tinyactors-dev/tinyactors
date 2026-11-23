@@ -29,6 +29,15 @@
   the reviewer has not touched (draft or suggested, no note, no message,
   no text of their own) deletes itself.
 
+  Rewrites side by side: an `ask` or `suggest` carries the page's active
+  audiences (`audienceIDs`, kept as `active`; `active` is a spawn's param
+  too, for a note that asks at once). With two or more, and no finding (a
+  finding is one audience's), the rewrite request is per audience
+  (`request.audienceIDs`): the model writes one rewrite for each and maybe
+  one that serves them all, and each suggestion keeps its `audienceID`
+  (null: for everyone). With one or none, a suggestion has no
+  `audienceID`, as before.
+
   A suggestion's `after` is the number of messages before it: the panel
   shows it after the message that brought it. The record is the datamodel
   but `request` and `clip`. `state` names the decision for
@@ -57,6 +66,8 @@
     <data id="finding" expr="null"/>
     <!-- what the next model request carries besides the messages: {more} -->
     <data id="request" expr="null"/>
+    <!-- the page's active audiences at the last ask or suggest (or the spawn) -->
+    <data id="active" expr="[]"/>
     <!-- the id of the clip being transcribed (the core keeps the audio) -->
     <data id="clip" expr="null"/>
   </datamodel>
@@ -73,6 +84,23 @@
       if (data.thoughts) m.thoughts = data.thoughts;
       if (data.seconds) m.seconds = data.seconds;
       return m;
+    }
+
+    // What the next rewrite request carries: {more} for more alternatives,
+    // {audienceIDs} to write one rewrite per active audience (two or more,
+    // and not a finding, which is one audience's); null for neither.
+    function requestOf(more, ids, found) {
+      var r = {};
+      if (more) r.more = true;
+      if (!found &amp;&amp; ids &amp;&amp; ids.length > 1) r.audienceIDs = ids;
+      return Object.keys(r).length ? r : null;
+    }
+
+    // A rewrite of a reply as a suggestion; a per-audience one keeps its audienceID.
+    function suggestion(r, n, after) {
+      var s = { id: 's' + n, text: r.replacement, rationale: r.rationale || '', after: after };
+      if (r.audienceID !== undefined) s.audienceID = r.audienceID;
+      return s;
     }
   </script>
 
@@ -118,6 +146,7 @@
       </transition>
       <transition cond="state === 'new' &amp;&amp; note" target="asking">
         <assign location="messages" expr="[{ role: 'user', text: note, at: createdAt }]"/>
+        <assign location="request" expr="requestOf(false, active, finding)"/>
       </transition>
       <!-- page-level: nothing on the page to find -->
       <transition cond="!anchor" target="open"/>
@@ -156,14 +185,17 @@
       </state>
 
       <transition event="ask" cond="_event.data.clip" target="transcribing">
+        <assign location="active" expr="(_event.data &amp;&amp; _event.data.audienceIDs) || []"/>
         <assign location="clip" expr="_event.data.clip"/>
       </transition>
       <transition event="ask" target="asking">
+        <assign location="active" expr="(_event.data &amp;&amp; _event.data.audienceIDs) || []"/>
         <assign location="messages" expr="messages.concat([{ role: 'user', text: _event.data.text, at: new Date().toISOString() }])"/>
-        <assign location="request" expr="null"/>
+        <assign location="request" expr="requestOf(false, active, finding)"/>
       </transition>
       <transition event="suggest" target="asking">
-        <assign location="request" expr="({ more: true })"/>
+        <assign location="active" expr="(_event.data &amp;&amp; _event.data.audienceIDs) || []"/>
+        <assign location="request" expr="requestOf(true, active, finding)"/>
       </transition>
       <!-- page-level: the reviewer's own text to add, never previewed -->
       <transition event="edit" cond="!anchor" target="suggested">
@@ -190,7 +222,7 @@
       <onexit><assign location="clip" expr="null"/></onexit>
       <transition event="model.transcript" cond="String(_event.data.text || '').trim()" target="asking">
         <assign location="messages" expr="messages.concat([{ role: 'user', text: String(_event.data.text).trim(), at: new Date().toISOString(), spoken: true }])"/>
-        <assign location="request" expr="null"/>
+        <assign location="request" expr="requestOf(false, active, finding)"/>
       </transition>
       <transition event="model.transcript" target="opening">
         <assign location="error" expr="'Nothing was heard.'"/>
@@ -219,7 +251,7 @@
         <if cond="_event.data.for &amp;&amp; _event.data.for.length &amp;&amp; (_event.data.rewrites || []).length">
           <assign location="audiences" expr="_event.data.for"/>
         </if>
-        <assign location="suggestions" expr="suggestions.concat((_event.data.rewrites || []).map((r, i) => ({ id: 's' + (suggestions.length + i + 1), text: r.replacement, rationale: r.rationale || '', after: messages.length })))"/>
+        <assign location="suggestions" expr="suggestions.concat((_event.data.rewrites || []).map((r, i) => suggestion(r, suggestions.length + i + 1, messages.length)))"/>
         <if cond="_event.data.note &amp;&amp; !note"><assign location="note" expr="_event.data.note"/></if>
         <assign location="request" expr="null"/>
       </transition>
@@ -266,20 +298,23 @@
         <assign location="chosenID" expr="null"/>
       </transition>
       <transition event="ask" cond="_event.data.clip" target="transcribing">
+        <assign location="active" expr="(_event.data &amp;&amp; _event.data.audienceIDs) || []"/>
         <send type="page" event="revert"><content expr="({ id })"/></send>
         <assign location="chosenID" expr="null"/>
         <assign location="clip" expr="_event.data.clip"/>
       </transition>
       <transition event="ask" target="asking">
+        <assign location="active" expr="(_event.data &amp;&amp; _event.data.audienceIDs) || []"/>
         <send type="page" event="revert"><content expr="({ id })"/></send>
         <assign location="chosenID" expr="null"/>
         <assign location="messages" expr="messages.concat([{ role: 'user', text: _event.data.text, at: new Date().toISOString() }])"/>
-        <assign location="request" expr="null"/>
+        <assign location="request" expr="requestOf(false, active, finding)"/>
       </transition>
       <transition event="suggest" target="asking">
+        <assign location="active" expr="(_event.data &amp;&amp; _event.data.audienceIDs) || []"/>
         <send type="page" event="revert"><content expr="({ id })"/></send>
         <assign location="chosenID" expr="null"/>
-        <assign location="request" expr="({ more: true })"/>
+        <assign location="request" expr="requestOf(true, active, finding)"/>
       </transition>
     </state>
 

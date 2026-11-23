@@ -452,9 +452,16 @@ from the model.
 ## Actors and processors
 
 Charts in `charts/`, one actor per annotation, one for the page chat's
-open conversation, and one per reading of the page as an audience
+open conversation, one per reading of the page as an audience
 (`charts/reading.scxml`: reading → done or failed, retry; its header
-draws the flow). A conversation is held with the editor or with an
+draws the flow), and one for the open page's audiences
+(`charts/audiences.scxml`: the page's set, and the one suggestion asked
+of the model for a page with none: unset → suggesting → suggested →
+set; `model` answers its `suggest {url}` with `model.audiences
+{audienceIDs}`). An annotation's `ask` and `suggest` carry the page's
+active audiences; with two or more (and no finding) its rewrite request
+is per audience (`request.audienceIDs`) and each suggestion keeps the
+reply's `audienceID` (null: for everyone); its header says how. A conversation is held with the editor or with an
 audience (`charts/conversation.scxml`, its `audienceID`; the header draws
 the flow): its mode, set when it starts, decides the model request
 (`chat` for the editor, `talk` for the reader) and so the tools.

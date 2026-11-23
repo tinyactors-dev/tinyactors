@@ -1,0 +1,118 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  The audiences of one page: which of the saved audiences read it. The core
+  spawns one actor of this chart for the page it opens, from the page's
+  stored record, and ends it when the panel leaves the page. Its set
+  (`audienceIDs`) is the page's active audiences; until it has one, the
+  page writes for the last set used on any page (the settings'
+  `audienceIDs`).
+
+  A page with no set is asked about once, when it is first opened with a
+  key and saved audiences (`canSuggest`, or `key` later): a cheap request
+  over the page and the audiences' names and descriptions ("which of
+  these read this page?"). Its answer is a suggestion the reviewer
+  accepts, adjusts or dismisses; it is never applied by itself.
+
+    unset ──(canSuggest) or key──▶ suggesting ──model.audiences──▶ suggested
+      ▲                               │ none, model.error             │ accept: the suggestion
+      └───────────────────────────────┘                               │ dismiss {audienceIDs}: the set in use
+                                                                      ▼
+    unset, suggesting, suggested ──set {audienceIDs}──────────────▶  set ──set──▶ set
+
+  `suggestion` is null (never asked), {state: 'asking'}, {state: 'ready',
+  audienceIDs}, {state: 'none'} (the model named none) or {state:
+  'failed', error}; asked once, it is not asked again. Entering `set`
+  clears it.
+
+    model  suggest  {url}          → model.audiences {audienceIDs} | model.error {message}
+    store  page     its record, after every change
+    ui     page     its record, after every change
+
+  `state` names where it was for the store; an actor spawned with a stored
+  record starts from it (one stored while asking was cut off asks again).
+-->
+<scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0"
+       datamodel="ecmascript" name="audiences" initial="live">
+  <datamodel>
+    <data id="url"/>
+    <!-- the page's set, in order; null: none yet -->
+    <data id="audienceIDs" expr="null"/>
+    <data id="suggestion" expr="null"/>
+    <data id="state" expr="'new'"/>
+    <!-- spawn only: a key and saved audiences, so a suggestion can be asked for now -->
+    <data id="canSuggest" expr="false"/>
+  </datamodel>
+
+  <state id="live" initial="restore">
+    <transition event="changed">
+      <send type="ui" event="page" namelist="url audienceIDs suggestion state"/>
+      <send type="store" event="page" namelist="url audienceIDs suggestion state"/>
+    </transition>
+    <!-- the reviewer (or the model's use_audiences) chose the page's set -->
+    <transition event="set" target="set">
+      <assign location="audienceIDs" expr="_event.data.audienceIDs"/>
+    </transition>
+
+    <state id="restore">
+      <transition cond="audienceIDs !== null" target="set"/>
+      <transition cond="suggestion &amp;&amp; suggestion.state === 'ready'" target="suggested"/>
+      <transition cond="canSuggest &amp;&amp; (!suggestion || suggestion.state === 'asking')" target="suggesting"/>
+      <transition target="unset">
+        <if cond="suggestion &amp;&amp; suggestion.state === 'asking'"><assign location="suggestion" expr="null"/></if>
+      </transition>
+    </state>
+
+    <!-- No set: the page writes for the last set used. -->
+    <state id="unset">
+      <onentry>
+        <if cond="state !== 'unset'"><assign location="state" expr="'unset'"/><raise event="changed"/></if>
+      </onentry>
+      <transition event="key" cond="!suggestion" target="suggesting"/>
+    </state>
+
+    <!-- The model is asked which audiences read the page. -->
+    <state id="suggesting">
+      <onentry>
+        <assign location="state" expr="'suggesting'"/>
+        <assign location="suggestion" expr="({ state: 'asking' })"/>
+        <raise event="changed"/>
+        <send type="model" event="suggest" namelist="url"/>
+      </onentry>
+      <transition event="model.audiences" cond="(_event.data.audienceIDs || []).length" target="suggested">
+        <assign location="suggestion" expr="({ state: 'ready', audienceIDs: _event.data.audienceIDs })"/>
+      </transition>
+      <transition event="model.audiences" target="unset">
+        <assign location="suggestion" expr="({ state: 'none' })"/>
+      </transition>
+      <transition event="model.error" target="unset">
+        <assign location="suggestion" expr="({ state: 'failed', error: _event.data.message })"/>
+      </transition>
+      <transition event="error.communication" target="unset">
+        <assign location="suggestion" expr="({ state: 'failed', error: 'The model could not be reached.' })"/>
+      </transition>
+    </state>
+
+    <!-- A suggestion waits for the reviewer. -->
+    <state id="suggested">
+      <onentry><assign location="state" expr="'suggested'"/><raise event="changed"/></onentry>
+      <transition event="accept" target="set">
+        <assign location="audienceIDs" expr="suggestion.audienceIDs"/>
+      </transition>
+      <!-- not these: the page keeps the set in use -->
+      <transition event="dismiss" target="set">
+        <assign location="audienceIDs" expr="_event.data.audienceIDs"/>
+      </transition>
+    </state>
+
+    <!-- The page has its own set. -->
+    <state id="set">
+      <onentry>
+        <assign location="state" expr="'set'"/>
+        <assign location="suggestion" expr="null"/>
+        <raise event="changed"/>
+      </onentry>
+      <!-- an answer that comes after the reviewer chose: dropped -->
+      <transition event="model.audiences model.error error.communication key"/>
+    </state>
+  </state>
+</scxml>
