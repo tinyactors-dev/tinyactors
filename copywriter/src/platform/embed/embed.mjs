@@ -21,13 +21,16 @@ const HOST_ID = 'tinyactors-copywriter';
 const KEY = 'tinyactors-copywriter-key';
 const SHEET = 'tinyactors-copywriter-sheet';
 const WIDE = '(min-width: 900px)';
-const SNAPS = { full: 0.75, half: 0.4 };  // the sheet's heights, of the viewport
+// The sheet's height, as a share of the viewport: it opens low, so the page
+// stays in view; the reader drags it anywhere between MIN and MAX, and a tap
+// on the grip switches between LOW and HIGH.
+const SIZE = { MIN: 0.22, LOW: 0.4, HIGH: 0.75, MAX: 0.92 };
 
 const CSS = String.raw`
 :host { all: initial; }
 /* while the sheet is open, room after the page, so its last lines can
    scroll up above the sheet at half height */
-@media not ${WIDE} { :host([data-open]) { display: block; height: calc(${SNAPS.half} * 100dvh); } }
+@media not ${WIDE} { :host([data-open]) { display: block; height: var(--room, 40dvh); } }
 * { box-sizing: border-box; }
 .launcher {
   position: fixed; z-index: 2147483000;
@@ -58,16 +61,23 @@ const CSS = String.raw`
 
 .sheet {
   position: fixed; z-index: 2147483001; left: 0; right: 0; bottom: 0;
-  height: calc(var(--snap, .4) * 100dvh);
+  height: var(--height, 40dvh);
   display: flex; flex-direction: column;
   background: #FAF6EE; border-radius: 12px 12px 0 0; overflow: hidden;
   box-shadow: 0 0 0 1px rgba(42,38,34,.12), 0 -12px 40px rgba(40,30,20,.22);
   padding-bottom: env(safe-area-inset-bottom, 0px);
   transform: translateY(calc(100% + 24px)); visibility: hidden;
-  transition: transform .28s cubic-bezier(.16,1,.3,1), height .28s cubic-bezier(.16,1,.3,1), visibility 0s .28s;
+  transition: transform .28s cubic-bezier(.16,1,.3,1), visibility 0s .28s;
+  will-change: transform;
 }
-:host([data-open]) .sheet { transform: translateY(var(--drag, 0px)); visibility: visible; transition: transform .28s cubic-bezier(.16,1,.3,1), height .28s cubic-bezier(.16,1,.3,1); }
+/* one thing moves at a time: the sheet slides in and out (transform); a
+   resize changes its height, animated only for a tap's switch */
+:host([data-open]) .sheet { transform: translateY(var(--pull, 0px)); visibility: visible; transition: transform .28s cubic-bezier(.16,1,.3,1); }
+:host([data-settling]) .sheet { transition: height .22s cubic-bezier(.16,1,.3,1), transform .28s cubic-bezier(.16,1,.3,1); }
 :host([data-dragging]) .sheet { transition: none; }
+:host([data-dragging]) .body { pointer-events: none; }
+/* the panel's header is a handle too: a bigger target than the grip */
+@media not ${WIDE} { .cw-header { touch-action: none; } }
 .grip {
   flex: none; position: relative; height: 28px; touch-action: none; cursor: grab;
   display: grid; place-items: center; background: inherit;
@@ -81,6 +91,8 @@ const CSS = String.raw`
 .close:focus-visible { outline: 2px solid #1F5E4A; }
 .close svg { width: 18px; height: 18px; stroke-width: 1.75; }
 .body { flex: 1; min-height: 0; }
+/* a scroll that reaches the end of the panel's content stops there, not in the page behind */
+.sheet, .sheet * { overscroll-behavior: contain; }
 
 @media (prefers-color-scheme: dark) {
   .sheet { background: #201811; box-shadow: 0 0 0 1px #45362A, 0 -12px 40px rgba(0,0,0,.5); }
@@ -193,8 +205,8 @@ function start() {
     band() {
       if (!open) return null;
       if (wide.matches) return { right: innerWidth - sheet.getBoundingClientRect().width };
-      if (snap === 'full') { snap = 'half'; show(true); }
-      return { bottom: innerHeight * (1 - SNAPS.half) };
+      if (size > SIZE.LOW + 0.05) resize(SIZE.LOW, { animate: true });
+      return { bottom: innerHeight * (1 - size) };
     },
   });
 
@@ -221,23 +233,37 @@ function start() {
 
   let panel = null;
   const saved = (() => { try { return JSON.parse(storage('sessionStorage')?.getItem(SHEET) || 'null'); } catch { return null; } })();
-  let snap = saved?.snap === 'full' ? 'full' : 'half';  // opens low, so the page stays in view
+  const clamp = (value) => Math.min(SIZE.MAX, Math.max(SIZE.MIN, value));
+  let size = clamp(Number(saved?.size) || SIZE.LOW);
 
   function remember() {
-    try { storage('sessionStorage')?.setItem(SHEET, JSON.stringify({ open, snap })); } catch { /* full */ }
+    try { storage('sessionStorage')?.setItem(SHEET, JSON.stringify({ open, size })); } catch { /* full */ }
+  }
+
+  /** Sets the sheet's height (a share of the viewport) and the room after the page. */
+  function resize(value, { animate = false } = {}) {
+    size = clamp(value);
+    if (animate) {
+      host.setAttribute('data-settling', '');
+      clearTimeout(resize.settled);
+      resize.settled = setTimeout(() => host.removeAttribute('data-settling'), 300);
+    }
+    sheet.style.setProperty('--height', `${(size * 100).toFixed(2)}dvh`);
+    host.style.setProperty('--room', `${(size * 100).toFixed(2)}dvh`);
+    remember();
   }
 
   function show(value) {
     open = value;
     if (open) {
       panel ??= mountPanel(body, reviewer, { layout: 'sheet' });
+      resize(size);
       host.setAttribute('data-open', '');
-      sheet.style.setProperty('--snap', String(SNAPS[snap]));
     } else {
       host.removeAttribute('data-open');
       if (shadow.activeElement && sheet.contains(shadow.activeElement)) launcher.focus();
     }
-    sheet.style.removeProperty('--drag');
+    sheet.style.removeProperty('--pull');
     remember();
   }
 
@@ -251,37 +277,59 @@ function start() {
     if (event.key === 'Escape' && open && event.target === close) show(false);
   });
 
-  // Dragging the grip: down closes or lowers the sheet, up raises it; a tap
-  // switches between the two heights.
+  // Resizing: the grip, and the panel's header outside its buttons, are a
+  // handle. The sheet's top follows the finger and stays where it is let go;
+  // pulled below its smallest height it slides down, and let go there, or
+  // flicked down from low, it closes. A tap on the grip switches between
+  // LOW and HIGH. Moves are applied once per frame.
+  const INTERACTIVE = 'button, a, input, select, textarea, [role=button], [role=menu], [contenteditable]';
+  const handle = (target) => target.closest?.('.grip') && !target.closest('.close')
+    || target.closest?.('.cw-header') && !target.closest(INTERACTIVE);
   let drag = null;
-  grip.addEventListener('pointerdown', (event) => {
-    if (wide.matches || event.target.closest?.('.close')) return;
-    drag = { y: event.clientY, t: performance.now(), dy: 0 };
-    grip.setPointerCapture(event.pointerId);
-    host.setAttribute('data-dragging', '');
+  let frame = 0;
+  sheet.addEventListener('pointerdown', (event) => {
+    if (wide.matches || !open || !handle(event.target) || event.button > 0) return;
+    drag = { id: event.pointerId, y: event.clientY, start: size * innerHeight, moved: false, samples: [[performance.now(), event.clientY]], onGrip: Boolean(event.target.closest('.grip')) };
+    sheet.setPointerCapture(event.pointerId);
   });
-  grip.addEventListener('pointermove', (event) => {
-    if (!drag) return;
-    drag.dy = event.clientY - drag.y;
-    const height = SNAPS[snap] * innerHeight;
-    const dy = drag.dy < 0 ? Math.max(drag.dy, SNAPS.full * innerHeight - height) : drag.dy;
-    sheet.style.setProperty('--drag', `${dy}px`);
+  sheet.addEventListener('pointermove', (event) => {
+    if (!drag || event.pointerId !== drag.id) return;
+    const dy = event.clientY - drag.y;
+    if (!drag.moved && Math.abs(dy) < 6) return;
+    if (!drag.moved) { drag.moved = true; host.setAttribute('data-dragging', ''); }
+    drag.samples.push([performance.now(), event.clientY]);
+    if (drag.samples.length > 6) drag.samples.shift();
+    drag.dy = dy;
+    cancelAnimationFrame(frame);
+    frame = requestAnimationFrame(() => {
+      if (!drag) return;
+      const wanted = drag.start - drag.dy;
+      const least = SIZE.MIN * innerHeight;
+      sheet.style.setProperty('--height', `${Math.min(SIZE.MAX * innerHeight, Math.max(least, wanted))}px`);
+      sheet.style.setProperty('--pull', `${Math.max(0, least - wanted)}px`);
+    });
   });
-  const release = () => {
-    if (!drag) return;
-    const { dy, t } = drag;
+  const release = (event) => {
+    if (!drag || event.pointerId !== drag.id) return;
+    const { moved, samples, onGrip, start } = drag;
+    const dy = drag.dy || 0;
     drag = null;
+    cancelAnimationFrame(frame);
     host.removeAttribute('data-dragging');
-    const velocity = dy / Math.max(1, performance.now() - t);   // px per ms, down positive
-    const height = SNAPS[snap] * innerHeight - dy;
-    if (Math.abs(dy) < 6) snap = snap === 'full' ? 'half' : 'full';
-    else if (height < SNAPS.half * innerHeight * 0.6 || velocity > 1.2 && snap === 'half') { snap = 'full'; show(false); return; }
-    else if (velocity > 0.6 || height < (SNAPS.full + SNAPS.half) / 2 * innerHeight) snap = 'half';
-    else snap = 'full';
-    show(true);
+    if (!moved) {
+      if (onGrip && event.type === 'pointerup') resize(size > (SIZE.LOW + SIZE.HIGH) / 2 ? SIZE.LOW : SIZE.HIGH, { animate: true });
+      return;
+    }
+    const [t0, y0] = samples[0];
+    const [t1, y1] = samples[samples.length - 1];
+    const velocity = (y1 - y0) / Math.max(1, t1 - t0);   // px per ms, down positive, over the last moves
+    const wanted = (start - dy) / innerHeight;
+    sheet.style.removeProperty('--pull');
+    if (wanted < SIZE.MIN - 0.06 || (velocity > 1.1 && wanted < SIZE.LOW)) { show(false); return; }
+    resize(wanted);
   };
-  grip.addEventListener('pointerup', release);
-  grip.addEventListener('pointercancel', release);
+  sheet.addEventListener('pointerup', release);
+  sheet.addEventListener('pointercancel', release);
 
   // Open on the last page: it stays where it was, without sliding in again.
   if (saved?.open) {

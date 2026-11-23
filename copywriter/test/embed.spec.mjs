@@ -142,6 +142,41 @@ async function phone() {
 
 const FAR = 'The far paragraph is where a phone\'s sheet would cover a preview.';
 
+test('on a phone, the sheet resizes to where it is let go, from the grip or the header, and slides away when pulled down', async () => {
+  const { context, page, errors, sheet, launcher } = await phone();
+  await launcher.tap();
+  await sheet.locator('.cw-panel').waitFor();
+  await page.waitForTimeout(400);
+  const drag = async (selector, dy) => {
+    const box = await sheet.locator(selector).first().boundingBox();
+    const x = box.x + (selector === '.grip' ? box.width / 2 : 60), y = box.y + box.height / 2;
+    await page.mouse.move(x, y);
+    await page.mouse.down();
+    await page.mouse.move(x, y + dy, { steps: 20 });
+    await page.waitForTimeout(150);   // a slow drag: no flick
+    await page.mouse.up();
+    await page.waitForTimeout(350);
+  };
+  const height = async () => (await sheet.boundingBox()).height;
+  const before = await height();
+  await drag('.grip', -200);
+  assert.ok(Math.abs(await height() - (before + 200)) < 4, `up by 200 from the grip: ${before} → ${await height()}`);
+  await drag('.cw-header h1, .cw-header .cw-title, .cw-header', 120);
+  assert.ok(Math.abs(await height() - (before + 80)) < 4, `down by 120 from the header: ${await height()}`);
+  assert.ok(await page.locator('#tinyactors-copywriter').evaluate((n) => n.hasAttribute('data-open')), 'still open');
+  // the height is kept across a reload
+  const kept = await height();
+  await page.reload();
+  await page.locator('#tinyactors-copywriter .sheet .cw-panel').waitFor();
+  await page.waitForTimeout(400);
+  assert.ok(Math.abs(await height() - kept) < 4, `kept: ${kept} → ${await height()}`);
+  // a slow drag far down closes it
+  await drag('.grip', 700);
+  assert.ok(!(await page.locator('#tinyactors-copywriter').evaluate((n) => n.hasAttribute('data-open'))), 'closed');
+  assert.deepEqual(errors, []);
+  await context.close();
+});
+
 test('on a phone, the launcher is bottom left and stays there while the page scrolls', async () => {
   const { context, page, launcher } = await phone();
   const before = await launcher.boundingBox();
