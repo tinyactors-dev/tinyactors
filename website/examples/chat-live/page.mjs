@@ -257,9 +257,13 @@ export async function mount(root) {
     const dm = chat.screen(you).dms.find((each) => each.room === name);
     return !dm ? `#${name}` : dm.with === you ? `${you} (you)` : dm.with;
   };
-  // a result's channel or direct message, which opens it
+  // a result's channel or direct message, which opens it: a channel by its #name, a direct
+  // message by the other person's avatar and "Direct message with …", as a client labels them
   const channelLink = (name) => {
-    const link = el('button', { type: 'button', class: 'chatlive__in', title: `Open ${placeName(name)}` }, placeName(name));
+    const dm = chat.screen(you).dms.find((each) => each.room === name);
+    const label = !dm ? `#${name}` : dm.with === you ? 'Your notes' : `Direct message with ${dm.with}`;
+    const link = el('button', { type: 'button', class: `chatlive__in${dm ? ' chatlive__in--dm' : ''}`, title: `Open ${placeName(name)}` },
+      ...(dm ? [avatar(dm.with, 'tiny'), el('span', { class: 'chatlive__in-name' }, label)] : [label]));
     link.addEventListener('click', () => openRoom(name));
     return link;
   };

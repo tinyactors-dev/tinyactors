@@ -743,6 +743,12 @@ ta-tabs { display: block; }
 .chatlive__in { min-width: 0; padding: 0; border: 0; background: none; cursor: pointer; overflow: hidden; white-space: nowrap; text-overflow: ellipsis;
   font-size: 12px !important; color: var(--cl-link) !important; }
 .chatlive__in:hover { text-decoration: underline; }
+/* a direct message's result: the other person's avatar and their name, in the text's colour, apart from a channel's link */
+.chatlive__in--dm { display: inline-flex; align-items: center; gap: 4px; align-self: center; color: var(--cl-muted) !important; }
+.chatlive__in--dm:hover { text-decoration: none; }
+.chatlive__in--dm:hover .chatlive__in-name { text-decoration: underline; }
+.chatlive__in-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.chatlive__avatar--tiny { width: 14px; height: 14px; border-radius: 3px; font-size: 9px; line-height: 1; }
 .chatlive__at { font-size: 12px; color: var(--cl-muted); font-variant-numeric: tabular-nums; }
 .chatlive__body { margin: 0; line-height: 22px; overflow-wrap: anywhere; }
 .chatlive__body mark { background: var(--cl-mark); color: inherit; border-radius: 2px; }
