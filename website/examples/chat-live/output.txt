@@ -1,8 +1,10 @@
 -- step 5, scout in the tunnel
+a second start while it runs is refused
 forager sees scout as offline
 scout's screen got: nothing
 scout went offline on forager's screen 3 times
 -- step 9, scout in the tunnel
+a second start while it runs is refused
 forager sees scout as away
 scout's screen got: scout, are you there? | the sugar is by the oak | bring two more
 scout went offline on forager's screen once

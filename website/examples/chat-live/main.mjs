@@ -23,6 +23,7 @@ for (const version of [5, 9]) {
   await chat.scenario('tunnel');
   await chat.advance(2_000);
   console.log(`-- step ${version}, scout in the tunnel`);
+  console.log(`a second start while it runs is ${await chat.scenario('tunnel') ? 'run' : 'refused'}`);
   console.log(`forager sees scout as ${chat.screen('forager').roster.scout}`);
   await chat.advance(118_000);
   console.log(`scout's screen got: ${messages(chat, 'scout')}`);

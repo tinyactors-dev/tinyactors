@@ -859,6 +859,7 @@ ta-tabs { display: block; }
 .chatlive__control, .chatlive__speed { height: 28px; padding: 0 10px; border: 1px solid var(--cl-line); border-radius: 8px; background: var(--cl-pane); cursor: pointer;
   font-size: 13px !important; font-weight: 700; }
 .chatlive__control:hover, .chatlive__speed:hover { background: var(--cl-hover); }
+.chatlive__control:disabled { opacity: .6; cursor: not-allowed; background: var(--cl-pane); }
 .chatlive__speeds { display: flex; }
 .chatlive__speed { border-radius: 0; margin-left: -1px; font-variant-numeric: tabular-nums; }
 .chatlive__speed:first-child { border-radius: 8px 0 0 8px; margin-left: 0; }

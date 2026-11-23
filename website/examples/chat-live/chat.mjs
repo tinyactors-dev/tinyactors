@@ -119,6 +119,11 @@ export async function createChat(tinyactors, { versions, version = LATEST, seed 
     return entry;
   };
 
+  // ---- the scenarios running: those whose start is queued, and those with steps on the agenda
+  const starting = new Set();
+  const stepsLeft = (id) => (starting.has(id) ? SCENARIOS[id].steps.length
+    : agenda.filter((entry) => entry.what === SCENARIOS[id].title).length || null);
+
   // ---- each user's screen, and the faults between the charts and it
   const screens = new Map();
   const faults = new Map(); // user -> { drop: 0..1, delay: seconds }
@@ -503,16 +508,32 @@ export async function createChat(tinyactors, { versions, version = LATEST, seed 
      * unless signed in, and joins #general unless their screen shows it
      * joined (the `joined` the charts sent it), so no room adds a member twice.
      */
-    scenario: (id) => act(async () => {
-      const scenario = SCENARIOS[id];
-      note('scenario', `${scenario.title}: ${scenario.about}`);
-      for (const name of ONLINE_FOR[id]) {
-        if (!connections.has(name)) open(name);
-        if (!screen(name).rooms.includes('general')) tell(name, 'join', { room: 'general' });
-      }
-      await host.idle();
-      for (const [at, step] of scenario.steps) later(at, scenario.title, () => step(direct));
-    }),
+    scenario: (id) => {
+      // one run of a scenario at a time: a second start while it runs would put every step on
+      // the agenda twice. Refused at once, while the first start may still be queued
+      if (stepsLeft(id) !== null) return Promise.resolve(false);
+      starting.add(id);
+      return act(async () => {
+        try {
+          const scenario = SCENARIOS[id];
+          note('scenario', `${scenario.title}: ${scenario.about}`);
+          for (const name of ONLINE_FOR[id]) {
+            if (!connections.has(name)) open(name);
+            if (!screen(name).rooms.includes('general')) tell(name, 'join', { room: 'general' });
+          }
+          await host.idle();
+          for (const [at, step] of scenario.steps) later(at, scenario.title, () => step(direct));
+          return true;
+        } finally {
+          starting.delete(id);
+        }
+      });
+    },
+    /**
+     * How many of scenario `id`'s steps are still to come, or null when it
+     * is not running: while it runs, `scenario(id)` refuses to start it again.
+     */
+    scenarioLeft: (id) => stepsLeft(id),
     /** What the application will do, and when (simulated seconds). */
     agenda: () => agenda.map((entry) => ({ at: entry.at / 1000, what: entry.what })),
     /** What happened, newest last: { at, kind (input, screen, lost, late, fault, scenario, version, data), text }. */

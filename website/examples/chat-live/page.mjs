@@ -918,6 +918,7 @@ export async function mount(root) {
       run.addEventListener('click', () => {
         setClock(true, 1);
         chat.scenario(id);
+        run.disabled = true; // now: the next draw waits for the start to go through
       });
       return el('li', { class: 'chatlive__card', 'data-key': id },
         el('div', { class: 'chatlive__card-text' }, el('strong', {}, scenario.title), el('span', {}, scenario.about), el('span', { class: 'chatlive__card-note' })),
@@ -1439,11 +1440,11 @@ export async function mount(root) {
         button.disabled = migrating;
       }
       setText(versionAbout, VERSIONS[version].replace(/^Step \d+: /, '').replace(/^./, (first) => first.toUpperCase()));
-      const agenda = chat.agenda();
       for (const card of scenarioList.children) {
-        const { title } = SCENARIOS[card.dataset.key];
-        const left = agenda.filter((entry) => entry.what === title).length;
+        // a running scenario cannot start again (chat.scenario refuses it): its Run waits for it
+        const left = chat.scenarioLeft(card.dataset.key);
         setText(card.querySelector('.chatlive__card-note'), left ? `Running: ${left} ${left === 1 ? 'step' : 'steps'} to go` : '');
+        card.querySelector('button').disabled = left !== null;
       }
       for (const row of personList.children) {
         const name = row.dataset.key;
