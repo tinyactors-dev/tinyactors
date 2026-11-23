@@ -64,7 +64,7 @@ test('export: a ZIP of packet.xml (valid), CHANGES.md, README.md and the schema'
   assert.match(changes, /- element: `main > p`/);
   assert.match(changes, /### Open item 2[\s\S]*Actors are <cheap>[\s\S]*Request: Cheap how\?/);
   assert.doesNotMatch(changes, /Fine as it is/, 'a dismissed annotation is not exported');
-  assert.match(files['README.md'], /1 kept change\(s\) and 1 open item\(s\) on 1 page\(s\)/);
+  assert.match(files['README.md'], /1 kept change\(s\), 1 open item\(s\) and 0 gap\(s\) by audience on 1 page\(s\)/);
   reviewer.close();
 });
 

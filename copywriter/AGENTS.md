@@ -130,6 +130,40 @@ one-off Python.
   were written for (`audiences`), which the export prints ("Written
   for"). The database's version 2 moved an edited default persona's
   instructions to the voice and dropped the other personas.
+- **Reading as an audience** (the maintainer, 2026-11-23). "Read as"
+  an audience (from its chip in the list, its row in Settings, "Read as
+  all active", or the page chat's `read_as` tool when the reviewer asks
+  how a reader would see the page) has the model read the whole page
+  (`page.context()`) as that reader, with the voice and the audience's
+  description, knowledge, wants, tasks and objections, and report with
+  function calls only (`report_finding`, `report_coverage`; one call per
+  finding and per item, in one answer). Checked against the API on
+  2026-11-23 (`mise run read-eval`: the live home page in Chromium, the
+  three starting audiences side by side, Gemini 4 Hydrogen at high
+  thinking): 40 to 85 s a reading, 7 or 8 findings each, every anchored
+  one on the page (5 to 7 placed), a coverage call for every item. The
+  `replacement` parameter is required and empty when nothing on the page
+  helps: optional, Gemini left it out of every finding. A **finding** is where
+  the reader gets stuck: `objection` (raised or left unanswered),
+  `task` (no next step), `doubt` (a claim without proof or source),
+  `jargon` (a word they would not know), `missing` (something they want
+  that the page lacks); at most eight, each with the page text it attaches
+  to (resolved with `page.anchor`; not found, or `missing`: page-level),
+  a one-sentence explanation in the reader's terms, a short `need` and
+  maybe a rewrite (its first suggestion). Each becomes an ordinary
+  annotation (source `audience`), so keep, dismiss, preview and export
+  work unchanged; a page-level one is never previewed and is exported as
+  an item to add. The **checklist** is the audience's wants, tasks and
+  objections split into items (`checklist` in `src/core/audiences.mjs`:
+  one per quoted question, per semicolon part and sentence; tasks also at
+  commas), each `answered` (with the anchor of the text that answers it),
+  `partial` or `missing`; a gap can be made an open item (page-level,
+  kind `missing`), and the export lists the rest under "Gaps by audience".
+  Reading an audience again replaces its untouched findings (draft or
+  suggested, no note, no message, no text of the reviewer's) and keeps
+  the rest; a finding the reviewer acted on is not reported again. One
+  reading per audience and page is kept (the database's version 3 added
+  the `readings` store).
 - **Conversations.** The page chat has any number of conversations per
   page; a new one starts empty and the model reads only the open one.
   Each is an actor of `charts/conversation.scxml` while it is open (the
@@ -165,7 +199,8 @@ copywriter/
   src/platform/embed/     embed.mjs (launcher, Shadow DOM, page adapter on the live DOM), loader snippet
   site/                   the /copywriter/ page: download the extension, turn the widget on for this device
   test/                   node:test for charts and core; Playwright for the extension and the widget
-  mise/tasks/             build, test, serve (Ruby)
+  mise/tasks/             build, test, charts, eval, read-eval (Ruby)
+  tools/                  serve.mjs (the panel's preview), eval.mjs and read-eval.mjs (the real Gemini)
   dist/                   build output (not in git): extension/, copywriter-extension.zip, site/
 ```
 
@@ -211,7 +246,11 @@ annotation's id.
   annotations: [{                          // this page's, newest first
     id, state,                             // 'draft' | 'transcribing' | 'asking' | 'suggested' | 'previewing' | 'kept' | 'dismissed' | 'failed'
     original, anchorFound,                 // anchorFound false: the text is no longer on the page
-    source,                                // 'typed' | 'model' (made by the page chat)
+    source,                                // 'typed' | 'model' (made by the page chat) | 'audience' (a reading's finding)
+    finding?: { audienceID, kind, explanation, need?, section?, item? },  // source 'audience': kind 'objection' |
+                                           //   'task' | 'doubt' | 'jargon' | 'missing'; section: the heading a page-level
+                                           //   one belongs under; item: {field, status} of the checklist gap it was made of
+    pageLevel?,                            // true: no anchor (what the page lacks); never previewed, exported as "add"
     note,                                  // the user's note (why)
     suggestions: [{ id, text, rationale, own?, after? }],   // own: the user's text (edit); after: the number of
                                            // messages before it (it follows the reply that brought it)
@@ -219,6 +258,16 @@ annotation's id.
     audiences,                             // the names of the audiences its last rewrites were written for
     messages: [message],                   // below
     error?, createdAt, updatedAt,
+  }],
+  readings: [{                             // this page's last reading per saved audience, in Settings' order
+    audienceID, state,                     // 'reading' | 'done' | 'failed'
+    at,                                    // when it was answered (while reading: when it started)
+    items: [{ field, text, status, explanation, anchor?, annotationID? }],
+                                           // the checklist: field 'wants' | 'tasks' | 'objections'; status 'answered' |
+                                           //   'partial' | 'missing'; anchor: the text that answers it; annotationID:
+                                           //   the open item made of it (reading.open), while it exists
+    findingIDs,                            // the annotations its findings made, while they exist
+    error?, seconds?,
   }],
   activeID: string | null,
   chat: {                                  // the page chat's open conversation
@@ -237,7 +286,7 @@ message = {
   spoken?,                                 // a user message: true when it is a clip's transcript
   annotations?,                            // a page chat's model message: the ids of the annotations its rewrites made
   proposed?,                               // true: the model said nothing, the text lists its proposals
-  audiences?: [{ name, action, id? }],     // a model message: its audience calls ('define' | 'use'); id once saved
+  audiences?: [{ name, action, id? }],     // a model message: its audience calls ('define' | 'use' | 'read'); id once saved
   sources?: [{ title, uri }],              // a model message: the web pages it was grounded on (search, URL context)
   thoughts?, seconds?,                     // a model message: the summary of its thinking, and the request's seconds
 }
@@ -270,7 +319,10 @@ transcript exists; then the message shows, and the conversation goes on
 | `settings.deleteAudience` | `id` | deletes an audience (it stops being active) |
 | `settings.forgetKey` | | |
 | `models.refresh` | | |
-| `export` | `scope: 'page' \| 'all'`, `to: 'download' \| 'clipboard'` | |
+| `read` | `audienceIDs?` | reads the page as each audience (default: the active ones), side by side; settles when every reading has answered. An audience already reading is skipped ("Already reading as …" when all are); a failed reading is retried |
+| `reading.show` | `audienceID`, `index` | highlights the text that answers a checklist item |
+| `reading.open` | `audienceID`, `index` | makes a partial or missing item an open item (a page-level annotation of kind `missing`); resolves to its id |
+| `export` | `scope: 'page' \| 'all'`, `to: 'download' \| 'clipboard'` | the kept changes, the open items, and the checklist gaps not made into open items |
 
 ## Platform adapters (what each platform gives the core)
 
@@ -372,9 +424,16 @@ The model's tools (`src/core/gemini.mjs`, `FUNCTIONS`): `propose_rewrite
 {original_text?, replacement, rationale}`, `set_note {note}`,
 `define_audience {name, description, knows?, wants?, tasks?, objections?,
 use?}` (create or update by name; `use: true` makes it active) and
-`use_audiences {names}` (the active ones). A reply's audience calls go
-from the actor to `settings`; a reply of audience calls only says
-what was saved.
+`use_audiences {names}` (the active ones) and `read_as {audience}` (the
+`model` processor plans the reading; the conversation spawns it). A
+reply's audience calls go from the actor to `settings`; a reply of
+audience calls only says what was saved. A reading asks with
+`READING_FUNCTIONS` only: `report_finding {kind, original_text?, need,
+explanation, replacement?, section?}` and `report_coverage {item, status,
+answer_text?, explanation}` (`readingOf` reads them); the reading actor
+sends `model` a `read {page, audienceID}`, answered `model.reading
+{items, findings, thoughts?, seconds?}` with the findings' anchors and
+the items' found, at most `MAX_FINDINGS`.
 
 `src/core/charts.mjs` is generated by `mise run charts` from
 `charts/*.scxml` and `spec/work-packet.xsd` (string constants, so the

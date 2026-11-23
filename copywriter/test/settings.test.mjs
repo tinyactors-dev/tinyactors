@@ -163,7 +163,7 @@ test('gemini: contents merge turns, a reply\'s text and calls are read, bad call
     ['set_note', { note: 'Vague.' }],
     ['delete_page', {}],
   ])));
-  assert.deepEqual(read, { text: 'Done.', rewrites: [{ original_text: 'Old', replacement: 'New', rationale: 'why' }], note: 'Vague.', audiences: [], thoughts: '', sources: [] });
+  assert.deepEqual(read, { text: 'Done.', rewrites: [{ original_text: 'Old', replacement: 'New', rationale: 'why' }], note: 'Vague.', audiences: [], reads: [], thoughts: '', sources: [] });
   assert.throws(() => parse({ promptFeedback: { blockReason: 'SAFETY' } }), /blocked the request \(SAFETY\)/);
 });
 

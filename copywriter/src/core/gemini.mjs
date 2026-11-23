@@ -49,6 +49,15 @@ export const FUNCTIONS = Object.freeze([
     },
   },
   {
+    name: 'read_as',
+    description: 'Read the whole page as one saved audience: where that reader gets stuck, and which of their wants, tasks and objections the page answers. The findings appear in the reviewer\'s list. Call it when the reviewer asks how a reader would read or see the page.',
+    parameters: {
+      type: 'object',
+      properties: { audience: { type: 'string', description: 'The saved audience\'s name.' } },
+      required: ['audience'],
+    },
+  },
+  {
     name: 'use_audiences',
     description: 'Set the active audiences, by their names: the rewrites are then written for them. An empty list writes for no audience in particular.',
     parameters: {
@@ -205,6 +214,7 @@ const CALL_RESULTS = Object.freeze({
   set_note: 'Saved as the note.',
   define_audience: 'Saved; the reviewer sees it in Settings.',
   use_audiences: 'They are the active audiences now.',
+  read_as: 'The reading started; its findings and checklist appear in the reviewer\'s list when it ends.',
 });
 
 /**
@@ -258,12 +268,14 @@ export async function generate({
  * rewrites (`propose_rewrite`'s arguments), a note (`set_note`), the
  * audience calls (`define_audience` as `{action: 'define', name,
  * description, knows?, wants?, tasks?, objections?, use}`, `use_audiences`
- * as `{action: 'use', names}`) and the thought summary. Calls of other
+ * as `{action: 'use', names}`), the audiences to read the page as
+ * (`read_as`, `reads`: names) and the thought summary. Calls of other
  * names, or with the wrong types, are dropped.
  */
 export function reading({ text, calls, thoughts = '', sources = [] }) {
   const rewrites = [];
   const audiences = [];
+  const reads = [];
   let note = null;
   const clean = (value, max = 600) => (typeof value === 'string' ? value.trim().slice(0, max) : '');
   for (const call of calls) {
@@ -280,9 +292,11 @@ export function reading({ text, calls, thoughts = '', sources = [] }) {
       audiences.push(audience);
     } else if (call.name === 'use_audiences' && Array.isArray(a.names)) {
       audiences.push({ action: 'use', names: a.names.map((n) => clean(n, 80)).filter(Boolean) });
+    } else if (call.name === 'read_as' && clean(a.audience, 80)) {
+      reads.push(clean(a.audience, 80));
     }
   }
-  return { text, rewrites, note, audiences, thoughts, sources };
+  return { text, rewrites, note, audiences, reads, thoughts, sources };
 }
 
 /** What the transcription asks of the model. */
@@ -319,4 +333,75 @@ export function retrying(fetch, delays = RETRY_DELAYS, sleep = (ms) => new Promi
       await sleep(after > 0 && after <= 20 ? after * 1000 : delays[attempt]);
     }
   };
+}
+
+/** The kinds of a reading's findings, in the order the panel lists them. */
+export const FINDING_KINDS = Object.freeze(['objection', 'task', 'doubt', 'jargon', 'missing']);
+/** The statuses of a checklist item. */
+export const COVERAGE = Object.freeze(['answered', 'partial', 'missing']);
+
+/** The functions of a reading (the page read as one audience). */
+export const READING_FUNCTIONS = Object.freeze([
+  {
+    name: 'report_finding',
+    description: 'Report one place on the page where the reader gets stuck, or one thing they want that the page lacks.',
+    parameters: {
+      type: 'object',
+      properties: {
+        kind: {
+          type: 'string', enum: [...FINDING_KINDS],
+          description: 'objection: an objection of theirs the page leaves unanswered where they would raise it; task: a task they came to do, where the page gives no next step; doubt: a claim they would not believe without proof or a source; jargon: a word or name they would not know; missing: something they want that the page does not have at all.',
+        },
+        original_text: { type: 'string', description: 'The exact text on the page where they get stuck, copied verbatim: one sentence, heading or list item, never more. Omit it only for missing.' },
+        need: { type: 'string', description: 'What the reader needs here, as a short instruction to the writer, at most 12 words (for missing: what to add).' },
+        explanation: { type: 'string', description: 'One sentence in the reader\'s own terms: why they get stuck here.' },
+        replacement: { type: 'string', description: 'original_text rewritten in the voice so this reader gets further, using only facts the page states. An empty string when nothing on the page helps (and always for missing).' },
+        section: { type: 'string', description: 'For missing: the page heading, copied exactly, of the section where it belongs.' },
+      },
+      required: ['kind', 'need', 'explanation', 'replacement'],
+    },
+  },
+  {
+    name: 'report_coverage',
+    description: 'Report whether the page answers one item of the reader\'s checklist. Call it once for every item.',
+    parameters: {
+      type: 'object',
+      properties: {
+        item: { type: 'integer', description: 'The item\'s number in the checklist.' },
+        status: { type: 'string', enum: [...COVERAGE], description: 'answered: the page answers it fully; partial: it answers part, or only by implication; missing: it does not.' },
+        answer_text: { type: 'string', description: 'For answered or partial: the exact text on the page that answers it, copied verbatim, one sentence or list item.' },
+        explanation: { type: 'string', description: 'One short sentence: what the page says for it, or what it lacks.' },
+      },
+      required: ['item', 'status', 'explanation'],
+    },
+  },
+]);
+
+/**
+ * A reading's answer: `{findings, coverage}` from its report_finding and
+ * report_coverage calls, against the checklist `items` ([{field, text}]).
+ * Findings of another kind or with no explanation are dropped; coverage
+ * is one entry per item (the last call for an item wins; an item the
+ * model left out is 'missing', with no explanation).
+ */
+export function readingOf({ calls }, items) {
+  const clean = (value, max = 600) => (typeof value === 'string' ? value.trim().slice(0, max) : '');
+  const findings = [];
+  const statuses = new Map();
+  for (const { name, args: a } of calls) {
+    if (name === 'report_finding' && FINDING_KINDS.includes(a.kind) && clean(a.explanation)) {
+      const f = { kind: a.kind, need: clean(a.need, 160), explanation: clean(a.explanation) };
+      if (clean(a.original_text)) f.original_text = clean(a.original_text);
+      if (clean(a.replacement)) f.replacement = clean(a.replacement);
+      if (clean(a.section, 200)) f.section = clean(a.section, 200);
+      findings.push(f);
+    } else if (name === 'report_coverage' && COVERAGE.includes(a.status)) {
+      const n = Number(a.item);
+      if (Number.isInteger(n) && n >= 1 && n <= items.length) {
+        statuses.set(n - 1, { status: a.status, explanation: clean(a.explanation), ...(clean(a.answer_text) ? { answer_text: clean(a.answer_text) } : {}) });
+      }
+    }
+  }
+  const coverage = items.map((item, i) => ({ field: item.field, text: item.text, ...(statuses.get(i) || { status: 'missing', explanation: '' }) }));
+  return { findings, coverage };
 }
