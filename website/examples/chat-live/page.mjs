@@ -263,13 +263,13 @@ export async function mount(root) {
   const channelLink = (name) => {
     const dm = chat.screen(you).dms.find((each) => each.room === name);
     const label = !dm ? `#${name}` : dm.with === you ? 'Your notes' : `Direct message with ${dm.with}`;
-    const link = el('button', { type: 'button', class: `chatlive__in${dm ? ' chatlive__in--dm' : ''}`, title: `Open ${placeName(name)}` },
+    const link = el('button', { type: 'button', class: `chatlive__in${dm ? ' chatlive__in--dm' : ''}`, title: dm ? label : `Open #${name}` },
       ...(dm ? [avatar(dm.with, 'tiny'), el('span', { class: 'chatlive__in-name' }, label)] : [label]));
     link.addEventListener('click', () => openRoom(name));
     return link;
   };
   // three names a screen reader tells apart: this button, the pane (its heading) and its tabs
-  const debugToggle = el('button', { type: 'button', class: 'chatlive__top-button', 'aria-label': 'Show the debugger', 'aria-pressed': 'false', title: 'Debugger and experiments' },
+  const debugToggle = el('button', { type: 'button', class: 'chatlive__top-button', 'aria-label': 'Open the debugger', 'aria-pressed': 'false', title: 'Debugger and experiments' },
     icon('bug'), el('span', { class: 'chatlive__top-label' }, 'Debugger'));
   // opening it puts focus on its heading, so a keyboard is in it at once: it comes after the
   // conversation in the page's order, as a client's side panes do, which a screen reader reads that way
@@ -625,9 +625,12 @@ export async function mount(root) {
     if (link() === 'signedOut' || !selfState?.online) return 'signedOut';
     return '';
   }
+  /** Why the running charts have no direct messages, said the same in the People note, a card and the DMs view. */
+  const noDMs = () => `Step ${chat.version()}’s charts have no direct messages. Switch to step ${LATEST} in the debugger.`;
   /** The sentence that says why you cannot message `name` (`block` from messageBlock). */
   function messageNote(name, block) {
     const self = name === you;
+    if (block === 'older') return noDMs();
     if (block === 'waiting') return `You’re reconnecting. ${self ? 'Open your notes' : `Message ${name}`} once you’re back.`;
     return self ? 'Sign in to open your notes.' : `Sign in to message ${name}.`;
   }
@@ -636,7 +639,7 @@ export async function mount(root) {
     peopleNote.textContent = '';
     const block = messageBlock(name);
     if (block === 'older') {
-      peopleNote.textContent = `Step ${chat.version()}’s charts have no direct messages. Switch to step ${LATEST} in the debugger.`;
+      peopleNote.textContent = noDMs();
       return;
     }
     if (block) {
@@ -831,7 +834,7 @@ export async function mount(root) {
     if (block && document.activeElement === cardMessage) card.focus();
     cardMessage.hidden = Boolean(block);
     cardMessage.title = self ? 'Open your notes' : `Message ${name}`;
-    setText(cardNote, block === 'older' ? `Step ${chat.version()}’s charts have no direct messages.` : block ? messageNote(name, block) : '');
+    setText(cardNote, block ? messageNote(name, block) : '');
     cardNote.hidden = !block;
   }
   cardMessage.addEventListener('click', () => {
@@ -1056,7 +1059,7 @@ export async function mount(root) {
     render();
   }
 
-  const closeDebugger = el('button', { type: 'button', class: 'chatlive__close', 'aria-label': 'Close debugger' }, icon('close'));
+  const closeDebugger = el('button', { type: 'button', class: 'chatlive__close', 'aria-label': 'Close the debugger' }, icon('close'));
   closeDebugger.addEventListener('click', () => { openDebugger(false); debugToggle.focus(); });
   const debugTitle = el('h3', { class: 'chatlive__title', id: 'chatlive-debug-title', tabindex: '-1' }, 'Debugger');
   const debug = el('aside', { class: 'chatlive__debug', 'aria-labelledby': 'chatlive-debug-title', hidden: '' },
@@ -1438,7 +1441,7 @@ export async function mount(root) {
     };
     badge('dms', dms.filter(unreadIn).length, 'unread');
     // DMs: on step 5 there are none to list
-    setText(dmEmpty, chat.version() !== LATEST ? `Step ${chat.version()}’s charts have no direct messages. Switch to step ${LATEST} in the debugger.`
+    setText(dmEmpty, chat.version() !== LATEST ? noDMs()
       : dms.length ? '' : 'No direct messages yet. Click a person in Home to start one.');
     keyed(dmRows, dms.map(dmKey), (key) => {
       const [dmRoom, name] = key.split('\n');
