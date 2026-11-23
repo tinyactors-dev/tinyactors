@@ -1,9 +1,8 @@
 # Step 9: direct messages
 
-Two people who want to talk privately have only channels. Anyone can join
-a channel, and the two could make two channels for one pair. A direct
-message (DM) is a room of the two, made once for the pair, that nobody
-else can join.
+Two people who want to talk privately have only channels, which anyone
+can join. A direct message (DM) is a room of the two, made once per pair,
+that nobody else can join.
 
 ## A room of two, made by the workspace
 
@@ -17,8 +16,8 @@ else can join.
   workspace keeps DMs in `dms`, apart from `rooms`, so the channel list
   never shows one.
 - The workspace spawns a room through the `Spawner`, with its two members
-  and `direct` as params. A DM is the room chart of step 8, so it has a
-  channel's history, typing, held messages and catch-up.
+  and `direct` as params. A DM runs step 8's room chart with the check
+  below, so it has a channel's history, typing, held messages and catch-up.
 - The room refuses a join from anyone but its members when `direct` is
   set, and takes typing and posts from members only, in a channel too.
 - A DM with oneself has one member: a place for one's own notes.

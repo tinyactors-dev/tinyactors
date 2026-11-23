@@ -130,11 +130,11 @@
 
   <section id="direct-messages">
     <heading>9. Send a direct message</heading>
-    <p>To talk privately, two people could only make a channel anyone can join, and could make two for one pair. A direct message is a room of the two, which the workspace makes once for the pair.</p>
+    <p>Two people who want to talk privately have only channels, which anyone can join. A direct message is a room of the two, which the workspace makes once per pair.</p>
     <code src="../../examples/chat/9-direct-messages/charts/workspace.scxml" lines="85-100" language="scxml" file="charts/workspace.scxml"/>
     <p>Either side asks for <code>dm.forager.scout</code>: the two names, sorted. A channel's name holds no dot, so no channel takes it.</p>
     <code src="../../examples/chat/9-direct-messages/charts/workspace.scxml" lines="34-37" language="scxml" file="charts/workspace.scxml"/>
-    <p>The room chart is step 8's, so a direct message keeps history, typing and catch-up. Its members come with the spawn, and the room refuses anyone else's join.</p>
+    <p>The room chart builds on step 8's, so a direct message keeps history, typing and catch-up. Its members come with the spawn, and the room refuses anyone else's join.</p>
     <code src="../../examples/chat/9-direct-messages/charts/room.scxml" lines="15-25" language="scxml" file="charts/room.scxml"/>
     <p>The other person hears of their direct messages from the workspace when they come online, as they hear the roster. Back from a lost connection, the user chart asks for them with <code>dms.get</code>, as it asks <code>roster.get</code>.</p>
     <code src="../../examples/chat/9-direct-messages/charts/workspace.scxml" lines="120-127" language="scxml" file="charts/workspace.scxml"/>
