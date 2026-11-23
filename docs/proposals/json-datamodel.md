@@ -6,7 +6,7 @@ datamodel" and "An application datamodel"
 ([application-datamodel.md](application-datamodel.md), dropped); "History"
 says why.
 **Touches:** tinyactors-core (a datamodel layer, `src/datamodel_json`,
-and its header; a writer addition to `cbor.h`); every binding that offers
+and its header; the fix for payloads between datamodels); every binding that offers
 it (Swift, Kotlin and Go when they exist; `@tinyactors/wasm`;
 `ta-conform`); tinyactors-test (a stylesheet and a function library for
 the W3C suite).
@@ -60,8 +60,8 @@ leaves the computation to the application's functions.
     CBOR, payload and loop rows, the vtable's 29 entries); size
     **unverified**;
   - per actor: core's record, a session row and the document (Appendix A's
-    order is 74 bytes of CBOR). A quickjs session measured 891 B resident
-    beside core's 287 B record (`tinyactors-napi/AGENTS.md`, "Measured
+    order is 74 bytes of CBOR). A quickjs session measured 891 B resident,
+    core's 287 B record included (`tinyactors-napi/AGENTS.md`, "Measured
     cost per session"); this datamodel's figure is **unverified**;
   - per assignment: the document copied once with the new value in place;
   - per function call: the arguments written as one CBOR array (mostly
@@ -91,20 +91,35 @@ migration) are the [glossary's](../../GLOSSARY.md).
 
 A value is a JSON value (RFC 8259): an object, an array, a string, a
 number, `true`, `false` or `null`, stored as the CBOR the value table
-writes for it (RFC 8949, section 6.2). Integers are exact to 64 bits, as
-the value table keeps them. The value table has three values JSON lacks,
-and this datamodel keeps them because core hands them to a datamodel:
+writes for it (RFC 8949, section 6.2;
+[protocol.md](../../tinyactors-core/docs/protocol.md#values), lines
+90-106). A number whose value is an integer from -2^64 to 2^64 - 1 is
+an integer, any other a float, as the value table writes them. The value
+table also has values
+JSON lacks, and this datamodel keeps them, because other datamodels and
+other systems send them:
 
-| Value | Why | In a chart |
+| Value | Where it comes from | In a chart |
 |---|---|---|
 | `undefined` | a declared variable before its initialization (SCXML 5.2.2); `actor.context` answers it | the literal `undefined` |
-| an actor's address (tag 32) | `_event.origin`, a `Spawner`'s answer, a target to send to | read from an event or returned by a function; converts to its text where text is wanted |
-| a byte string | data from another system that is bytes | read from an event or returned by a function; no literal |
+| an actor's address (tag 32) | event data: a `Spawner`'s answer, a value another chart sent | read from data or returned by a function; converts to its text where text is wanted |
+| a byte string | event data from another system | read from data or returned by a function; no literal |
+| NaN, ±Infinity, -0.0 | floats another datamodel or a function produced | read from data or returned by a function; no literal |
+
+A number literal follows the same rule: `1.0` and `1e2` are the integers
+1 and 100, `-0` is the float -0.0 (as JavaScript reads it), and `1.5` a
+float.
 
 > Every value the datamodel stores is canonical: definite lengths, each
 > head and float in its shortest form, keys in the order written, no key
 > twice, no tag but 32, no simple value but `false`, `true`, `null` and
-> `undefined`.
+> `undefined`, and at most 63 levels deep.
+
+The depth leaves one level for the single container the datamodel wraps
+around a value it hands on (a call's argument array, a capture's map), so
+nothing it writes goes past `TA_CBOR_DEPTH_MAX` (64), which core's reader
+refuses (`cbor.h:40-41`, `:117-120`). Blobs and snapshots carry each
+document as a byte string, which adds no depth.
 
 Bytes from outside (`from_wire`, `payload_deserialize`, a function's
 result) are checked against the value table, refused with a key twice, and
@@ -118,20 +133,28 @@ A session's variables are one JSON object, stored as one CBOR map, whose
 keys are its variables.
 
 - **Every `<data>` is a key from `create` on,** holding `undefined` until
-  initialized, early or late as the chart binds (SCXML 5.2.2). A spawn's or
-  an invoke's params that name a `<data>` id set it in place of the
-  `<data>`'s own value; params naming anything else are ignored.
+  initialized, early or late as the chart binds (SCXML 5.2.2), unless a
+  spawn's or invoke's params set it (below); params naming anything else
+  are ignored.
 - **A `<foreach>` may add a key** for its `item` or `index` (SCXML 4.6).
-  Every key is a variable, for paths, hibernation and migration alike.
+  The chart's *declared variables* are its `<data>` ids and the roots of
+  its `<foreach>` items and indexes (`TA_EXPRESSION_ITEM`,
+  `image.h:111-113`), so a key a loop added survives hibernation.
 - **A stored document never changes.** An assignment writes a new one and
   releases the old; a `<foreach>` holds a reference on the block it
   iterates, which is the shallow copy SCXML 4.6 asks for.
-- **Limits.** A document MUST NOT nest deeper than `TA_CBOR_DEPTH_MAX` (64)
-  or exceed the datamodel's `max_document_bytes`. The same limit bounds
-  every value the datamodel builds: a capture, a call's arguments, a
-  function's result. A write that would break one is `error.execution`
-  with the reason `memory` (`TA_DATAMODEL_FAILURE_MEMORY`), and nothing
-  changes.
+- **Limits.** A document MUST NOT exceed the datamodel's
+  `max_document_bytes`, nor nest past 63 levels ("Values"). The same
+  limits bound every value the datamodel builds: a capture, a call's
+  arguments, a function's result. A write that would break one is
+  `error.execution`, with the reason `memory`
+  (`TA_DATAMODEL_FAILURE_MEMORY`) for size and `exception` for depth, and
+  nothing changes.
+- **`create`** takes the spawn's or invoke's params (`init`, one
+  reference, which it releases: core releases it only when no `create`
+  runs, `core.c:2129-2137`). A map sets the declared variables it names
+  and marks them, and `init_data` then skips their `<data>` expressions,
+  early or late binding alike; params that are not a map set nothing.
 
 The system variables are not in the document. `_sessionid` and `_name`
 are copied into the session's row at `create`, since core's views of them
@@ -184,20 +207,30 @@ number     = [ "-" ] int [ frac ] [ exp ]   ; int, frac, exp: RFC 8259, section 
 string     = DQUOTE *dchar DQUOTE / "'" *schar "'"
 dchar      = unescaped-but-dquote / "'" / escape
 schar      = unescaped-but-squote / DQUOTE / escape
+           ; both quotes, the backslash and controls are escaped
 escape     = "\\" ( DQUOTE / "'" / "\\" / "/" / %s"b" / %s"f" / %s"n"
            / %s"r" / %s"t" / %s"u" 4HEXDIG )
-           ; unescaped-but-*: RFC 8259's unescaped, less that quote
+unescaped-but-dquote = %x20-21 / %x23-26 / %x28-5B / %x5D-10FFFF
+unescaped-but-squote = unescaped-but-dquote
 
 name       = ( ALPHA / "_" ) *( ALPHA / DIGIT / "_" / "-" )
 variable   = name                       ; not a reserved word
 function   = name                       ; not a reserved word
 ```
 
+- **Tokens** are names, numbers, strings and the punctuation of the
+  grammar; whitespace may separate tokens and never splits one (`- 1` is
+  no number). A name followed by `(` is a call, any other name a path.
 - **Reserved words:** `true`, `false`, `null`, `undefined`, `In`, and every
   name that starts with `_` (SCXML reserves those for the platform, 5.10).
-  A function cannot be registered under one, and a `<data id>` that is one
-  cannot be named by a path, so its initialization is `error.execution`.
-  A token is a literal, a call or a path by its first word alone.
+  A function cannot be registered under one. A `<data id>` that is one, or
+  that `name` cannot spell (an XML id may hold `.` and letters outside
+  ASCII), is a key like any other and is initialized, but no path names
+  it; `ta_datamodel_json_check` reports it.
+- **What else is the expression's error,** found at attach: a `\u` escape
+  that leaves a lone surrogate, a key twice in a map literal, a position
+  past 2^32 - 1, a LOCATION expression that is not a path, and
+  `In('...')` of a state the chart lacks.
 - **A key that is not a name** is reached by a string index:
   `_ioprocessors["http://www.w3.org/TR/scxml/#SCXMLEventProcessor"].location`.
 - **No operators.** `hp <= 1` is `weak(hp)` (decision 2).
@@ -225,9 +258,12 @@ to 2^32 - 1 a position, anything else `error.execution`.
   that is neither. A missing key never reads as `undefined`, so a misspelt
   key in event data fails where it is read.
 - **`_event`** is a map of `name`, `type`, `sendid`, `origin`,
-  `origintype`, `invokeid`, `raw` (text; an absent field is empty text) and
+  `origintype`, `invokeid`, `raw`, all text as core gives them (an absent
+  field is empty text; `origin` too is text, `datamodel.h:55`), and
   `data` (the event's payload, `undefined` when it has none). Paths into
-  `_event.data` read the payload's bytes in place.
+  `_event.data` read the payload's bytes in place. Before the first event
+  `_event` is unbound (`architecture.md`, 9.4), and a path into it is
+  `error.execution`.
 - **`_ioprocessors[type].location`** is the session's address for that
   processor (SCXML 5.10; W3C 325, 326, 329, 346 and 569).
 
@@ -254,19 +290,22 @@ to 2^32 - 1 a position, anything else `error.execution`.
 | child text of `<data>`, `<assign>`, `<content>` (`TA_EXPRESSION_CONTENT`) | the literal's value when the text is one; otherwise the text, whitespace normalized, as a string, as SCXML's ECMAScript data model treats content that is not JSON; XML children are the expression's error |
 | `eventexpr`, `targetexpr`, `typeexpr`, `srcexpr`, `delayexpr`, `sendidexpr`, `docexpr` | text; an address gives its text; any other value is `error.execution` |
 | `<log expr>` | text as it is; any other value in CBOR diagnostic notation (`ta_cbor_diagnostic`, `cbor.h:89`) |
-| `<foreach array>` | an array, iterated by reference over the block it came from |
+| `<foreach array>` | an array, iterated by reference over the block it came from; a function's result, which has no block, is copied into one at `foreach_begin` |
 | `namelist` | a map of each variable's name to its value |
 | a trace's value (`TA_CAPTURE_VALUE`) | the value; a failure leaves it out of the record |
-| `<script>` | `error.execution` (decision 1) |
+| `<script>`, and a chart-level `<script>` (`TA_EXPRESSION_GLOBAL_SCRIPT`) at the start | `error.execution` (decision 1) |
 | the vtable's `custom` | `TA_ERROR_UNSUPPORTED`, which core makes `error.execution` |
 
 ## Functions
 
 A function takes values and returns one value. The application registers
-it under a name, for every chart or for the charts it names, before adding
+it under a name, for every chart or for one chart by name, before adding
 the image whose charts call it, and writes it in its own language. A
 chart's call reaches the function registered for that chart under that
-name, so a chart cannot call a function meant for another.
+name, and an entry for every chart only when the chart has none of its
+own, so a chart cannot call a function meant for another. Every version
+of a chart shares its name and so its functions: a new version that needs
+a function with other parameters calls it by a new name.
 
 > A function MUST NOT keep state between calls, call the host, or change
 > anything but its result.
@@ -309,21 +348,31 @@ typedef ta_status (*ta_json_function)(ta_json_call *call);
   datamodel's rules: it may not re-enter the host (`datamodel.h:7-8`).
   It extends the datamodel's callback surface; it is no new kind of
   callback (decision 5).
-- **The result room is kept between calls,** so a warmed call allocates
-  nothing. `ta_cbor_writer` gives no owner its grown block today (its
-  fields are private, `cbor.h:142`): a call that does is a prerequisite.
+- **The result room** is one block of `max_document_bytes`, allocated with
+  the datamodel, which the writer fills without growing (a writer with no
+  allocator, `cbor.h:126-130`, `:159-162`): a result that does not fit is
+  `TA_ERROR_NO_MEMORY` there and `error.execution` with the reason
+  `memory`. A call allocates nothing.
 
 ### Fuel
 
-Core charges one unit per instruction of executable content
-(`src/core/core.c:1307`) and burns what a datamodel reports
-(`ta_datamodel_environment_charge`, `core.c:89-92`), nothing more. This
-datamodel reports one unit per function call and one per 64 bytes it
-reads, writes or copies. Core calls `foreach_item` and `assign_string`
-with no environment (`core.c:1450-1471`); their fuel is kept and reported
-at the next call that has one, so an `<assign>` inside a `<foreach>` pays
-for each document it copies. A function must end: no fuel stops it once
-called.
+Core burns fuel for its own work (one unit per instruction of executable
+content, `src/core/core.c:1307`, and its steps) and what a datamodel
+reports (`ta_datamodel_environment_charge`, `core.c:89-92`); it does not
+measure a datamodel's work. This datamodel reports one unit per function
+call and one per 64 bytes it reads, writes or copies.
+
+- Core calls `foreach_item` (`core.c:1450-1471`) and `assign_string`
+  (`core.c:1055-1059`, `:1555-1559`) with no environment. Their fuel is
+  kept in the session's row, so it is in snapshots and never billed to
+  another session, and reported at the session's next evaluation, so an
+  `<assign>` inside a `<foreach>` pays for each document it copies.
+- It is never reported through `bind_event`, whose fuel core ignores
+  (`datamodel.h:38-40`), `migrate`, which runs with an environment of its
+  own (`core.c:2238`), or `init_data` during an adoption, which runs
+  without a limit (`core.c:2228-2232`).
+
+A function must end: no fuel stops it once called.
 
 ### What a binding writes
 
@@ -353,7 +402,9 @@ reference count and one canonical CBOR block, allocated through the
 datamodel's allocator. Session documents are blocks of the same kind.
 
 - **`capture`** writes the `<param>`s or `namelist` as a map, or the
-  `<content>`'s value, into a new block.
+  `<content>`'s value, into a new block. A name given twice keeps its last
+  value, one key (W3C 178, a manual test, expects both values; a JSON
+  object cannot hold them).
 - **`to_wire` and `payload_serialize`** hand a block's bytes out as they
   are; **`from_wire` and `payload_deserialize`** check and canonicalize
   ("Values").
@@ -363,21 +414,26 @@ datamodel's allocator. Session documents are blocks of the same kind.
   its sendid, origin and `raw`; its name, unless `name_id` gives the same
   text (a name the image lacks has no exact id, `event_pool.c:143-151`);
   its invokeid, unless it is the text kept for its `invoke_slot` (an id
-  generated per execution differs, `datamodel.h:45-47`). The datamodel
-  sets `TA_DATAMODEL_EVENT_DETACHABLE`; `detach_event` drops nothing, so
-  `_event` stays bound until the next event (SCXML 5.10).
+  generated per execution differs, `datamodel.h:45-47`). It builds the
+  new `_event` before it lets the old go; when memory fails, which core
+  does not hear (`core.c:530` ignores the status), `_event` is unbound
+  and a read of it is `error.execution` with the reason `memory`. The
+  datamodel sets `TA_DATAMODEL_EVENT_DETACHABLE`; `detach_event` drops
+  nothing, so `_event` stays bound until the next event (SCXML 5.10).
 - **A `<foreach>`** is a row of the loop table: a reference on the array's
-  block, the position, and the `item` and `index` paths. A loop can stay
-  open across a yield inside a microstep (`core.c:121-128`, `:1440-1448`),
-  so loops are in snapshots.
+  block, the position, and the `item` and `index` paths. A run can yield
+  at any instruction (`core.c:1306`) while a loop's frame stays in the
+  workspace (`:1442-1449`), and a snapshot copies the whole region
+  (`include/tinyactors/host.h:449`), so loops are in snapshots.
 
 ## Hibernation, migration, snapshots, inspection
 
 - **`serialize`** writes `{"vars": <the document>, "event": [...] |
-  null}`, the form the other datamodels write, the document copied in as
-  it is.
+  null}`, the form the other datamodels write, with the document as a
+  byte string of its bytes, so the blob adds no depth.
 - **`deserialize`** makes the session's document from the blob's: the
-  variables the chart declares, `undefined` for those the blob lacks. It
+  chart's declared variables ("The session document"), `undefined` for
+  those the blob lacks. It
   keeps the blob's whole document beside it, because core calls `migrate`
   right after `deserialize` when the blob was written for an older version
   (`src/system/hibernate.c:1095`, `core.c:2235-2245`).
@@ -387,9 +443,11 @@ datamodel's allocator. Session documents are blocks of the same kind.
   (`datamodel.h:214-221`). The kept document goes then, or at the first
   event when no migration asks for it.
 - **`variable`** (`actor.context`) answers a variable's value as a new
-  payload; `undefined` answers none, as the vtable asks.
+  payload; `undefined` answers none, and a name the document lacks
+  `TA_ERROR_INVALID`, as the vtable asks (`datamodel.h:250-257`).
 - **A snapshot** writes the tables' handle namespaces (`ta_table_snapshot`)
-  and every row: sessions with their documents and `_event`, payloads,
+  and every row: sessions with their documents (as byte strings), pending
+  fuel and `_event`, payloads,
   loops, and each session's chart by its attachment's segment and index
   (`ta_datamodel_chart.segment`), since two segments may run one image.
 
@@ -402,6 +460,8 @@ fills starts with its `size`.
 
 ```c
 /* include/tinyactors/datamodel_json.h */
+typedef struct ta_datamodel_json ta_datamodel_json;
+
 typedef struct ta_json_function_entry {
     uint32_t size;
     uint32_t pad;
@@ -439,6 +499,11 @@ TA_API void ta_datamodel_json_free(ta_datamodel_json *datamodel);
   and its context MUST stay valid until `ta_datamodel_json_free`, which
   follows `ta_host_free`. A function registered after a chart attached is
   seen by charts attached later.
+- **The layer is freestanding** and checked as one: an entry in
+  `tinyactors-core/mise/core.rb` with `freestanding: true`, so
+  `check:freestanding` covers it. Its default lives in
+  `ta_datamodel_json_config_normalize`, which the rule "a default lives in
+  one place" (`tinyactors-core/AGENTS.md`) then lists beside the other two.
 - **A host takes the binding** beside its other datamodels
   (`ta_host_environment.datamodels`, at most 8, `include/tinyactors/host.h:112`).
   Nothing in `datamodel.h` changes.
@@ -455,6 +520,7 @@ TA_API void ta_datamodel_json_free(ta_datamodel_json *datamodel);
 | `_event`: a payload reference, ids, copied text | the session's row | `bind_event` | the next `bind_event`, or `destroy` |
 | a payload | the payload table | `capture`, `from_wire`, `payload_deserialize` | `release` to 0 |
 | a loop | the loop table | `foreach_begin` | `foreach_end` |
+| the result room | the datamodel | `ta_datamodel_json_new` | `ta_datamodel_json_free` |
 | a call's `arguments` | the datamodel | before the call | its return |
 | a call's `message` | the function | the call | its return (copied) |
 | `serialize`'s and `to_wire`'s bytes | the datamodel | the call | its next call (`datamodel.h:9-13`) |
@@ -473,8 +539,10 @@ TA_API void ta_datamodel_json_free(ta_datamodel_json *datamodel);
   running `"json"` charts would hand one datamodel's handle to the other.
   Core must convert at the crossing (`to_wire` on one side, `from_wire` on
   the other), or refuse the mix as C5 says, before this datamodel ships.
-- **A writer whose grown block its owner keeps,** in `cbor.h`, for the
-  result room ("The function interface").
+  The fix changes what the bindings rely on, so it updates
+  `tinyactors-core/docs/bindings.md` (section 8, line 287: "a payload goes
+  only to the datamodel it came from", stated as fact) and
+  `docs/embedding.md` in the same commit.
 - **Not blocking:** a failed attach leaks the charts attached before it,
   in `attach_charts` (`src/system/system.c:243-259`), after the trace
   rules (`:386-388`) and on restore (`:1267-1268`). This datamodel fails an
@@ -694,4 +762,9 @@ static ta_status has_items(ta_json_call *call) {
   W3C tests that need ill-formed expressions to load, fuel for the
   datamodel's own work, bounds on what it builds, function scope per
   chart, canonical values, a grammar without ambiguity, `_event`'s text,
-  loops in snapshots, and the payload problem in core, all reflected above.
+  loops in snapshots, and the payload problem in core. A review of the
+  rewrite found the depth a blob adds, the variables a `<foreach>`
+  declares, the value table's floats and integer range, `_event.origin`'s
+  type, where pending fuel lives, a result room that needs no new `cbor.h`
+  call, `create`'s params, and the grammar's remaining cases; all are
+  reflected above.
