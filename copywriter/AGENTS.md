@@ -349,7 +349,11 @@ one-off Python.
   number the page or the site map does not state; the core routed one
   need (agent-platform.why-scxml, an explanation's, linked to /about/).
   The model gave no `conflict` and wrote some criteria about this page in
-  a link's list, which is why both rules above exist.
+  a link's list, which is why both rules above exist. The same day in
+  the widget (Pixel 7, the deployed site): read as the three audiences in
+  37 s, planned in 118 s (12 items, 3 new pages), a rewrite and a link
+  accepted, the rewrite previewed in the hero. The site map leaves the
+  page out by its path, so a URL with a query does not list itself.
 
 ## Layout
 

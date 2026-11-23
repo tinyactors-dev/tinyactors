@@ -87,7 +87,7 @@ const article = (word) => (/^[aeiou]/.test(word) ? 'an' : 'a');
  * that names it, else any of that kind; never `here`. Null: none.
  */
 export function bestPage(pages, { kind, siteID, here }) {
-  const others = pages.filter((p) => p.kind === kind && p.url !== here);
+  const others = pages.filter((p) => p.kind === kind && p.url !== here && p.path !== shortPath(here));
   return others.find((p) => p.audiences[0] === siteID) || others.find((p) => p.audiences.includes(siteID)) || others[0] || null;
 }
 

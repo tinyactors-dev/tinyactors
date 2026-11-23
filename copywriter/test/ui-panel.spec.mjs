@@ -859,6 +859,7 @@ test('revise page: the plan lists its items quietly; accepting a rewrite makes a
   await panel.locator('.cw-plan-item[data-id=p1][data-decision=accepted]').waitFor();
   await panel.locator('.cw-plan-item[data-id=p1] [data-action=plan-open]').click();
   await panel.locator('[data-view=detail]').waitFor();
+  assert.equal(await panel.locator('.cw-heading').textContent(), 'Actors as a library', 'an annotation\'s detail names the page');
   await panel.locator('.cw-card [data-action=preview]').first().click();
   await until(async () => (await page.evaluate(() => reviewer.getState().annotations.find((a) => a.id === 'p1-a')?.state)) === 'previewing');
   await panel.locator('[data-action=keep]').click();

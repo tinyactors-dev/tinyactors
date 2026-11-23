@@ -54,9 +54,9 @@ const PLAN = geminiReply('', [
   ['new_page', { title: 'When to use tinyactors', kind: 'explanation', audiences: ['tech-lead'], outline: ['Use it when', 'Do not use it when'], needs: ['tech-lead.when-to-use'], reason: 'No page answers it.' }],
 ]);
 
-async function planned({ plan = PLAN, fetchFile = siteFiles() } = {}) {
+async function planned({ plan = PLAN, fetchFile = siteFiles(), url = `${SITE}/` } = {}) {
   const fetch = fakeFetch();
-  const env = await setup({ page: fakePage({ url: `${SITE}/`, title: 'tinyactors', text: TEXT, purpose: HOME }), fetch, fetchFile });
+  const env = await setup({ page: fakePage({ url, title: 'tinyactors', text: TEXT, purpose: HOME }), fetch, fetchFile });
   const lead = env.reviewer.getState().settings.audiences.find((a) => a.id === 'site-tech-lead');
   fetch.answer(READING((id) => lead.items.findIndex((x) => x.id === id) + 1));
   await env.reviewer.dispatch({ type: 'read', audienceIDs: ['site-tech-lead'] });
@@ -299,4 +299,12 @@ test('a link\'s criteria go to their pages: the line\'s here, the answer\'s to t
   ]);
   assert.equal(items[0].conflict, 'A reference answers it.', 'no conflict given: the reason');
   assert.deepEqual(newPages[0].criteria.map((c) => c.text), ['\'Maintainers\' names who maintains tinyactors'], 'the new page takes the plan\'s criterion');
+});
+
+test('a page opened with a query string is still left out of its own site map', async () => {
+  const { reviewer, fetch } = await planned({ url: `${SITE}/?cb=1` });
+  assert.ok(!system(fetch.requests[1]).includes('- / (pitch'));
+  assert.equal(reviewer.getState().plan.sitePages, 22);
+  assert.equal(reviewer.getState().plan.items.find((x) => x.action === 'rewrite').target, 'here');
+  reviewer.close();
 });

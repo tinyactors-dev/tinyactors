@@ -922,7 +922,8 @@ export function createReviewer({
     const linkedHere = linkedIDs(url);
     const ids = linkedHere.length ? linkedHere : activeIDs();
     const readers = ids.map((id) => audiences.find((a) => a.id === id)).filter(Boolean);
-    const map = (await siteMapOf(url)).filter((p) => p.url !== url);
+    // the other pages: this one is left out by its path (its URL may carry a query)
+    const map = (await siteMapOf(url)).filter((p) => p.path !== shortPath(url));
     // every need of the page's audiences, with what the last readings said of it
     const needs = new Map();
     const lines = [];

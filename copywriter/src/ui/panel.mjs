@@ -1568,7 +1568,7 @@ export function mountPanel(root, reviewer, { layout = 'sidebar', onTall = null }
     } else {
       heading.classList.remove('is-reader');
       delete heading.dataset.audience;
-      heading.textContent = ui.view === 'settings' ? 'Settings' : reader ? reader.name : ui.view === 'plan' ? 'Revise page' : (state.page?.title || state.page?.url || '');
+      heading.textContent = ui.view === 'settings' ? 'Settings' : reader ? reader.name : ui.view === 'plan' && !a ? 'Revise page' : (state.page?.title || state.page?.url || '');
       heading.title = ui.view === 'settings' ? '' : reader ? `Read as ${reader.name}: ${state.page?.url ?? ''}`
         : [state.page?.kind, state.page?.url].filter(Boolean).join(' · ');
     }
