@@ -48,6 +48,9 @@ On step 5 the page shows no typing indicator: those charts send none,
 and a switch to them clears the indicators, since they never send the
 `typing.stopped` that would end one step 8 started.
 
-Step 8's join brings the room's last 50 posts, numbered: a screen adds
-those it lacks, shown as "earlier" since they reached it with no time of
-their own, and shows each numbered post once.
+On step 8 a channel's history is data this program stores (`chat.mjs`,
+`history`: the `chat:history` I/O processor the room chart appends each
+numbered post to). A join brings the number of the room's last post; the
+screen reads the posts up to it from the store, adds those it lacks,
+shown as "earlier" since they reached it as data with no time of their
+own, and shows each numbered post once.

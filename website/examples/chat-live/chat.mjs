@@ -1,8 +1,11 @@
 // The team chat of the tutorial (examples/chat), finished: a workspace
 // that makes rooms, users who come and go, and a store that keeps idle
 // actors out of memory, on step 8's charts (typing, a grace period for a
-// lost connection, a room's history) or step 5's (none of them). It takes the tinyactors package
-// as an argument, so the same code runs in Node.js (main.mjs, against
+// lost connection, a room's history) or step 5's (none of them). On step
+// 8 a channel's history is data this program stores (`history` below):
+// the room chart numbers each post and appends it, and a screen reads a
+// channel's posts from the store when it joins. It takes the tinyactors
+// package as an argument, so the same code runs in Node.js (main.mjs, against
 // output.txt) and in the reader's browser (page.mjs, on @tinyactors/wasm).
 //
 // What each user's screen shows is built only from what the charts send to
@@ -121,8 +124,10 @@ export async function createChat(tinyactors, { versions, version = LATEST, seed 
     else if (event === 'typing.stopped') target.typing = { ...target.typing, [data.room]: (target.typing[data.room] ?? []).filter((user) => user !== data.user) };
     else if (event === 'joined') {
       if (!target.rooms.includes(data.room)) target.rooms = [...target.rooms, data.room];
-      // step 8's join brings the room's kept posts: those the screen lacks, before its newer ones, with no time of their own
-      const missing = (data.history ?? []).filter((post) => !target.messages.some((m) => m.room === data.room && m.seq === post.seq));
+      // step 8's join brings the number of the room's last post: the screen reads the posts up to it from the
+      // store, those it lacks, before its newer ones, with no time of their own (they reached it as data)
+      const stored = data.seq === undefined ? [] : history.read(data.room, data.seq);
+      const missing = stored.filter((post) => !target.messages.some((m) => m.room === data.room && m.seq === post.seq));
       if (missing.length > 0) {
         const others = target.messages.filter((m) => m.room !== data.room);
         const here = target.messages.filter((m) => m.room === data.room);
@@ -139,7 +144,7 @@ export async function createChat(tinyactors, { versions, version = LATEST, seed 
     if (event === 'typing') return `${data.user} is typing in #${data.room}`;
     if (event === 'typing.stopped') return `${data.user} stopped typing in #${data.room}`;
     if (event === 'roster') return 'the whole roster';
-    if (event === 'joined') return `joined #${data.room}${data.history?.length ? `, with ${data.history.length} earlier posts` : ''}`;
+    if (event === 'joined') return `joined #${data.room}${data.seq ? `, reads posts 1 to ${data.seq} from the store` : ''}`;
     return `${event}${data.reason ? `: ${data.reason}` : ''}`;
   };
   const client = {
@@ -161,6 +166,23 @@ export async function createChat(tinyactors, { versions, version = LATEST, seed 
     },
   };
 
+  // ---- the channels' history, step 8's: data this program stores, a list
+  // of posts a channel, appended by the room chart (chat:history). A real
+  // application keeps it in a database table.
+  const history = {
+    posts: new Map(), // room -> [{ seq, from, text }]
+    receive(send) {
+      const { room, seq, from, text } = send.data;
+      if (!this.posts.has(room)) this.posts.set(room, []);
+      this.posts.get(room).push({ seq, from, text });
+      note('data', `#${room}'s history stores post ${seq} from ${from}`);
+    },
+    /** The posts of `room` numbered up to `seq`, the last `limit` of them. */
+    read(room, seq, limit = 50) {
+      return (this.posts.get(room) ?? []).filter((post) => post.seq <= seq).slice(-limit);
+    },
+  };
+
   // ---- the host, on the version asked for; both versions compiled once
   const images = {};
   for (const [step, charts] of Object.entries(versions)) {
@@ -175,7 +197,7 @@ export async function createChat(tinyactors, { versions, version = LATEST, seed 
     clock,
     store,
     resident: RESIDENT,
-    ioProcessors: { 'chat:client': client, spawn: new Spawner() },
+    ioProcessors: { 'chat:client': client, 'chat:history': history, spawn: new Spawner() },
     migrationDone: (result) => migrating?.(result),
   });
 
@@ -276,7 +298,7 @@ export async function createChat(tinyactors, { versions, version = LATEST, seed 
     }),
     /** What the application will do, and when (simulated seconds). */
     agenda: () => agenda.map((entry) => ({ at: entry.at / 1000, what: entry.what })),
-    /** What happened, newest last: { at, kind (input, screen, lost, late, fault, scenario, version), text }. */
+    /** What happened, newest last: { at, kind (input, screen, lost, late, fault, scenario, version, data), text }. */
     log: () => log.slice(),
 
     // ---- the version of the charts
