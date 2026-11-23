@@ -116,6 +116,7 @@ export function createReviewer({
   let chat = { messages: [], busy: false };
   let activeID = null;
   let recording = { state: 'idle', target: null };
+  let picking = false; // the page's pick mode: a tap picks an element's text
   let exporting = 'idle';
   let status = 'booting';
   let error;
@@ -141,6 +142,7 @@ export function createReviewer({
       status, ...(error ? { error } : {}),
       page: { url: current.url, title: current.title },
       selection: selection ? { text: selection.text, fits: fits(selection) } : null,
+      picking,
       settings: {
         hasKey, rememberKey, model: settings.model,
         models: models.map((m) => ({ id: m.id, label: m.label })),
@@ -387,6 +389,7 @@ export function createReviewer({
     }
     previewed.clear();
     selection = null;
+    picking = false;
     activeID = null;
     current = { url: info.url || '', title: info.title || '', lang: info.lang || 'en' };
     pages[current.url] = { title: current.title, lang: current.lang };
@@ -421,6 +424,8 @@ export function createReviewer({
       }
       page.onSelection?.((s) => { selection = s && s.text ? s : null; publish(); });
       page.onNavigate?.(() => navigate());
+      // the page ended pick mode itself (Escape there)
+      page.onPickEnd?.(() => { if (picking) { picking = false; publish(); } });
       await openPage();
       if (closed) return;
       status = 'ready';
@@ -477,7 +482,24 @@ export function createReviewer({
     clips.delete(id);
   }
 
+  async function stopPicking() {
+    picking = false;
+    try { await page.pick?.(false); } catch { /* the page went away */ }
+  }
+
   const commands = {
+    async 'pick.start'() {
+      if (!page.pick) throw new Error('This page cannot pick elements.');
+      if (picking) return;
+      if (!(await page.pick(true))) throw new Error('This page cannot pick elements.');
+      picking = true;
+      publish();
+    },
+    async 'pick.stop'() {
+      if (!picking) return;
+      await stopPicking();
+      publish();
+    },
     async annotate({ note }) {
       const s = (await page.selection()) || selection;
       if (!s || !s.text || !s.text.trim()) throw new Error('Select some text on the page first.');
@@ -492,6 +514,7 @@ export function createReviewer({
       });
       selection = null; // used: the panel's banner goes until the next selection
       activeID = id;
+      if (picking) await stopPicking(); // an annotation of the pick ends pick mode
       publish(); // the panel opens it now, not when the model has answered
       await host.idle();
       publish();

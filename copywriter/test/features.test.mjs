@@ -3,7 +3,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { setup, fakeFetch, geminiReply, find } from './fakes.mjs';
+import { setup, fakeFetch, fakePage, geminiReply, find } from './fakes.mjs';
 import { createRecorder } from '../src/core/recorder.mjs';
 import { createMemoryStore } from '../src/core/store.mjs';
 import { thinkingConfig, parse } from '../src/core/gemini.mjs';
@@ -340,4 +340,51 @@ test('personas: any but the default can be deleted; deleting the active one goes
   assert.deepEqual(await store.personas(), []);
   assert.equal((await store.settings()).personaID, 'tinyactors-voice');
   reviewer.close();
+});
+
+test('pick mode: start, a tap is the selection, annotating it ends pick mode; stop and Escape end it too', async () => {
+  const fetch = fakeFetch(geminiReply('Plainer.', [['propose_rewrite', { replacement: 'Ship it', rationale: 'r' }]]));
+  const { reviewer, page } = await setup({ fetch });
+  assert.equal(reviewer.getState().picking, false);
+  await reviewer.dispatch({ type: 'pick.start' });
+  assert.equal(reviewer.getState().picking, true);
+  assert.equal(page.picking, true);
+
+  page.tap('Actors are cheap');
+  assert.deepEqual(reviewer.getState().selection, { text: 'Actors are cheap', fits: true });
+  page.tap('Read the guide'); // another element moves the pick
+  assert.equal(reviewer.getState().selection.text, 'Read the guide');
+  const id = await reviewer.dispatch({ type: 'annotate', note: 'Which guide?' });
+  let s = reviewer.getState();
+  assert.equal(s.picking, false, 'the annotation ends pick mode');
+  assert.equal(page.picking, false);
+  assert.equal(s.activeID, id);
+  assert.equal(find(reviewer, id).original, 'Read the guide');
+  assert.equal(find(reviewer, id).state, 'suggested');
+
+  await reviewer.dispatch({ type: 'pick.start' });
+  await reviewer.dispatch({ type: 'pick.stop' });
+  assert.equal(reviewer.getState().picking, false);
+  assert.equal(page.picking, false);
+
+  await reviewer.dispatch({ type: 'pick.start' });
+  page.escape();
+  assert.equal(reviewer.getState().picking, false, 'Escape on the page ends it');
+  assert.deepEqual(page.calls.filter((c) => c[0] === 'pick').map((c) => c[1]), [true, false, true, false, true]);
+  reviewer.close();
+});
+
+test('pick mode: a page without it refuses; another page ends it', async () => {
+  const page = fakePage({ text: 'Build better products.' });
+  page.pick = undefined;
+  const { reviewer } = await setup({ page });
+  await assert.rejects(reviewer.dispatch({ type: 'pick.start' }), /cannot pick/);
+  reviewer.close();
+
+  const second = await setup();
+  await second.reviewer.dispatch({ type: 'pick.start' });
+  second.page.navigate({ url: 'https://www.tinyactors.dev/guide/', title: 'Guide', text: 'A guide.' });
+  await second.reviewer.dispatch({ type: 'deselect' });
+  assert.equal(second.reviewer.getState().picking, false);
+  second.reviewer.close();
 });

@@ -8,6 +8,7 @@ export function fakePage({ url = 'https://www.tinyactors.dev/', title = 'tinyact
   const previews = new Map(); // id → {exact, text}
   const listeners = [];
   const navigators = [];
+  const pickEnds = [];
   const fake = {
     url, title, lang, text,
     selected: null,
@@ -18,6 +19,16 @@ export function fakePage({ url = 'https://www.tinyactors.dev/', title = 'tinyact
     selection() { return fake.selected; },
     onSelection(fn) { listeners.push(fn); },
     onNavigate(fn) { navigators.push(fn); },
+    picking: false,
+    pick(on) { fake.calls.push(['pick', on]); fake.picking = on; return true; },
+    onPickEnd(fn) { pickEnds.push(fn); },
+    /** In pick mode, a tap on the element whose text is `exact`: it is the selection. */
+    tap(exact) {
+      if (!fake.picking) throw new Error('not picking');
+      fake.select(exact);
+    },
+    /** Escape on the page: pick mode ends there. */
+    escape() { fake.picking = false; for (const fn of pickEnds) fn(); },
     locate(anchor) { return fake.text.includes(anchor.quote.exact); },
     preview({ id, anchor, text }) {
       fake.calls.push(['preview', id, text]);

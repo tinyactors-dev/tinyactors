@@ -1,7 +1,7 @@
 # AGENTS.md: copywriter
 
 The tinyactors copywriter: a reviewer that improves a website's copy in
-place. Select text on a page, ask Gemini for better copy (typed or spoken),
+place. Pick an element on a page (or select text), ask Gemini for better copy (typed or spoken),
 preview the replacement in the page, keep or undo it, add notes, and export
 the kept changes as a work packet a coding agent applies to the site's
 sources. Its first user is the maintainer, improving www.tinyactors.dev.
@@ -78,6 +78,21 @@ one-off Python.
   per page, the original text, the replacement, the note, the anchor) and
   `README.md`. On a phone, "Copy for agent" puts `CHANGES.md` on the
   clipboard, since a download there is awkward.
+- **Pick mode.** The main way to choose what to review (the maintainer,
+  2026-11-23: selecting text on a phone raises the system's text menu over
+  the widget). One tap on the pick button enters it; then a tap or click
+  on the page picks the nearest text block (p, li, h1-h6, blockquote,
+  figcaption, td, th, dt, dd, a button's, link's or label's text, or any
+  element with text of its own) that fits one annotation, outlined in
+  pine by an overlay over it, never by the page's own styles, and that is
+  the selection (the element's whole text, its CSS path, the text around
+  it). The same element again picks its parent block, while that fits.
+  While picking, the page's text cannot be selected (no system menu) and
+  a tap there opens no link and presses no button; a mouse shows a dashed
+  outline of what it would pick; the phone's sheet lowers to its least
+  height. It ends with an annotation of the pick (the sheet rises again
+  and shows it), the pick button again, or Escape. Selecting text still
+  works outside pick mode.
 - **Persona.** The default style guide is the website's voice
   (`website/AGENTS.md`, "The voice: short and literal"), editable in
   Settings but never deleted; more personas can be added in Settings or by
@@ -143,8 +158,9 @@ annotation's id.
 {
   status: 'booting' | 'ready' | 'error', error?: string,   // error also when the store failed to save
   page: { url, title },
-  selection: { text, fits } | null,        // the page's current selection, if any; fits false: more than one
+  selection: { text, fits } | null,        // the page's current selection or pick, if any; fits false: more than one
                                            // sentence, heading or paragraph (another block, or over 600 characters)
+  picking,                                 // true in pick mode (pick.start until pick.stop, an annotation, or Escape)
   settings: {
     hasKey, rememberKey, model, models: [{ id, label }],
     thinking,                              // 'low' | 'medium' | 'high' | 'xhigh'
@@ -191,7 +207,8 @@ transcript exists; then the message shows, and the conversation goes on
 
 | `type` | fields | what it does |
 |---|---|---|
-| `annotate` | `note?` | an annotation of the current selection; with a note, it asks the model at once. A selection that does not fit (`fits` false) is refused: "Select one sentence, heading or paragraph." |
+| `annotate` | `note?` | an annotation of the current selection or pick; with a note, it asks the model at once; it ends pick mode. A selection that does not fit (`fits` false) is refused: "Select one sentence, heading or paragraph." |
+| `pick.start` / `pick.stop` | | pick mode on the page (`page.pick`); refused where the page has none |
 | `select` / `deselect` | `id` | the active annotation; highlights its text in the page |
 | `ask` | `id`, `text` | a message about one annotation; the model answers and may propose rewrites |
 | `suggest` | `id` | more alternatives, no message |
@@ -229,6 +246,9 @@ page = {
                                  //   its replacement), or clear
   onNavigate?(fn),               // optional: fn() when the panel follows another page (tab switch, navigation);
                                  // the reviewer ends the old page's actors and starts the new one's
+  pick?(on),                     // pick mode on or off; → boolean (false: the page cannot). A pick is reported
+                                 //   through onSelection and returned by selection(), like a selection
+  onPickEnd?(fn),                // fn() when the page ended pick mode itself (Escape)
 }
 anchor = { quote: { exact, prefix, suffix }, selector }   // W3C text quote + CSS path of the nearest element
 credentials = { get(), set(key, { remember }), forget(), remembered() }
@@ -245,7 +265,9 @@ from the model.
   proxy: `chrome.tabs.sendMessage` to the reviewed tab's content script
   (`{cw: 'page', method, args}`), injected with `chrome.scripting` where the
   manifest's did not run (a tab opened before the extension loaded); the
-  content script sends `{cw: 'selection'}` back. The panel follows its
+  content script sends `{cw: 'selection'}` back, and `{cw: 'pick', on:
+  false}` when Escape ends pick mode in the page; a tab the panel leaves
+  while picking is told to stop. The panel follows its
   window's active tab and that tab's loads (`onNavigate`); `?tab=<id>` binds
   it to one tab (the tests open it so). Host permissions are every http(s)
   page: one user, no per-site prompts. On a page no content script can
