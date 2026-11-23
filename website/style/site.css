@@ -671,6 +671,8 @@ ta-tabs { display: block; }
 .chatlive__browse-joined { flex: none; font-size: 13px; font-weight: 700; color: var(--cl-active); }
 .chatlive__browse-join { flex: none; height: 32px; padding: 0 14px; border: 1px solid var(--cl-line); border-radius: 4px; background: var(--cl-pane); cursor: pointer; font-weight: 700 !important; }
 .chatlive__browse-join:hover { background: var(--cl-hover); }
+.chatlive__browse-join:disabled { opacity: .5; cursor: not-allowed; }
+.chatlive__browse-join:disabled:hover { background: var(--cl-pane); }
 .chatlive__note { margin: 2px 16px 0 52px; font-size: 13px; line-height: 18px; color: var(--cl-side-muted); }
 .chatlive__note:empty { display: none; }
 .chatlive__person { all: unset; box-sizing: border-box; display: flex; align-items: center; gap: 8px; width: calc(100% - 16px); height: 28px; margin: 0 8px; padding: 0 8px 0 16px;

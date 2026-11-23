@@ -192,6 +192,9 @@ export async function mount(root) {
   let ready = false; // the page draws once its parts are made
   let inspected = null; // the actor whose chart is shown
   let selfState = null; // your user actor's state value: { online: ... }, 'reconnecting', or null (offline)
+  // your connection is lost and its reconnect pending (or signed in with none): your user actor
+  // drops what you do until it is back, so the page sends nothing and says why
+  const waiting = () => chat.reconnects(you) !== null || (Boolean(selfState) && !chat.connected(you));
   let shownStored = null; // whether the inspected actor was in the store when last drawn
   let query = ''; // the search, lowercased
   let part = 'experiments'; // the debugger's tab
@@ -438,6 +441,7 @@ export async function mount(root) {
   /** What is wrong with the name in the field, or '' when the workspace may take it. */
   function nameProblemText() {
     const name = nameField.value;
+    if (waiting()) return 'You’re reconnecting. Create the channel once you’re back.';
     if (!selfState) return 'Sign in to create a channel.';
     if (!name) return '';
     if (/[^a-z0-9-]/.test(name)) return 'Use only lowercase letters, numbers and dashes.';
@@ -449,7 +453,7 @@ export async function mount(root) {
     setText(nameCount, String(NAME_MAX - nameField.value.length));
     const problem = nameProblemText();
     setText(nameProblem, problem);
-    nameField.setAttribute('aria-invalid', String(Boolean(problem) && Boolean(nameField.value)));
+    nameField.setAttribute('aria-invalid', String(Boolean(problem) && Boolean(nameField.value) && Boolean(selfState) && !waiting()));
     createButton.disabled = creating || Boolean(problem) || !nameField.value;
   }
   nameField.addEventListener('input', () => {
@@ -501,14 +505,16 @@ export async function mount(root) {
     if (!browseDialog.open) return;
     const screen = chat.screen(you);
     // signed in, the list says it all: each channel, and Join or Joined beside it
-    browseNote.hidden = Boolean(selfState);
-    setText(browseNote, 'Sign in to join a channel.');
+    const away = waiting();
+    browseNote.hidden = Boolean(selfState) && !away;
+    setText(browseNote, away ? 'You’re reconnecting. Join a channel once you’re back.' : 'Sign in to join a channel.');
     keyed(browseList, browseRooms, (name) => {
       const open = el('button', { type: 'button', class: 'chatlive__browse-name', title: `Open #${name}` },
         el('span', { class: 'chatlive__hash', 'aria-hidden': 'true' }, '#'), el('span', { class: 'chatlive__room-name' }, name));
       open.addEventListener('click', () => { closeDialog(browseDialog, null); openRoom(name, true); });
       const joinOne = el('button', { type: 'button', class: 'chatlive__browse-join', 'aria-label': `Join #${name}` }, 'Join');
       joinOne.addEventListener('click', async () => {
+        if (waiting()) return;
         const who = you;
         await chat.join(who, name);
         if (who === you && browseDialog.open) open.focus(); // the button goes once you are in
@@ -517,7 +523,8 @@ export async function mount(root) {
     }, (node, name) => {
       const joined = screen.rooms.includes(name);
       node.children[1].hidden = !joined;
-      node.children[2].hidden = joined || !selfState;
+      node.children[2].hidden = joined || (!selfState && !away);
+      node.children[2].disabled = away;
     });
   }
   async function openBrowse() {
@@ -550,7 +557,7 @@ export async function mount(root) {
     }
     // signed in, your actor asks the workspace; signed out or connecting, a direct message your screen has still opens
     const who = you; // the person who clicked: a switch while the workspace answers does not change who opens it
-    const made = selfState?.online ? await chat.openDM(who, name) : dmWith(name)?.room ?? null;
+    const made = selfState?.online && !waiting() ? await chat.openDM(who, name) : dmWith(name)?.room ?? null;
     if (who !== you) return made && openFor(who, made);
     if (!made) {
       peopleNote.textContent = `Sign in to message ${name}.`;
@@ -762,7 +769,7 @@ export async function mount(root) {
   const text = el('input', { type: 'text', class: 'chatlive__text', 'aria-label': 'Message', maxlength: '200' });
   const send = el('button', { type: 'submit', class: 'chatlive__send', 'aria-label': 'Send' }, arrow());
   const join = el('button', { type: 'button', class: 'chatlive__join' }, 'Join channel');
-  join.addEventListener('click', () => chat.join(you, room));
+  join.addEventListener('click', () => waiting() || chat.join(you, room));
   // a channel you have not joined: its posts from the store, and this bar in the composer's place
   const viewingName = el('strong', {});
   const viewing = el('div', { class: 'chatlive__signed-out chatlive__viewing' }, el('p', {}, 'You are viewing ', viewingName), join);
@@ -787,7 +794,7 @@ export async function mount(root) {
   }
   text.addEventListener('input', () => {
     send.classList.toggle('chatlive__send--ready', text.value.trim() !== '');
-    if (!selfState?.online || chat.now() - typed < TYPED) return; // the chart throttles too: one notice to the room per 3 s
+    if (!selfState?.online || waiting() || chat.now() - typed < TYPED) return; // the chart throttles too: one notice to the room per 3 s
     typed = chat.now();
     chat.typing(you, room);
   });
@@ -1084,6 +1091,7 @@ export async function mount(root) {
     selfState = yours(self);
     const yourStatus = statusOf(selfState);
     const reconnecting = yourStatus === 'reconnecting';
+    const cut = reconnecting || waiting(); // what you do now would be dropped: the composer and Join wait
     const roster = { ...screen.roster, [you]: yourStatus };
 
     // you, on the rail and in your menu
@@ -1270,14 +1278,14 @@ export async function mount(root) {
     banner.hidden = !reconnecting;
     foot.hidden = Boolean(query); // a list of results has no composer
     composer.hidden = !(connected && joined);
-    composer.classList.toggle('chatlive__composer--off', reconnecting);
-    text.disabled = reconnecting;
-    send.disabled = reconnecting;
+    composer.classList.toggle('chatlive__composer--off', cut);
+    text.disabled = cut;
+    send.disabled = cut;
     viewing.hidden = !connected || joined;
     setText(viewingName, `#${room}`);
-    join.disabled = reconnecting;
+    join.disabled = cut;
     signedOut.hidden = connected;
-    text.placeholder = reconnecting ? 'Connecting…' : dm?.with === you ? 'Jot something down' : `Message ${dm ? dm.with : `#${room}`}`;
+    text.placeholder = cut ? 'Connecting…' : dm?.with === you ? 'Jot something down' : `Message ${dm ? dm.with : `#${room}`}`;
     if (acting) {
       // nothing to act on (a lost connection disables the composer): a conversation just opened shows its title
       const next = action() ?? (toAction ? roomTitle : null);
