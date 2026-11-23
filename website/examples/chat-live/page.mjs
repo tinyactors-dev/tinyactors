@@ -267,7 +267,8 @@ export async function mount(root) {
     link.addEventListener('click', () => openRoom(name));
     return link;
   };
-  const debugToggle = el('button', { type: 'button', class: 'chatlive__top-button', 'aria-label': 'Debugger', 'aria-pressed': 'false', title: 'Debugger and experiments' },
+  // three names a screen reader tells apart: this button, the pane (its heading) and its tabs
+  const debugToggle = el('button', { type: 'button', class: 'chatlive__top-button', 'aria-label': 'Show the debugger', 'aria-pressed': 'false', title: 'Debugger and experiments' },
     icon('bug'), el('span', { class: 'chatlive__top-label' }, 'Debugger'));
   // opening it puts focus on its heading, so a keyboard is in it at once: it comes after the
   // conversation in the page's order, as a client's side panes do, which a screen reader reads that way
@@ -1026,7 +1027,7 @@ export async function mount(root) {
     el('div', { class: 'chatlive__log-head' }, el('p', { class: 'chatlive__hint' }, 'The newest 200 entries, at simulated time.'), kindPick), logList);
 
   const parts = { experiments, actors: actorsPart, log: logPart };
-  const tabs = el('div', { class: 'chatlive__tabs', role: 'tablist', 'aria-label': 'Debugger' },
+  const tabs = el('div', { class: 'chatlive__tabs', role: 'tablist', 'aria-label': 'Debugger sections' },
     ...Object.entries({ experiments: 'Experiments', actors: 'Actors', log: 'Log' }).map(([key, label]) => {
       const button = el('button', { type: 'button', role: 'tab', class: 'chatlive__debug-tab', id: `chatlive-tab-${key}`, 'aria-controls': `chatlive-${key}`,
         'aria-selected': String(key === part), tabindex: key === part ? '0' : '-1', 'data-key': key }, label);
@@ -1056,8 +1057,8 @@ export async function mount(root) {
 
   const closeDebugger = el('button', { type: 'button', class: 'chatlive__close', 'aria-label': 'Close debugger' }, icon('close'));
   closeDebugger.addEventListener('click', () => { openDebugger(false); debugToggle.focus(); });
-  const debugTitle = el('h3', { class: 'chatlive__title', tabindex: '-1' }, 'Debugger');
-  const debug = el('aside', { class: 'chatlive__debug', 'aria-label': 'Debugger', hidden: '' },
+  const debugTitle = el('h3', { class: 'chatlive__title', id: 'chatlive-debug-title', tabindex: '-1' }, 'Debugger');
+  const debug = el('aside', { class: 'chatlive__debug', 'aria-labelledby': 'chatlive-debug-title', hidden: '' },
     el('header', { class: 'chatlive__bar-title' }, debugTitle, closeDebugger),
     el('div', { class: 'chatlive__details' },
       el('div', { class: 'chatlive__clockbar' },
