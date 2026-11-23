@@ -25,6 +25,47 @@ const REWRITES = {
   ],
 };
 
+const LEAD = {
+  id: 'lead', name: 'Tech lead who approves dependencies', description: 'Decides whether the team may depend on tinyactors.',
+  wants: 'An honest "use it when"; the license', tasks: 'Decide yes or no, check the license',
+  objections: '"Who maintains it?" "What happens when the host dies?"',
+};
+
+// The tech lead's reading of the page: its checklist and two findings.
+function sampleReading(now) {
+  return {
+    audienceID: 'lead', state: 'done', at: now - 9 * MINUTE, seconds: 41,
+    items: [
+      { field: 'wants', text: 'An honest "use it when"', status: 'missing', explanation: 'The page never says when not to use it.' },
+      { field: 'wants', text: 'The license', status: 'answered', explanation: 'MIT, in the footer.', anchor: { quote: { exact: 'MIT licensed.', prefix: '', suffix: '' }, selector: 'footer p' } },
+      { field: 'tasks', text: 'Decide yes or no', status: 'partial', explanation: 'Facts, but no limits.' },
+      { field: 'tasks', text: 'check the license', status: 'answered', explanation: 'MIT.', anchor: { quote: { exact: 'MIT licensed.', prefix: '', suffix: '' }, selector: 'footer p' } },
+      { field: 'objections', text: '"Who maintains it?"', status: 'missing', explanation: 'No maintainer is named.' },
+      { field: 'objections', text: '"What happens when the host dies?"', status: 'partial', explanation: 'Snapshots, but nothing on a crash.' },
+    ],
+    findingIDs: ['f1', 'f2'],
+  };
+}
+
+function sampleFindings(now) {
+  const at = (minutes) => now - minutes * MINUTE;
+  return [
+    {
+      id: 'f1', state: 'suggested', anchorFound: true, source: 'audience', original: 'An actor takes about 530 bytes in Node.js.',
+      note: '', chosenID: null, messages: [], audiences: [LEAD.name],
+      suggestions: [{ id: 's1', text: 'An actor takes about 530 bytes in Node.js, measured with the benchmark on the memory page.', rationale: 'Measured how, and on what?', after: 0 }],
+      finding: { audienceID: 'lead', kind: 'doubt', explanation: 'I cannot size servers from 530 bytes without knowing how it was measured.' },
+      createdAt: at(9), updatedAt: at(9),
+    },
+    {
+      id: 'f2', state: 'draft', anchorFound: true, pageLevel: true, source: 'audience', original: 'Add a "when not to use it" section',
+      note: '', chosenID: null, messages: [], audiences: [LEAD.name], suggestions: [],
+      finding: { audienceID: 'lead', kind: 'missing', explanation: 'I cannot tell when to say no.', section: 'Like SQLite, but for actors' },
+      createdAt: at(9), updatedAt: at(9),
+    },
+  ];
+}
+
 function sample(now) {
   const at = (minutes) => now - minutes * MINUTE;
   return [
@@ -72,7 +113,7 @@ function sample(now) {
   ];
 }
 
-export function createMockReviewer({ hasKey = true, delay = 1, empty = false, status = 'ready' } = {}) {
+export function createMockReviewer({ hasKey = true, delay = 1, empty = false, status = 'ready', read = true } = {}) {
   const now = Date.now();
   let seq = 100;
   const listeners = new Set();
@@ -96,10 +137,12 @@ export function createMockReviewer({ hasKey = true, delay = 1, empty = false, st
       voice: { instructions: VOICE, custom: false },
       audiences: [
         { id: 'student', name: 'Student', description: 'Learns statecharts for a course.', wants: 'One small example.' },
+        ...(read ? [LEAD] : []),
       ],
-      audienceIDs: [],
+      audienceIDs: empty || !read ? [] : ['lead'],
     },
-    annotations: empty ? [] : sample(now),
+    annotations: empty ? [] : [...(read ? sampleFindings(now) : []), ...sample(now)],
+    readings: empty || !read ? [] : [sampleReading(now)],
     activeID: null,
     chat: {
       id: 'c1', messages: [], busy: false,
@@ -221,6 +264,15 @@ export function createMockReviewer({ hasKey = true, delay = 1, empty = false, st
         }] }) });
         return;
       }
+      if (/how would|read as/i.test(text)) {
+        const lead = state.settings.audiences.find((a) => a.id === 'lead') ?? state.settings.audiences[0];
+        set({ chat: chatSet({ busy: false, messages: [...state.chat.messages, {
+          role: 'model', at: Date.now(), text: `Reading the page as ${lead.name}: the findings come into the list.`,
+          audiences: [{ name: lead.name, action: 'read', id: lead.id }],
+        }] }) });
+        await handlers.read({ audienceIDs: [lead.id] });
+        return;
+      }
       if (/who|audience|persona/i.test(text)) {
         const audience = {
           id: id('u'), name: 'Skeptical backend engineer', description: 'A senior backend engineer evaluating actor runtimes.',
@@ -264,6 +316,53 @@ export function createMockReviewer({ hasKey = true, delay = 1, empty = false, st
     async 'chat.open'({ id: chatID }) {
       if (!conversations.has(chatID)) throw new Error('No such conversation on this page.');
       set({ chat: chatSet({ id: chatID, messages: conversations.get(chatID), busy: false }) });
+    },
+    async read({ audienceIDs }) {
+      const ids = audienceIDs ?? state.settings.audienceIDs;
+      if (!ids.length) throw new Error('Choose an audience first.');
+      const others = state.readings.filter((r) => !ids.includes(r.audienceID));
+      set({ readings: [...others, ...ids.map((audienceID) => ({ ...(state.readings.find((r) => r.audienceID === audienceID) ?? { items: [], findingIDs: [] }), audienceID, state: 'reading', at: Date.now() }))] });
+      await wait(1200);
+      const fresh = ids.map((audienceID) => {
+        const fid = id('f');
+        return {
+          reading: {
+            audienceID, state: 'done', at: Date.now(), seconds: 2, findingIDs: [fid],
+            items: [
+              { field: 'wants', text: 'One small example', status: 'partial', explanation: 'The example needs its imports.' },
+              { field: 'objections', text: '"Is it maintained?"', status: 'missing', explanation: 'No maintainer is named.' },
+            ],
+          },
+          finding: {
+            id: fid, state: 'draft', anchorFound: true, source: 'audience', original: 'Statecharts run the same everywhere.', note: '', chosenID: null,
+            messages: [], suggestions: [], audiences: [], createdAt: Date.now(), updatedAt: Date.now(),
+            finding: { audienceID, kind: 'jargon', explanation: 'What is a statechart?' },
+          },
+        };
+      });
+      set({
+        readings: [...state.readings.filter((r) => !ids.includes(r.audienceID)), ...fresh.map((f) => f.reading)],
+        annotations: [...fresh.map((f) => f.finding), ...state.annotations],
+      });
+    },
+    async 'reading.show'({ audienceID, index }) {
+      const item = state.readings.find((r) => r.audienceID === audienceID)?.items[index];
+      if (!item?.anchor) throw new Error('The page has no text for it.');
+    },
+    async 'reading.open'({ audienceID, index }) {
+      const r = state.readings.find((x) => x.audienceID === audienceID);
+      const item = r.items[index];
+      const t = Date.now();
+      const annotation = {
+        id: id('g'), state: 'draft', anchorFound: true, pageLevel: true, source: 'audience', original: item.text, note: '', chosenID: null,
+        messages: [], suggestions: [], audiences: [], createdAt: t, updatedAt: t,
+        finding: { audienceID, kind: 'missing', explanation: item.explanation, item: { field: item.field, status: item.status } },
+      };
+      set({
+        annotations: [annotation, ...state.annotations],
+        readings: state.readings.map((x) => (x === r ? { ...r, items: r.items.map((y, i) => (i === index ? { ...y, annotationID: annotation.id } : y)) } : x)),
+      });
+      return annotation.id;
     },
     async 'pick.start'() { set({ picking: true }); },
     async 'pick.stop'() { set({ picking: false }); },

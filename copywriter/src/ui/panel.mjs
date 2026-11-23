@@ -22,6 +22,7 @@ import {
   ArchiveRestore, ArrowLeft, ArrowRight, ArrowUp, Check, ChevronDown, ChevronRight, CircleSlash, Copy, Download,
   Ellipsis, Eye, EyeOff, FileArchive, KeyRound, LoaderCircle, MessageSquare, MessagesSquare, Mic, Plus, SquarePen, UsersRound,
   MousePointerClick, Pencil, RefreshCw, RotateCcw, Settings, Sparkles, SquareDashedMousePointer, Trash2, TriangleAlert, Undo2, X,
+  ScanEye, ListChecks, CircleCheck, Contrast, Circle, CirclePlus, MessageCircleQuestion, Signpost, ShieldQuestion, BookA, Link2,
 } from 'lucide';
 import { panelCSS } from './panel-css.mjs';
 import { markPaths, markViewBox } from './mark.mjs';
@@ -41,6 +42,23 @@ const STATES = {
   dismissed: { icon: CircleSlash, label: 'Dismissed' },
   failed: { icon: TriangleAlert, label: 'Failed' },
 };
+// A reading's findings, by kind: an icon and the word for its tooltip.
+const KINDS = {
+  objection: { icon: MessageCircleQuestion, label: 'Objection unanswered' },
+  task: { icon: Signpost, label: 'No next step' },
+  doubt: { icon: ShieldQuestion, label: 'Claim without proof' },
+  jargon: { icon: BookA, label: 'Jargon' },
+  missing: { icon: CirclePlus, label: 'Missing' },
+};
+// A checklist item's status: a glyph and its word.
+const COVER = {
+  answered: { icon: CircleCheck, label: 'Answered' },
+  partial: { icon: Contrast, label: 'Partly answered' },
+  missing: { icon: Circle, label: 'Not answered' },
+};
+const FIELDS = [['wants', 'Wants'], ['tasks', 'Came to'], ['objections', 'Objections']];
+// An audience's initials: the first letters of its first two words.
+const initials = (name) => String(name || '?').split(/[\s-]+/).filter(Boolean).slice(0, 2).map((w) => w[0].toUpperCase()).join('');
 const LENGTHS = [['short', 'Short'], ['medium', 'Medium'], ['long', 'Long']];
 const TOOLS = [['search', 'Search the web', 'Google Search: answers cite the pages'], ['url', 'Read links', 'The model reads the pages a message names'], ['code', 'Run code', 'The model may compute with Python']];
 const THINKING = [['low', 'Low'], ['medium', 'Medium'], ['high', 'High'], ['xhigh', 'Extra high']];
@@ -172,7 +190,9 @@ export function mountPanel(root, reviewer, { layout = 'sidebar' } = {}) {
 
   // What the panel itself remembers; never the reviewer's state.
   const ui = {
-    view: 'list',          // 'list' | 'chat' | 'settings' (an active annotation shows over list and chat)
+    view: 'list',          // 'list' | 'chat' | 'settings' | 'reading' (an active annotation shows over list, chat and reading)
+    reading: null,         // the audience whose checklist the 'reading' view shows
+    itemOpen: null,        // the checklist item unfolded, its index
     showDone: null,        // the kept and dismissed annotations, folded under the open ones (null: open when nothing else is)
     menu: null,            // 'export' | 'more'
     scope: 'page',
@@ -462,7 +482,7 @@ export function mountPanel(root, reviewer, { layout = 'sidebar' } = {}) {
       onclick: () => { ui.menu = null; render(); send(command); },
     }, icon(node), text);
     return h('div', { class: 'cw-menu', role: 'menu', 'aria-label': 'Annotation' },
-      a.anchorFound !== false && item(MousePointerClick, 'Show on page', { type: 'select', id: a.id }),
+      a.anchorFound !== false && !a.pageLevel && item(MousePointerClick, 'Show on page', { type: 'select', id: a.id }),
       a.state === 'dismissed'
         ? item(ArchiveRestore, 'Reopen', { type: 'reopen', id: a.id })
         : item(CircleSlash, 'Dismiss', { type: 'dismiss', id: a.id }),
@@ -511,6 +531,7 @@ export function mountPanel(root, reviewer, { layout = 'sidebar' } = {}) {
       view.append(h('button', { type: 'button', class: 'cw-hintrow', 'data-action': 'add-key', onclick: () => go('settings') },
         icon(KeyRound), h('span', null, 'Add a Gemini key for rewrites'), icon(ChevronRight)));
     }
+    view.append(...[audienceStrip()].filter(Boolean));
     const all = state.annotations ?? [];
     const open = all.filter((a) => OPEN.has(a.state));
     const done = all.filter((a) => !OPEN.has(a.state));
@@ -548,13 +569,20 @@ export function mountPanel(root, reviewer, { layout = 'sidebar' } = {}) {
     else if (a.note) sub = h('span', { class: 'cw-row-sub' }, a.note);
     else if (latest) sub = h('span', { class: 'cw-row-sub' }, latest.text);
     const missing = a.anchorFound === false;
+    // a reading's finding: its kind as the icon, the audience's initials on it
+    const kind = a.finding && KINDS[a.finding.kind];
+    const who = a.finding && audienceOf(a.finding.audienceID);
+    const quiet = kind && (a.state === 'draft' || a.state === 'suggested');
     return h('button', {
-      type: 'button', class: `cw-row${replaced ? ' is-replaced' : ''}${missing ? ' is-quiet' : ''}`,
-      'data-id': a.id, 'data-state': a.state,
-      title: `${s.label}${missing ? ' · no longer on the page' : ''}`,
+      type: 'button', class: `cw-row${replaced ? ' is-replaced' : ''}${missing ? ' is-quiet' : ''}${a.pageLevel ? ' is-page' : ''}`,
+      'data-id': a.id, 'data-state': a.state, ...(kind ? { 'data-kind': a.finding.kind } : {}),
+      title: `${kind ? `${kind.label} · ${who?.name ?? a.audiences?.[0] ?? 'audience'} · ` : ''}${s.label}${missing ? ' · no longer on the page' : ''}${a.pageLevel ? ' · to add' : ''}`,
       onclick: () => send({ type: 'select', id: a.id }),
     },
-    h('span', { class: 'cw-row-icon' }, icon(missing ? TriangleAlert : s.icon, s.spin ? 'cw-spin' : ''), h('span', { class: 'cw-sr' }, s.label)),
+    h('span', { class: `cw-row-icon${kind ? ' is-finding' : ''}` },
+      icon(missing ? TriangleAlert : quiet ? kind.icon : s.icon, s.spin && !quiet ? 'cw-spin' : ''),
+      kind && h('span', { class: 'cw-initials', 'aria-hidden': 'true' }, initials(who?.name ?? a.audiences?.[0])),
+      h('span', { class: 'cw-sr' }, kind ? `${kind.label}, ${who?.name ?? ''}: ${s.label}` : s.label)),
     h('span', { class: 'cw-row-text' }, h('span', { class: 'cw-row-original' }, a.original), sub));
   }
 
@@ -596,6 +624,13 @@ export function mountPanel(root, reviewer, { layout = 'sidebar' } = {}) {
     const audiences = state.settings?.audiences ?? [];
     const audience = audiences.find((x) => x.id === c.id) ?? audiences.find((x) => x.name.toLowerCase() === c.name.toLowerCase());
     const active = audience && (state.settings?.audienceIDs ?? []).includes(audience.id);
+    if (c.action === 'read') {
+      return h('button', {
+        type: 'button', class: 'cw-audience-chip', 'data-action': 'open-reading', 'data-audience': audience?.id ?? '',
+        disabled: !audience, title: 'Read as this audience: its checklist', 'aria-label': `Reading as ${c.name}`,
+        onclick: () => { if (audience) openReading(audience.id); },
+      }, icon(ScanEye), h('span', null, c.name));
+    }
     return h('button', {
       type: 'button', class: `cw-audience-chip${active ? ' is-active' : ''}`, 'data-action': 'open-audience', 'data-audience': audience?.id ?? '',
       disabled: !audience, title: `${c.action === 'define' ? 'Audience saved' : 'Writing for it'}${active ? ' · active' : ''}`,
@@ -625,7 +660,7 @@ export function mountPanel(root, reviewer, { layout = 'sidebar' } = {}) {
   async function openProposal(a) {
     if (await send({ type: 'select', id: a.id }) === FAILED) return;
     const first = a.suggestions?.[0];
-    if (a.state === 'suggested' && first && a.anchorFound !== false) send({ type: 'preview', id: a.id, suggestionID: first.id });
+    if (a.state === 'suggested' && first && a.anchorFound !== false && !a.pageLevel) send({ type: 'preview', id: a.id, suggestionID: first.id });
   }
 
   function thread(messages, busy, transcribing) {
@@ -677,9 +712,11 @@ export function mountPanel(root, reviewer, { layout = 'sidebar' } = {}) {
     view.append(body);
 
     body.append(h('blockquote', {
-      class: `cw-original${replaced ? ' is-replaced' : ''}${missing ? ' is-missing' : ''}`,
-      title: missing ? 'No longer on the page' : null,
-    }, a.original, missing && h('span', { class: 'cw-missing', role: 'img', 'aria-label': 'No longer on the page' }, icon(TriangleAlert))));
+      class: `cw-original${replaced ? ' is-replaced' : ''}${missing ? ' is-missing' : ''}${a.pageLevel ? ' is-page' : ''}`,
+      title: missing ? 'No longer on the page' : a.pageLevel ? `Not on the page: to add${a.finding?.section ? ` under “${a.finding.section}”` : ''}` : null,
+    }, a.pageLevel && h('span', { class: 'cw-add', role: 'img', 'aria-label': 'To add' }, icon(CirclePlus)), a.original,
+    missing && h('span', { class: 'cw-missing', role: 'img', 'aria-label': 'No longer on the page' }, icon(TriangleAlert))));
+    if (a.finding) body.append(findingLine(a));
 
     // the note: why, in the reviewer's words; quiet under the quote
     const note = h('textarea', {
@@ -698,7 +735,7 @@ export function mountPanel(root, reviewer, { layout = 'sidebar' } = {}) {
     const flow = h('div', { class: 'cw-thread', 'aria-live': 'polite' });
     const cardsAfter = (n) => {
       const here = suggestions.filter((s) => (s.after ?? messages.length) === n);
-      if (here.length) flow.append(h('div', { class: 'cw-cards', role: 'list', 'aria-label': 'Suggestions' }, here.map((s) => card(a, s, missing))));
+      if (here.length) flow.append(h('div', { class: 'cw-cards', role: 'list', 'aria-label': 'Suggestions' }, here.map((s) => card(a, s, missing || a.pageLevel))));
     };
     cardsAfter(0);
     messages.forEach((m, i) => { flow.append(message(m)); cardsAfter(i + 1); });
@@ -761,7 +798,7 @@ export function mountPanel(root, reviewer, { layout = 'sidebar' } = {}) {
     h('button', {
       type: 'button', class: 'cw-card-pick', 'data-action': 'preview',
       'aria-disabled': String(!canPreview), 'aria-pressed': String(previewing || kept),
-      title: canPreview ? 'Preview on the page' : (missing ? 'No longer on the page' : null),
+      title: canPreview ? 'Preview on the page' : (a.pageLevel ? 'Text to add' : missing ? 'No longer on the page' : null),
       onclick: () => { if (canPreview) send({ type: 'preview', id: a.id, suggestionID: s.id }); },
     }, h('div', { class: 'cw-card-text' }, s.text)),
     corner,
@@ -811,7 +848,8 @@ export function mountPanel(root, reviewer, { layout = 'sidebar' } = {}) {
           type: 'button', class: 'cw-audience-name', 'aria-expanded': String(open), 'data-action': 'edit-audience', title: a.description,
           onclick: () => { ui.audienceOpen = open ? null : a.id; ui.audienceDraft = null; render(); },
         }, h('span', null, a.name), a.source === 'model' && h('span', { class: 'cw-ok', title: 'Defined by Gemini' }, icon(Sparkles)),
-        icon(ChevronRight, 'cw-chevron'))),
+        icon(ChevronRight, 'cw-chevron')),
+        state.settings?.hasKey && iconButton(ScanEye, `Read as ${a.name}`, { 'data-action': 'read-as', onclick: () => readAs([a.id]) })),
       open && audienceEditor(a));
   }
 
@@ -854,6 +892,155 @@ export function mountPanel(root, reviewer, { layout = 'sidebar' } = {}) {
         h('span', { class: 'cw-grow' }),
         iconButton(X, 'Cancel', { onclick: () => { ui.audienceOpen = null; ui.audienceDraft = null; render(); } }),
         button('Save', { variant: 'cw-btn--secondary', 'data-action': 'save-audience', onclick: save })));
+  }
+
+  // --- reading as an audience ---------------------------------------------------
+
+  const audienceOf = (id) => state.settings?.audiences?.find((a) => a.id === id) ?? null;
+  const readingOf = (id) => state.readings?.find((r) => r.audienceID === id) ?? null;
+  const answered = (r) => r.items.filter((x) => x.status === 'answered').length;
+
+  // Reads the page as the audiences; the list shows each reading's chip
+  // spinning, and the checklist when one was asked for opens.
+  function readAs(ids) {
+    ui.menu = null;
+    if (ui.view === 'settings') ui.view = 'list';
+    render();
+    return send({ type: 'read', audienceIDs: ids });
+  }
+
+  function openReading(id) {
+    ui.menu = null;
+    ui.reading = id;
+    ui.itemOpen = null;
+    if (state.activeID) send({ type: 'deselect', id: state.activeID });
+    ui.view = 'reading';
+    render();
+    focusLead();
+  }
+
+  // The audiences of the list's strip: the active ones, then any read on this page.
+  function stripAudiences() {
+    const ids = [...(state.settings?.audienceIDs ?? []), ...(state.readings ?? []).map((r) => r.audienceID)];
+    return [...new Set(ids)].map(audienceOf).filter(Boolean);
+  }
+
+  // A row of small chips, one per audience: its initials and, once read,
+  // how much of its checklist the page answers. A tap opens its menu.
+  function audienceStrip() {
+    const list = stripAudiences();
+    if (!list.length || state.status !== 'ready') return null;
+    const hasKey = !!state.settings?.hasKey;
+    const active = state.settings?.audienceIDs ?? [];
+    const strip = h('div', { class: 'cw-strip', role: 'group', 'aria-label': 'Audiences' });
+    for (const a of list) {
+      const r = readingOf(a.id);
+      const name = `audience:${a.id}`;
+      const open = ui.menu === name;
+      const status = !r ? '' : r.state === 'reading' ? 'reading' : r.state === 'failed' ? 'failed' : `${answered(r)}/${r.items.length}`;
+      const title = `${a.name}${!r ? '' : r.state === 'reading' ? ' · reading the page' : r.state === 'failed' ? ` · ${r.error ?? 'failed'}` : ` · ${answered(r)} of ${r.items.length} answered · ${ago(r.at)}`}`;
+      const chip = h('button', {
+        type: 'button', class: `cw-strip-chip${active.includes(a.id) ? ' is-active' : ''}`, 'data-menu': name, 'data-audience': a.id,
+        'data-reading': r?.state ?? '', 'aria-haspopup': 'menu', 'aria-expanded': String(open), title, 'aria-label': title,
+        onclick: () => toggleMenu(name),
+      }, h('span', { class: 'cw-avatar' }, initials(a.name)),
+      r?.state === 'reading' ? icon(LoaderCircle, 'cw-spin')
+        : r?.state === 'failed' ? icon(TriangleAlert)
+          : r ? h('span', { class: 'cw-cover' }, status) : null);
+      const item = (node, text, onclick, props = {}) => h('button', {
+        type: 'button', class: 'cw-menu-item', role: 'menuitem', onclick, ...props,
+      }, icon(node), text);
+      strip.append(h('div', { class: 'cw-anchor', 'data-anchor': name }, chip, open && h('div', { class: 'cw-menu cw-menu--left', role: 'menu', 'aria-label': a.name },
+        h('div', { class: 'cw-menu-title' }, a.name),
+        item(ScanEye, r?.state === 'done' ? 'Read again' : 'Read as this reader', () => readAs([a.id]), {
+          disabled: !hasKey || r?.state === 'reading', 'data-action': 'read-as',
+        }),
+        r && item(ListChecks, 'Checklist', () => openReading(a.id), { 'data-action': 'open-reading' }),
+        item(UsersRound, 'Edit audience', () => { ui.menu = null; ui.audienceOpen = a.id; ui.audienceDraft = null; go('settings'); }, { 'data-action': 'edit-audience' }))));
+    }
+    const actives = active.filter((id) => audienceOf(id));
+    if (hasKey && actives.length > 1) {
+      strip.append(iconButton(ScanEye, 'Read as all active', {
+        variant: 'cw-strip-all', 'data-action': 'read-all',
+        disabled: actives.every((id) => readingOf(id)?.state === 'reading'),
+        onclick: () => readAs(actives),
+      }));
+    }
+    return strip;
+  }
+
+  // A finding's line in its detail: what the reader would say, by whom.
+  function findingLine(a) {
+    const kind = KINDS[a.finding.kind] ?? KINDS.missing;
+    const who = audienceOf(a.finding.audienceID);
+    return h('div', { class: 'cw-finding', 'data-kind': a.finding.kind },
+      h('span', { class: 'cw-finding-mark', title: `${kind.label} · ${who?.name ?? a.audiences?.[0] ?? ''}` },
+        icon(kind.icon), h('span', { class: 'cw-initials' }, initials(who?.name ?? a.audiences?.[0]))),
+      h('span', { class: 'cw-finding-text' }, a.finding.explanation,
+        who && h('button', {
+          type: 'button', class: 'cw-finding-who', 'data-action': 'open-reading', title: 'Checklist', onclick: () => openReading(who.id),
+        }, who.name)));
+  }
+
+  // The checklist: each item a line with its status. A tap unfolds why,
+  // and shows an answered item's text on the page; a gap can become an
+  // open item, quietly, at the line's end.
+  function readingView() {
+    const a = audienceOf(ui.reading);
+    const r = readingOf(ui.reading);
+    const view = h('div', { class: 'cw-view', 'data-view': 'reading', 'data-audience': ui.reading ?? '' });
+    const body = h('div', { class: 'cw-reading' });
+    view.append(body);
+    if (!a) { body.append(h('p', { class: 'cw-fine' }, 'This audience was deleted.')); return view; }
+    const hasKey = !!state.settings?.hasKey;
+    const head = h('div', { class: 'cw-reading-head' },
+      r?.state === 'done' && h('span', { class: 'cw-cover cw-cover--big', title: `${answered(r)} of ${r.items.length} answered` }, `${answered(r)}/${r.items.length}`),
+      h('span', { class: 'cw-reading-at', title: r?.at ? when(r.at) : '' },
+        !r ? 'Not read yet' : r.state === 'reading' ? 'Reading the page' : r.state === 'failed' ? '' : ago(r.at)),
+      r?.state === 'reading' && dots(),
+      h('span', { class: 'cw-grow' }),
+      hasKey && r?.state !== 'reading' && iconButton(r ? RefreshCw : ScanEye, r ? 'Read again' : `Read as ${a.name}`, {
+        'data-action': 'read-as', onclick: () => readAs([a.id]),
+      }));
+    body.append(head);
+    if (r?.state === 'failed') body.append(h('div', { class: 'cw-error', role: 'alert' }, icon(TriangleAlert), h('span', null, r.error ?? 'The reading failed.')));
+    if (!r || !r.items.length) return view;
+
+    for (const [field, label] of FIELDS) {
+      const items = r.items.map((x, i) => ({ ...x, index: i })).filter((x) => x.field === field);
+      if (!items.length) continue;
+      body.append(h('div', { class: 'cw-label' }, label),
+        h('ul', { class: 'cw-checklist', role: 'list', 'aria-label': label }, items.map((x) => h('li', null, checkItem(a, x)))));
+    }
+    const found = (r.findingIDs ?? []).map((id) => state.annotations?.find((x) => x.id === id)).filter(Boolean);
+    if (found.length) {
+      body.append(h('div', { class: 'cw-label', title: 'Where this reader gets stuck' }, 'Findings', h('span', { class: 'cw-count' }, found.length)),
+        h('ul', { class: 'cw-list cw-list--flush', role: 'list', 'aria-label': 'Findings' }, found.map((f) => h('li', null, row(f)))));
+    }
+    return view;
+  }
+
+  function checkItem(a, x) {
+    const c = COVER[x.status] ?? COVER.missing;
+    const open = ui.itemOpen === x.index;
+    const linked = x.annotationID && state.annotations?.find((y) => y.id === x.annotationID);
+    const line = h('button', {
+      type: 'button', class: 'cw-check-line', 'aria-expanded': String(open), 'data-action': 'check-item',
+      title: x.status === 'answered' && x.anchor ? 'Show the answer on the page' : c.label,
+      onclick: () => {
+        ui.itemOpen = open ? null : x.index;
+        render();
+        if (!open && x.anchor) send({ type: 'reading.show', audienceID: a.id, index: x.index });
+      },
+    }, h('span', { class: 'cw-check-glyph', role: 'img', 'aria-label': c.label }, icon(c.icon)), h('span', { class: 'cw-check-text' }, x.text));
+    const action = x.status === 'answered' ? null : linked
+      ? iconButton(Link2, 'Open item', { variant: 'cw-check-act is-linked', 'data-action': 'open-gap', onclick: () => send({ type: 'select', id: linked.id }) })
+      : iconButton(Plus, 'Make it an open item', {
+        variant: 'cw-check-act', 'data-action': 'add-gap',
+        onclick: () => send({ type: 'reading.open', audienceID: a.id, index: x.index }).then((id) => { if (id !== FAILED) toast('Open item added'); }),
+      });
+    return h('div', { class: `cw-check-item${open ? ' is-open' : ''}`, 'data-status': x.status, 'data-index': x.index },
+      line, action, h('div', { class: 'cw-fold' }, h('div', null, x.explanation && h('div', { class: 'cw-why' }, x.explanation))));
   }
 
   function settingsView() {
@@ -1001,7 +1188,7 @@ export function mountPanel(root, reviewer, { layout = 'sidebar' } = {}) {
   function place() {
     if (ui.view === 'settings') return 'settings';
     const a = activeAnnotation();
-    return a ? `detail:${a.id}` : ui.view;
+    return a ? `detail:${a.id}` : ui.view === 'reading' ? `reading:${ui.reading}` : ui.view;
   }
 
   function count() {
@@ -1016,7 +1203,10 @@ export function mountPanel(root, reviewer, { layout = 'sidebar' } = {}) {
     const a = activeAnnotation();
     if (a) return JSON.stringify(['detail', a, ui.editing === a.id, state.settings?.hasKey, state.recording, state.settings?.audiences, state.settings?.audienceIDs]);
     if (ui.view === 'chat') return JSON.stringify(['chat', state.chat, state.settings?.hasKey, state.annotations?.map((x) => [x.id, x.state, x.chosenID]), state.recording, state.settings?.audiences, state.settings?.audienceIDs]);
-    return JSON.stringify(['list', state.status, state.error, state.annotations, state.settings?.hasKey, ui.showDone, state.picking]);
+    if (ui.view === 'reading') return JSON.stringify(['reading', ui.reading, ui.itemOpen, state.readings, state.annotations, state.settings?.audiences, state.settings?.hasKey]);
+    return JSON.stringify(['list', state.status, state.error, state.annotations, state.settings?.hasKey, ui.showDone, state.picking,
+      state.readings?.map((r) => [r.audienceID, r.state, r.at, r.items.map((x) => x.status)]), state.settings?.audiences, state.settings?.audienceIDs,
+      ui.menu?.startsWith('audience:') ? ui.menu : null]);
   }
 
   function renderMain() {
@@ -1034,7 +1224,7 @@ export function mountPanel(root, reviewer, { layout = 'sidebar' } = {}) {
 
     const a = activeAnnotation();
     if (ui.editing && ui.editing !== a?.id) ui.editing = null;
-    const view = ui.view === 'settings' ? settingsView() : a ? detailView(a) : ui.view === 'chat' ? chatView() : listView();
+    const view = ui.view === 'settings' ? settingsView() : a ? detailView(a) : ui.view === 'chat' ? chatView() : ui.view === 'reading' ? readingView() : listView();
     const where = place();
     if (where !== lastPlace) view.classList.add('is-new');
     main.replaceChildren(view);
@@ -1062,7 +1252,7 @@ export function mountPanel(root, reviewer, { layout = 'sidebar' } = {}) {
   function renderHeader() {
     const a = activeAnnotation();
     const atHome = ui.view === 'list' && !a;
-    const key = JSON.stringify([atHome, ui.view, !!a, state.page, state.chat?.busy, state.chat?.messages?.length > 0]);
+    const key = JSON.stringify([atHome, ui.view, ui.reading, !!a, state.page, state.chat?.busy, state.chat?.messages?.length > 0, ui.view === 'reading' && audienceOf(ui.reading)?.name]);
     if (keys.header === key) return;
     const wasHome = keys.home;
     keys.header = key;
@@ -1072,8 +1262,9 @@ export function mountPanel(root, reviewer, { layout = 'sidebar' } = {}) {
         ? h('span', { class: 'cw-mark', title: 'Copywriter', role: 'img', 'aria-label': 'Copywriter' }, mark())
         : iconButton(ArrowLeft, 'Back', { 'data-action': 'back', onclick: back }));
     }
-    heading.textContent = ui.view === 'settings' ? 'Settings' : (state.page?.title || state.page?.url || '');
-    heading.title = ui.view === 'settings' ? '' : (state.page?.url ?? '');
+    const reader = ui.view === 'reading' && !a ? audienceOf(ui.reading) : null;
+    heading.textContent = ui.view === 'settings' ? 'Settings' : reader ? reader.name : (state.page?.title || state.page?.url || '');
+    heading.title = ui.view === 'settings' ? '' : reader ? `Read as ${reader.name}: ${state.page?.url ?? ''}` : (state.page?.url ?? '');
     moreAnchor.hidden = !a;
     chatButton.hidden = !!a;
     newChatButton.hidden = ui.view !== 'chat' || !!a || !state.chat?.messages?.length;

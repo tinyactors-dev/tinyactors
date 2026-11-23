@@ -49,7 +49,7 @@ async function until(fn, ms = 6000) {
 const commands = (page) => page.evaluate(() => reviewer.log.map((c) => c.type));
 
 test('the list shows the annotations, filtered', async () => {
-  const { page, panel, errors } = await open('');
+  const { page, panel, errors } = await open('read=0');
   assert.equal(await panel.locator('.cw-row').count(), 3, 'open: suggested, previewing, draft');
   const done = panel.locator('[data-action=done]');
   assert.equal(await done.getAttribute('aria-label'), 'Done: 1 kept, 0 dismissed');
@@ -254,7 +254,7 @@ test('export: the menu, a download and a refusal', async () => {
 });
 
 test('page chat: a message, the answer, a link to the annotation it proposed', async () => {
-  const { page, panel } = await open('');
+  const { page, panel } = await open('read=0');
   const composer = panel.locator('textarea[aria-label=Message]');
   await composer.fill('What should change?');
   await composer.press('Enter');
@@ -349,7 +349,7 @@ test('thinking: a reply shows a quiet "Thought for N s" that unfolds its summary
 });
 
 test('audiences: the chat\'s chip opens the audience in Settings, where a switch, the editor and delete work', async () => {
-  const { page, panel, errors } = await open('');
+  const { page, panel, errors } = await open('read=0');
   const composer = panel.locator('textarea[aria-label=Message]');
   await composer.fill('Who is this page for?');
   await composer.press('Enter');
@@ -489,5 +489,97 @@ test('unmount removes the panel and its stylesheet', async () => {
   await page.evaluate(() => panel.unmount());
   assert.equal(await panel.locator('.cw-panel').count(), 0);
   assert.equal(await panel.locator('style[data-cw-panel]').count(), 0);
+  await page.close();
+});
+
+test('read as an audience: the strip\'s chip shows how much the page answers; its menu reads again; the chip spins, then counts', async () => {
+  const { page, panel, errors } = await open('');
+  const chip = panel.locator('.cw-strip-chip[data-audience=lead]');
+  assert.match(await chip.getAttribute('aria-label'), /^Tech lead who approves dependencies · 2 of 6 answered/);
+  assert.equal((await chip.textContent()).trim(), 'TL2/6', 'initials and a count, no name');
+  await chip.click();
+  const menu = panel.locator('.cw-menu[aria-label="Tech lead who approves dependencies"]');
+  await menu.waitFor();
+  assert.deepEqual(await menu.locator('.cw-menu-item').allTextContents(), ['Read again', 'Checklist', 'Edit audience']);
+  await menu.locator('[data-action=read-as]').click();
+  await until(async () => (await chip.getAttribute('data-reading')) === 'reading');
+  assert.equal(await chip.locator('.cw-spin').count(), 1);
+  await until(async () => (await chip.getAttribute('data-reading')) === 'done');
+  assert.equal((await chip.textContent()).trim(), 'TL0/2');
+  const read = await page.evaluate(() => reviewer.log.find((c) => c.type === 'read'));
+  assert.deepEqual(read, { type: 'read', audienceIDs: ['lead'] });
+  assert.deepEqual(errors, []);
+  await page.close();
+});
+
+test('the checklist: one line per item with its status; an answer shows on the page, a gap becomes an open item', async () => {
+  const { page, panel, errors } = await open('');
+  await panel.locator('.cw-strip-chip[data-audience=lead]').click();
+  await panel.locator('[data-action=open-reading]').click();
+  const view = panel.locator('[data-view=reading]');
+  await view.waitFor();
+  assert.equal(await panel.locator('.cw-heading').textContent(), 'Tech lead who approves dependencies');
+  assert.deepEqual(await view.locator('.cw-label').allTextContents(), ['Wants', 'Came to', 'Objections', 'Findings2']);
+  assert.deepEqual(await view.locator('.cw-check-item').evaluateAll((items) => items.map((x) => x.dataset.status)),
+    ['missing', 'answered', 'partial', 'answered', 'missing', 'partial']);
+  assert.equal(await view.locator('.cw-check-glyph[aria-label="Partly answered"]').count(), 2);
+  // an answered item: its text on the page, and why
+  await view.locator('.cw-check-item[data-index="1"] .cw-check-line').click();
+  assert.equal(await view.locator('.cw-check-item[data-index="1"]').getAttribute('class'), 'cw-check-item is-open');
+  assert.match(await view.locator('.cw-check-item[data-index="1"] .cw-why').textContent(), /MIT/);
+  assert.deepEqual(await page.evaluate(() => reviewer.log.at(-1)), { type: 'reading.show', audienceID: 'lead', index: 1 });
+  assert.equal(await view.locator('.cw-check-item[data-status=answered] [data-action=add-gap]').count(), 0, 'nothing to add to an answer');
+  // a gap: a quiet + makes it an open item, which the line then links to
+  await view.locator('.cw-check-item[data-index="4"] [data-action=add-gap]').click();
+  await view.locator('.cw-check-item[data-index="4"] [data-action=open-gap]').waitFor();
+  assert.deepEqual(await page.evaluate(() => reviewer.log.at(-1)), { type: 'reading.open', audienceID: 'lead', index: 4 });
+  assert.equal(await view.locator('.cw-row').count(), 2, 'the reading\'s findings under the checklist');
+  // back: the list, where the gap is an open item to add
+  await panel.locator('[data-action=back]').click();
+  await panel.locator('.cw-row[data-kind=missing]').first().waitFor();
+  assert.equal(await panel.locator('.cw-row.is-page').count(), 2);
+  assert.deepEqual(errors, []);
+  await page.close();
+});
+
+test('findings in the list: the kind as an icon with the audience\'s initials, no words; a page-level one is never previewed', async () => {
+  const { page, panel, errors } = await open('');
+  const doubt = panel.locator('.cw-row[data-kind=doubt]');
+  assert.equal((await doubt.locator('.cw-initials').textContent()), 'TL');
+  assert.match(await doubt.getAttribute('title'), /^Claim without proof · Tech lead who approves dependencies · Suggestions ready/);
+  assert.equal(await doubt.locator('.cw-row-icon').evaluate((n) => [...n.children].filter((c) => !c.classList.contains('cw-sr')).map((c) => c.textContent).join('').trim()), 'TL', 'the kind is an icon, not a word');
+  await panel.locator('.cw-row[data-kind=missing]').click();
+  const detail = panel.locator('[data-view=detail]');
+  await detail.waitFor();
+  assert.equal(await detail.locator('.cw-original.is-page .cw-add').count(), 1);
+  assert.match(await detail.locator('.cw-finding').textContent(), /I cannot tell when to say no\./);
+  await panel.locator('[data-menu=more]').click();
+  assert.equal(await panel.locator('.cw-menu [data-action=select]').count(), 0, 'no "Show on page" for what the page lacks');
+  await page.keyboard.press('Escape');
+  // the finding's audience opens its checklist
+  await detail.locator('.cw-finding-who').click();
+  await panel.locator('[data-view=reading]').waitFor();
+  // a finding with a rewrite previews it as any suggestion
+  await panel.locator('[data-view=reading] .cw-row[data-kind=doubt]').click();
+  await panel.locator('[data-view=detail] .cw-card-pick').click();
+  await until(async () => (await panel.locator('.cw-card.is-chosen').count()) === 1);
+  assert.deepEqual(errors, []);
+  await page.close();
+});
+
+test('read as: from an audience\'s row in Settings, and from the page chat, whose chip opens the checklist', async () => {
+  const { page, panel, errors } = await open('');
+  await panel.locator('header [data-action=settings]').click();
+  await panel.locator('[data-audience=student] [data-action=read-as]').click();
+  await until(async () => (await page.evaluate(() => reviewer.log.some((c) => c.type === 'read' && c.audienceIDs[0] === 'student'))));
+  await panel.locator('[data-view=list] .cw-strip-chip[data-audience=student]').waitFor();
+  const composer = panel.locator('textarea[aria-label=Message]');
+  await composer.fill('How would the tech lead read this page?');
+  await composer.press('Enter');
+  const chip = panel.locator('[data-view=chat] [data-action=open-reading]');
+  await chip.waitFor();
+  await chip.click();
+  await panel.locator('[data-view=reading][data-audience=lead]').waitFor();
+  assert.deepEqual(errors, []);
   await page.close();
 });

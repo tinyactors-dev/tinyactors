@@ -194,11 +194,23 @@ copywriter/
                           the audiences (each a switch, an editor and delete), Answers (short, medium,
                           long) with a switch per built-in tool. A grounded answer's sources are small
                           numbered links under it.
+                          Reading as an audience: the list opens with a strip of small chips, one per
+                          active or read audience (its initials; once read, answered/items; spinning
+                          while it reads), each a menu (Read as or Read again, Checklist, Edit
+                          audience), and "Read as all active" when more than one is active; Settings'
+                          audience rows and the chat's `read` chips read too. The checklist view: one
+                          line per item with a glyph (answered ✓, partial half circle, missing empty
+                          circle); a tap unfolds why and shows an answer on the page; a gap's quiet +
+                          makes it an open item, then links to it; the reading's findings follow. A
+                          finding's row shows its kind as the icon with the audience's initials on it
+                          (no words; the tooltip names them); a page-level one is set in italics and
+                          never previewed; its detail says the finding in the reader's words.
   src/platform/dom.mjs    the page adapter's DOM side, shared: anchors, locate, preview/revert of Text nodes, highlights
   src/platform/extension/ manifest.json, service-worker.mjs, content.mjs (page adapter), sidepanel.html/.mjs, mic.html/.mjs
   src/platform/embed/     embed.mjs (launcher, Shadow DOM, page adapter on the live DOM), loader snippet
   site/                   the /copywriter/ page: download the extension, turn the widget on for this device
-  test/                   node:test for charts and core; Playwright for the extension and the widget
+  test/                   node:test for charts and core (readings.test.mjs: the reading actors); Playwright for
+                          the panel over src/ui/mock-reviewer.mjs (?read=0: no reading yet), the extension and the widget
   mise/tasks/             build, test, charts, eval, read-eval (Ruby)
   tools/                  serve.mjs (the panel's preview), eval.mjs and read-eval.mjs (the real Gemini)
   dist/                   build output (not in git): extension/, copywriter-extension.zip, site/
