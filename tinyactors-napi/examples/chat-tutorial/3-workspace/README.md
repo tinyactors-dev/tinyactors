@@ -38,7 +38,9 @@ already waiting. A second request for the same name may come first, and
 it finds the name in `rooms`. So no name is spawned twice.
 
 `refusal` is a function of a chart-level `<script>`. The chart's
-expressions call it. It takes the variables it reads as arguments.
+expressions call it. It takes the variables it reads as arguments. A
+name is 1 to 32 lowercase letters, digits and dashes, and starts with a
+letter or digit, so `-` is refused.
 
 ## Asking an actor
 
@@ -83,6 +85,7 @@ node examples/chat-tutorial/3-workspace/main.mjs
 create general: room.created
 create general: room.refused (exists)
 create Bad Name: room.refused (invalid name)
+create -: room.refused (invalid name)
 rooms: general
 ada joined general
 bob gets an error: no such room

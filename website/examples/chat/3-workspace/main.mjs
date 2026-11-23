@@ -27,7 +27,7 @@ export async function run(options = {}) {
   const ada = host.actor('user.ada');
   const bob = host.actor('user.bob');
 
-  for (const name of ['general', 'general', 'Bad Name']) {
+  for (const name of ['general', 'general', 'Bad Name', '-']) {
     const [event, data] = await workspace.ask('room.create', { name });
     client.lines.push(`create ${name}: ${event}${data.reason ? ` (${data.reason})` : ''}`);
   }

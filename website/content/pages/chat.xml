@@ -54,7 +54,7 @@
     <code src="../../examples/chat/3-workspace/charts/workspace.scxml" lines="19-44" language="scxml" file="charts/workspace.scxml"/>
     <p>A user joins a room by its name. A join sent to a room that does not exist comes back to the user as <code>error.communication</code>.</p>
     <code src="../../examples/chat/3-workspace/charts/user.scxml" lines="21-38" language="scxml" file="charts/user.scxml"/>
-    <p>With <code>actor.ask</code>, the program requests <code>general</code> twice and an invalid name; then bob joins a room that does not exist.</p>
+    <p>With <code>actor.ask</code>, the program requests <code>general</code> twice and two invalid names; then bob joins a room that does not exist.</p>
     <example>
       <code src="../../examples/chat/3-workspace/main.mjs" lines="30-39" language="javascript" file="main.mjs"/>
       <code src="../../examples/chat/3-workspace/output.txt" language="text" role="output"/>

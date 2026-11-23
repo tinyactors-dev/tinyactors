@@ -623,15 +623,46 @@ ta-tabs { display: block; }
 .chatlive__room-link:hover { background: var(--cl-side-hover); }
 .chatlive__room-link[aria-current="true"] { background: var(--cl-side-current); color: var(--cl-side-strong); font-weight: 700; }
 .chatlive__room-link:focus-visible { outline: 2px solid var(--cl-side-strong); outline-offset: -2px; }
-.chatlive__create { display: flex; align-items: center; gap: 8px; height: 28px; margin: 0 8px; padding: 0 4px 0 16px; }
+.chatlive__add-channels { all: unset; box-sizing: border-box; display: flex; align-items: center; gap: 8px; width: calc(100% - 16px); height: 28px; margin: 0 8px;
+  padding: 0 8px 0 16px; border-radius: 6px; cursor: pointer; color: var(--cl-side-fg); white-space: nowrap; }
+.chatlive__add-channels:hover { background: var(--cl-side-hover); }
+.chatlive__add-channels:focus-visible { outline: 2px solid var(--cl-side-strong); outline-offset: -2px; }
 .chatlive__plus { display: grid; place-items: center; width: 20px; height: 20px; flex: none; border-radius: 4px; background: var(--cl-side-field); font-size: 15px; line-height: 1; }
-.chatlive__new { min-width: 0; flex: 1; height: 24px; padding: 0 6px; margin-left: -6px; border: 1px solid transparent; border-radius: 4px; background: transparent; color: var(--cl-side-strong) !important; }
-.chatlive__new::placeholder { color: var(--cl-side-fg); opacity: 1; }
-.chatlive__new:hover, .chatlive__new:focus { background: var(--cl-side-field); border-color: rgba(255, 255, 255, .2); outline: 0; }
-.chatlive__new:placeholder-shown:not(:focus) + .chatlive__add { display: none; }
-.chatlive__add { flex: none; height: 24px; padding: 0 8px; border: 0; border-radius: 4px; cursor: pointer; font-size: 13px !important; font-weight: 700;
-  background: var(--cl-side-field); color: var(--cl-side-strong) !important; }
-.chatlive__add:hover { background: rgba(255, 255, 255, .18); }
+.chatlive__menu.chatlive__add-menu { right: auto; bottom: auto; width: 240px; padding: 8px 0; }
+
+/* a dialog: "Create a channel", "Browse channels" */
+.chatlive__dialog { width: min(520px, calc(100vw - 32px)); max-height: calc(100vh - 64px); box-sizing: border-box; padding: 0; border: 0; border-radius: 8px;
+  background: var(--cl-pane); color: var(--cl-fg); box-shadow: 0 18px 48px rgba(0, 0, 0, .35); overflow: auto;
+  font: 400 15px/1.46668 "Lato", -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
+.chatlive__dialog::backdrop { background: rgba(0, 0, 0, .6); }
+.chatlive__dialog-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 20px 20px 4px 28px; }
+.chatlive__dialog-title { margin: 0; font-size: 22px; font-weight: 900; line-height: 1.3; color: var(--cl-fg); }
+.chatlive__dialog-close { display: grid; place-items: center; flex: none; width: 36px; height: 36px; padding: 0; border: 0; border-radius: 6px; background: none; cursor: pointer; color: var(--cl-muted); }
+.chatlive__dialog-close:hover { background: var(--cl-hover); color: var(--cl-fg); }
+.chatlive__dialog-body { padding: 12px 28px 24px; }
+.chatlive__dialog-label { display: block; margin-bottom: 8px; font-weight: 700; }
+.chatlive__name-box { display: flex; align-items: center; gap: 6px; height: 40px; padding: 0 12px; border: 1px solid var(--cl-muted); border-radius: 6px; }
+.chatlive__name-box:focus-within { border-color: var(--cl-link); box-shadow: 0 0 0 3px color-mix(in srgb, var(--cl-link) 35%, transparent); }
+.chatlive__name-box:has([aria-invalid="true"]) { border-color: var(--cl-lost); }
+.chatlive__name-hash { color: var(--cl-muted); font-size: 17px; }
+.chatlive__name-field { flex: 1; min-width: 0; height: 100%; padding: 0; border: 0; background: transparent; outline: 0; }
+.chatlive__app .chatlive__name-field:focus-visible { outline: 0; }
+.chatlive__name-field::placeholder { color: var(--cl-muted); opacity: 1; }
+.chatlive__name-count { flex: none; font-size: 13px; color: var(--cl-muted); font-variant-numeric: tabular-nums; }
+.chatlive__dialog-note { margin: 8px 0 0; font-size: 13px; line-height: 18px; color: var(--cl-muted); }
+.chatlive__dialog-problem { margin: 6px 0 0; font-size: 13px; line-height: 18px; color: var(--cl-lost); }
+.chatlive__dialog-problem:empty { display: none; }
+.chatlive__dialog-foot { display: flex; justify-content: flex-end; margin-top: 20px; }
+.chatlive__browse { margin: 12px 0 0; padding: 0; list-style: none; border-top: 1px solid var(--cl-line); }
+.chatlive__browse-row { display: flex; align-items: center; gap: 12px; min-height: 48px; border-bottom: 1px solid var(--cl-line); }
+.chatlive__browse-name { all: unset; box-sizing: border-box; display: flex; align-items: center; flex: 1; min-width: 0; height: 36px; padding: 0 8px; border-radius: 6px;
+  cursor: pointer; font-weight: 700; white-space: nowrap; overflow: hidden; }
+.chatlive__browse-name:hover { background: var(--cl-hover); }
+.chatlive__browse-name:focus-visible { outline: 2px solid var(--cl-link); outline-offset: -2px; }
+.chatlive__browse-name .chatlive__hash { width: 18px; flex: none; color: var(--cl-muted); }
+.chatlive__browse-joined { flex: none; font-size: 13px; font-weight: 700; color: var(--cl-active); }
+.chatlive__browse-join { flex: none; height: 32px; padding: 0 14px; border: 1px solid var(--cl-line); border-radius: 4px; background: var(--cl-pane); cursor: pointer; font-weight: 700 !important; }
+.chatlive__browse-join:hover { background: var(--cl-hover); }
 .chatlive__note { margin: 2px 16px 0 52px; font-size: 13px; line-height: 18px; color: var(--cl-side-muted); }
 .chatlive__note:empty { display: none; }
 .chatlive__person { all: unset; box-sizing: border-box; display: flex; align-items: center; gap: 8px; width: calc(100% - 16px); height: 28px; margin: 0 8px; padding: 0 8px 0 16px;
@@ -708,7 +739,7 @@ ta-tabs { display: block; }
 .chatlive__composer--off { background: var(--cl-hover); }
 .chatlive__composer--off .chatlive__text { cursor: not-allowed; }
 .chatlive__composer--off .chatlive__send { background: transparent; color: var(--cl-off); cursor: not-allowed; }
-.chatlive__join:disabled { opacity: .5; cursor: not-allowed; }
+.chatlive__app .chatlive__join:disabled { opacity: .5; cursor: not-allowed; }
 .chatlive__composer { display: flex; align-items: center; gap: 8px; min-height: 44px; padding: 6px 6px 6px 12px;
   border: 1px solid var(--cl-line); border-radius: 8px; background: var(--cl-pane); }
 .chatlive__composer:focus-within { border-color: var(--cl-muted); }

@@ -283,19 +283,186 @@ export async function mount(root) {
 
   // ---- the sidebar: the rooms, the people
   const roomList = el('ul', { class: 'chatlive__rooms', 'aria-label': 'Channels' });
-  const newRoom = el('input', { type: 'text', class: 'chatlive__new', placeholder: 'Add channels', 'aria-label': 'New channel name', maxlength: '40' });
-  const create = el('button', { type: 'submit', class: 'chatlive__add' }, 'Add');
-  const createForm = el('form', { class: 'chatlive__create' }, el('span', { class: 'chatlive__plus', 'aria-hidden': 'true' }, '+'), newRoom, create);
-  const createNote = el('p', { class: 'chatlive__note', 'aria-live': 'polite' });
+  // "Add channels" opens a menu, as a client's does: create a channel, or browse them all
+  const addChannels = el('button', { type: 'button', class: 'chatlive__add-channels', 'aria-haspopup': 'menu', 'aria-expanded': 'false', 'aria-controls': 'chatlive-add-menu' },
+    el('span', { class: 'chatlive__plus', 'aria-hidden': 'true' }, '+'), 'Add channels');
+  const addItems = [['create', 'Create a new channel'], ['browse', 'Browse channels']].map(([key, label]) => {
+    const item = el('button', { type: 'button', role: 'menuitem', tabindex: '-1', class: 'chatlive__item', 'data-key': key }, label);
+    item.addEventListener('click', () => { closeAddMenu(false); return key === 'create' ? openCreate() : openBrowse(); });
+    return item;
+  });
+  const addMenu = el('div', { role: 'menu', id: 'chatlive-add-menu', 'aria-label': 'Add channels', class: 'chatlive__menu chatlive__add-menu', hidden: '' }, ...addItems);
+  function openAddMenu() {
+    const at = addChannels.getBoundingClientRect();
+    const box = app.getBoundingClientRect();
+    addMenu.style.left = `${Math.max(8, at.left - box.left + 8)}px`;
+    addMenu.style.top = `${at.bottom - box.top + 4}px`;
+    addMenu.hidden = false;
+    addChannels.setAttribute('aria-expanded', 'true');
+    addItems[0].focus();
+  }
+  function closeAddMenu(refocus) {
+    if (addMenu.hidden) return;
+    addMenu.hidden = true;
+    addChannels.setAttribute('aria-expanded', 'false');
+    if (refocus) addChannels.focus();
+  }
+  addChannels.addEventListener('click', () => (addMenu.hidden ? openAddMenu() : closeAddMenu(true)));
+  addMenu.addEventListener('keydown', (event) => {
+    const at = addItems.indexOf(document.activeElement);
+    const move = { ArrowDown: at + 1, ArrowUp: at - 1, Home: 0, End: addItems.length - 1 }[event.key];
+    if (move !== undefined) {
+      event.preventDefault();
+      addItems[(move + addItems.length) % addItems.length].focus();
+    } else if (event.key === 'Escape') {
+      event.preventDefault();
+      closeAddMenu(true);
+    } else if (event.key === 'Tab') closeAddMenu(true); // Tab goes on from the button, in the sidebar's order
+  });
+  document.addEventListener('pointerdown', (event) => {
+    if (!addMenu.hidden && !addMenu.contains(event.target) && !addChannels.contains(event.target)) closeAddMenu(false);
+  });
+
+  // a modal dialog: Escape and its close button close it; focus stays in it, and goes back where it came from
+  const dialog = (id, title, ...body) => {
+    const close = el('button', { type: 'button', class: 'chatlive__dialog-close', 'aria-label': 'Close' }, icon('close'));
+    const node = el('dialog', { class: 'chatlive__dialog', 'aria-labelledby': id },
+      el('div', { class: 'chatlive__dialog-head' }, el('h3', { class: 'chatlive__dialog-title', id }, title), close), ...body);
+    close.addEventListener('click', () => closeDialog(node));
+    node.addEventListener('keydown', (event) => {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        closeDialog(node);
+      } else if (event.key === 'Tab') {
+        // focus stays in the dialog: past its last control it comes back to the first
+        const all = [...node.querySelectorAll('button, input')].filter((each) => !each.disabled && each.offsetParent !== null);
+        const at = all.indexOf(document.activeElement);
+        const next = event.shiftKey ? (at <= 0 ? all.length - 1 : null) : (at === all.length - 1 || at < 0 ? 0 : null);
+        if (next !== null) {
+          event.preventDefault();
+          all[next].focus();
+        }
+      }
+    });
+    node.addEventListener('pointerdown', (event) => { if (event.target === node) closeDialog(node); }); // the backdrop
+    return node;
+  };
+  function showDialog(node, focus) {
+    node.showModal();
+    focus.focus();
+  }
+  /** Closes a dialog; focus goes to `focus`, or back to "Add channels", which opened it. */
+  function closeDialog(node, focus = addChannels) {
+    if (!node.open) return;
+    node.close();
+    (focus ?? addChannels).focus();
+  }
+
+  // "Create a channel": the workspace's rule shown before the name is sent. The name is
+  // lowercased and a space becomes a dash as it is typed, as a client does.
+  const NAME = /^[a-z0-9][a-z0-9-]{0,31}$/; // workspace.scxml's refusal(): keep the two the same
+  const NAME_MAX = 32;
+  const nameField = el('input', { type: 'text', class: 'chatlive__name-field', id: 'chatlive-new-name', maxlength: String(NAME_MAX),
+    autocomplete: 'off', spellcheck: 'false', placeholder: 'e.g. plan-budget', 'aria-describedby': 'chatlive-name-rule chatlive-name-problem' });
+  const nameCount = el('span', { class: 'chatlive__name-count', 'aria-hidden': 'true' });
+  const nameRule = el('p', { class: 'chatlive__dialog-note', id: 'chatlive-name-rule' },
+    `Lowercase letters, numbers and dashes, up to ${NAME_MAX} characters. Start with a letter or number.`);
+  const nameProblem = el('p', { class: 'chatlive__dialog-problem', id: 'chatlive-name-problem', 'aria-live': 'polite' });
+  const createButton = el('button', { type: 'submit', class: 'chatlive__join' }, 'Create');
+  const createForm = el('form', { class: 'chatlive__dialog-body' },
+    el('label', { class: 'chatlive__dialog-label', for: 'chatlive-new-name' }, 'Name'),
+    el('div', { class: 'chatlive__name-box' }, el('span', { class: 'chatlive__name-hash', 'aria-hidden': 'true' }, '#'), nameField, nameCount),
+    nameRule, nameProblem,
+    el('div', { class: 'chatlive__dialog-foot' }, createButton));
+  const createDialog = dialog('chatlive-create-title', 'Create a channel', createForm);
+  let refused = null; // { name, reason } of the workspace's last refusal
+  let creating = false;
+  /** What is wrong with the name in the field, or '' when the workspace may take it. */
+  function nameProblemText() {
+    const name = nameField.value;
+    if (!selfState) return 'Sign in to create a channel.';
+    if (!name) return '';
+    if (/[^a-z0-9-]/.test(name)) return 'Use only lowercase letters, numbers and dashes.';
+    if (!NAME.test(name)) return 'Start with a letter or number.';
+    if (refused?.name === name) return refused.reason === 'exists' ? `#${name} already exists.` : `The workspace refused #${name}: ${refused.reason}.`;
+    return '';
+  }
+  function drawCreate() {
+    setText(nameCount, String(NAME_MAX - nameField.value.length));
+    const problem = nameProblemText();
+    setText(nameProblem, problem);
+    nameField.setAttribute('aria-invalid', String(Boolean(problem) && Boolean(nameField.value)));
+    createButton.disabled = creating || Boolean(problem) || !nameField.value;
+  }
+  nameField.addEventListener('input', () => {
+    const at = nameField.selectionStart;
+    const value = nameField.value.toLowerCase().replace(/\s/g, '-');
+    if (value !== nameField.value) {
+      nameField.value = value;
+      nameField.setSelectionRange(at, at);
+    }
+    drawCreate();
+  });
+  function openCreate() {
+    nameField.value = '';
+    refused = null;
+    drawCreate();
+    showDialog(createDialog, nameField);
+  }
   createForm.addEventListener('submit', async (event) => {
     event.preventDefault();
-    const name = newRoom.value.trim();
-    if (!name) return;
-    const [answer, data] = await chat.createRoom(name);
-    createNote.textContent = answer === 'room.created' ? `The workspace made #${name}.` : `The workspace refused #${name}: ${data.reason}.`;
-    if (answer === 'room.created') { newRoom.value = ''; room = name; }
-    render();
+    const name = nameField.value;
+    if (createButton.disabled) return;
+    creating = true;
+    drawCreate();
+    try {
+      const [answer, data] = await chat.createRoom(name);
+      if (answer !== 'room.created') {
+        refused = { name, reason: data.reason };
+        return;
+      }
+      // the creator is in the channel, and sees it open
+      await chat.join(you, name);
+      closeDialog(createDialog, text);
+      openRoom(name);
+      text.focus();
+    } finally {
+      creating = false;
+      drawCreate();
+    }
   });
+
+  // "Browse channels": every channel the workspace holds, joined or not; a name opens it
+  const browseList = el('ul', { class: 'chatlive__browse', 'aria-label': 'Channels' });
+  const browseNote = el('p', { class: 'chatlive__dialog-note' });
+  const browseDialog = dialog('chatlive-browse-title', 'Browse channels', el('div', { class: 'chatlive__dialog-body' }, browseNote, browseList));
+  let browseRooms = [];
+  function drawBrowse() {
+    if (!browseDialog.open) return;
+    const screen = chat.screen(you);
+    setText(browseNote, selfState ? `${browseRooms.length} channels in ${WORKSPACE}.` : `Sign in to join a channel.`);
+    keyed(browseList, browseRooms, (name) => {
+      const open = el('button', { type: 'button', class: 'chatlive__browse-name', title: `Open #${name}` },
+        el('span', { class: 'chatlive__hash', 'aria-hidden': 'true' }, '#'), el('span', { class: 'chatlive__room-name' }, name));
+      open.addEventListener('click', () => { closeDialog(browseDialog, roomTitle); openRoom(name); });
+      const joinOne = el('button', { type: 'button', class: 'chatlive__browse-join', 'aria-label': `Join #${name}` }, 'Join');
+      joinOne.addEventListener('click', async () => {
+        await chat.join(you, name);
+        open.focus(); // the button goes once you are in
+      });
+      return el('li', { class: 'chatlive__browse-row' }, open, el('span', { class: 'chatlive__browse-joined' }, 'Joined'), joinOne);
+    }, (node, name) => {
+      const joined = screen.rooms.includes(name);
+      node.children[1].hidden = !joined;
+      node.children[2].hidden = joined || !selfState;
+    });
+  }
+  async function openBrowse() {
+    browseRooms = [...(await chat.rooms())].sort();
+    showDialog(browseDialog, browseDialog.querySelector('.chatlive__dialog-close'));
+    drawBrowse();
+    browseList.querySelector('button')?.focus();
+  }
   // your direct messages, newest first, and the people: a person opens your direct message with them
   const dmList = el('ul', { class: 'chatlive__people', 'aria-label': 'Direct messages' });
   const dmSection = section('Direct messages', dmList);
@@ -303,7 +470,7 @@ export async function mount(root) {
   const peopleNote = el('p', { class: 'chatlive__note chatlive__note--people', 'aria-live': 'polite' });
   const sidebar = el('nav', { class: 'chatlive__sidebar', 'aria-label': WORKSPACE },
     el('h3', { class: 'chatlive__workspace' }, WORKSPACE, icon('chevron')),
-    section('Channels', roomList, createForm, createNote),
+    section('Channels', roomList, addChannels),
     dmSection,
     section('People', people, peopleNote));
   /** The direct message on your screen with `name`, or undefined. */
@@ -602,7 +769,7 @@ export async function mount(root) {
     render();
   }
 
-  app.append(top, rail, sidebar, dmView, activityView, el('div', { class: 'chatlive__pane' }, main, debug), menu);
+  app.append(top, rail, sidebar, dmView, activityView, el('div', { class: 'chatlive__pane' }, main, debug), menu, addMenu, createDialog, browseDialog);
   // Escape on a phone goes back from a conversation to its list, as the back button does
   app.addEventListener('keydown', (event) => {
     if (event.key !== 'Escape' || event.defaultPrevented || app.dataset.view !== 'room' || !debug.hidden || !menu.hidden || !phone()) return;
@@ -692,6 +859,12 @@ export async function mount(root) {
 
     // the sidebar
     const rooms = actors.filter((actor) => actor.chart === 'room' && !actor.direct).map((actor) => actor.name.slice(5));
+    // an open dialog follows the chat: signing in or out, a join, a channel someone else made
+    if (createDialog.open) drawCreate();
+    if (browseDialog.open) {
+      browseRooms = [...new Set([...browseRooms, ...rooms])].sort();
+      drawBrowse();
+    }
     // a direct message of the other person's (after a person switch) is not yours: back to general
     const dms = chat.version() === LATEST ? chat.directMessages(you) : [];
     const yourDM = screen.dms.find((dm) => dm.room === room);

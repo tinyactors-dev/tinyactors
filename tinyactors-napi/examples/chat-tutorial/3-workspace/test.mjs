@@ -13,6 +13,7 @@ for (const datamodel of ['native', 'quickjs']) {
       'create general: room.created',
       'create general: room.refused (exists)',
       'create Bad Name: room.refused (invalid name)',
+      'create -: room.refused (invalid name)',
       'rooms: general',
       'ada joined general',
       'bob gets an error: no such room',
