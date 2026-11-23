@@ -125,7 +125,10 @@ test('on a phone: select, open, annotate, ask, preview, keep; a reload applies i
 });
 
 // A phone with the widget on and a key, Gemini routed, the reviewer ready.
-async function phone() {
+// A phone with the widget on the fixture page. Its links make three
+// audiences the page's set; unless `linked`, the set is one of them, so a
+// rewrite comes one at a time and the sheet does not rise to compare.
+async function phone({ linked = false } = {}) {
   const context = await browser.newContext(PHONE);
   await context.addInitScript(() => {
     localStorage.setItem('tinyactors-copywriter', 'on');
@@ -137,6 +140,7 @@ async function phone() {
   page.on('pageerror', (e) => errors.push(e.message));
   await page.goto(`${origin(server)}/page/page.html`);
   await page.waitForFunction(() => globalThis.tinyactorsCopywriter?.reviewer.getState().status === 'ready');
+  if (!linked) await page.evaluate(() => tinyactorsCopywriter.reviewer.dispatch({ type: 'settings.save', audienceIDs: ['site-tech-lead'] }));
   return { context, page, errors, sheet: page.locator('#tinyactors-copywriter .sheet'), launcher: page.locator('#tinyactors-copywriter .launcher') };
 }
 
@@ -324,8 +328,6 @@ const LINKED = 'Read the hibernation guide to keep idle actors on disk.';
 
 test('on a phone, pick mode: one tap enters it, a tap picks a block (twice: its parent), no link opens, no text is selected; a message annotates it', async () => {
   const { context, page, errors, sheet, launcher } = await phone();
-  // one audience: one rewrite at a time, so the sheet does not rise to compare
-  await page.evaluate(() => tinyactorsCopywriter.reviewer.dispatch({ type: 'settings.save', audienceIDs: ['site-tech-lead'] }));
   await launcher.tap();
   await sheet.locator('.cw-panel').waitFor();
   await page.waitForTimeout(400);
@@ -430,7 +432,7 @@ test('a database of version 1: the page\'s chat is its first conversation, an ed
 });
 
 test('the widget reads the page\'s audiences from its links: the files are fetched, their chips appear with no audience of the copywriter\'s own', async () => {
-  const { context, page, errors, sheet, launcher } = await phone();
+  const { context, page, errors, sheet, launcher } = await phone({ linked: true });
   const state = await page.evaluate(() => tinyactorsCopywriter.reviewer.getState());
   assert.equal(state.page.kind, 'pitch');
   assert.equal(state.page.mainAudienceID, 'site-agent-platform');
