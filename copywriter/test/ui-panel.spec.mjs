@@ -423,6 +423,35 @@ test('conversations: a new one from the chat\'s header; the earlier ones are lis
   await page.close();
 });
 
+test('settings: the answers\' length and Google\'s tools, one compact row each', async () => {
+  const { page, panel } = await open('');
+  await panel.locator('[data-action=settings]').click();
+  const length = panel.locator('[role=group][aria-labelledby=cw-length]');
+  assert.equal(await length.locator('[aria-pressed=true]').textContent(), 'Short');
+  await length.locator('[data-length=long]').click();
+  await page.waitForFunction(() => reviewer.getState().settings.length === 'long');
+  const tools = panel.locator('[role=group][aria-label=Tools]');
+  assert.deepEqual(await tools.locator('.cw-switch').evaluateAll((all) => all.map((x) => [x.dataset.tool, x.checked])), [['search', false], ['url', true], ['code', false]]);
+  await tools.locator('[data-tool=search]').click();
+  await page.waitForFunction(() => reviewer.getState().settings.tools.search);
+  const saved = (await page.evaluate(() => reviewer.log)).filter((c) => c.type === 'settings.save').at(-1);
+  assert.deepEqual(saved, { type: 'settings.save', tools: { search: true } });
+  await page.close();
+});
+
+test('a grounded answer shows its sources as small numbered links', async () => {
+  const { page, panel } = await open('');
+  const composer = panel.locator('textarea[aria-label=Message]');
+  await composer.fill('How do other actor runtimes describe themselves? Use search.');
+  await composer.press('Enter');
+  const sources = panel.locator('[data-view=chat] .cw-sources a');
+  await sources.first().waitFor();
+  assert.deepEqual(await sources.evaluateAll((all) => all.map((a) => [a.textContent, a.href, a.target])), [
+    ['1akka.io', 'https://akka.io/', '_blank'], ['2learn.microsoft.com', 'https://learn.microsoft.com/dotnet/orleans/', '_blank'],
+  ]);
+  await page.close();
+});
+
 test('settings: the thinking level is a segmented control', async () => {
   const { page, panel } = await open('');
   await panel.locator('[data-action=settings]').click();

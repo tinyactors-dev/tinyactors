@@ -157,7 +157,9 @@ copywriter/
                           of dots while it is transcribed); a reply that thought has a collapsed
                           "Thought for N s"; an audience call is a chip that opens the audience in
                           Settings. Settings: the model, a segmented Thinking control, the voice,
-                          the audiences (each a switch, an editor and delete).
+                          the audiences (each a switch, an editor and delete), Answers (short, medium,
+                          long) with a switch per built-in tool. A grounded answer's sources are small
+                          numbered links under it.
   src/platform/dom.mjs    the page adapter's DOM side, shared: anchors, locate, preview/revert of Text nodes, highlights
   src/platform/extension/ manifest.json, service-worker.mjs, content.mjs (page adapter), sidepanel.html/.mjs, mic.html/.mjs
   src/platform/embed/     embed.mjs (launcher, Shadow DOM, page adapter on the live DOM), loader snippet

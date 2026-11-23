@@ -490,6 +490,21 @@ export const panelCSS = String.raw`
 .cw-panel[data-layout="sheet"] .cw-input { font-size: 16px; }
 .cw-panel .cw-input:focus { border-color: var(--accent); box-shadow: none; }
 .cw-panel .cw-textarea--small { min-height: 0; }
+/* a switch and its name, one row each; the tools sit under the length */
+.cw-panel .cw-tools-group { gap: 0; margin-top: -14px; }
+.cw-panel .cw-switch-row { display: flex; align-items: center; gap: 10px; min-height: var(--hit); font-size: 13.5px; color: var(--fg-1); cursor: pointer; }
+.cw-panel[data-layout="sheet"] .cw-switch-row { min-height: 44px; font-size: 15px; }
+/* a grounded answer's sources: small numbered links */
+.cw-panel .cw-sources { list-style: none; margin: 8px 0 0; padding: 0; display: flex; flex-wrap: wrap; gap: 4px 6px; }
+.cw-panel .cw-sources a {
+  display: inline-flex; align-items: center; gap: 5px; max-width: 220px; min-height: 24px; padding: 0 8px 0 3px;
+  border: 1px solid var(--border-1); border-radius: 999px; background: var(--surface);
+  font-size: 12px; color: var(--fg-2); text-decoration: none; transition: border-color var(--fast) var(--ease-step), color var(--fast) var(--ease-step);
+}
+.cw-panel .cw-sources a > span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cw-panel .cw-sources a:hover { border-color: var(--accent); color: var(--accent-fg); }
+.cw-panel .cw-source-n { display: grid; place-items: center; min-width: 18px; height: 18px; border-radius: 50%; background: var(--surface-2); font: 500 10.5px/1 var(--mono); color: var(--fg-3); }
+.cw-panel[data-layout="sheet"] .cw-sources a { min-height: 32px; font-size: 13px; }
 .cw-panel .cw-field { display: flex; flex-direction: column; gap: 3px; }
 .cw-panel .cw-field-label { font-size: 11.5px; color: var(--fg-4); }
 .cw-panel[data-layout="sheet"] .cw-field-label { font-size: 12.5px; }

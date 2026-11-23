@@ -41,6 +41,8 @@ const STATES = {
   dismissed: { icon: CircleSlash, label: 'Dismissed' },
   failed: { icon: TriangleAlert, label: 'Failed' },
 };
+const LENGTHS = [['short', 'Short'], ['medium', 'Medium'], ['long', 'Long']];
+const TOOLS = [['search', 'Search the web', 'Google Search: answers cite the pages'], ['url', 'Read links', 'The model reads the pages a message names'], ['code', 'Run code', 'The model may compute with Python']];
 const THINKING = [['low', 'Low'], ['medium', 'Medium'], ['high', 'High'], ['xhigh', 'Extra high']];
 const PROMPTS = ['Tighten the headline', 'Which claims need a number?', 'Find sentences over 21 words'];
 const FAILED = Symbol('failed');  // what send() resolves to when the reviewer refused the command
@@ -570,6 +572,9 @@ export function mountPanel(root, reviewer, { layout = 'sidebar' } = {}) {
         m.spoken && h('span', { class: 'cw-spoken', title: 'Spoken' }, icon(Mic), h('span', { class: 'cw-sr' }, 'Spoken: ')),
         markdown(m.text)),
       made.length > 0 && h('div', { class: 'cw-links' }, made.map(link)),
+      m.sources?.length > 0 && h('ol', { class: 'cw-sources', 'aria-label': 'Sources' }, m.sources.map((x, i) => h('li', null,
+        h('a', { href: x.uri, target: '_blank', rel: 'noopener noreferrer', title: x.uri, 'data-source': '' },
+          h('span', { class: 'cw-source-n' }, i + 1), h('span', null, x.title))))),
       m.audiences?.length > 0 && h('div', { class: 'cw-audience-chips' }, m.audiences.map(audienceChip)));
     seen.add(id);
     return node;
@@ -915,6 +920,21 @@ export function mountPanel(root, reviewer, { layout = 'sidebar' } = {}) {
             send({ type: 'models.refresh' }).finally(() => { ui.refreshing = false; render(); });
           },
         }))));
+    // the answers: how long, and the tools Google runs for them
+    const segmented = (id, label, title, options, current, field) => h('div', { class: 'cw-group' },
+      h('span', { class: 'cw-label', id }, label),
+      h('div', { class: 'cw-scope', role: 'group', 'aria-labelledby': id, title },
+        options.map(([value, text]) => h('button', {
+          type: 'button', 'aria-pressed': String(current === value), [`data-${field}`]: value,
+          onclick: () => { if (current !== value) send({ type: 'settings.save', [field]: value }); },
+        }, text))));
+    body.append(segmented('cw-length', 'Answers', 'How long Gemini\'s answers are; the rewrites follow the voice', LENGTHS, s.length ?? 'short', 'length'));
+    const tools = s.tools ?? {};
+    body.append(h('div', { class: 'cw-group cw-tools-group', role: 'group', 'aria-label': 'Tools' }, TOOLS.map(([name, text, title]) => {
+      const toggle = h('input', { type: 'checkbox', role: 'switch', class: 'cw-switch', checked: !!tools[name], 'data-tool': name, 'data-focus-key': `tool:${name}` });
+      toggle.addEventListener('change', () => send({ type: 'settings.save', tools: { [name]: toggle.checked } }));
+      return h('label', { class: 'cw-switch-row', title }, toggle, h('span', null, text));
+    })));
     body.append(h('div', { class: 'cw-group' },
       h('span', { class: 'cw-label', id: 'cw-thinking' }, 'Thinking'),
       h('div', { class: 'cw-scope cw-thinking', role: 'group', 'aria-labelledby': 'cw-thinking', title: 'How long Gemini thinks before it answers' },

@@ -87,6 +87,7 @@ export function createMockReviewer({ hasKey = true, delay = 1, empty = false, st
     picking: false,
     settings: {
       hasKey, rememberKey: false, model: 'gemini-4-hydrogen', thinking: 'high',
+      length: 'short', tools: { search: false, url: true, code: false },
       models: [
         { id: 'gemini-4-hydrogen', label: 'Gemini 4 Hydrogen' },
         { id: 'gemini-3.8-flash', label: 'Gemini 3.8 Flash' },
@@ -213,6 +214,13 @@ export function createMockReviewer({ hasKey = true, delay = 1, empty = false, st
     async chat({ text, spoken }) {
       set({ chat: chatSet({ messages: [...state.chat.messages, { role: 'user', text, at: Date.now(), ...(spoken ? { spoken: true } : {}) }], busy: true }) });
       await wait(1100);
+      if (/search/i.test(text)) {
+        set({ chat: chatSet({ busy: false, messages: [...state.chat.messages, {
+          role: 'model', at: Date.now(), text: 'Akka calls itself a platform for agentic AI; Orleans a framework for distributed apps.',
+          sources: [{ title: 'akka.io', uri: 'https://akka.io/' }, { title: 'learn.microsoft.com', uri: 'https://learn.microsoft.com/dotnet/orleans/' }],
+        }] }) });
+        return;
+      }
       if (/who|audience|persona/i.test(text)) {
         const audience = {
           id: id('u'), name: 'Skeptical backend engineer', description: 'A senior backend engineer evaluating actor runtimes.',
@@ -282,6 +290,8 @@ export function createMockReviewer({ hasKey = true, delay = 1, empty = false, st
       if (command.rememberKey != null) settings.rememberKey = command.rememberKey;
       if (command.model) settings.model = command.model;
       if (command.thinking) settings.thinking = command.thinking;
+      if (command.length) settings.length = command.length;
+      if (command.tools) settings.tools = { ...settings.tools, ...command.tools };
       if (command.voice !== undefined) settings.voice = command.voice ? { instructions: command.voice, custom: command.voice !== VOICE } : { instructions: VOICE, custom: false };
       if (command.audienceIDs) settings.audienceIDs = command.audienceIDs;
       if (command.audience) {
