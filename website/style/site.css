@@ -741,6 +741,12 @@ ta-tabs { display: block; }
 .chatlive__message--more .chatlive__at { visibility: hidden; justify-self: end; align-self: center; font-size: 11px; }
 .chatlive__message--more:hover .chatlive__at { visibility: visible; }
 .chatlive__empty, .chatlive__notice { padding: 4px 20px; color: var(--cl-muted); font-style: italic; }
+/* the top of a conversation: the channel's name, or the person, large, then a line about it */
+.chatlive__beginning { padding: 12px 20px 16px; }
+.chatlive__begin-title { margin: 0; overflow-wrap: anywhere; font: 900 22px/1.3 "Lato", -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; color: var(--cl-fg); }
+.chatlive__begin-title .chatlive__hash { font-weight: 400; margin-right: 3px; }
+.chatlive__begin-text { margin: 4px 0 0; line-height: 22px; color: var(--cl-muted); overflow-wrap: anywhere; }
+.chatlive__avatar--begin { width: 72px; height: 72px; margin-bottom: 12px; border-radius: 12px; font-size: 36px; }
 .chatlive__foot { flex: none; padding: 0 20px 2px; }
 .chatlive__typing { min-height: 18px; margin: 2px 0 0 2px; font-size: 12px; line-height: 18px; color: var(--cl-muted); }
 .chatlive__banner { flex: none; margin: 0; padding: 8px 20px; background: var(--cl-warn); color: var(--cl-warn-fg); font-size: 13px; line-height: 20px; }
@@ -878,7 +884,7 @@ ta-tabs { display: block; }
   .chatlive__debug { position: absolute; inset: 44px 4px 4px; z-index: 2; width: auto; border: 0; border-radius: 8px; box-shadow: var(--cl-shadow); }
   .chatlive__app--debug[data-view] .chatlive__pane { display: grid; grid-template-rows: minmax(0, 1fr); }
   .chatlive__menu { left: auto; right: 8px; bottom: 64px; }
-  .chatlive__bar-title, .chatlive__foot, .chatlive__message, .chatlive__empty, .chatlive__notice { padding-left: 12px; padding-right: 12px; }
+  .chatlive__bar-title, .chatlive__foot, .chatlive__message, .chatlive__empty, .chatlive__notice, .chatlive__beginning { padding-left: 12px; padding-right: 12px; }
   .chatlive__foot { padding-bottom: 2px; }
   .chatlive__signed-out { flex-wrap: wrap; }
   .chatlive__subheading, .chatlive__state, .chatlive__clock, .chatlive__controls, .chatlive__memory, .chatlive__hint, .chatlive__result,

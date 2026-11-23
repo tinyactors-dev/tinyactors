@@ -355,6 +355,8 @@ export async function createChat(tinyactors, { versions, version = LATEST, seed 
   const workspace = host.spawn('workspace', { name: 'workspace' });
   for (const name of PEOPLE) host.spawn('user', { name: `user.${name}`, params: { name } });
   await host.idle();
+  // who created each channel the page made, and when: the workspace's answer reaches the asker only
+  const created = new Map();
   for (const room of ROOMS) await workspace.ask('room.create', { name: room });
   await host.idle();
   log.length = 0;
@@ -422,11 +424,23 @@ export async function createChat(tinyactors, { versions, version = LATEST, seed 
       if (directRooms.has(room)) return [];
       return history.read(room).map((post) => ({ room, seq: post.seq, from: post.from, text: post.text, at: post.at }));
     },
-    /** Asks the workspace for a room: answers [event, data], room.created or room.refused. */
-    createRoom: (name) => act(async () => {
+    /**
+     * Asks the workspace for a room for `by`: answers [event, data],
+     * room.created or room.refused. The answer reaches this call only, so
+     * the page records here who created the room and when.
+     */
+    createRoom: (name, by) => act(async () => {
       note('input', `workspace ← room.create #${name}`);
-      return workspace.ask('room.create', { name });
+      const answer = await workspace.ask('room.create', { name });
+      if (answer[0] === 'room.created') created.set(name, { by, at: now() });
+      return answer;
     }),
+    /**
+     * Who created channel `room` and when (simulated seconds): { by, at },
+     * `by` null for the workspace's own channels, made at the start; null
+     * when this page did not see it made.
+     */
+    created: (room) => (ROOMS.includes(room) ? { by: null, at: 0 } : created.get(room) ?? null),
     /** The rooms the workspace holds. */
     rooms: () => read(async () => (await workspace.ask('rooms.list'))[1].rooms),
     /** Moves the simulated clock `ms` on: due timers fire, and what the agenda holds happens. */

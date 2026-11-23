@@ -452,7 +452,7 @@ export async function mount(root) {
     creating = true;
     drawCreate();
     try {
-      const [answer, data] = await chat.createRoom(name);
+      const [answer, data] = await chat.createRoom(name, you);
       if (answer !== 'room.created') {
         refused = { name, reason: data.reason };
         return;
@@ -872,6 +872,26 @@ export async function mount(root) {
   let announcedView = null;
   const statusOf = (state) => (state === 'reconnecting' ? 'reconnecting' : state?.online ?? 'offline');
 
+  /** The top of a conversation: a channel's name and who created it, or the person a direct message is with. */
+  function drawBeginning(node, dm, name) {
+    const made = dm ? null : chat.created(name);
+    const drawn = dm ? `dm\n${dm.with}\n${you}` : `room\n${name}\n${made?.by}\n${made?.at}\n${you}`;
+    if (node.drawn === drawn) return;
+    node.drawn = drawn;
+    if (dm) {
+      const notes = dm.with === you;
+      node.replaceChildren(avatar(dm.with, 'begin'),
+        el('p', { class: 'chatlive__begin-title' }, dm.with, ...(notes ? [el('span', { class: 'chatlive__title-note' }, ' (you)')] : [])),
+        el('p', { class: 'chatlive__begin-text' }, notes ? 'This is your space. Only you see what you post here.'
+          : `This conversation is just between you and ${dm.with}.`));
+      return;
+    }
+    const who = !made ? '' : made.by === null ? ' The workspace created it at the start.'
+      : ` ${made.by === you ? 'You' : made.by} created it at ${clock(made.at)}.`;
+    node.replaceChildren(el('p', { class: 'chatlive__begin-title' }, el('span', { class: 'chatlive__hash', 'aria-hidden': 'true' }, '#'), name),
+      el('p', { class: 'chatlive__begin-text' }, `This is the very beginning of the #${name} channel.${who}`));
+  }
+
   async function render() {
     if (!ready) return;
     if (rendering) { again = true; return; }
@@ -1012,19 +1032,22 @@ export async function mount(root) {
     const inRoom = preview ?? screen.messages.filter((message) => message.room === room);
     const here = query ? screen.messages.filter((message) => message.text.toLowerCase().includes(query)) : inRoom;
     const atBottom = messages.scrollHeight - messages.scrollTop - messages.clientHeight < 40;
+    // the conversation's beginning, above its first post, as a client shows it: only where the
+    // store's numbers say the oldest post shown is the first (step 5's posts have none)
+    const beginning = !query && chat.version() === LATEST && Boolean(dm || joined || preview) && (!inRoom.length || inRoom[0].seq === 1);
     const empty = query ? `No messages on your screen match “${searched}”.`
-      : dm && !inRoom.length ? (dm.with === you ? 'Your notes. Only you see what you post here.' : `Your direct messages with ${dm.with} start here. Nobody else sees them.`)
-        : !joined && connected && !preview ? `Step ${chat.version()}’s charts keep no history. Join #${room} to see its new messages.`
-          : !joined && connected ? `No messages in #${room} yet.`
-          : !joined && !inRoom.length ? `You have not joined #${room}.`
+      : !joined && connected && !preview ? `Step ${chat.version()}’s charts keep no history. Join #${room} to see its new messages.`
+        : !joined && !inRoom.length ? `You have not joined #${room}.`
           : 'No messages on your screen yet.';
     // one row per message, kept while the message stays on the screen; rebuilt only when its
     // header, time, the search's highlight or its mention of you changes
     const rows = new Map(here.map((message, index) => [keyOf(message), [message, here[index - 1]]]));
     const notice = screen.notices.at(-1);
-    const keys = [...(here.length ? rows.keys() : ['empty']), ...(notice ? ['notice'] : [])];
-    keyed(messages, keys, (key) => el('li', { class: key === 'empty' ? 'chatlive__empty' : key === 'notice' ? 'chatlive__notice' : 'chatlive__message' }), (node, key) => {
+    const keys = [...(beginning ? ['beginning'] : []), ...(here.length ? rows.keys() : beginning ? [] : ['empty']), ...(notice ? ['notice'] : [])];
+    const ROW = { empty: 'chatlive__empty', notice: 'chatlive__notice', beginning: 'chatlive__beginning' };
+    keyed(messages, keys, (key) => el('li', { class: ROW[key] ?? 'chatlive__message' }), (node, key) => {
       if (key === 'empty') return setText(node, empty);
+      if (key === 'beginning') return drawBeginning(node, dm, room);
       if (key === 'notice') return setText(node, notice);
       const [message, before] = rows.get(key);
       // search results stand alone, each labelled with its channel
