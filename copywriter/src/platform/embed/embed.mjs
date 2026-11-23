@@ -226,6 +226,28 @@ function start() {
     launcher.title = selected ? 'Annotate' : 'Copywriter';
   });
 
+  // Pick mode lowers the sheet to its least height, so the page shows; it
+  // rises back to where it was when pick mode ends (an annotation of the
+  // pick, the pick button, Escape).
+  // While picking, its least height is what shows the header, the pick's
+  // banner and the composer whole, measured after each render.
+  let wasPicking = false;
+  let beforePick = null;
+  function fitPick() {
+    if (!wasPicking || wide.matches || !open) return;
+    const part = (selector) => body.querySelector(selector)?.offsetHeight ?? 0;
+    const need = grip.offsetHeight + part('.cw-header') + part('.cw-dock') + 8;
+    resize(Math.max(SIZE.MIN, need / innerHeight), { animate: true });
+  }
+  reviewer.subscribe((state) => {
+    if (state.picking === wasPicking) { if (wasPicking) requestAnimationFrame(fitPick); return; }
+    wasPicking = state.picking;
+    host.toggleAttribute('data-picking', wasPicking);
+    if (wide.matches || !open) return;
+    if (wasPicking) { beforePick = size; requestAnimationFrame(fitPick); }
+    else if (beforePick !== null) { resize(beforePick, { animate: true }); beforePick = null; }
+  });
+
   // The launcher stays where it is: hiding it while the page scrolled left
   // a reader far down a page with no way to start (the maintainer, 2026-11-23).
 

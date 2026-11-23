@@ -153,3 +153,32 @@ test('a tab opened before the extension gets the content script injected; inject
   await site.close();
   await panelPage.close();
 });
+
+test('pick from the side panel: a click on the page picks its paragraph, opens nothing, and the banner annotates it', async () => {
+  const site = await context.newPage();
+  await site.goto(`${origin(server)}/page/page.html`);
+  const panelPage = await context.newPage();
+  await panelPage.goto(`chrome-extension://${extensionID}/sidepanel.html`);
+  const tabID = await panelPage.evaluate(async (url) => (await chrome.tabs.query({ url }))[0].id, `${origin(server)}/page/page.html`);
+  await panelPage.goto(`chrome-extension://${extensionID}/sidepanel.html?tab=${tabID}`);
+  await panelPage.waitForFunction(() => globalThis.reviewer?.getState().status === 'ready');
+
+  await panelPage.locator('[data-action=pick]').click();
+  await panelPage.waitForFunction(() => reviewer.getState().picking);
+  // hover outlines what a click would pick (dashed)
+  await site.locator('#linked').hover({ position: { x: 4, y: 4 } });
+  await site.locator('[data-copywriter-outline=hover]').waitFor({ state: 'visible' });
+  const url = site.url();
+  await site.locator('#guide-link').click();
+  await site.locator('#guide-link').click();
+  const banner = panelPage.locator('[data-banner=selection]');
+  await banner.filter({ hasText: 'to keep idle actors on disk' }).waitFor();
+  assert.equal(site.url(), url, 'the link did not open');
+  await banner.locator('[data-action=annotate]').click();
+  await panelPage.locator('[data-view=detail]').waitFor();
+  assert.equal(await panelPage.locator('.cw-original').textContent(), 'Read the hibernation guide to keep idle actors on disk.');
+  await panelPage.waitForFunction(() => !reviewer.getState().picking);
+  await site.waitForFunction(() => !document.querySelector('[data-copywriter-outline]'));
+  await site.close();
+  await panelPage.close();
+});

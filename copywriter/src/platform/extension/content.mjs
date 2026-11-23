@@ -8,6 +8,7 @@
 // Messages, both ways through chrome.runtime:
 //   panel → page  {cw: 'page', method, args} → {value} | {error}
 //   page → panel  {cw: 'selection', selection: {text, anchor} | null}
+//                 {cw: 'pick', on: false}   (Escape ended pick mode)
 //
 // Injected twice into one document, the second copy finds the first and
 // stops; a copy left by an extension that was reloaded (its runtime gone)
@@ -37,6 +38,7 @@ function alive(runtime) {
     preview: (request) => page.preview(request),
     revert: (request) => page.revert(request),
     highlight: (anchor) => page.highlight(anchor),
+    pick: (on) => page.pick(on),
   };
 
   function listener(message, _sender, sendResponse) {
@@ -58,6 +60,11 @@ function alive(runtime) {
   page.onSelection((selection) => {
     if (!alive(chrome.runtime)) return;
     chrome.runtime.sendMessage({ cw: 'selection', selection }).catch(() => { /* no panel open */ });
+  });
+
+  page.onPickEnd(() => {
+    if (!alive(chrome.runtime)) return;
+    chrome.runtime.sendMessage({ cw: 'pick', on: false }).catch(() => { /* no panel open */ });
   });
 
   globalThis[KEY] = {

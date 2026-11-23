@@ -21,7 +21,7 @@ import {
   createElement,
   ArchiveRestore, ArrowLeft, ArrowRight, ArrowUp, Check, ChevronDown, ChevronRight, CircleSlash, Copy, Download, Drama,
   Ellipsis, Eye, EyeOff, FileArchive, KeyRound, LoaderCircle, MessageSquare, MessagesSquare, Mic,
-  MousePointerClick, Pencil, RefreshCw, RotateCcw, Settings, Sparkles, Trash2, TriangleAlert, Undo2, X,
+  MousePointerClick, Pencil, RefreshCw, RotateCcw, Settings, Sparkles, SquareDashedMousePointer, Trash2, TriangleAlert, Undo2, X,
 } from 'lucide';
 import { panelCSS } from './panel-css.mjs';
 import { markPaths, markViewBox } from './mark.mjs';
@@ -219,7 +219,10 @@ export function mountPanel(root, reviewer, { layout = 'sidebar' } = {}) {
   const recLine = h('div', { class: 'cw-rec', hidden: true, 'aria-live': 'polite' });
   const mic = iconButton(Mic, 'Hold to talk', { variant: 'cw-mic', 'aria-pressed': 'false', 'data-action': 'mic' });
   const sendButton = iconButton(ArrowUp, 'Send', { variant: 'cw-send', 'data-action': 'send', disabled: true });
-  const composer = h('div', { class: 'cw-composer' }, textarea, recLine, mic, sendButton);
+  const pickButton = iconButton(SquareDashedMousePointer, 'Pick on the page', {
+    variant: 'cw-pick', 'aria-pressed': 'false', 'data-action': 'pick', onclick: () => togglePick(),
+  });
+  const composer = h('div', { class: 'cw-composer' }, pickButton, textarea, recLine, mic, sendButton);
   const dock = h('div', { class: 'cw-dock' }, banner, composer);
   const toasts = h('div', { class: 'cw-toasts', 'aria-live': 'polite' });
   panel.append(header, main, dock, toasts);
@@ -232,6 +235,15 @@ export function mountPanel(root, reviewer, { layout = 'sidebar' } = {}) {
     if (view !== 'settings' && state.activeID) send({ type: 'deselect', id: state.activeID });
     render();
     focusLead();
+  }
+
+  // Pick mode: a tap on the page picks its text. Starting it leaves an open
+  // annotation and the chat, so a message annotates the pick.
+  function togglePick() {
+    if (state.picking) { send({ type: 'pick.stop' }); return; }
+    if (activeAnnotation()) send({ type: 'deselect', id: state.activeID });
+    if (ui.view !== 'list') { ui.view = 'list'; render(); }
+    send({ type: 'pick.start' });
   }
 
   function back() {
@@ -371,7 +383,13 @@ export function mountPanel(root, reviewer, { layout = 'sidebar' } = {}) {
     mic.disabled = !hasKey || transcribing || state.status !== 'ready';
 
     textarea.placeholder = !hasKey ? 'Add a Gemini key in settings to ask'
-      : { ask: 'Ask for a change', annotate: 'What should change?', chat: 'Ask about this page' }[m.kind] ?? '';
+      : state.picking && !state.selection ? 'Tap text on the page'
+        : { ask: 'Ask for a change', annotate: 'What should change?', chat: 'Ask about this page' }[m.kind] ?? '';
+    pickButton.hidden = recording || transcribing;
+    pickButton.disabled = state.status !== 'ready';
+    pickButton.setAttribute('aria-pressed', String(!!state.picking));
+    pickButton.setAttribute('aria-label', state.picking ? 'Stop picking' : 'Pick on the page');
+    pickButton.title = state.picking ? 'Stop picking (Esc)' : 'Pick on the page';
     sendButton.disabled = !canSend();
   }
 
@@ -480,7 +498,10 @@ export function mountPanel(root, reviewer, { layout = 'sidebar' } = {}) {
     const done = all.filter((a) => !OPEN.has(a.state));
     if (open.length === 0) {
       view.append(h('div', { class: 'cw-empty', style: done.length ? 'flex:none;padding:28px 24px' : null },
-        h('span', { class: 'cw-empty-icon' }, icon(MousePointerClick)), 'Select text on the page'));
+        h('button', {
+          type: 'button', class: 'cw-empty-icon', 'data-action': 'pick-empty', 'aria-label': 'Pick on the page', title: 'Pick on the page',
+          onclick: () => togglePick(),
+        }, icon(SquareDashedMousePointer)), state.picking ? 'Tap text on the page' : 'Pick text on the page'));
     } else {
       view.append(h('ul', { class: 'cw-list', role: 'list', 'aria-label': 'Open' }, open.map((a) => h('li', null, row(a)))));
     }
@@ -894,7 +915,7 @@ export function mountPanel(root, reviewer, { layout = 'sidebar' } = {}) {
     const a = activeAnnotation();
     if (a) return JSON.stringify(['detail', a, ui.editing === a.id, state.settings?.hasKey, state.recording, state.settings?.personas, state.settings?.personaID]);
     if (ui.view === 'chat') return JSON.stringify(['chat', state.chat, state.settings?.hasKey, state.annotations?.map((x) => [x.id, x.state, x.chosenID]), state.recording, state.settings?.personas, state.settings?.personaID]);
-    return JSON.stringify(['list', state.status, state.error, state.annotations, state.settings?.hasKey, ui.showDone]);
+    return JSON.stringify(['list', state.status, state.error, state.annotations, state.settings?.hasKey, ui.showDone, state.picking]);
   }
 
   function renderMain() {
@@ -1004,6 +1025,7 @@ export function mountPanel(root, reviewer, { layout = 'sidebar' } = {}) {
     event.preventDefault();
     if (ui.menu) closeMenu(true);
     else if (rec.active) stopRecording();
+    else if (state.picking) send({ type: 'pick.stop' });
     else if (event.target === textarea && textarea.value) textarea.select();
     else if (ui.editing) { ui.editing = null; render(); }
     else if (ui.view !== 'list' || activeAnnotation()) back();

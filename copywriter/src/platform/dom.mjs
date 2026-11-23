@@ -2,7 +2,8 @@
 // the embedded widget (AGENTS.md, "Platform adapters"): a selection as a W3C
 // text-quote anchor with a CSS path, finding an anchor's text again,
 // previewing a replacement by rewriting Text nodes only (never markup),
-// reverting it, and outlining the active annotation's text.
+// reverting it, outlining the active annotation's text, and pick mode
+// (a tap picks an element's text; see pick()).
 //
 //   const page = createDOMPage({ exclude: (node) => widget.contains(node) });
 //   page.selection()  page.locate(anchor)  page.preview({id, anchor, text})  ...
@@ -27,6 +28,11 @@ export const MAX_TEXT = 600;
 const CONTEXT = 32;              // characters of prefix and suffix an anchor keeps
 const MAX_CONTEXT_TEXT = 20000;  // what context() gives the model
 const HIGHLIGHT = 'tinyactors-copywriter';
+// What pick mode picks: the nearest of these whose text fits, or any
+// element with text of its own that fits.
+const PICKABLE = 'p, li, h1, h2, h3, h4, h5, h6, blockquote, figcaption, caption, td, th, dt, dd, button, a, label, summary';
+const PINE = '#1F5E4A';
+const OVERLAY_Z = 2147482990;    // above the page, below the widget's launcher and sheet
 const PREVIEW_HIGHLIGHT = 'tinyactors-copywriter-preview';
 
 const isSpace = (c) => c === ' ' || c === '\n' || c === '\t' || c === '\r' || c === '\f' || c === ' ';
@@ -240,6 +246,32 @@ function textParts(range) {
   return parts;
 }
 
+const ownText = (el) => [...el.childNodes].some((n) => n.nodeType === 3 && n.data.trim());
+
+/**
+ * The text block pick mode picks for a tap on `target`: the nearest
+ * PICKABLE element, or element with text of its own, whose text is not
+ * empty and at most MAX_TEXT; null when none (the body, an image alone).
+ */
+export function blockAt(target, { exclude = () => false } = {}) {
+  for (let el = elementOf(target); el && el.tagName !== 'BODY' && el.tagName !== 'HTML'; el = el.parentElement) {
+    if (exclude(el) || SKIPPED.has(el.tagName)) return null;
+    if (!(el.matches(PICKABLE) || ownText(el))) continue;
+    const text = normalize(el.textContent);
+    if (text && text.length <= MAX_TEXT) return el;
+  }
+  return null;
+}
+
+/** The block a second tap on `el` picks: the nearest larger block around it that still fits, or null. */
+export function parentBlock(el, options) {
+  const text = normalize(el.textContent);
+  for (let up = blockAt(el.parentElement, options); up; up = blockAt(up.parentElement, options)) {
+    if (normalize(up.textContent) !== text) return up;
+  }
+  return null;
+}
+
 /**
  * The adapter's DOM methods over `doc`. `exclude(node)` names what is not
  * the page (the widget). `keepSelection(event)` says whether a selection
@@ -260,6 +292,7 @@ export function createDOMPage({ doc = document, exclude = () => false, keepSelec
   let reported = null;
 
   const options = () => ({ root: doc.body, exclude });
+  let picked = null;          // in pick mode: {element, value}
 
   function current() {
     const selection = doc.getSelection();
@@ -278,6 +311,7 @@ export function createDOMPage({ doc = document, exclude = () => false, keepSelec
   function onSelectionChange() {
     clearTimeout(timer);
     timer = win.setTimeout(() => {
+      if (picking) return;  // a pick is the selection until pick mode ends
       const now = current();
       if (now) last = now;
       else if (keepSelection()) return;
@@ -423,6 +457,119 @@ export function createDOMPage({ doc = document, exclude = () => false, keepSelec
     return true;
   }
 
+  // ---- pick mode ---------------------------------------------------------------
+  //
+  // While on: the page's text cannot be selected and shows no callout (a
+  // stylesheet of our own, adopted while picking), a click or tap on the
+  // page is caught in the capture phase (no link opens, no button
+  // presses), a mouse's hover outlines what it would pick (dashed), and a
+  // tap picks a block (solid), which is the selection. Both outlines are
+  // overlays over the element, never its own styles.
+  let picking = false;
+  const pickEnds = new Set();
+  let pickSheet = null;
+  const overlay = { hover: null, picked: null };
+  let hovered = null;
+  let framed = 0;
+
+  function box(kind) {
+    if (overlay[kind]) return overlay[kind];
+    const el = doc.createElement('div');
+    el.setAttribute('aria-hidden', 'true');
+    el.dataset.copywriterOutline = kind;
+    el.style.cssText = `position:fixed;z-index:${OVERLAY_Z};pointer-events:none;box-sizing:border-box;border-radius:3px;display:none;`
+      + `outline:2px ${kind === 'hover' ? 'dashed' : 'solid'} ${PINE};outline-offset:3px;`
+      + (kind === 'picked' ? 'background:rgba(31,94,74,.06);transition:top .14s,left .14s,width .14s,height .14s;' : '');
+    doc.documentElement.append(el);
+    overlay[kind] = el;
+    return el;
+  }
+
+  function place() {
+    framed = 0;
+    for (const [kind, el] of [['hover', hovered], ['picked', picked?.element]]) {
+      const node = overlay[kind];
+      if (!node) continue;
+      if (!el || !el.isConnected || (kind === 'hover' && el === picked?.element)) { node.style.display = 'none'; continue; }
+      const r = el.getBoundingClientRect();
+      Object.assign(node.style, { display: 'block', top: `${r.top}px`, left: `${r.left}px`, width: `${r.width}px`, height: `${r.height}px` });
+    }
+  }
+  const schedule = () => { if (!framed) framed = win.requestAnimationFrame(place); };
+
+  const outside = (event) => event.composedPath().some((n) => n.nodeType === 1 && exclude(n));
+
+  function pickElement(el) {
+    const range = doc.createRange();
+    range.selectNodeContents(el);
+    const anchor = anchorOf(range, options());
+    if (!anchor) return;
+    const value = { text: anchor.quote.exact, anchor, fits: anchor.quote.exact.length <= MAX_TEXT };
+    picked = { element: el, value };
+    box('picked');
+    place();
+    reported = value;
+    for (const fn of listeners) fn(value);
+  }
+
+  // A click or tap on the page: it picks, and nothing else happens.
+  function onClick(event) {
+    if (outside(event)) return;
+    event.preventDefault();
+    event.stopPropagation();
+    event.stopImmediatePropagation();
+    if (event.type !== 'click') return;
+    const at = blockAt(event.target, { exclude });
+    if (!at) return;
+    const el = picked && (picked.element === at || picked.element.contains(at)) ? parentBlock(picked.element, { exclude }) || picked.element : at;
+    hovered = null;
+    pickElement(el);
+  }
+  function onMove(event) {
+    if (event.pointerType !== 'mouse' || outside(event)) { if (hovered) { hovered = null; schedule(); } return; }
+    const at = blockAt(event.target, { exclude });
+    if (at !== hovered) { hovered = at; box('hover'); schedule(); }
+  }
+  function onKey(event) {
+    if (event.key !== 'Escape' || outside(event)) return;
+    event.preventDefault();
+    pick(false);
+    for (const fn of pickEnds) fn();
+  }
+  const CAUGHT = ['click', 'auxclick', 'dblclick', 'mousedown', 'mouseup', 'contextmenu', 'submit'];
+
+  /** Pick mode on or off; → true (this page can pick). */
+  function pick(on) {
+    if (Boolean(on) === picking) return true;
+    picking = Boolean(on);
+    if (picking) {
+      try {
+        pickSheet ??= new win.CSSStyleSheet();
+        pickSheet.replaceSync('html, body, body * { -webkit-user-select: none !important; user-select: none !important; -webkit-touch-callout: none !important; } body * { cursor: pointer; }');
+        doc.adoptedStyleSheets = [...doc.adoptedStyleSheets, pickSheet];
+      } catch { /* no constructable stylesheets: text stays selectable */ }
+      doc.getSelection()?.removeAllRanges();
+      for (const type of CAUGHT) win.addEventListener(type, onClick, true);
+      win.addEventListener('pointermove', onMove, true);
+      win.addEventListener('keydown', onKey, true);
+      win.addEventListener('scroll', schedule, { capture: true, passive: true });
+      win.addEventListener('resize', schedule);
+    } else {
+      if (pickSheet) doc.adoptedStyleSheets = doc.adoptedStyleSheets.filter((x) => x !== pickSheet);
+      for (const type of CAUGHT) win.removeEventListener(type, onClick, true);
+      win.removeEventListener('pointermove', onMove, true);
+      win.removeEventListener('keydown', onKey, true);
+      win.removeEventListener('scroll', schedule, { capture: true });
+      win.removeEventListener('resize', schedule);
+      win.cancelAnimationFrame(framed);
+      framed = 0;
+      for (const kind of ['hover', 'picked']) { overlay[kind]?.remove(); overlay[kind] = null; }
+      hovered = null;
+      picked = null;
+    }
+    return true;
+  }
+
   /** The anchor of the first place `text` is on the page, or null. */
   function anchor(text) {
     const range = findRange({ quote: { exact: text } }, options());
@@ -438,6 +585,7 @@ export function createDOMPage({ doc = document, exclude = () => false, keepSelec
      * again, and a kept one is not given twice.
      */
     selection() {
+      if (picked) return picked.value;
       const value = current() || (keepSelection() ? last : null);
       last = null;
       reported = null;
@@ -449,8 +597,11 @@ export function createDOMPage({ doc = document, exclude = () => false, keepSelec
     preview,
     revert,
     highlight,
+    pick,
+    onPickEnd(fn) { pickEnds.add(fn); return () => pickEnds.delete(fn); },
     /** Puts every preview back and stops listening (the script is replaced). */
     dispose() {
+      pick(false);
       for (const id of [...previews.keys()]) revert({ id });
       highlights()?.delete(HIGHLIGHT);
       highlights()?.delete(PREVIEW_HIGHLIGHT);

@@ -26,6 +26,8 @@ function createTabPage() {
   let tabID = fixedTab;
   const selectionListeners = new Set();
   const navigateListeners = new Set();
+  const pickEndListeners = new Set();
+  let pickingTab = null; // the tab in pick mode: told to stop when the panel leaves it
   let ready = null; // a promise of the tab's id, once found
 
   async function activeTab() {
@@ -56,11 +58,21 @@ function createTabPage() {
   }
 
   chrome.runtime.onMessage.addListener((message, sender) => {
-    if (message?.cw !== 'selection' || sender.tab?.id !== tabID) return;
-    for (const fn of selectionListeners) fn(message.selection);
+    if (sender.tab?.id !== tabID) return;
+    if (message?.cw === 'selection') for (const fn of selectionListeners) fn(message.selection);
+    if (message?.cw === 'pick' && !message.on) {
+      pickingTab = null;
+      for (const fn of pickEndListeners) fn();
+    }
   });
 
-  const navigate = () => { for (const fn of navigateListeners) fn(); };
+  const navigate = () => {
+    if (pickingTab !== null && pickingTab !== tabID) {
+      chrome.tabs.sendMessage(pickingTab, { cw: 'page', method: 'pick', args: [false] }).catch(() => { /* gone */ });
+      pickingTab = null;
+    }
+    for (const fn of navigateListeners) fn();
+  };
   if (fixedTab === null) {
     chrome.windows.getCurrent().then((win) => {
       chrome.tabs.onActivated.addListener((active) => {
@@ -91,6 +103,12 @@ function createTabPage() {
     preview: async (request) => Boolean(await call('preview', request)),
     revert: async (request) => Boolean(await call('revert', request)),
     highlight: (anchor) => call('highlight', anchor),
+    async pick(on) {
+      const ok = Boolean(await call('pick', on));
+      pickingTab = on && ok ? tabID : null;
+      return ok;
+    },
+    onPickEnd: (fn) => pickEndListeners.add(fn),
     onNavigate: (fn) => navigateListeners.add(fn),
   };
 }

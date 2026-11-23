@@ -400,6 +400,10 @@ export const panelCSS = String.raw`
 .cw-panel .cw-composer textarea::placeholder { color: var(--fg-4); }
 .cw-panel .cw-rec { flex: 1; display: flex; align-items: center; gap: 8px; min-height: var(--hit); padding: 0 8px; font: 500 12px/1 var(--mono); color: var(--fg-2); font-variant-numeric: tabular-nums; }
 .cw-panel .cw-rec-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--error); animation: cw-pulse 1s infinite; }
+.cw-panel .cw-pick[aria-pressed="true"] { background: var(--accent); color: var(--on-accent); }
+.cw-panel .cw-pick[aria-pressed="true"]:hover { background: var(--accent-hover); }
+.cw-panel button.cw-empty-icon { padding: 0; background: none; color: var(--fg-2); cursor: pointer; transition: border-color var(--fast) var(--ease-step), color var(--fast) var(--ease-step); }
+.cw-panel button.cw-empty-icon:hover { border-color: var(--accent); color: var(--accent-fg); }
 .cw-panel .cw-mic { touch-action: none; user-select: none; -webkit-user-select: none; }
 .cw-panel .cw-mic[aria-pressed="true"] { background: var(--error); color: #FFF8F0; }
 .cw-panel .cw-send { background: var(--accent); color: var(--on-accent); }

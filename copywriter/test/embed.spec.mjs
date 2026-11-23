@@ -289,3 +289,74 @@ test('from 900px wide, the panel is a drawer on the right', async () => {
   await page.waitForFunction(() => !document.getElementById('tinyactors-copywriter').hasAttribute('data-open'));
   await context.close();
 });
+
+const LINKED = 'Read the hibernation guide to keep idle actors on disk.';
+
+test('on a phone, pick mode: one tap enters it, a tap picks a block (twice: its parent), no link opens, no text is selected; a message annotates it', async () => {
+  const { context, page, errors, sheet, launcher } = await phone();
+  await launcher.tap();
+  await sheet.locator('.cw-panel').waitFor();
+  await page.waitForTimeout(400);
+  const open = (await sheet.boundingBox()).height;
+  const pick = sheet.locator('[data-action=pick]');
+  await pick.tap();
+  await page.waitForFunction(() => tinyactorsCopywriter.reviewer.getState().picking);
+  assert.equal(await pick.getAttribute('aria-pressed'), 'true');
+  await page.waitForTimeout(400);
+  assert.ok((await sheet.boundingBox()).height < open, 'the sheet lowers');
+  assert.equal(await page.locator('#lede').evaluate((el) => getComputedStyle(el).userSelect), 'none', 'no text selection while picking');
+
+  // a tap on the link picks the link's text, and the page stays
+  const url = page.url();
+  await page.locator('#guide-link').scrollIntoViewIfNeeded();
+  await page.locator('#guide-link').tap();
+  await page.waitForFunction(() => tinyactorsCopywriter.reviewer.getState().selection?.text === 'hibernation guide');
+  assert.equal(page.url(), url, 'the link did not navigate');
+  assert.equal(await page.evaluate(() => getSelection().toString()), '', 'no text selection was made');
+  const outline = page.locator('[data-copywriter-outline=picked]');
+  const near = (a, b) => Math.abs(a.x - b.x) < 2 && Math.abs(a.y - b.y) < 2 && Math.abs(a.width - b.width) < 2 && Math.abs(a.height - b.height) < 2;
+  await page.waitForTimeout(200);
+  assert.ok(near(await outline.boundingBox(), await page.locator('#guide-link').boundingBox()), 'the outline is over the link');
+
+  // the same element again: its paragraph
+  await page.locator('#guide-link').tap();
+  await page.waitForFunction((text) => tinyactorsCopywriter.reviewer.getState().selection?.text === text, LINKED);
+  await page.waitForTimeout(200);
+  assert.ok(near(await outline.boundingBox(), await page.locator('#linked').boundingBox()), 'the outline is over the paragraph');
+  // the lowered sheet shows the pick's banner and the composer whole
+  const dock = await sheet.locator('.cw-dock').boundingBox();
+  assert.ok(dock.y + dock.height <= 844 + 1, `the composer is in view: ${dock.y + dock.height}`);
+  const linked = await page.locator('#linked').boundingBox();
+  assert.ok(linked.y + linked.height <= (await sheet.boundingBox()).y, 'the paragraph is above the sheet');
+  assert.equal(page.url(), url);
+
+  // a message annotates the pick; pick mode ends and the sheet rises again
+  const composer = sheet.locator('textarea[aria-label=Message]');
+  await composer.fill('Name the guide');
+  await composer.press('Enter');
+  await sheet.locator('[data-view=detail]').waitFor();
+  assert.equal(await sheet.locator('.cw-original').textContent(), LINKED);
+  await page.waitForFunction(() => !tinyactorsCopywriter.reviewer.getState().picking);
+  await page.waitForTimeout(400);
+  assert.ok(Math.abs((await sheet.boundingBox()).height - open) < 2, 'back to its height');
+  assert.equal(await outline.count(), 0, 'the outline goes with pick mode');
+  assert.notEqual(await page.locator('#lede').evaluate((el) => getComputedStyle(el).userSelect), 'none', 'text selects again');
+  assert.deepEqual(errors, []);
+  await context.close();
+});
+
+test('on a phone, pick mode ends with Escape on the page and with the pick button', async () => {
+  const { context, page, sheet, launcher } = await phone();
+  await launcher.tap();
+  await sheet.locator('.cw-panel').waitFor();
+  await sheet.locator('[data-action=pick]').tap();
+  await page.waitForFunction(() => tinyactorsCopywriter.reviewer.getState().picking);
+  await page.evaluate(() => document.activeElement?.blur?.());
+  await page.keyboard.press('Escape');
+  await page.waitForFunction(() => !tinyactorsCopywriter.reviewer.getState().picking);
+  await sheet.locator('[data-action=pick]').tap();
+  await page.waitForFunction(() => tinyactorsCopywriter.reviewer.getState().picking);
+  await sheet.locator('[data-action=pick]').tap();
+  await page.waitForFunction(() => !tinyactorsCopywriter.reviewer.getState().picking);
+  await context.close();
+});

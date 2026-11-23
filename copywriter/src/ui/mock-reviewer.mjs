@@ -84,6 +84,7 @@ export function createMockReviewer({ hasKey = true, delay = 1, empty = false, st
     status,
     page: { url: 'https://www.tinyactors.dev/', title: 'Actors as a library' },
     selection: null,
+    picking: false,
     settings: {
       hasKey, rememberKey: false, model: 'gemini-4-hydrogen', thinking: 'high',
       models: [
@@ -168,7 +169,7 @@ export function createMockReviewer({ hasKey = true, delay = 1, empty = false, st
         id: id('a'), state: 'draft', anchorFound: true, original: state.selection.text, note: note ?? '',
         suggestions: [], chosenID: null, messages: [], createdAt: t, updatedAt: t,
       };
-      set({ annotations: [annotation, ...state.annotations], activeID: annotation.id, selection: null });
+      set({ annotations: [annotation, ...state.annotations], activeID: annotation.id, selection: null, picking: false });
       if (note) await ask(annotation.id, note);
       return annotation.id;
     },
@@ -228,7 +229,9 @@ export function createMockReviewer({ hasKey = true, delay = 1, empty = false, st
         },
       });
     },
-    async 'record.start'({ target }) { set({ recording: { state: 'recording', target } }); },
+    async 'pick.start'() { set({ picking: true }); },
+    async 'pick.stop'() { set({ picking: false }); },
+        async 'record.start'({ target }) { set({ recording: { state: 'recording', target } }); },
     async 'record.stop'({ target }) {
       set({ recording: { state: 'transcribing', target } });
       const annotation = target && target !== 'page' && get(target);
