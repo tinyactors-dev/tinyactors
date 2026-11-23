@@ -451,14 +451,16 @@ export async function mount(root) {
     if (createButton.disabled) return;
     creating = true;
     drawCreate();
+    const who = you; // the person who asked: a switch during the waits does not change who acts
     try {
-      const [answer, data] = await chat.createRoom(name, you);
+      const [answer, data] = await chat.createRoom(name, who);
       if (answer !== 'room.created') {
         refused = { name, reason: data.reason };
         return;
       }
       // the creator is in the channel, and sees it open
-      await chat.join(you, name);
+      await chat.join(who, name);
+      if (who !== you) return openFor(who, name); // another person shows now, with their own dialog if any
       closeDialog(createDialog, null);
       openRoom(name);
       toAction = true; // in the composer, on a phone too: you made the channel to write in it
@@ -485,8 +487,9 @@ export async function mount(root) {
       open.addEventListener('click', () => { closeDialog(browseDialog, null); openRoom(name, true); });
       const joinOne = el('button', { type: 'button', class: 'chatlive__browse-join', 'aria-label': `Join #${name}` }, 'Join');
       joinOne.addEventListener('click', async () => {
-        await chat.join(you, name);
-        open.focus(); // the button goes once you are in
+        const who = you;
+        await chat.join(who, name);
+        if (who === you && browseDialog.open) open.focus(); // the button goes once you are in
       });
       return el('li', { class: 'chatlive__browse-row' }, open, el('span', { class: 'chatlive__browse-joined' }, 'Joined'), joinOne);
     }, (node, name) => {
@@ -496,7 +499,10 @@ export async function mount(root) {
     });
   }
   async function openBrowse() {
-    browseRooms = [...(await chat.rooms())].sort();
+    const who = you;
+    const rooms = await chat.rooms();
+    if (who !== you) return; // switched person meanwhile: the dialog was the other person's
+    browseRooms = [...rooms].sort();
     showDialog(browseDialog, browseDialog.querySelector('.chatlive__dialog-close'));
     drawBrowse();
     browseList.querySelector('button')?.focus();
@@ -521,7 +527,9 @@ export async function mount(root) {
       return;
     }
     // signed in, your actor asks the workspace; signed out or connecting, a direct message your screen has still opens
-    const made = selfState?.online ? await chat.openDM(you, name) : dmWith(name)?.room ?? null;
+    const who = you; // the person who clicked: a switch while the workspace answers does not change who opens it
+    const made = selfState?.online ? await chat.openDM(who, name) : dmWith(name)?.room ?? null;
+    if (who !== you) return made && openFor(who, made);
     if (!made) {
       peopleNote.textContent = `Sign in to message ${name}.`;
       return;
@@ -576,6 +584,14 @@ export async function mount(root) {
   // other's, so nobody's posts are read because someone else had them open.
   const views = new Map();
   const firstView = () => ({ room: 'general', railView: 'home', picked: null, search: '', scroll: null, shows: 'room' });
+  /**
+   * After a wait, opens `name` for `who`: on the screen when `who` is still the person shown,
+   * else in `who`'s saved view, so they find it open when switched back.
+   */
+  function openFor(who, name) {
+    if (who === you) return openRoom(name);
+    views.set(who, { ...(views.get(who) ?? firstView()), room: name, search: '', scroll: null, shows: 'room' });
+  }
   let scrollTo; // the scroll position the next draw restores: a number, null for the end, undefined for none
   function switchTo(name) {
     const end = messages.scrollHeight - messages.scrollTop - messages.clientHeight < 40;
