@@ -145,7 +145,6 @@ links of the page it is given and knows no audience of its own.
 
 ```html
 <meta name="page-kind" content="pitch">
-<meta name="page-answers" content="tech-lead.release-history">
 <link rel="audience" href="/audiences/agent-platform.xml">
 <link rel="audience" href="/audiences/tech-lead.xml">
 ```
@@ -160,16 +159,15 @@ links of the page it is given and knows no audience of its own.
   order: the first is the page's main audience. `audience` is not one of
   HTML's registered link types; HTML lets a page use other `rel` values,
   and a browser ignores one it does not know.
-- `<meta name="page-answers">`, optional: needs the page answers as a
-  whole, space-separated.
 - A page without these declares nothing (here, the 404).
 
-**On a section:** the `<section>` element carries
-`data-answers="tech-lead.host-dies agent-platform.memory"`, the needs its
-text answers, space-separated, and `data-kind="how-to"` when its kind
-differs from the page's. Neither attribute appears where there is nothing
-to say. A need is named `<audience id>.<need id>`, where the audience id is
-that of a file the page links (its `id` attribute).
+**What the page does not publish:** which needs its sections answer.
+The content says so (`answers` on a purpose or a section), the build
+checks it and lists the unanswered needs in `build/needs.json`, and the
+repository's tools read it from `content/`; the published HTML carries
+none of it. A tool reviewing a page judges from its text which needs it
+answers. A need is named `<audience id>.<need id>`, where the audience id
+is that of a file the page links (its `id` attribute).
 
 **An audience file** (`/audiences/<id>.xml`), valid against
 [`/audiences/audience.xsd`](schema/audience.xsd), namespace
@@ -202,6 +200,6 @@ A page's Markdown (`index.md`) says the same in its first line under the
 title, `Kind: pitch. For: [name](audience file URL), ...`, and `llms.txt`
 lists the audiences once, under "Audiences". The build writes all of it
 from `content/`; `mise run test` checks that every page with a purpose has
-its meta and links in order, every section with `answers` its
-`data-answers`, and every audience file validates against
+its meta and links in order, that no page publishes the content's
+answers, and that every audience file validates against
 `audience.xsd`.

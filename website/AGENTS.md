@@ -80,9 +80,12 @@ rules.
   wins: a tutorial does not stop for a pitch's proof, a pitch does not
   turn into reference. Link the other need to the page that answers it,
   or write that page; never squeeze it in.
-- The published convention (head links, `data-answers`, the audience
-  files and `schema/audience.xsd`) is README.md's "Audiences and page
-  kinds": tools on other sites rely on it, so change it there first.
+- The published convention (the `page-kind` meta, the `rel="audience"`
+  links, the audience files and `schema/audience.xsd`) is README.md's
+  "Audiences and page kinds": tools on other sites rely on it, so change
+  it there first. Which needs a section answers is the content's
+  bookkeeping (`answers`): it stays in `content/` and is never published
+  (the maintainer, 2026-11-23).
 
 ## The guides
 

@@ -11,9 +11,8 @@
     <link rel="audience" href="/audiences/tech-lead.xml">
     <meta name="page-kind" content="pitch">
 
-  and a section the needs it answers, each as "<audience id>.<need id>":
-
-    <section id="failure" data-answers="tech-lead.host-dies">
+  A need is named "<audience id>.<need id>". Which needs a page answers is
+  not published: a tool judges that from the page's text.
 
   README.md, "Audiences and page kinds", is the convention in full. Any
   site may publish files of this format; a tool reads them from the links

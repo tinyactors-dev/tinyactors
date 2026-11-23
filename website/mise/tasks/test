@@ -143,8 +143,8 @@ puts "website: #{markdown.size} pages have their Markdown, each listed once in l
 
 # 3c. Audiences and page kinds (README.md, "Audiences and page kinds"):
 #     each page with a purpose has its <meta name="page-kind"> and one
-#     <link rel="audience"> per audience, in its order; each section that
-#     answers needs carries them as data-answers; every audience file the
+#     <link rel="audience"> per audience, in its order; no page carries
+#     the content's answers (they stay in content/); every audience file the
 #     build wrote, and the index, validates against the published
 #     audiences/audience.xsd; and every file a page links to is one of them.
 PURPOSES_QUERY = <<~XQUERY
@@ -172,9 +172,7 @@ purposes.each do |purpose|
   failures << "#{name}: links the audiences #{hrefs.inspect}, not #{want.inspect}" unless hrefs == want
   hrefs.each { |href| failures << "#{name}: #{href}: no such audience file" unless audience_dir.join(File.basename(href)).file? }
   linked += hrefs.size
-  purpose['sections'].each do |section|
-    failures << "#{name}: section #{section['id']} lacks data-answers=\"#{section['answers']}\"" unless html.match?(/<section id="#{Regexp.escape(section['id'])}"[^>]* data-answers="#{Regexp.escape(section['answers'])}"/)
-  end
+  failures << "#{name}: publishes the content's answers (data-answers, data-kind or page-answers)" if html.match?(/data-answers=|data-kind=|name="page-answers"/)
 end
 puts "website: #{purposes.size} pages name their kind and #{linked} audience links; #{audience_files.size} audience files valid against audience.xsd"
 

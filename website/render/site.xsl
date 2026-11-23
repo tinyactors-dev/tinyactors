@@ -118,9 +118,6 @@
         <!-- What the page is for, and whom (README.md, "Audiences and page kinds"). -->
         <xsl:for-each select="s:purpose">
           <meta name="page-kind" content="{@kind}"/>
-          <xsl:if test="@answers">
-            <meta name="page-answers" content="{normalize-space(@answers)}"/>
-          </xsl:if>
           <xsl:for-each select="tokenize(@for)">
             <link rel="audience" href="/audiences/{.}.xml"/>
           </xsl:for-each>
@@ -394,8 +391,6 @@
 
   <xsl:template match="s:section">
     <section id="{@id}" class="section" aria-labelledby="{@id}-heading">
-      <xsl:if test="@kind"><xsl:attribute name="data-kind" select="@kind"/></xsl:if>
-      <xsl:if test="@answers"><xsl:attribute name="data-answers" select="normalize-space(@answers)"/></xsl:if>
       <div class="wrap">
         <header class="section__head">
           <h2 id="{@id}-heading"><xsl:apply-templates select="s:heading/node()"/></h2>
