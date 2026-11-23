@@ -9,8 +9,9 @@
      A lost connection is not yet offline: the user reconnects within 30
      seconds without the others seeing a change, and gets the messages
      that came meanwhile.
-     Joining a room shows its history: the posts it kept, each numbered,
-     so a screen shows a post once. -->
+     Joining a room tells the screen the number of the room's last post,
+     so the screen reads the history up to it from the application's store;
+     each message carries its number, so a screen shows a post once. -->
 <scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0"
        datamodel="ecmascript" name="user" initial="offline">
   <datamodel>
@@ -112,7 +113,7 @@
       <send type="chat:client" event="joined">
         <param name="to" expr="name"/>
         <param name="room" expr="_event.data.room"/>
-        <param name="history" expr="_event.data.history"/>
+        <param name="seq" expr="_event.data.seq"/>
       </send>
     </transition>
     <transition event="error.communication" cond="_event.sendid === 'join'">

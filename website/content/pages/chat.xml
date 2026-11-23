@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <page xmlns="https://www.tinyactors.dev/ns/site" id="chat" path="/chat/">
   <title>Build a team chat with tinyactors</title>
-  <description>Try a team chat in your browser, then build it in eight steps, from one room to a history for late joiners.</description>
+  <description>Try a team chat in your browser, then build it in eight steps, from one room to a history your program stores.</description>
 
   <hero>
     <headline>Build a team chat</headline>
@@ -109,13 +109,15 @@
 
   <section id="history">
     <heading>8. Show a room's history to late joiners</heading>
-    <p>A member who joins late saw nothing said before, and a member who joined twice got every post twice. The room now numbers each post and keeps the last 50.</p>
-    <code src="../../examples/chat/8-history/charts/room.scxml" lines="34-45" language="scxml" file="charts/room.scxml"/>
-    <p>A join sends the kept posts back, and adds the member only once.</p>
-    <code src="../../examples/chat/8-history/charts/room.scxml" lines="15-23" language="scxml" file="charts/room.scxml"/>
-    <p>Cat joins after two posts and sees both; bob joins a second time, and the third post reaches him once.</p>
+    <p>A member who joins late saw nothing said before, and a member who joined twice got every post twice. A channel's history is data your program stores; the room numbers each post and appends it.</p>
+    <code src="../../examples/chat/8-history/charts/room.scxml" lines="35-51" language="scxml" file="charts/room.scxml"/>
+    <p>The store is an I/O processor of your program. A screen reads a channel's posts from it, up to the number its join brought.</p>
+    <code src="../../examples/chat/8-history/main.mjs" lines="4-21" language="javascript" file="main.mjs"/>
+    <p>A join answers with the number of the last post, and adds the member only once.</p>
+    <code src="../../examples/chat/8-history/charts/room.scxml" lines="16-24" language="scxml" file="charts/room.scxml"/>
+    <p>Cat joins after two posts and reads both; bob joins a second time, and the third post reaches him once.</p>
     <example>
-      <code src="../../examples/chat/8-history/main.mjs" lines="46-51" language="javascript" file="main.mjs"/>
+      <code src="../../examples/chat/8-history/main.mjs" lines="70-75" language="javascript" file="main.mjs"/>
       <code src="../../examples/chat/8-history/output.txt" language="text" role="output"/>
     </example>
   </section>
