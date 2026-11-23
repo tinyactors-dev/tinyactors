@@ -366,7 +366,7 @@ export function createReviewer({
       try {
         if (event === 'save') await store.putAnnotation(data);
         else if (event === 'reading') await store.putReading(data);
-        else if (event === 'page') await store.putPage({ url: data.url, audienceIDs: data.audienceIDs ?? null, suggestion: data.suggestion ?? null, state: data.state });
+        else if (event === 'page') await store.putPage({ url: data.url, audienceIDs: data.audienceIDs ?? null, suggestion: data.suggestion ?? null, state: data.state, from: data.from ?? null });
         else if (event === 'delete') await store.deleteAnnotation(data.page, data.id);
         else if (event === 'chat' && data.messages.length) {
           await store.putConversation({

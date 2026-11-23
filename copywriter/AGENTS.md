@@ -517,7 +517,13 @@ draws the flow), and one for the open page's audiences
 (`charts/audiences.scxml`: the page's set, and the one suggestion asked
 of the model for a page with none: unset → suggesting → suggested →
 set; `model` answers its `suggest {url}` with `model.audiences
-{audienceIDs}`). An annotation's `ask` and `suggest` carry the page's
+{audienceIDs}`; a page that links site audiences is spawned with them as
+`linked` and they are its set, `from: 'site'`, until the reviewer chooses
+one, `from: 'user'`, and it is never asked). A reading's checklist items
+of a site audience carry `needID` (`audience.need`), `kind` (the kind of
+page the need belongs on) and `claimed` (the sections that claim to answer
+it); a finding about one carries its `needID`, and so does an open item
+made of a gap. An annotation's `ask` and `suggest` carry the page's
 active audiences; with two or more (and no finding) its rewrite request
 is per audience (`request.audienceIDs`) and each suggestion keeps the
 reply's `audienceID` (null: for everyone); its header says how. A conversation is held with the editor or with an

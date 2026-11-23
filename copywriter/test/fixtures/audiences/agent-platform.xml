@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<audience xmlns="https://www.tinyactors.dev/ns/audience" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" id="agent-platform" xsi:schemaLocation="https://www.tinyactors.dev/ns/audience audience.xsd">
+  <name>Agent-platform engineer</name>
+  <description>A senior backend engineer building a multi-tenant backend for AI agents, chats or realtime sessions, in Node.js or Bun, evaluating a runtime for one long-lived stateful unit per session or tenant.</description>
+  <knows>Actor systems and Cloudflare Durable Objects; Rivet; XState; containers and serverless limits. Little SCXML.</knows>
+  <want id="in-backend">Whether it runs inside the backend they already have</want>
+  <want id="memory">Memory per actor and how many fit in one process, with the benchmark behind the number</want>
+  <want id="idle-sessions">Hibernation and snapshots for idle sessions</want>
+  <want id="code-first">A code example before any concept</want>
+  <task id="evaluate">Evaluate it in minutes</task>
+  <task id="first-chart">npm install and run the first chart</task>
+  <task id="compare">Compare it with Rivet and Durable Objects</task>
+  <objection id="another-runtime">Another runtime or platform to operate?</objection>
+  <objection id="why-scxml">Why SCXML and not XState?</objection>
+  <objection id="production">Is anyone running this in production?</objection>
+  <objection id="agent-charts">Will an agent really write good charts?</objection>
+</audience>

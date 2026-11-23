@@ -31,10 +31,14 @@
 
   An item of `items`: {field: 'wants' | 'tasks' | 'objections', text,
   status: 'answered' | 'partial' | 'missing', anchor?, explanation,
-  annotationID?}: the anchor of the text that answers it, and the open
-  item made of it. A finding: {kind: 'objection' | 'task' | 'doubt' |
-  'jargon' | 'missing', anchor?, original_text?, need, explanation,
-  replacement?, section?}; one without an anchor is page-level.
+  annotationID?, needID?, kind?, claimed?}: the anchor of the text that
+  answers it, and the open item made of it; for a site audience's item,
+  its need's reference (`audience.need`), the kind of page it belongs on
+  (pitch, tutorial, how-to, reference, explanation) and the headings of
+  the sections that claim to answer it (`data-answers`). A finding:
+  {kind: 'objection' | 'task' | 'doubt' | 'jargon' | 'missing', anchor?,
+  original_text?, need, explanation, replacement?, section?, needID?};
+  one without an anchor is page-level; needID: the item it is about.
 
   `state` names where it was for the store; an actor spawned with a stored
   record starts from it (one stored while reading was cut off: failed).
@@ -87,18 +91,24 @@
       };
       if (f.section) params.finding.section = f.section;
       if (f.need) params.finding.need = f.need;
+      if (f.needID) params.finding.needID = f.needID;
       return { chart: 'annotation', name: id, params: params };
     }
 
     // The Spawner's request for the open item a checklist gap becomes: a
     // page-level annotation of kind 'missing'.
     function gap(item, id, r) {
+      var about = { field: item.field, status: item.status };
+      var found = { audienceID: r.audienceID, kind: 'missing', explanation: item.explanation || '', item: about };
+      if (item.needID) found.needID = item.needID;
+      if (item.needID) about.needID = item.needID;
+      if (item.kind) about.kind = item.kind;
       return {
         chart: 'annotation', name: id,
         params: {
           id: id, page: r.page, lang: r.lang, source: 'audience', state: 'new',
           original: item.text, anchor: null, suggestions: [], audiences: r.audience ? [r.audience] : [],
-          finding: { audienceID: r.audienceID, kind: 'missing', explanation: item.explanation || '', item: { field: item.field, status: item.status } },
+          finding: found,
         },
       };
     }

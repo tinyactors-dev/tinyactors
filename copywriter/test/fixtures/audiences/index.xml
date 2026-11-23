@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<audiences xmlns="https://www.tinyactors.dev/ns/audience" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="https://www.tinyactors.dev/ns/audience audience.xsd">
+  <item id="agent-platform" href="agent-platform.xml">Agent-platform engineer</item>
+  <item id="workflow-tester" href="workflow-tester.xml">Workflow developer who tests</item>
+  <item id="tech-lead" href="tech-lead.xml">Tech lead who approves dependencies</item>
+</audiences>

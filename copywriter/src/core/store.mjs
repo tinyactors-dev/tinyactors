@@ -14,7 +14,7 @@
 //   deleteAudience(id)
 //   readings(page?) → [record]     every page's, or one page's, last reading per audience (charts/reading.scxml's record)
 //   putReading(record)              by (record.page, record.audienceID)
-//   pages() → [record]              every page's audiences (charts/audiences.scxml's record: {url, audienceIDs, suggestion, state})
+//   pages() → [record]              every page's audiences (charts/audiences.scxml's record: {url, audienceIDs, suggestion, state, from})
 //   putPage(record)                 by record.url
 //
 // Version 2 of the database replaced a page's one chat with conversations

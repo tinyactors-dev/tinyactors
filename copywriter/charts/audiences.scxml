@@ -7,7 +7,13 @@
   page writes for the last set used on any page (the settings'
   `audienceIDs`).
 
-  A page with no set is asked about once, when it is first opened with a
+  A page that links its audiences (`<link rel="audience">`, read by the
+  core into the store as site audiences) is spawned with them as `linked`,
+  in its order: they are its set (`from: 'site'`) unless the reviewer
+  changed it (`from: 'user'`), and such a page is never asked. Opened
+  again with other links, a set from the site follows them.
+
+  A page with no links and no set is asked about once, when it is first opened with a
   key and saved audiences (`canSuggest`, or `key` later): a cheap request
   over the page and the audiences' names and descriptions ("which of
   these read this page?"). Its answer is a suggestion the reviewer
@@ -18,11 +24,14 @@
       └───────────────────────────────┘                               │ dismiss {audienceIDs}: the set in use
                                                                       ▼
     unset, suggesting, suggested ──set {audienceIDs}──────────────▶  set ──set──▶ set
+    restore ──linked, and no set of the reviewer's──────────────────▶ set  (from: 'site')
 
   `suggestion` is null (never asked), {state: 'asking'}, {state: 'ready',
   audienceIDs}, {state: 'none'} (the model named none) or {state:
   'failed', error}; asked once, it is not asked again. Entering `set`
-  clears it.
+  clears it. `from` says who chose the set: 'site' (the page's links),
+  'user' (the reviewer, the model's use_audiences, an accepted or
+  dismissed suggestion), null before either.
 
     model  suggest  {url}          → model.audiences {audienceIDs} | model.error {message}
                                      (sent to this actor by name when the answer comes,
@@ -43,19 +52,29 @@
     <data id="state" expr="'new'"/>
     <!-- spawn only: a key and saved audiences, so a suggestion can be asked for now -->
     <data id="canSuggest" expr="false"/>
+    <!-- spawn only: the ids of the site audiences the page links, in order; null: it links none -->
+    <data id="linked" expr="null"/>
+    <!-- who chose the set: 'site' | 'user' | null -->
+    <data id="from" expr="null"/>
   </datamodel>
 
   <state id="live" initial="restore">
     <transition event="changed">
-      <send type="ui" event="page" namelist="url audienceIDs suggestion state"/>
-      <send type="store" event="page" namelist="url audienceIDs suggestion state"/>
+      <send type="ui" event="page" namelist="url audienceIDs suggestion state from"/>
+      <send type="store" event="page" namelist="url audienceIDs suggestion state from"/>
     </transition>
     <!-- the reviewer (or the model's use_audiences) chose the page's set -->
     <transition event="set" target="set">
       <assign location="audienceIDs" expr="_event.data.audienceIDs"/>
+      <assign location="from" expr="'user'"/>
     </transition>
 
     <state id="restore">
+      <!-- the page's links are its set, unless the reviewer chose one -->
+      <transition cond="linked &amp;&amp; linked.length &amp;&amp; (audienceIDs === null || from === 'site')" target="set">
+        <assign location="audienceIDs" expr="linked"/>
+        <assign location="from" expr="'site'"/>
+      </transition>
       <transition cond="audienceIDs !== null" target="set"/>
       <transition cond="suggestion &amp;&amp; suggestion.state === 'ready'" target="suggested"/>
       <transition cond="canSuggest &amp;&amp; (!suggestion || suggestion.state === 'asking')" target="suggesting"/>
@@ -99,10 +118,12 @@
       <onentry><assign location="state" expr="'suggested'"/><raise event="changed"/></onentry>
       <transition event="accept" target="set">
         <assign location="audienceIDs" expr="suggestion.audienceIDs"/>
+        <assign location="from" expr="'user'"/>
       </transition>
       <!-- not these: the page keeps the set in use -->
       <transition event="dismiss" target="set">
         <assign location="audienceIDs" expr="_event.data.audienceIDs"/>
+        <assign location="from" expr="'user'"/>
       </transition>
     </state>
 

@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<audience xmlns="https://www.tinyactors.dev/ns/audience" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" id="workflow-tester" xsi:schemaLocation="https://www.tinyactors.dev/ns/audience audience.xsd">
+  <name>Workflow developer who tests</name>
+  <description>A backend developer, often in Python, whose long-running business logic (retries, timeouts, payments, multi-day waits) is hard to test and has been hand-rolled as state machines or considered for Temporal.</description>
+  <knows>Temporal or Celery and their replay or retry models; pytest; the pain of sleeping in tests and of flaky timing.</knows>
+  <want id="simulated-clock">A simulated clock that runs a week of timeouts in milliseconds</want>
+  <want id="written-flow">The whole flow written down as states and transitions</want>
+  <want id="no-mocks">Effects as events their code performs, so tests need no mocks of the world</want>
+  <want id="no-server">No server to run</want>
+  <task id="one-workflow">Write one workflow as a chart</task>
+  <task id="test-timeouts">Test its timeouts in CI</task>
+  <task id="show-speedup">Show the team the speedup</task>
+  <objection id="needs-cluster">Does it need Docker or a cluster like Temporal?</objection>
+  <objection id="crash">What survives a crash of the process?</objection>
+  <objection id="simulation-matches">Will the simulated run match production?</objection>
+</audience>

@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<audience xmlns="https://www.tinyactors.dev/ns/audience" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" id="tech-lead" xsi:schemaLocation="https://www.tinyactors.dev/ns/audience audience.xsd">
+  <name>Tech lead who approves dependencies</name>
+  <description>An architect or tech lead deciding whether the team may depend on tinyactors across services, clients and devices (Node.js, Python, the browser, C), and accountable when it fails.</description>
+  <knows>Reasons like sqlite.org's "when to use" page: what it is for, what it is not for. Knows SQLite, embedded libraries, and the cost of a new server.</knows>
+  <want id="when-to-use">An honest "use it when, do not use it when"</want>
+  <want id="failure-semantics">The failure semantics of one process: what is lost, what a snapshot or migration keeps</want>
+  <want id="same-everywhere">One chart running the same everywhere</want>
+  <want id="license">The license</want>
+  <want id="release-history">The release history</want>
+  <want id="test-suite">The test suite that backs "passes all"</want>
+  <task id="decide">Decide yes or no</task>
+  <task id="write-case">Write the case for the team</task>
+  <task id="check-portability">Check the license and portability</task>
+  <objection id="single-point">One process is one point of failure.</objection>
+  <objection id="host-dies">What happens to state when the host dies?</objection>
+  <objection id="lock-in">Are we locked in to this runtime or its chart format?</objection>
+  <objection id="maintainer">Who maintains it?</objection>
+</audience>
