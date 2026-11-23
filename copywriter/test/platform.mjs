@@ -14,7 +14,7 @@ export const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 export const FIXTURE = join(ROOT, 'test/fixtures/page.html');
 const TYPES = {
   '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.mjs': 'text/javascript; charset=utf-8',
-  '.wasm': 'application/wasm', '.zip': 'application/zip', '.css': 'text/css', '.woff2': 'font/woff2', '.svg': 'image/svg+xml',
+  '.wasm': 'application/wasm', '.zip': 'application/zip', '.css': 'text/css', '.woff2': 'font/woff2', '.svg': 'image/svg+xml', '.xml': 'application/xml', '.xsd': 'application/xml',
 };
 
 /**

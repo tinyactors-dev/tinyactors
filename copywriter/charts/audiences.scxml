@@ -31,7 +31,8 @@
   'failed', error}; asked once, it is not asked again. Entering `set`
   clears it. `from` says who chose the set: 'site' (the page's links),
   'user' (the reviewer, the model's use_audiences, an accepted or
-  dismissed suggestion), null before either.
+  dismissed suggestion), null before either. `kind` is the page's kind
+  as it declared it when opened, in its record for the export.
 
     model  suggest  {url}          → model.audiences {audienceIDs} | model.error {message}
                                      (sent to this actor by name when the answer comes,
@@ -54,14 +55,16 @@
     <data id="canSuggest" expr="false"/>
     <!-- spawn only: the ids of the site audiences the page links, in order; null: it links none -->
     <data id="linked" expr="null"/>
+    <!-- spawn only: the page's kind (its meta page-kind), kept for the export; null: it declares none -->
+    <data id="kind" expr="null"/>
     <!-- who chose the set: 'site' | 'user' | null -->
     <data id="from" expr="null"/>
   </datamodel>
 
   <state id="live" initial="restore">
     <transition event="changed">
-      <send type="ui" event="page" namelist="url audienceIDs suggestion state from"/>
-      <send type="store" event="page" namelist="url audienceIDs suggestion state from"/>
+      <send type="ui" event="page" namelist="url audienceIDs suggestion state from kind"/>
+      <send type="store" event="page" namelist="url audienceIDs suggestion state from kind"/>
     </transition>
     <!-- the reviewer (or the model's use_audiences) chose the page's set -->
     <transition event="set" target="set">

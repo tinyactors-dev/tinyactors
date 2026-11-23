@@ -179,7 +179,7 @@ test('on a phone, the sheet resizes to where it is let go, from the grip or the 
 
 test('on a phone, a conversation with a reader and rewrites side by side raise the sheet to its high size; leaving them lowers it back', async () => {
   const { context, page, errors, sheet, launcher } = await phone();
-  await page.evaluate(() => tinyactorsCopywriter.reviewer.dispatch({ type: 'settings.save', audienceIDs: ['starter-tech-lead'] }));
+  await page.evaluate(() => tinyactorsCopywriter.reviewer.dispatch({ type: 'settings.save', audienceIDs: ['site-tech-lead'] }));
   await launcher.tap();
   await sheet.locator('.cw-panel').waitFor();
   await page.waitForTimeout(400);
@@ -193,7 +193,7 @@ test('on a phone, a conversation with a reader and rewrites side by side raise t
   await page.waitForTimeout(400);
   assert.ok(Math.abs(await share() - 0.4) < 0.02, `back where it was: ${await share()}`);
   // rewrites side by side rise it to compare; a preview lowers it so the page shows
-  await page.evaluate(() => tinyactorsCopywriter.reviewer.dispatch({ type: 'settings.save', audienceIDs: ['starter-tech-lead', 'starter-workflow-tester'] }));
+  await page.evaluate(() => tinyactorsCopywriter.reviewer.dispatch({ type: 'settings.save', audienceIDs: ['site-tech-lead', 'site-workflow-tester'] }));
   await selectText(page, '#lede', ORIGINAL);
   await page.waitForFunction(() => tinyactorsCopywriter.reviewer.getState().selection);
   await page.evaluate(() => tinyactorsCopywriter.reviewer.dispatch({ type: 'annotate', note: 'Sharper' }));
@@ -324,6 +324,8 @@ const LINKED = 'Read the hibernation guide to keep idle actors on disk.';
 
 test('on a phone, pick mode: one tap enters it, a tap picks a block (twice: its parent), no link opens, no text is selected; a message annotates it', async () => {
   const { context, page, errors, sheet, launcher } = await phone();
+  // one audience: one rewrite at a time, so the sheet does not rise to compare
+  await page.evaluate(() => tinyactorsCopywriter.reviewer.dispatch({ type: 'settings.save', audienceIDs: ['site-tech-lead'] }));
   await launcher.tap();
   await sheet.locator('.cw-panel').waitFor();
   await page.waitForTimeout(400);
@@ -421,8 +423,8 @@ test('a database of version 1: the page\'s chat is its first conversation, an ed
   assert.deepEqual(state.chat.messages.map((m) => m.text), ['Old question', 'Old answer']);
   assert.deepEqual(state.settings.voice, { instructions: 'Edited voice.', custom: true });
   assert.equal(state.settings.thinking, 'low', 'the other settings stay');
-  // no audience came from version 1; the three starting ones are added, none active
-  assert.deepEqual(state.settings.audiences.map((a) => a.source), ['starter', 'starter', 'starter']);
-  assert.deepEqual(state.settings.audienceIDs, []);
+  // no audience came from version 1; the page's linked files are added, and are its set
+  assert.deepEqual(state.settings.audiences.map((a) => a.source), ['site', 'site', 'site']);
+  assert.deepEqual(state.settings.audienceIDs, ['site-agent-platform', 'site-tech-lead', 'site-workflow-tester']);
   await context.close();
 });

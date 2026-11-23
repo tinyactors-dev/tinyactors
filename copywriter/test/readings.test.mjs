@@ -10,7 +10,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { setup, fakePage, geminiReply, find } from './fakes.mjs';
 import { createMemoryStore } from '../src/core/store.mjs';
-import { checklist, STARTER_AUDIENCES } from '../src/core/audiences.mjs';
+import { checklist } from '../src/core/audiences.mjs';
 import { readingOf } from '../src/core/gemini.mjs';
 import { unzip } from '../src/core/packet.mjs';
 
@@ -80,8 +80,12 @@ test('checklist: one item per quoted question, per semicolon part and sentence; 
     ['tasks', 'Decide yes or no'], ['tasks', 'check the license'],
     ['objections', '"Who maintains it?"'], ['objections', '"What happens when the host dies?"'],
   ]);
-  const lead = STARTER_AUDIENCES.find((a) => a.id === 'starter-tech-lead');
-  assert.equal(checklist(lead).length, 11, 'the starting tech lead: four wants, three tasks, four objections');
+  const lead = {
+    wants: 'An honest "use it when / do not use it when"; the failure semantics of one process (what is lost, what a snapshot or migration keeps); one chart running the same everywhere; the license, the release history, the test suite that backs "passes all".',
+    tasks: 'Decide yes or no, write the case for the team, check the license and portability.',
+    objections: '"One process is one point of failure." "What happens to state when the host dies?" "Are we locked in to this runtime or its chart format?" "Who maintains it?"',
+  };
+  assert.equal(checklist(lead).length, 11, 'a tech lead in prose: four wants, three tasks, four objections');
   // an item left out is missing; a number out of range is dropped
   const { coverage: c } = readingOf({ calls: [{ name: 'report_coverage', args: { item: 9, status: 'answered', explanation: 'x' } }] }, checklist(DEV));
   assert.deepEqual(c, [{ field: 'wants', text: 'A simulated clock', status: 'missing', explanation: '' }]);

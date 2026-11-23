@@ -1,16 +1,18 @@
 // Fakes of the platform adapters and of Gemini, for the node tests.
 
+import { readFileSync } from 'node:fs';
 import { createReviewer } from '../src/core/reviewer.mjs';
 import { createMemoryStore } from '../src/core/store.mjs';
 
 /** A page whose text is one string; previews replace in it. */
-export function fakePage({ url = 'https://www.tinyactors.dev/', title = 'tinyactors', lang = 'en', text = '' } = {}) {
+export function fakePage({ url = 'https://www.tinyactors.dev/', title = 'tinyactors', lang = 'en', text = '', purpose = null } = {}) {
   const previews = new Map(); // id → {exact, text}
   const listeners = [];
   const navigators = [];
   const pickEnds = [];
   const fake = {
-    url, title, lang, text,
+    url, title, lang, text, purpose: purpose && (() => fake.declared),
+    declared: purpose,
     selected: null,
     highlighted: [],
     calls: [],
@@ -75,6 +77,31 @@ export function fakePage({ url = 'https://www.tinyactors.dev/', title = 'tinyact
   return fake;
 }
 
+/**
+ * The site's audience files, from test/fixtures/audiences/ (fetched once from
+ * https://www.tinyactors.dev/audiences/): `fetchFile(url)` gives a file's
+ * text by its name; `files` overrides or adds texts by URL; `asked` lists
+ * the URLs asked for.
+ */
+export function fakeFiles(files = {}) {
+  const asked = [];
+  const fetchFile = async (url) => {
+    asked.push(url);
+    if (url in files) {
+      if (files[url] instanceof Error) throw files[url];
+      return files[url];
+    }
+    const name = new URL(url).pathname.split('/').pop();
+    return readFileSync(new URL(`./fixtures/audiences/${name}`, import.meta.url), 'utf8');
+  };
+  fetchFile.asked = asked;
+  fetchFile.files = files;
+  return fetchFile;
+}
+
+/** The fixture audience file `name` (agent-platform, tech-lead, workflow-tester) as text. */
+export const audienceFile = (name) => readFileSync(new URL(`./fixtures/audiences/${name}.xml`, import.meta.url), 'utf8');
+
 /** Credentials in memory. */
 export function fakeCredentials(initial = null) {
   let key = initial;
@@ -124,12 +151,12 @@ export function fakeFetch(...answers) {
 }
 
 /** A reviewer over fakes; returns everything a test pokes. */
-export async function setup({ text = 'Build better products. Actors are cheap. Read the guide.', key = 'AIza-test-key-123', fetch = fakeFetch(), store = createMemoryStore(), page = fakePage({ text }), recorder, starterAudiences = [], retryDelays = [] } = {}) {
+export async function setup({ text = 'Build better products. Actors are cheap. Read the guide.', key = 'AIza-test-key-123', fetch = fakeFetch(), store = createMemoryStore(), page = fakePage({ text }), recorder, fetchFile = fakeFiles(), retryDelays = [] } = {}) {
   const credentials = fakeCredentials(key);
   const downloads = [];
   const clipboard = [];
   const reviewer = createReviewer({
-    page, credentials, store, fetch, recorder, starterAudiences, retryDelays,
+    page, credentials, store, fetch, recorder, fetchFile, retryDelays,
     download: (name, bytes) => downloads.push({ name, bytes }),
     clipboard: (t) => clipboard.push(t),
   });

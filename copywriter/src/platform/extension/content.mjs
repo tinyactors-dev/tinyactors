@@ -32,6 +32,7 @@ function alive(runtime) {
     ping: () => true,
     info: () => page.info(),
     context: () => page.context(),
+    purpose: () => page.purpose(),
     selection: () => page.selection(),
     locate: (anchor) => page.locate(anchor),
     anchor: (text) => page.anchor(text),

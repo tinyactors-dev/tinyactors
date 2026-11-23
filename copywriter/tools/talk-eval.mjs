@@ -28,9 +28,9 @@ if (!key) { console.error('talk-eval: GEMINI_API_KEY is not set (run through fno
 
 // The correction each starting audience gets, by id.
 const CORRECTIONS = {
-  'starter-agent-platform': 'You\'d actually know Erlang and OTP well: you ran an Elixir backend for years.',
-  'starter-workflow-tester': 'Actually, you work in TypeScript on Node.js now, not Python.',
-  'starter-tech-lead': 'You\'d also care about supply-chain security: signed releases and an SBOM.',
+  'site-agent-platform': 'You\'d actually know Erlang and OTP well: you ran an Elixir backend for years.',
+  'site-workflow-tester': 'Actually, you work in TypeScript on Node.js now, not Python.',
+  'site-tech-lead': 'You\'d also care about supply-chain security: signed releases and an SBOM.',
 };
 const FIRST = 'What would make you close this tab?';
 
@@ -46,7 +46,7 @@ await tab.goto(values.url, { waitUntil: 'networkidle' });
 await tab.addScriptTag({ content: outputFiles[0].text });
 const call = (method, ...args) => tab.evaluate(([m, a]) => window.cwPage[m](...a), [method, args]);
 const page = {
-  info: () => call('info'), context: () => call('context'), selection: () => null, onSelection() {},
+  info: () => call('info'), context: () => call('context'), purpose: () => call('purpose'), selection: () => null, onSelection() {},
   locate: (a) => call('locate', a), anchor: (t) => call('anchor', t),
   preview: () => false, revert: () => false, highlight: () => {},
 };

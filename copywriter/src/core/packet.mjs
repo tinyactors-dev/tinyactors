@@ -54,8 +54,18 @@ export function packetItems(annotations, gaps = []) {
   return { pages, changes, notes, gaps: open };
 }
 
-// What a gap asks the writer.
-const gapRequest = (g) => `${GAP_VERBS[g.field] || 'Address'}: ${g.text} (${STATUS[g.status] || g.status} for ${g.audience})`;
+// What a gap asks the writer, with its need's reference when it has one.
+const gapRequest = (g) => `${GAP_VERBS[g.field] || 'Address'}: ${g.text} (${STATUS[g.status] || g.status} for ${g.audience})${g.needID ? ` [${g.needID}]` : ''}`;
+
+// What a task says of its page's kind: the kind wins, other needs are routed.
+const kindNote = (pages, url) => (pages[url]?.kind ? ` The page is a ${pages[url].kind}: a need that belongs on another kind of page gets a link to where it is answered.` : '');
+
+// The need an annotation is about (a reading's finding, or a gap made an open item).
+const needOf = (a) => a.finding?.needID || a.finding?.item?.needID || '';
+
+/** A site audience the reviewer edited: what to change in the site's sources, by field. */
+const FIELD_ELEMENTS = Object.freeze({ name: 'name', description: 'description', knows: 'knows', wants: 'want', tasks: 'task', objections: 'objection' });
+const audienceTask = (a) => `Update the audience "${a.siteID}" in website/content/site.xml (published as ${a.url}): ${a.differences.map((d) => FIELD_ELEMENTS[d.field] || d.field).join(', ')}.`;
 
 // What an open item asks: the request, else the proposals.
 function summary(a) {
@@ -70,9 +80,11 @@ function summary(a) {
  * to `{title, lang, audiences?}` where known (audiences: the names of the
  * page's own set, which its section in CHANGES.md says it is for). Throws when there is nothing to export.
  */
-export async function buildPacket({ annotations, gaps = [], pages = {}, title = 'Copy review', at = new Date().toISOString() }) {
+export async function buildPacket({ annotations, gaps = [], audiences = [], pages = {}, title = 'Copy review', at = new Date().toISOString() }) {
   const items = packetItems(annotations, gaps);
-  if (items.changes.length === 0 && items.notes.length === 0 && items.gaps.length === 0) {
+  // the site audiences the reviewer edited: {siteID, url, name, differences: [{field, site, yours}]}
+  items.audiences = audiences.filter((a) => a.differences?.length);
+  if (items.changes.length === 0 && items.notes.length === 0 && items.gaps.length === 0 && items.audiences.length === 0) {
     throw new Error('Nothing to export: keep a change or write a note first.');
   }
   const pageID = new Map(items.pages.map((url, i) => [url, `page-${i + 1}`]));
@@ -87,17 +99,27 @@ export async function buildPacket({ annotations, gaps = [], pages = {}, title = 
   }
   // a page-level item (no anchor: what the page lacks) is anchored to the page's body
   const quoteOf = (a) => (items.gaps.includes(a) ? a.text : a.original);
+  for (const [i, a] of items.audiences.entries()) {
+    sources.push(`<page id="audience-page-${i + 1}" url="${escapeAttribute(a.url)}" fingerprint="${await sha256(a.url)}" locale="en"/>`);
+  }
   for (const a of all) {
     const n = number.get(a);
     const selector = a.anchor?.selector || 'body';
     sources.push(`<anchor id="anchor-${n}" pageRef="${pageID.get(a.page)}" selector="${escapeAttribute(selector)}" domPath="${escapeAttribute(selector)}" textSha256="${await sha256(quoteOf(a))}" textQuote="${escapeAttribute(quoteOf(a))}"/>`);
   }
+  for (const [i, a] of items.audiences.entries()) {
+    sources.push(`<anchor id="audience-anchor-${i + 1}" pageRef="audience-page-${i + 1}" selector="audience" domPath="audience" textSha256="${await sha256(a.name)}" textQuote="${escapeAttribute(a.name)}"/>`);
+  }
   for (const a of all) {
     const n = number.get(a);
     const gap = items.gaps.includes(a);
     const text = gap ? gapRequest(a) : request(a) || (items.notes.includes(a) ? summary(a) : 'Rewrite this text.');
-    sources.push(`<observation id="observation-${n}" authorRef="${gap ? 'audience' : 'reviewer'}" anchorRef="anchor-${n}" source="${escapeAttribute(gap ? 'audience' : a.source || 'typed')}" recordedAt="${escapeAttribute((gap ? a.at : a.createdAt) || at)}"><text>${escapeText(text)}</text></observation>`);
+    const need = gap ? '' : needOf(a);
+    sources.push(`<observation id="observation-${n}" authorRef="${gap ? 'audience' : 'reviewer'}" anchorRef="anchor-${n}" source="${escapeAttribute(gap ? 'audience' : a.source || 'typed')}" recordedAt="${escapeAttribute((gap ? a.at : a.createdAt) || at)}"><text>${escapeText(need ? `${text} [${need}]` : text)}</text></observation>`);
   }
+  items.audiences.forEach((a, i) => {
+    sources.push(`<observation id="audience-observation-${i + 1}" authorRef="reviewer" anchorRef="audience-anchor-${i + 1}" source="audience" recordedAt="${escapeAttribute(at)}"><text>${escapeText(audienceTask(a))}</text></observation>`);
+  });
   for (const a of items.changes) {
     const n = number.get(a);
     sources.push(`<revision id="revision-${n}" patchId="${escapeAttribute(a.id)}" anchorRef="anchor-${n}" observationRef="observation-${n}" accepted="true" expectedSha256="${await sha256(a.original)}" replacementSha256="${await sha256(keptText(a).text)}"/>`);
@@ -120,7 +142,7 @@ export async function buildPacket({ annotations, gaps = [], pages = {}, title = 
     const what = a.anchor ? `Revise the text "${a.original}" on ${a.page} to address it` : `Add to ${a.page}${a.finding?.section ? ` (under "${a.finding.section}")` : ''}: ${a.original}`;
     entries.push(`<design-task id="item-${n}" observationRef="observation-${n}" status="open">`
       + `<summary>${escapeText(summary(a))}</summary>`
-      + `<instructions>${escapeText(`${what}${writtenFor(a) ? `, for ${writtenFor(a)}` : ''}${proposed(a).length ? `; proposed: ${proposed(a).map((x) => `"${x.text}"`).join(', ')}` : ''}.`)}</instructions>`
+      + `<instructions>${escapeText(`${what}${writtenFor(a) ? `, for ${writtenFor(a)}` : ''}${needOf(a) ? ` (need ${needOf(a)})` : ''}${proposed(a).length ? `; proposed: ${proposed(a).map((x) => `"${x.text}"`).join(', ')}` : ''}.${kindNote(pages, a.page)}`)}</instructions>`
       + `<acceptance>${escapeText('The reviewer agrees the note is addressed.')}</acceptance>`
       + '</design-task>');
   }
@@ -128,10 +150,18 @@ export async function buildPacket({ annotations, gaps = [], pages = {}, title = 
     const n = number.get(g);
     entries.push(`<design-task id="item-${n}" observationRef="observation-${n}" status="open">`
       + `<summary>${escapeText(gapRequest(g))}</summary>`
-      + `<instructions>${escapeText(`Add to ${g.page} what answers it, where it fits${g.explanation ? ` (${g.explanation})` : ''}, using only facts the project can back.`)}</instructions>`
+      + `<instructions>${escapeText(`Add to ${g.page} what answers it, where it fits${g.explanation ? ` (${g.explanation})` : ''}, using only facts the project can back.${kindNote(pages, g.page)}`)}</instructions>`
       + `<acceptance>${escapeText(`Read as ${g.audience}, the page answers it.`)}</acceptance>`
       + '</design-task>');
   }
+
+  items.audiences.forEach((a, i) => {
+    entries.push(`<design-task id="audience-item-${i + 1}" observationRef="audience-observation-${i + 1}" status="open">`
+      + `<summary>${escapeText(audienceTask(a))}</summary>`
+      + `<instructions>${escapeText(a.differences.map((d) => `${FIELD_ELEMENTS[d.field] || d.field}: the site says ${JSON.stringify(d.site)}; the reviewer's copy says ${JSON.stringify(d.yours)}`).join('. '))}. Keep each need's id; a new need gets an id of its own.</instructions>`
+      + `<acceptance>${escapeText(`${a.url} says what the reviewer's copy says, and every need id a page names still exists.`)}</acceptance>`
+      + '</design-task>');
+  });
 
   const payload = `<payload><sources>${sources.join('')}</sources><items>${entries.join('')}</items></payload>`;
   const digest = await sha256(payload);
@@ -169,13 +199,16 @@ function changesMarkdown(items, pages, at) {
     '5. Gaps by audience: what a reader wants, came to do or objects to that the',
     '   page does not answer. Add what answers each, where it fits, from facts the',
     '   project can back (never invent a number or a claim), or report why not.',
-    '6. Build the site and check each page shows the replacement.',
+    '6. Audiences to update: the reviewer edited an audience the site publishes;',
+    '   change its definition in the site\'s sources to match, keeping need ids.',
+    '7. Build the site and check each page shows the replacement.',
     '',
   ];
   for (const url of items.pages) {
     const title = pages[url]?.title;
     lines.push(`## ${url}${title ? ` (${title})` : ''}`, '');
-    if (pages[url]?.audiences?.length) lines.push(`For: ${pages[url].audiences.join(', ')}`, '');
+    const purpose = [pages[url]?.kind && `Kind: ${pages[url].kind}.`, pages[url]?.audiences?.length && `For: ${pages[url].audiences.join(', ')}`].filter(Boolean);
+    if (purpose.length) lines.push(purpose.join(' '), '');
     let n = 0;
     for (const a of items.changes.filter((c) => c.page === url)) {
       const kept = keptText(a);
@@ -191,6 +224,7 @@ function changesMarkdown(items, pages, at) {
       n += 1;
       lines.push(a.anchor ? `### Open item ${n}` : `### Open item ${n}: add`, '', a.anchor ? 'Text:' : 'Add:', '', fence(a.original), '');
       if (a.finding) lines.push(`Found reading as: ${a.audiences?.[0] || 'an audience'} (${a.finding.kind})`, '');
+      if (needOf(a)) lines.push(`Need: ${needOf(a)}`, '');
       if (request(a)) lines.push(`Request: ${request(a)}`, '');
       if (writtenFor(a)) lines.push(`Written for: ${writtenFor(a)}`, '');
       lines.push(...sourceLines(a));
@@ -203,9 +237,16 @@ function changesMarkdown(items, pages, at) {
       for (const audience of [...new Set(gaps.map((g) => g.audience))]) {
         const mine = gaps.filter((g) => g.audience === audience);
         lines.push(`${audience} (read ${mine[0].at || 'earlier'}):`, '');
-        for (const g of mine) lines.push(`- ${GAP_VERBS[g.field] || 'Address'}: ${g.text} (${STATUS[g.status] || g.status})${g.explanation ? `. ${g.explanation}` : ''}`);
+        for (const g of mine) lines.push(`- ${GAP_VERBS[g.field] || 'Address'}: ${g.text} (${STATUS[g.status] || g.status}${g.needID ? `, ${g.needID}` : ''}${g.kind ? `, belongs on a ${g.kind}` : ''})${g.explanation ? `. ${g.explanation}` : ''}`);
         lines.push('');
       }
+    }
+  }
+  if (items.audiences.length) {
+    lines.push('## Audiences to update', '', 'The reviewer edited these audiences; the site\'s files say otherwise.', '');
+    for (const a of items.audiences) {
+      lines.push(`### ${a.name}`, '', audienceTask(a), '');
+      for (const d of a.differences) lines.push(`${FIELD_ELEMENTS[d.field] || d.field}:`, '', 'The site:', '', fence(d.site), '', 'The reviewer\'s:', '', fence(d.yours), '');
     }
   }
   return lines.join('\n');
@@ -237,7 +278,7 @@ function readme(items, at) {
   return [
     '# Work packet',
     '',
-    `Exported by the tinyactors copywriter on ${at}: ${items.changes.length} kept change(s), ${items.notes.length} open item(s) and ${items.gaps.length} gap(s) by audience on ${items.pages.length} page(s).`,
+    `Exported by the tinyactors copywriter on ${at}: ${items.changes.length} kept change(s), ${items.notes.length} open item(s) and ${items.gaps.length} gap(s) by audience on ${items.pages.length} page(s)${items.audiences.length ? `, and ${items.audiences.length} audience(s) to update` : ''}.`,
     '',
     '- `CHANGES.md`: the changes as instructions for a coding agent. Start here.',
     '- `packet.xml`: the same, as data, valid against `work-packet.xsd`.',

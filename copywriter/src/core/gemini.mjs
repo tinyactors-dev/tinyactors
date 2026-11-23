@@ -3,6 +3,7 @@
 // header of each request and nowhere else.
 
 import { BASE, KEY_REFUSED } from './models.mjs';
+import { PAGE_KINDS } from './site.mjs';
 
 /** The functions the model may call (model-tools.xml, adapted). */
 export const FUNCTIONS = Object.freeze([
@@ -448,6 +449,7 @@ export const READING_FUNCTIONS = Object.freeze([
         explanation: { type: 'string', description: 'One sentence in the reader\'s own terms: why they get stuck here.' },
         replacement: { type: 'string', description: 'original_text rewritten in the voice so this reader gets further, using only facts the page states. An empty string when nothing on the page helps (and always for missing).' },
         section: { type: 'string', description: 'For missing: the page heading, copied exactly, of the section where it belongs.' },
+        item: { type: 'integer', description: 'The number of the checklist item this finding is about, when it is about one; always for a doubt about a section\'s claim.' },
       },
       required: ['kind', 'need', 'explanation', 'replacement'],
     },
@@ -462,15 +464,21 @@ export const READING_FUNCTIONS = Object.freeze([
         status: { type: 'string', enum: [...COVERAGE], description: 'answered: the page answers it fully; partial: it answers part, or only by implication; missing: it does not.' },
         answer_text: { type: 'string', description: 'For answered or partial: the exact text on the page that answers it, copied verbatim, one sentence or list item.' },
         explanation: { type: 'string', description: 'One short sentence: what the page says for it, or what it lacks.' },
+        kind: {
+          type: 'string', enum: [...PAGE_KINDS],
+          description: 'The kind of page where this item is best answered: pitch (deciding whether to adopt: a claim, a demonstration, proof, a next step), tutorial (learning by doing), how-to (reaching a goal), reference (facts to look up), explanation (reasons, limits, trade-offs).',
+        },
       },
-      required: ['item', 'status', 'explanation'],
+      required: ['item', 'status', 'explanation', 'kind'],
     },
   },
 ]);
 
 /**
  * A reading's answer: `{findings, coverage}` from its report_finding and
- * report_coverage calls, against the checklist `items` ([{field, text}]).
+ * report_coverage calls, against the checklist `items` ([{field, text,
+ * needID?}]); a finding about an item keeps its index (`item`) and need,
+ * an item the kind of page it belongs on (`kind`).
  * Findings of another kind or with no explanation are dropped; coverage
  * is one entry per item (the last call for an item wins; an item the
  * model left out is 'missing', with no explanation).
@@ -485,14 +493,24 @@ export function readingOf({ calls }, items) {
       if (clean(a.original_text)) f.original_text = clean(a.original_text);
       if (clean(a.replacement)) f.replacement = clean(a.replacement);
       if (clean(a.section, 200)) f.section = clean(a.section, 200);
+      const n = Number(a.item);
+      if (Number.isInteger(n) && n >= 1 && n <= items.length) {
+        f.item = n - 1;
+        if (items[n - 1].needID) f.needID = items[n - 1].needID;
+      }
       findings.push(f);
     } else if (name === 'report_coverage' && COVERAGE.includes(a.status)) {
       const n = Number(a.item);
       if (Number.isInteger(n) && n >= 1 && n <= items.length) {
-        statuses.set(n - 1, { status: a.status, explanation: clean(a.explanation), ...(clean(a.answer_text) ? { answer_text: clean(a.answer_text) } : {}) });
+        statuses.set(n - 1, {
+          status: a.status, explanation: clean(a.explanation), ...(clean(a.answer_text) ? { answer_text: clean(a.answer_text) } : {}),
+          ...(PAGE_KINDS.includes(a.kind) ? { kind: a.kind } : {}),
+        });
       }
     }
   }
-  const coverage = items.map((item, i) => ({ field: item.field, text: item.text, ...(statuses.get(i) || { status: 'missing', explanation: '' }) }));
+  const coverage = items.map((item, i) => ({
+    field: item.field, text: item.text, ...(item.needID ? { needID: item.needID } : {}), ...(statuses.get(i) || { status: 'missing', explanation: '' }),
+  }));
   return { findings, coverage };
 }

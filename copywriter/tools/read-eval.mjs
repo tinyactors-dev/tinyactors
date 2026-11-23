@@ -38,7 +38,7 @@ await tab.addScriptTag({ content: outputFiles[0].text });
 const call = (method, ...args) => tab.evaluate(([m, a]) => window.cwPage[m](...a), [method, args]);
 
 const page = {
-  info: () => call('info'), context: () => call('context'), selection: () => null, onSelection() {},
+  info: () => call('info'), context: () => call('context'), purpose: () => call('purpose'), selection: () => null, onSelection() {},
   locate: (a) => call('locate', a), anchor: (t) => call('anchor', t),
   preview: () => false, revert: () => false, highlight: () => {},
 };

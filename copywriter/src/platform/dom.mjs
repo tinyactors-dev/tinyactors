@@ -570,6 +570,39 @@ export function createDOMPage({ doc = document, exclude = () => false, keepSelec
     return true;
   }
 
+  /**
+   * What the page says it is for (website/README.md, "Audiences and page
+   * kinds: the convention"): its kind, the audience files it links (absolute
+   * URLs, in order: the first is its main audience), the needs it answers as
+   * a whole, and each section that names needs or a kind of its own, by its
+   * heading's text (or its CSS path when it has none).
+   */
+  function purpose() {
+    const head = doc.head || doc.documentElement;
+    const words = (value) => String(value || '').split(/\s+/).filter(Boolean);
+    const meta = (name) => head.querySelector(`meta[name="${name}"]`)?.getAttribute('content') || '';
+    const kind = meta('page-kind').trim() || null;
+    const audiences = [];
+    for (const link of head.querySelectorAll('link[rel~="audience"][href]')) {
+      try {
+        const url = new URL(link.getAttribute('href'), doc.baseURI).href;
+        if (!audiences.includes(url)) audiences.push(url);
+      } catch { /* not a URL */ }
+    }
+    const sections = [];
+    for (const el of doc.querySelectorAll('[data-answers], [data-kind]')) {
+      if (exclude(el)) continue;
+      const heading = el.querySelector('h1, h2, h3, h4, h5, h6');
+      const selector = cssPath(el);
+      sections.push({
+        anchor: heading ? normalize(heading.textContent) : selector, selector,
+        ...(el.dataset.kind ? { kind: el.dataset.kind.trim() } : {}),
+        answers: words(el.dataset.answers),
+      });
+    }
+    return { kind, audiences, answers: words(meta('page-answers')), sections };
+  }
+
   /** The anchor of the first place `text` is on the page, or null. */
   function anchor(text) {
     const range = findRange({ quote: { exact: text } }, options());
@@ -579,6 +612,7 @@ export function createDOMPage({ doc = document, exclude = () => false, keepSelec
   return {
     info,
     context,
+    purpose,
     /**
      * The selection now, or the last one kept (keepSelection), for an
      * annotation: it is used, so the same text selected again is reported

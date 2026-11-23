@@ -12,10 +12,11 @@ import {
 } from './gemini.mjs';
 import { DEFAULT_MODEL, MODELS, listModels, checkKey } from './models.mjs';
 import { DEFAULT_VOICE } from './voice.mjs';
-import { STARTER_AUDIENCES, checklist, CHECKLIST_FIELDS } from './audiences.mjs';
+import { checklist, CHECKLIST_FIELDS } from './audiences.mjs';
+import { parseAudience, fieldsOf, edited, differences, KIND_RULES, PAGE_KINDS, SITE_FIELDS } from './site.mjs';
 import { createIndexedDBStore, createMemoryStore } from './store.mjs';
 import { createRecorder } from './recorder.mjs';
-import { exportPacket } from './packet.mjs';
+import { exportPacket, sha256 } from './packet.mjs';
 
 const OPEN_STATES = new Set(['draft', 'transcribing', 'asking', 'suggested', 'previewing', 'failed']);
 
@@ -80,6 +81,20 @@ function view(r) {
   return a;
 }
 
+// What the panel sees of an audience: a site one names its file and
+// whether the reviewer's copy differs from it; the file's copy stays out.
+function audienceView(a) {
+  const { site, hash, ...rest } = a;
+  return { ...rest, ...(a.source === 'site' ? { diverged: Boolean(a.diverged) } : {}) };
+}
+
+/** Fetches an audience file's text (same origin in the widget; the side panel's host permissions in the extension). */
+async function fetchAudienceFile(url) {
+  const response = await globalThis.fetch(url, { cache: 'no-cache', signal: AbortSignal.timeout?.(8000) });
+  if (!response.ok) throw new Error(`${url}: ${response.status}`);
+  return response.text();
+}
+
 // What the panel sees of a reading's record; `exists(id)` tells which of
 // its annotations are still there.
 function readingView(r, exists) {
@@ -87,6 +102,7 @@ function readingView(r, exists) {
     audienceID: r.audienceID, state: r.state, at: r.at || r.started || null,
     items: (r.items || []).map((x) => ({
       field: x.field, text: x.text, status: x.status, explanation: x.explanation || '',
+      ...(x.needID ? { needID: x.needID } : {}), ...(x.kind ? { kind: x.kind } : {}), ...(x.claimed?.length ? { claimed: [...x.claimed] } : {}),
       ...(x.anchor ? { anchor: x.anchor } : {}), ...(x.annotationID && exists(x.annotationID) ? { annotationID: x.annotationID } : {}),
     })),
     findingIDs: (r.findingIDs || []).filter(exists),
@@ -119,9 +135,23 @@ export const READING_RULES = Object.freeze([
   'original_text is copied exactly from the page text above, character for character: one sentence, heading or list item where they get stuck, never more and never a paraphrase. Omit it only for missing; give section, the heading where it belongs, instead.',
   'explanation is one sentence of at most 20 words in the reader\'s own terms, the way they would say it. need says what the writer should do there, at most 12 words.',
   'replacement: original_text rewritten in the voice so this reader gets further. For every finding with original_text, try: a fact the page states elsewhere often helps (what a word means, where the next step is, the source of a number, a limit the page admits), and a rewrite that only makes the sentence plainer for this reader helps too. Use only facts, numbers and names the page states; never invent one. Omit replacement only when nothing on the page helps, and then name the missing fact in need.',
-  'Then call report_coverage once for every item of the checklist, by its number: answered (answer_text: the exact page text that answers it), partial (the closest text), or missing.',
+  'Then call report_coverage once for every item of the checklist, by its number: answered (answer_text: the exact page text that answers it), partial (the closest text), or missing; and kind, the kind of page where that need is best answered.',
   'Answer with function calls only.',
 ]);
+
+/**
+ * What a reading asks of the claims a page makes (its sections'
+ * data-answers), after the claims are listed.
+ */
+export const CLAIM_RULES = Object.freeze([
+  'Check every claim: read the section\'s own text as this reader. When it answers the item, its status is answered, with answer_text from that section. When it does not, or only in part, give the item partial or missing and also report_finding of kind doubt, with item set to its number, original_text the section\'s heading copied exactly, and explanation saying what the section claims and what it leaves out.',
+]);
+
+/** What a reading says of the page's kind: items of another kind may be routed, not answered here. */
+export const KIND_READING = 'An item whose kind is not the page\'s is answered well enough when the page sends the reader to where it is answered, with a link that says what is there; without one it is partial or missing.';
+
+/** What the rewrites and the page chat are told of the page's kind. */
+export const KIND_WINS = 'The page\'s kind wins over the other audiences\' needs: a need that belongs on another kind of page is answered here with a link to where it is answered (a route), never squeezed into this page; when a rewrite routes a need so, its rationale says it.';
 
 /**
  * What the system instruction asks of every answer, after the voice:
@@ -199,7 +229,7 @@ export const TALK_LENGTHS = Object.freeze({
 function describe(a) {
   const parts = [`- ${a.name}: ${a.description}`];
   for (const [field, label] of [['knows', 'Knows'], ['wants', 'Wants'], ['tasks', 'Came to'], ['objections', 'Objections']]) {
-    if (a[field]) parts.push(`  ${label}: ${a[field]}`);
+    if (a[field]) parts.push(`  ${label}: ${String(a[field]).split('\n').map((x) => x.trim()).filter(Boolean).join('; ')}`);
   }
   return parts.join('\n');
 }
@@ -240,7 +270,7 @@ export function createReviewer({
   page, credentials, download, clipboard,
   store = globalThis.indexedDB ? createIndexedDBStore() : createMemoryStore(),
   wasmURL, fetch = (...args) => globalThis.fetch(...args), recorder = createRecorder(),
-  starterAudiences = STARTER_AUDIENCES, retryDelays = RETRY_DELAYS,
+  fetchFile: fetchText = fetchAudienceFile, retryDelays = RETRY_DELAYS,
 }) {
   fetch = retrying(fetch, retryDelays);  // Google's brief overloads (503, 429) are retried
   const subscribers = new Set();
@@ -250,6 +280,8 @@ export function createReviewer({
   const previewed = new Set(); // annotation ids the page shows a preview of
   const readings = new Map(); // `${page}\n${audienceID}` → the last reading's record, every page
   const pageRecords = new Map(); // url → the page's audiences (charts/audiences.scxml's record), every page
+  const purposes = new Map(); // url → what the page said it is for (page.purpose()), this session
+  const linked = new Map(); // url → the ids of the site audiences it links, in order, this session
   let current = { url: '', title: '', lang: 'en' };
   let selection = null; // {text, anchor}
   let chat = { messages: [], busy: false };
@@ -285,7 +317,10 @@ export function createReviewer({
     const all = [...records.values()];
     state = deepFreeze({
       status, ...(error ? { error } : {}),
-      page: { url: current.url, title: current.title, audienceSuggestion: suggestionView() },
+      page: {
+        url: current.url, title: current.title, kind: purposeOf(current.url).kind,
+        mainAudienceID: linkedIDs(current.url)[0] ?? null, audienceSuggestion: suggestionView(),
+      },
       selection: selection ? { text: selection.text, fits: fits(selection) } : null,
       picking,
       settings: {
@@ -295,7 +330,7 @@ export function createReviewer({
         length: settings.length,
         tools: { ...settings.tools },
         voice: { instructions: settings.voice || DEFAULT_VOICE, custom: Boolean(settings.voice) },
-        audiences: audiences.map((a) => ({ ...a })),
+        audiences: audiences.map(audienceView),
         audienceIDs: activeIDs(),
       },
       annotations: mine.map(view),
@@ -366,7 +401,7 @@ export function createReviewer({
       try {
         if (event === 'save') await store.putAnnotation(data);
         else if (event === 'reading') await store.putReading(data);
-        else if (event === 'page') await store.putPage({ url: data.url, audienceIDs: data.audienceIDs ?? null, suggestion: data.suggestion ?? null, state: data.state, from: data.from ?? null });
+        else if (event === 'page') await store.putPage({ url: data.url, audienceIDs: data.audienceIDs ?? null, suggestion: data.suggestion ?? null, state: data.state, from: data.from ?? null, kind: data.kind ?? null });
         else if (event === 'delete') await store.deleteAnnotation(data.page, data.id);
         else if (event === 'chat' && data.messages.length) {
           await store.putConversation({
@@ -467,14 +502,14 @@ export function createReviewer({
             send.answer('audience.refused', { message: `An audience named “${name}” exists already.` });
             return;
           }
-          const audience = { ...before, ...data.fields, name };
+          const audience = edited({ ...before, ...data.fields, name });
           await store.putAudience(audience);
           ids[audience.name] = audience.id;
         } else if (data.action === 'define') {
           const before = byName(data.name);
           const audience = { ...(before || { id: nextID('u'), source: 'model' }), name: before?.name || data.name, description: data.description };
           for (const field of ['knows', 'wants', 'tasks', 'objections']) if (data[field]) audience[field] = data[field];
-          await store.putAudience(audience);
+          await store.putAudience(edited(audience));
           ids[data.name] = audience.id;
           if (data.use && !activeIDs().includes(audience.id)) setPageAudiences([...activeIDs(), audience.id]);
         } else {
@@ -498,7 +533,6 @@ export function createReviewer({
   const savedSettings = () => ({
     model: settings.model, thinking: settings.thinking, length: settings.length, tools: settings.tools,
     audienceIDs: settings.audienceIDs, ...(settings.voice ? { voice: settings.voice } : {}),
-    ...(settings.starters ? { starters: settings.starters } : {}),
   });
   // The open page's active audiences: its own set, else the last set used.
   function activeIDs() {
@@ -521,6 +555,18 @@ export function createReviewer({
   function setPageAudiences(ids) {
     settings.audienceIDs = [...ids];
     try { audiencesActor().send('set', { audienceIDs: [...ids] }); } catch { /* no page open */ }
+  }
+
+  // What the open page's kind requires, its main audience, and that the kind wins.
+  function kindLines() {
+    const { kind } = purposeOf(current.url);
+    const main = audiences.find((a) => a.id === linkedIDs(current.url)[0]);
+    if (!kind && !main) return [];
+    return [
+      kind ? `The page is a ${kind}: ${KIND_RULES[kind]}.` : '',
+      main ? `Its main audience: ${main.name}.` : '',
+      kind ? KIND_WINS : '',
+    ].filter(Boolean);
   }
 
   async function askModel(event, data) {
@@ -550,6 +596,7 @@ export function createReviewer({
       ...RULES,
       ...AUDIENCE_RULES,
       active.length ? 'Say in each rewrite\'s rationale which need of which active audience it serves, by the audience\'s name.' : '',
+      ...kindLines(),
       '',
     ];
     let messages = data.messages || [];
@@ -739,7 +786,17 @@ export function createReviewer({
     if (!audience) throw new Error('That audience was deleted.');
     let context = { headings: [], text: '' };
     try { context = (await page.context()) || context; } catch { /* no context */ }
-    const items = checklist(audience);
+    const purpose = purposeOf(url);
+    // each item a section (or the page) claims to answer, with where
+    const items = checklist(audience).map((x) => {
+      if (!x.needID) return x;
+      const claimed = [
+        ...(purpose.answers.includes(x.needID) ? ['the page'] : []),
+        ...purpose.sections.filter((c) => c.answers.includes(x.needID)).map((c) => c.anchor),
+      ];
+      return claimed.length ? { ...x, claimed } : x;
+    });
+    const claims = items.map((x, i) => [x, i]).filter(([x]) => x.claimed);
     const label = Object.fromEntries(CHECKLIST_FIELDS);
     const system = [
       'The voice (how to write):',
@@ -749,13 +806,21 @@ export function createReviewer({
       `The reader:\n${describe(audience)}`,
       '',
       `Page: ${url}${current.title ? ` (${current.title})` : ''}`,
+      purpose.kind ? `The page is a ${purpose.kind}: ${KIND_RULES[purpose.kind]}.` : '',
       context.headings?.length ? `Headings:\n${context.headings.map((h) => `- ${h}`).join('\n')}` : '',
       `Visible text:\n"""\n${String(context.text || '').slice(0, 20000)}\n"""`,
       '',
       ...READING_RULES,
+      ...(purpose.kind ? [KIND_READING] : []),
       ...RULES,
       '',
-      items.length ? `The checklist:\n${items.map((x, i) => `${i + 1}. [${label[x.field]}] ${x.text}`).join('\n')}` : 'The reader has no checklist: report findings only.',
+      items.length ? `The checklist:\n${items.map((x, i) => `${i + 1}. [${label[x.field]}] ${x.text}${x.needID ? ` (${x.needID})` : ''}`).join('\n')}` : 'The reader has no checklist: report findings only.',
+      ...(claims.length ? [
+        '',
+        'What the page claims to answer (its sections say so); the claims are the writer\'s, not facts:',
+        ...claims.map(([x, i]) => `- ${i + 1}. ${x.text}: claimed by ${x.claimed.map((c) => (c === 'the page' ? 'the page as a whole' : `the section “${c}”`)).join(', ')}`),
+        ...CLAIM_RULES,
+      ] : []),
     ].filter((l) => l !== null).join('\n');
     const started = Date.now();
     const result = await generate({
@@ -785,7 +850,12 @@ export function createReviewer({
     const checked = [];
     for (const c of coverage) {
       const anchor = c.status !== 'missing' ? await place(c.answer_text) : null;
-      checked.push({ field: c.field, text: c.text, status: c.status, explanation: c.explanation, ...(anchor ? { anchor } : {}) });
+      const item = items[checked.length];
+      checked.push({
+        field: c.field, text: c.text, status: c.status, explanation: c.explanation, ...(anchor ? { anchor } : {}),
+        ...(item.id ? { id: item.id } : {}), ...(item.needID ? { needID: item.needID } : {}), ...(c.kind ? { kind: c.kind } : {}),
+        ...(item.claimed ? { claimed: item.claimed } : {}),
+      });
     }
     return {
       items: checked, findings: placed, ...(result.thoughts ? { thoughts: result.thoughts } : {}),
@@ -840,6 +910,83 @@ export function createReviewer({
     try { host.actor(record.name).send('retry'); } catch { /* ended: the next read spawns one */ readings.delete(key(record.page, record.audienceID)); }
   }
 
+  // ---- what pages say they are for --------------------------------------
+
+  // A page's purpose: what it declared when it was opened this session, else
+  // the kind its stored record kept; nothing declared: {kind: null, ...}.
+  function purposeOf(url) {
+    const p = purposes.get(url);
+    if (p) return p;
+    const kind = pageRecords.get(url)?.kind;
+    return { kind: PAGE_KINDS.includes(kind) ? kind : null, audiences: [], answers: [], sections: [] };
+  }
+  const linkedIDs = (url) => (linked.get(url) || []).filter((id) => audiences.some((a) => a.id === id));
+
+  // The site audiences a page links, in the store: each file not there yet
+  // is added (source 'site', its url, its needs as items with their ids, a
+  // hash of its text); a file that changed updates the stored copy unless
+  // the reviewer edited it, which keeps the edit and is marked diverged. A
+  // starting audience of the same name (the copywriter's own, before pages
+  // linked theirs) is replaced, and the sets that named it name the site's.
+  // A file that cannot be fetched or read keeps the stored copy, if any.
+  // → the ids, in the links' order.
+  async function siteAudiences(urls) {
+    const fetched = await Promise.all(urls.map(async (url) => {
+      try {
+        const text = await fetchText(url);
+        return { url, text, parsed: parseAudience(text), hash: (await sha256(text)).slice(0, 16) };
+      } catch (e) {
+        console.warn(`copywriter: the audience file ${url} could not be read: ${e.message || e}`);
+        return { url };
+      }
+    }));
+    const stored = await store.audiences();
+    const ids = [];
+    let changed = false;
+    for (const f of fetched) {
+      const before = stored.find((a) => a.source === 'site' && a.url === f.url);
+      if (!f.parsed) { if (before) ids.push(before.id); continue; }
+      if (before && before.hash === f.hash) { ids.push(before.id); continue; }
+      const site = { name: f.parsed.name, description: f.parsed.description, knows: f.parsed.knows, items: f.parsed.items };
+      let record;
+      if (!before) {
+        let id = `site-${f.parsed.id}`;
+        for (let n = 2; stored.some((a) => a.id === id); n++) id = `site-${f.parsed.id}-${n}`;
+        record = { id, source: 'site', url: f.url, siteID: f.parsed.id, hash: f.hash, site, ...fieldsOf(site), items: site.items, diverged: false };
+        const starter = stored.find((a) => a.source === 'starter' && a.name.trim().toLowerCase() === site.name.trim().toLowerCase());
+        if (starter) { await replaceAudience(starter.id, id); stored.splice(stored.indexOf(starter), 1); }
+      } else if (!before.diverged) {
+        const kept = Object.fromEntries(Object.entries(before).filter(([k]) => !SITE_FIELDS.includes(k)));
+        record = { ...kept, siteID: f.parsed.id, hash: f.hash, site, ...fieldsOf(site), items: site.items, diverged: false };
+      } else {
+        record = edited({ ...before, siteID: f.parsed.id, hash: f.hash, site });
+      }
+      await store.putAudience(record);
+      if (before) stored[stored.indexOf(before)] = record;
+      else stored.push(record);
+      ids.push(record.id);
+      changed = true;
+    }
+    if (changed) audiences = (await store.audiences()).sort((a, b) => a.name.localeCompare(b.name));
+    return ids;
+  }
+
+  // A starting audience replaced by the site's: deleted, and every set that
+  // named it (the last set used, each page's) names the new one.
+  async function replaceAudience(from, to) {
+    await store.deleteAudience(from);
+    const swap = (list) => (list ? [...new Set(list.map((id) => (id === from ? to : id)))] : list);
+    if (settings.audienceIDs?.includes(from)) {
+      settings.audienceIDs = swap(settings.audienceIDs);
+      await store.putSettings(savedSettings());
+    }
+    for (const r of pageRecords.values()) {
+      if (!r.audienceIDs?.includes(from)) continue;
+      r.audienceIDs = swap(r.audienceIDs);
+      await store.putPage(r);
+    }
+  }
+
   // ---- booting and pages -----------------------------------------------
 
   async function loadSettings() {
@@ -847,13 +994,7 @@ export function createReviewer({
     settings = { model: DEFAULT_MODEL, thinking: DEFAULT_THINKING, length: DEFAULT_LENGTH, audienceIDs: [], ...stored, tools: { ...DEFAULT_TOOLS, ...stored.tools } };
     if (!LENGTHS[settings.length]) settings.length = DEFAULT_LENGTH;
     if (!THINKING_LEVELS.includes(settings.thinking)) settings.thinking = DEFAULT_THINKING;
-    // The starting audiences go in once: deleted later, they stay deleted.
-    if (!settings.starters) {
-      const have = new Set((await store.audiences()).map((a) => a.id));
-      for (const a of starterAudiences) if (!have.has(a.id)) await store.putAudience({ ...a, source: 'starter' });
-      settings.starters = 1;
-      await store.putSettings(savedSettings());
-    }
+    delete settings.starters; // the starting audiences are gone: the site's files replace them
     audiences = (await store.audiences()).sort((a, b) => a.name.localeCompare(b.name));
     settings.audienceIDs = (settings.audienceIDs || []).filter((id) => audiences.some((a) => a.id === id));
     hasKey = Boolean(await credentials.get());
@@ -904,6 +1045,17 @@ export function createReviewer({
     activeID = null;
     current = { url: info.url || '', title: info.title || '', lang: info.lang || 'en' };
     pages[current.url] = { title: current.title, lang: current.lang };
+    // what the page says it is for, and the site audiences it links, in the store first
+    let declared = null;
+    try { declared = (await page.purpose?.()) || null; } catch { /* the page declares nothing */ }
+    const purpose = {
+      kind: PAGE_KINDS.includes(declared?.kind) ? declared.kind : null,
+      audiences: (declared?.audiences || []).map(String),
+      answers: (declared?.answers || []).map(String),
+      sections: (declared?.sections || []).map((x) => ({ anchor: String(x.anchor || ''), ...(x.selector ? { selector: x.selector } : {}), ...(PAGE_KINDS.includes(x.kind) ? { kind: x.kind } : {}), answers: (x.answers || []).map(String) })),
+    };
+    purposes.set(current.url, purpose);
+    linked.set(current.url, purpose.audiences.length ? await siteAudiences(purpose.audiences) : []);
     conversations = new Map((await store.conversations(current.url)).map((c) => [c.id, {
       id: c.id, audienceID: c.audienceID ?? null, messages: c.messages, updatedAt: c.updatedAt,
     }]));
@@ -917,10 +1069,15 @@ export function createReviewer({
       host.spawn('reading', { name: record.name, params: record });
     }
     // the page's audiences: its own set, or a suggestion asked once with a key
+    // a page that links its audiences takes them as its set, and is never asked
     const own = pageRecords.get(current.url) || { url: current.url, audienceIDs: null, suggestion: null, state: 'new' };
+    const links = linkedIDs(current.url);
     host.spawn('audiences', {
       name: `audiences ${current.url}`,
-      params: { ...own, url: current.url, canSuggest: hasKey && audiences.length > 0 },
+      params: {
+        ...own, url: current.url, kind: purpose.kind, linked: links.length ? links : null,
+        canSuggest: hasKey && audiences.length > 0 && !links.length,
+      },
     });
     startConversation(newest?.id ?? nextID('c'));
     publish();
@@ -1177,7 +1334,9 @@ export function createReviewer({
         const before = audiences.find((a) => a.id === audience.id);
         const saved = { id: audience.id || nextID('u'), name, description: String(audience.description || ''), ...(before?.source ? { source: before.source } : {}) };
         for (const field of ['knows', 'wants', 'tasks', 'objections']) if (String(audience[field] || '').trim()) saved[field] = String(audience[field]).trim();
-        await store.putAudience(saved);
+        // a site audience keeps its file's copy: the edit is the reviewer's, and diverges from it
+        if (before?.source === 'site') Object.assign(saved, { url: before.url, siteID: before.siteID, hash: before.hash, site: before.site });
+        await store.putAudience(edited(saved));
       }
       if (id !== undefined) settings.model = String(id);
       if (thinking !== undefined) settings.thinking = thinking;
@@ -1195,7 +1354,7 @@ export function createReviewer({
       await loadSettings();
       if (listed?.models.length) models = listed.models;
       // a key for the first time: the open page may ask which audiences read it
-      if (!hadKey && hasKey && audiences.length) { try { audiencesActor().send('key'); } catch { /* none */ } }
+      if (!hadKey && hasKey && audiences.length && !linkedIDs(current.url).length) { try { audiencesActor().send('key'); } catch { /* none */ } }
       await host.idle();
       publish();
     },
@@ -1246,14 +1405,18 @@ export function createReviewer({
         const nameOf = (id) => audiences.find((a) => a.id === id)?.name;
         const forPages = Object.fromEntries(Object.entries(pages).map(([url, p]) => [url, {
           ...p, audiences: (pageRecords.get(url)?.audienceIDs || []).map(nameOf).filter(Boolean),
+          ...(purposeOf(url).kind ? { kind: purposeOf(url).kind } : {}),
         }]));
+        // the site audiences the reviewer edited: a task to update each in the site's sources
+        const diverged = audiences.filter((a) => a.source === 'site' && a.diverged)
+          .map((a) => ({ siteID: a.siteID, url: a.url, name: a.name, differences: differences(a) }));
         const written = annotations.map((r) => {
           const kept = (r.suggestions || []).find((x) => x.id === r.chosenID);
           if (!kept || kept.audienceID === undefined) return r;
           return { ...r, audiences: kept.audienceID ? [nameOf(kept.audienceID)].filter(Boolean) : r.audiences };
         });
         const packet = await exportPacket({
-          annotations: written, pages: forPages, gaps,
+          annotations: written, pages: forPages, gaps, audiences: diverged,
           title: scope === 'all' ? 'Copy review' : `Copy review of ${current.title || current.url}`,
           at: date.toISOString(),
         });

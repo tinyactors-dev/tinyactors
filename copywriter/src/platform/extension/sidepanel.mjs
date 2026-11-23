@@ -96,6 +96,7 @@ function createTabPage() {
       return { url: tab?.url || '', title: tab?.title || '', lang: 'en' };
     },
     context: async () => (await call('context')) || { headings: [], text: '' },
+    purpose: () => call('purpose'),
     selection: () => call('selection'),
     onSelection: (fn) => selectionListeners.add(fn),
     locate: async (anchor) => Boolean(await call('locate', anchor)),
