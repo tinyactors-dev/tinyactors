@@ -25,6 +25,8 @@
   clears it.
 
     model  suggest  {url}          → model.audiences {audienceIDs} | model.error {message}
+                                     (sent to this actor by name when the answer comes,
+                                     so opening the page does not wait for it)
     store  page     its record, after every change
     ui     page     its record, after every change
 

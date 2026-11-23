@@ -20,6 +20,13 @@ const suggest = (...names) => geminiReply('', [['page_audiences', { names }]]);
 const system = (request) => request.body.systemInstruction.parts[0].text;
 const functions = (request) => (request.body.tools || []).flatMap((t) => (t.functionDeclarations || []).map((f) => f.name));
 
+// Until the open page's suggestion is answered (it does not hold the page's opening).
+async function settled(reviewer) {
+  await reviewer.dispatch({ type: 'deselect' });
+  for (let i = 0; i < 400 && reviewer.getState().page.audienceSuggestion?.state === 'asking'; i++) await new Promise((r) => setTimeout(r, 5));
+  await new Promise((r) => setTimeout(r, 10));
+}
+
 // A store that has the two audiences already, so the first page opened can be asked about.
 async function seeded() {
   const store = createMemoryStore();
@@ -33,7 +40,7 @@ test('a page with no set is asked once which audiences read it: a suggestion, no
   const store = await seeded();
   const fetch = fakeFetch(suggest('Tech lead', 'Nobody we know'));
   const { reviewer } = await setup({ store, fetch, text: TEXT });
-  await reviewer.dispatch({ type: 'deselect' });  // waits for the page to open
+  await settled(reviewer);
   assert.equal(fetch.requests.length, 1, 'asked at the open');
   const request = fetch.requests[0];
   assert.deepEqual(functions(request), ['page_audiences']);
@@ -58,7 +65,7 @@ test('a page with no set is asked once which audiences read it: a suggestion, no
   // opened again: its set, and nothing asked
   const again = fakeFetch();
   const second = await setup({ store, fetch: again, text: TEXT });
-  await second.reviewer.dispatch({ type: 'deselect' });
+  await settled(second.reviewer);
   assert.deepEqual(second.reviewer.getState().settings.audienceIDs, ['lead']);
   assert.equal(again.requests.length, 0);
   second.reviewer.close();
@@ -68,21 +75,22 @@ test('each page has its own set; a page with none writes for the last set used',
   const store = await seeded();
   const fetch = fakeFetch(suggest(), suggest());  // home and about: none suggested
   const { reviewer, page } = await setup({ store, fetch, text: TEXT });
+  await settled(reviewer);
   await reviewer.dispatch({ type: 'settings.save', audienceIDs: ['lead'] });
   assert.deepEqual(reviewer.getState().settings.audienceIDs, ['lead']);
 
   page.navigate({ url: ABOUT, title: 'About' });
-  await reviewer.dispatch({ type: 'deselect' });
+  await settled(reviewer);
   assert.equal(reviewer.getState().page.url, ABOUT);
   assert.deepEqual(reviewer.getState().settings.audienceIDs, ['lead'], 'no set of its own: the last used');
   assert.equal(reviewer.getState().page.audienceSuggestion, null, 'the model named none');
   await reviewer.dispatch({ type: 'settings.save', audienceIDs: ['dev', 'lead'] });
 
   page.navigate({ url: HOME, title: 'tinyactors' });
-  await reviewer.dispatch({ type: 'deselect' });
+  await settled(reviewer);
   assert.deepEqual(reviewer.getState().settings.audienceIDs, ['lead'], 'home keeps its own');
   page.navigate({ url: ABOUT, title: 'About' });
-  await reviewer.dispatch({ type: 'deselect' });
+  await settled(reviewer);
   assert.deepEqual(reviewer.getState().settings.audienceIDs, ['dev', 'lead']);
   assert.equal(fetch.requests.length, 2, 'each page asked once');
 
@@ -97,11 +105,12 @@ test('a dismissed suggestion keeps the set in use as the page\'s own; a page ope
   await store.putSettings({ starters: 1, audienceIDs: ['dev'] });
   const fetch = fakeFetch({ models: [{ name: 'models/gemini-4-hydrogen', supportedGenerationMethods: ['generateContent'] }] }, suggest('Tech lead', 'Workflow developer'));
   const { reviewer } = await setup({ store, fetch, key: null, text: TEXT });
-  await reviewer.dispatch({ type: 'deselect' });
+  await settled(reviewer);
   assert.equal(fetch.requests.length, 0, 'no key: nothing asked');
   assert.equal(reviewer.getState().page.audienceSuggestion, null);
 
   await reviewer.dispatch({ type: 'settings.save', apiKey: 'AIza-new-key-456' });
+  await settled(reviewer);
   assert.equal(fetch.requests.length, 2, 'the key checked, then the page asked');
   assert.deepEqual(reviewer.getState().page.audienceSuggestion, { state: 'ready', audienceIDs: ['lead', 'dev'] });
   assert.deepEqual(reviewer.getState().settings.audienceIDs, ['dev']);
@@ -112,10 +121,27 @@ test('a dismissed suggestion keeps the set in use as the page\'s own; a page ope
   reviewer.close();
 });
 
+test('opening a page does not wait for its suggestion', async () => {
+  const store = await seeded();
+  let release;
+  const held = new Promise((r) => { release = r; });
+  const fetch = fakeFetch(async () => { await held; return suggest('Tech lead'); });
+  const { reviewer, page } = await setup({ store, fetch, text: TEXT });
+  await reviewer.dispatch({ type: 'deselect' });
+  assert.equal(reviewer.getState().page.audienceSuggestion.state, 'asking');
+  page.select('Licensed under MIT.');
+  const id = await reviewer.dispatch({ type: 'annotate' });
+  assert.ok(find(reviewer, id), 'an annotation while the model is asked');
+  release();
+  await settled(reviewer);
+  assert.deepEqual(reviewer.getState().page.audienceSuggestion, { state: 'ready', audienceIDs: ['lead'] });
+  reviewer.close();
+});
+
 test('the reviewer adjusts a suggestion by choosing the set: the suggestion goes', async () => {
   const store = await seeded();
   const { reviewer } = await setup({ store, fetch: fakeFetch(suggest('Tech lead')), text: TEXT });
-  await reviewer.dispatch({ type: 'deselect' });
+  await settled(reviewer);
   assert.equal(reviewer.getState().page.audienceSuggestion.state, 'ready');
   await reviewer.dispatch({ type: 'settings.save', audienceIDs: ['lead', 'dev'] });
   assert.equal(reviewer.getState().page.audienceSuggestion, null);
@@ -127,6 +153,7 @@ test('use_audiences in the page chat sets the open page\'s set; the export says 
   const store = await seeded();
   const fetch = fakeFetch(suggest(), geminiReply('Writing for the tech lead.', [['use_audiences', { names: ['Tech lead'] }]]));
   const { reviewer, page, clipboard } = await setup({ store, fetch, text: TEXT });
+  await settled(reviewer);
   await reviewer.dispatch({ type: 'chat', text: 'Write for the tech lead.' });
   assert.deepEqual(reviewer.getState().settings.audienceIDs, ['lead']);
   assert.deepEqual((await store.pages()).find((p) => p.url === HOME).audienceIDs, ['lead']);
@@ -148,6 +175,7 @@ test('rewrites side by side: with several audiences active, one rewrite per audi
     ['propose_rewrite', { replacement: 'MIT: use it in your tests freely.', rationale: 'The developer tests.', audience: 'workflow developer' }],
   ]));
   const { reviewer, page, clipboard } = await setup({ store, fetch, text: TEXT });
+  await settled(reviewer);
   await reviewer.dispatch({ type: 'settings.save', audienceIDs: ['lead', 'dev'] });
   page.select('Licensed under MIT.');
   const id = await reviewer.dispatch({ type: 'annotate' });
@@ -184,6 +212,7 @@ test('one active audience, or a finding, keeps one rewrite at a time: no audienc
   const store = await seeded();
   const fetch = fakeFetch(suggest(), geminiReply('Shorter.', [['propose_rewrite', { replacement: 'MIT licensed.', rationale: 'Short.' }]]));
   const { reviewer, page } = await setup({ store, fetch, text: TEXT });
+  await settled(reviewer);
   await reviewer.dispatch({ type: 'settings.save', audienceIDs: ['lead'] });
   page.select('Licensed under MIT.');
   const id = await reviewer.dispatch({ type: 'annotate', note: 'Shorter' });
@@ -199,6 +228,7 @@ test('a note that asks at once, with two audiences active, asks per audience', a
     ['propose_rewrite', { replacement: 'B', rationale: 'b', audience: 'Workflow developer' }],
   ]));
   const { reviewer, page } = await setup({ store, fetch, text: TEXT });
+  await settled(reviewer);
   await reviewer.dispatch({ type: 'settings.save', audienceIDs: ['lead', 'dev'] });
   page.select('Install it with npm.');
   const id = await reviewer.dispatch({ type: 'annotate', note: 'Say the command' });
@@ -217,9 +247,10 @@ test('readings think at medium unless the reviewer picked low', () => {
 test('the store\'s pages survive a new reviewer and are listed for every page', async () => {
   const store = await seeded();
   const { reviewer, page } = await setup({ store, fetch: fakeFetch(suggest(), suggest()), page: fakePage({ text: TEXT }) });
+  await settled(reviewer);
   await reviewer.dispatch({ type: 'settings.save', audienceIDs: ['dev'] });
   page.navigate({ url: ABOUT });
-  await reviewer.dispatch({ type: 'deselect' });
+  await settled(reviewer);
   reviewer.close();
   const pages = await store.pages();
   assert.deepEqual(pages.map((p) => [p.url, p.audienceIDs, p.state]).sort(), [[HOME, ['dev'], 'set'], [ABOUT, null, 'unset']]);

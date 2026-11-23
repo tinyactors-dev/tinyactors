@@ -410,6 +410,13 @@ export function createReviewer({
   const model = {
     async receive(send) {
       const { event, data } = send;
+      if (event === 'suggest') {
+        // A suggestion is answered by name, later: the page opens (and its
+        // commands run) without waiting for it.
+        const tell = (name, value) => { try { if (!closed) host.actor(`audiences ${data.url}`).send(name, value); } catch { /* the page was left */ } };
+        suggestAudiences(data).then((r) => tell('model.audiences', r), (e) => tell('model.error', { message: e.message || String(e) }));
+        return;
+      }
       // an answer that comes after close() has no host to go to
       const answer = send.answer.bind(send);
       send = { answer: (...args) => (closed ? false : answer(...args)) };
@@ -423,8 +430,6 @@ export function createReviewer({
           send.answer('model.reading', await readPage(data));
         } else if (event === 'talk') {
           send.answer('model.reply', await talkAsReader(data));
-        } else if (event === 'suggest') {
-          send.answer('model.audiences', await suggestAudiences(data));
         } else {
           send.answer('model.reply', await askModel(event, data));
         }

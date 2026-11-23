@@ -145,7 +145,12 @@ one-off Python.
   `page_audiences {names}` forced (`functionCallingConfig` `ANY`;
   `SUGGEST_RULES`). Its answer is a suggestion (`page.audienceSuggestion`),
   never applied by itself: accepted, adjusted (choosing a set) or
-  dismissed (the set in use becomes the page's). The export says which
+  dismissed (the set in use becomes the page's). The `model` processor
+  answers it by name when it comes (`model.audiences` to the page's
+  actor), so opening a page never waits for it. Checked on 2026-11-23
+  (Gemini 4 Hydrogen, the three starting audiences): the home page got
+  all three, /about/ none, /guides/testing/ the workflow developer, each
+  in 1 to 2 s. The export says which
   audiences each page is for ("For:" under its heading in `CHANGES.md`).
 - **Rewrites side by side** (the maintainer, 2026-11-23). With two or
   more audiences active, an annotation's rewrites (a message, Suggest, a
@@ -169,7 +174,12 @@ one-off Python.
   thinking): 40 to 85 s a reading, 7 or 8 findings each, every anchored
   one on the page (5 to 7 placed), a coverage call for every item. The
   `replacement` parameter is required and empty when nothing on the page
-  helps: optional, Gemini left it out of every finding. A **finding** is where
+  helps: optional, Gemini left it out of every finding. A reading thinks
+  at `medium` unless the reviewer picked `low` (`readingThinking`; their
+  level stays for rewrites and chat): the same eval on 2026-11-23 took 67
+  to 119 s a reading at high and 33 to 42 s at medium, both 8 findings
+  each (6 or 7 placed), 0 problems, 4 and 5 rewrites, and as many checklist
+  items answered or more (3, 3, 4 at medium against 3, 0, 4). A **finding** is where
   the reader gets stuck: `objection` (raised or left unanswered),
   `task` (no next step), `doubt` (a claim without proof or source),
   `jargon` (a word they would not know), `missing` (something they want

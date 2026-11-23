@@ -113,7 +113,7 @@ export function fakeFetch(...answers) {
     requests.push({ url: String(url), headers: init.headers || {}, body: init.body ? JSON.parse(init.body) : undefined });
     if (queue.length === 0) throw new Error(`fakeFetch: no answer left for ${url}`);
     let answer = queue.shift();
-    if (typeof answer === 'function') answer = answer(String(url));
+    if (typeof answer === 'function') answer = await answer(String(url));
     const { status = 200, body } = answer && answer.status ? answer : { body: answer };
     return new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
   };
