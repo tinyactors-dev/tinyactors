@@ -1410,7 +1410,8 @@ export function mountPanel(root, reviewer, { layout = 'sidebar', onTall = null }
     for (const a of site.audiences ?? []) {
       if (!a.needs.length) continue;
       const who = audienceOf(a.id) ?? { name: a.name };
-      const cols = a.pages.map(pageByURL).filter(Boolean);
+      // the pages read first, so what is known sits together; each group in the site map's order
+      const cols = a.pages.map(pageByURL).filter(Boolean).sort((x, y) => Number(y.read) - Number(x.read));
       const table = h('table', { class: 'cw-grid', 'aria-label': a.name });
       table.append(h('thead', null, h('tr', null,
         h('th', { class: 'cw-grid-corner', scope: 'col' }, h('span', { class: 'cw-cover', title: `${a.answered} of ${a.needs.length} needs answered on some page` }, `${a.answered}/${a.needs.length}`)),
@@ -1432,7 +1433,7 @@ export function mountPanel(root, reviewer, { layout = 'sidebar', onTall = null }
         const elsewhere = [...n.routes.filter((r) => r.url === 'new' || !a.pages.includes(r.url)), ...n.newPages.map((x) => ({ url: 'new', title: x.title, page: true }))];
         rows.append(h('tr', { 'data-need': n.id, class: open ? 'is-open' : '' },
           h('th', { scope: 'row', class: 'cw-grid-need', title: `${n.id}\n${n.text}` }, shortNeed(n.id)),
-          n.cells.map((c) => {
+          cols.map((col0) => n.cells.find((c) => c.url === col0.url)).filter(Boolean).map((c) => {
             const col = pageByURL(c.url);
             const st = c.status ? COVER[c.status] : null;
             const route = routed.has(c.url) && c.status !== 'answered';

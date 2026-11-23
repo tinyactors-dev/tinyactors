@@ -917,7 +917,8 @@ test('the site view: every need of the site\'s audiences against its pages; a ce
   const grid = panel.locator('.cw-grid-block[data-audience=lead]');
   await grid.waitFor();
   assert.equal(await grid.locator('.cw-grid-col').count(), 5, 'the pages the site map gives the tech lead');
-  assert.equal(await grid.locator('.cw-grid-col').first().getAttribute('aria-label'), 'Performance', 'its main pages first');
+  assert.deepEqual(await grid.locator('.cw-grid-col').evaluateAll((all) => all.map((n) => n.getAttribute('aria-label'))),
+    ['Why tinyactors exists', 'Snapshots', 'tinyactors: like SQLite, but for actors', 'Performance', 'Testing charts'], 'the pages read first, each group main pages first');
   const rows = grid.locator('tbody tr[data-need]');
   assert.equal(await rows.count(), 7);
   assert.equal(await rows.first().locator('.cw-grid-need').textContent(), 'when-to-use', 'the need by its id, its words in the tooltip');

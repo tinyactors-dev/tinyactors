@@ -526,7 +526,8 @@ copywriter/
                           sheet). Its head says how many pages were read (while reading: a spinner, done/total and the
                           seconds; a failure a warning glyph with a count, the pages in its tooltip), then "Read the
                           site", or "Read N" once columns are ticked, and a stop while it reads. Per audience its avatar
-                          and name, then a small grid: answered/needs in the corner, its pages as columns (labels set
+                          and name, then a small grid: answered/needs in the corner, its pages as columns (those read first;
+                          labels set
                           vertically, the home page a house, this page bold, a page never read dimmed; a tap ticks it to
                           read; one being read pulses), one row per need (its id without the audience, its words in
                           the tooltip; the column stays as the grid scrolls sideways); a cell is the checklist glyph
