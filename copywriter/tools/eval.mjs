@@ -2,7 +2,9 @@
 // it, over a fake page holding the live home page's text. For each case it
 // annotates a sentence with a note, waits for the model's rewrites, and
 // checks them against the website's voice (website/AGENTS.md): length,
-// no period on a heading, no hype words, the original's facts kept.
+// no period on a heading, sentence case, no hype words, no serial comma,
+// and nothing the page does not say (a heuristic: a number, or a word
+// that claims a capability, such as "test" or "trace", the page lacks).
 //
 //   mise run eval [-- --model gemini-4-hydrogen]   (GEMINI_API_KEY through fnox)
 
@@ -17,6 +19,14 @@ if (!key) { console.error('eval: GEMINI_API_KEY is not set (run through fnox)');
 
 const markdown = await (await fetch('https://www.tinyactors.dev/index.md')).text();
 const text = markdown.replace(/[#*`>_\[\]]/g, ' ').replace(/\(https?:[^)]*\)/g, ' ').replace(/[ \t]+/g, ' ');
+
+// Words that claim a capability: a rewrite that brings one the page does not use adds a claim.
+const CLAIMS = ['test', 'tests', 'tested', 'testing', 'testable', 'simulate', 'simulates', 'simulation', 'trace', 'traces', 'tracing',
+  'verify', 'verifies', 'verified', 'prove', 'proves', 'guarantee', 'guarantees', 'debug', 'debugs', 'replay', 'replays', 'scale', 'scales'];
+const pageWords = new Set(text.toLowerCase().match(/[a-z]+/g));
+const pageNumbers = new Set(text.match(/\d[\d.,]*/g)?.map((n) => n.replace(/[.,]$/, '')));
+// A list's last item after a comma and "and" or "or": the serial comma.
+const SERIAL = /\w[^,.;:]*,[^,.;:]+,\s+(and|or)\s/i;
 
 const HYPE = /\b(seamless|powerful|blazing|revolutionary|effortless|robust|cutting-edge|game-chang|supercharge|unlock|elevate|leverage)\w*/i;
 const cases = [
@@ -58,6 +68,13 @@ for (const c of cases) {
     if (c.kind === 'heading' && /\.$/.test(s.text.trim())) problems.push('heading ends with a period');
     if (HYPE.test(s.text)) problems.push(`hype word "${s.text.match(HYPE)[0]}"`);
     if (s.text.trim() === c.original.trim()) problems.push('unchanged');
+    if (SERIAL.test(s.text)) problems.push('serial comma');
+    const claims = (s.text.toLowerCase().match(/[a-z]+/g) || []).filter((w) => CLAIMS.includes(w) && !pageWords.has(w));
+    if (claims.length) problems.push(`adds a claim: ${[...new Set(claims)].join(', ')}`);
+    const numbers = (s.text.match(/\d[\d.,]*/g) || []).map((n) => n.replace(/[.,]$/, '')).filter((n) => !pageNumbers.has(n));
+    if (numbers.length) problems.push(`a number not on the page: ${numbers.join(', ')}`);
+    const words = s.text.trim().split(/\s+/).slice(1).filter((w) => /^[a-z]/i.test(w));
+    if (c.kind === 'heading' && words.length > 1 && words.filter((w) => /^[A-Z][a-z]/.test(w)).length > words.length / 2) problems.push('title case');
     if (problems.length) failures++;
     console.log(`  ${problems.length ? 'FAIL' : 'ok  '} ${s.text}${problems.length ? `  (${problems.join(', ')})` : ''}\n       ${s.rationale}`);
   }

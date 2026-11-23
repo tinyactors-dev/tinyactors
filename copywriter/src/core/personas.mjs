@@ -16,5 +16,9 @@ The voice: short and literal.
 
 Every sentence says something.
 - A headline states a benefit, a heading its finding, a lede the page's strongest facts (never a list of what is coming), and a sentence before a block what the block shows.
-- Name SCXML and actor terms exactly (state, event, transition, actor, host). The product name is lowercase: tinyactors.`,
+- Name SCXML and actor terms exactly (state, event, transition, actor, host). The product name is lowercase: tinyactors.
+
+Keep to what the page says.
+- Never add a claim, number, name or capability that the original or the page does not state. Keep the original's point.
+- Sentence case everywhere. No serial comma: "states, events and transitions", never "states, events, and transitions".`,
 });
