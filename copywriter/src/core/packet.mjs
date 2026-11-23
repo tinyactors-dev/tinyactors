@@ -23,16 +23,36 @@ function keptText(a) {
 }
 
 /**
- * What a packet holds, from annotation records: the kept changes, and the
- * notes of open annotations (not kept, not dismissed) without a kept
- * replacement. Pages in the order they first appear.
+ * What the reviewer asked of an annotation: the note, else the first
+ * message they wrote, else ''.
+ */
+export function request(a) {
+  return (a.note || '').trim() || ((a.messages || []).find((m) => m.role === 'user' && m.text !== '(voice message)')?.text || '').trim();
+}
+
+// The proposals of an open annotation, the user's own last.
+const proposed = (a) => (a.suggestions || []).filter((s) => s.text);
+
+/**
+ * What a packet holds, from annotation records: the kept changes, and
+ * every open annotation (not kept, not dismissed: a note, a request, the
+ * page chat's proposals) as an open item. Pages in the order they first
+ * appear.
  */
 export function packetItems(annotations) {
   const sorted = [...annotations].sort((a, b) => String(a.createdAt).localeCompare(String(b.createdAt)));
   const changes = sorted.filter((a) => a.state === 'kept' && keptText(a));
-  const notes = sorted.filter((a) => a.state !== 'kept' && a.state !== 'dismissed' && (a.note || '').trim());
+  const notes = sorted.filter((a) => a.state !== 'kept' && a.state !== 'dismissed' && a.state !== 'deleted');
   const pages = [...new Set([...changes, ...notes].map((a) => a.page))];
   return { pages, changes, notes };
+}
+
+// What an open item asks: the request, else the proposals.
+function summary(a) {
+  const asked = request(a);
+  if (asked) return asked;
+  const p = proposed(a);
+  return p.length ? `Consider: ${p.map((s) => `"${s.text}"`).join(' or ')}` : 'Review this text.';
 }
 
 /**
@@ -61,7 +81,7 @@ export async function buildPacket({ annotations, pages = {}, title = 'Copy revie
   }
   for (const a of all) {
     const n = number.get(a);
-    const text = (a.note || '').trim() || 'Rewrite this text.';
+    const text = request(a) || (items.notes.includes(a) ? summary(a) : 'Rewrite this text.');
     sources.push(`<observation id="observation-${n}" authorRef="reviewer" anchorRef="anchor-${n}" source="${escapeAttribute(a.source || 'typed')}" recordedAt="${escapeAttribute(a.createdAt || at)}"><text>${escapeText(text)}</text></observation>`);
   }
   for (const a of items.changes) {
@@ -76,15 +96,15 @@ export async function buildPacket({ annotations, pages = {}, title = 'Copy revie
     entries.push(`<copy-change id="item-${n}" observationRef="observation-${n}" anchorRef="anchor-${n}" revisionRef="revision-${n}" operation="replace_text" accepted="true">`
       + `<expected>${escapeText(a.original)}</expected>`
       + `<replacement>${escapeText(kept.text)}</replacement>`
-      + `<rationale>${escapeText(kept.rationale || a.note || '')}</rationale>`
+      + `<rationale>${escapeText([request(a) && `Asked: ${request(a)}`, kept.rationale].filter(Boolean).join(' ') || '')}</rationale>`
       + `<acceptance>${escapeText(`${a.page} shows the replacement exactly where it showed the expected text, in the same element.`)}</acceptance>`
       + '</copy-change>');
   }
   for (const a of items.notes) {
     const n = number.get(a);
     entries.push(`<design-task id="item-${n}" observationRef="observation-${n}" status="open">`
-      + `<summary>${escapeText(a.note.trim())}</summary>`
-      + `<instructions>${escapeText(`Revise the text "${a.original}" on ${a.page} to address the note.`)}</instructions>`
+      + `<summary>${escapeText(summary(a))}</summary>`
+      + `<instructions>${escapeText(`Revise the text "${a.original}" on ${a.page} to address it${proposed(a).length ? `; proposed: ${proposed(a).map((x) => `"${x.text}"`).join(', ')}` : ''}.`)}</instructions>`
       + `<acceptance>${escapeText('The reviewer agrees the note is addressed.')}</acceptance>`
       + '</design-task>');
   }
@@ -119,8 +139,8 @@ function changesMarkdown(items, pages, at) {
     '   Keep the markup around it; change only the text.',
     '3. If the original is not in the sources (it is generated, or it changed since),',
     '   do not guess: list it in your report.',
-    '4. Open notes have no replacement: revise the text to address the note, or',
-    '   report why not.',
+    '4. Open items were not approved: revise the text to address the request (a',
+    '   proposal may help), or report why not.',
     '5. Build the site and check each page shows the replacement.',
     '',
   ];
@@ -132,13 +152,16 @@ function changesMarkdown(items, pages, at) {
       const kept = keptText(a);
       n += 1;
       lines.push(`### Change ${n}`, '', 'Original:', '', fence(a.original), '', 'Replacement:', '', fence(kept.text), '');
+      if (request(a)) lines.push(`Request: ${request(a)}`, '');
       if (kept.rationale) lines.push(`Why: ${kept.rationale}`, '');
-      if ((a.note || '').trim()) lines.push(`Reviewer's note: ${a.note.trim()}`, '');
       lines.push(...anchorLines(a), '');
     }
     for (const a of items.notes.filter((c) => c.page === url)) {
       n += 1;
-      lines.push(`### Open note ${n}`, '', 'Text:', '', fence(a.original), '', `Note: ${a.note.trim()}`, '', ...anchorLines(a), '');
+      lines.push(`### Open item ${n}`, '', 'Text:', '', fence(a.original), '');
+      if (request(a)) lines.push(`Request: ${request(a)}`, '');
+      for (const p of proposed(a)) lines.push(`Proposed${p.own ? ' (by the reviewer)' : ''}:`, '', fence(p.text), '', ...(p.rationale && !p.own ? [`Why: ${p.rationale}`, ''] : []));
+      lines.push(...anchorLines(a), '');
     }
   }
   return lines.join('\n');
@@ -158,7 +181,7 @@ function readme(items, at) {
   return [
     '# Work packet',
     '',
-    `Exported by the tinyactors copywriter on ${at}: ${items.changes.length} kept change(s) and ${items.notes.length} open note(s) on ${items.pages.length} page(s).`,
+    `Exported by the tinyactors copywriter on ${at}: ${items.changes.length} kept change(s) and ${items.notes.length} open item(s) on ${items.pages.length} page(s).`,
     '',
     '- `CHANGES.md`: the changes as instructions for a coding agent. Start here.',
     '- `packet.xml`: the same, as data, valid against `work-packet.xsd`.',

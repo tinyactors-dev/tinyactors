@@ -21,6 +21,8 @@ STEPS = [
   # node expands the glob itself, so it is passed as one argument.
   ['node tests (charts and core)', -> { %w[node --test test/*.test.mjs] }],
   ['build', -> { %w[mise run build] }],
+  # the panel against the mock reviewer (tools/serve.mjs bundles it)
+  ['panel (Playwright)', -> { %w[node --test test/ui-panel.spec.mjs] }],
   # Chromium drives the unpacked extension and the widget on a fixture page.
   ['extension (Playwright)', -> { %w[node --test test/extension.spec.mjs] }],
   ['widget and site (Playwright)', -> { %w[node --test test/embed.spec.mjs] }],

@@ -69,22 +69,21 @@ test('on a phone: select, open, annotate, ask, preview, keep; a reload applies i
   await launcher.waitFor();
   await page.waitForFunction(() => globalThis.tinyactorsCopywriter?.reviewer.getState().status === 'ready');
 
-  // A selection, then a tap on the launcher; the tap clears the page's
-  // selection, as a phone does, and the widget keeps the last one.
+  // A selection, then a tap on the launcher, which annotates it: the sheet
+  // opens on the new annotation. The tap clears the page's selection, as
+  // a phone does, and the widget keeps the last one.
   await selectText(page, '#lede', ORIGINAL);
   await page.waitForFunction(() => tinyactorsCopywriter.reviewer.getState().selection);
+  assert.equal(await launcher.getAttribute('aria-label'), 'Annotate the selection');
   await launcher.tap();
   await page.evaluate(() => getSelection().removeAllRanges());
   const sheet = page.locator('#tinyactors-copywriter .sheet');
   await sheet.locator('.cw-panel').waitFor();
   const box = await sheet.boundingBox();
   assert.ok(Math.abs(box.height - 844 * 0.85) < 2, `the sheet is 85% of the viewport: ${box.height}`);
-  const banner = sheet.locator('[data-banner=selection]');
-  await banner.waitFor();
-  await page.waitForTimeout(300);  // past the selection's debounce
-  assert.equal(await banner.count(), 1, 'the selection is kept after the tap');
-  await banner.locator('[data-action=annotate]').tap();
   await sheet.locator('[data-view=detail]').waitFor();
+  assert.equal(await sheet.locator('.cw-original').textContent(), ORIGINAL);
+  const banner = sheet.locator('[data-banner=selection]');
   assert.equal(await banner.count(), 0, 'the selection was used');
 
   const composer = sheet.locator('textarea[aria-label=Message]');
@@ -121,6 +120,102 @@ test('on a phone: select, open, annotate, ask, preview, keep; a reload applies i
   await page.mouse.up();
   await page.waitForFunction(() => !document.getElementById('tinyactors-copywriter').hasAttribute('data-open'));
   assert.deepEqual(errors, []);
+  await context.close();
+});
+
+// A phone with the widget on and a key, Gemini routed, the reviewer ready.
+async function phone() {
+  const context = await browser.newContext(PHONE);
+  await context.addInitScript(() => {
+    localStorage.setItem('tinyactors-copywriter', 'on');
+    sessionStorage.setItem('tinyactors-copywriter-key', 'AIza-test-key');
+  });
+  await routeGemini(context);
+  const page = await context.newPage();
+  const errors = [];
+  page.on('pageerror', (e) => errors.push(e.message));
+  await page.goto(`${origin(server)}/page/page.html`);
+  await page.waitForFunction(() => globalThis.tinyactorsCopywriter?.reviewer.getState().status === 'ready');
+  return { context, page, errors, sheet: page.locator('#tinyactors-copywriter .sheet'), launcher: page.locator('#tinyactors-copywriter .launcher') };
+}
+
+const FAR = 'The far paragraph is where a phone\'s sheet would cover a preview.';
+
+test('on a phone, a preview shows above the sheet: lowered to half height, the text scrolled into the rest', async () => {
+  const { context, page, errors, sheet, launcher } = await phone();
+  await launcher.tap();
+  await sheet.locator('.cw-panel').waitFor();
+  // the paragraph sits behind the full sheet
+  await page.evaluate(() => document.querySelector('#far').scrollIntoView({ block: 'end' }));
+  await selectText(page, '#far', FAR);
+  const annotate = sheet.locator('[data-banner=selection] [data-action=annotate]');
+  await annotate.waitFor();
+  await annotate.tap();
+  const composer = sheet.locator('textarea[aria-label=Message]');
+  await composer.fill('Shorter');
+  await composer.press('Enter');
+  const card = sheet.locator('.cw-card', { hasText: REWRITE });
+  await card.waitFor();
+  await card.locator('[data-action=preview]').tap();
+  await page.waitForFunction((text) => document.querySelector('#far').textContent === text, REWRITE);
+  await page.waitForTimeout(1200);  // the sheet's move and the smooth scroll
+  const height = (await sheet.boundingBox()).height;
+  assert.ok(Math.abs(height - 844 * 0.45) < 2, `the sheet went down to half height: ${height}`);
+  const far = await page.locator('#far').boundingBox();
+  assert.ok(far.y >= 0 && far.y + far.height <= 844 - height, `the preview is above the sheet: ${far.y}..${far.y + far.height}, the sheet from ${844 - height}`);
+  const middle = far.y + far.height / 2;
+  assert.ok(Math.abs(middle - (844 - height) / 2) < 60, `near the middle of what shows: ${middle}`);
+  assert.deepEqual(errors, []);
+  await context.close();
+});
+
+test('on a phone, a selection fits one annotation: across blocks or past 600 characters it is refused; a preview empties no other node', async () => {
+  const { context, page, sheet, launcher } = await phone();
+  const fits = () => page.evaluate(() => tinyactorsCopywriter.reviewer.getState().selection?.fits);
+  // across two blocks: the lede into the heading after it
+  await page.evaluate(() => {
+    const range = document.createRange();
+    range.setStart(document.querySelector('#lede').firstChild, 2);
+    range.setEnd(document.querySelector('h2').firstChild, 5);
+    getSelection().removeAllRanges();
+    getSelection().addRange(range);
+  });
+  await page.waitForFunction(() => tinyactorsCopywriter.reviewer.getState().selection?.fits === false);
+  assert.equal(await launcher.getAttribute('aria-label'), 'Open copywriter', 'the launcher offers no annotation');
+  await launcher.tap();
+  const hint = sheet.locator('[data-banner=refused]');
+  await hint.waitFor();
+  assert.match(await hint.textContent(), /Select one sentence, heading or paragraph\./);
+  assert.equal(await sheet.locator('[data-action=annotate]').count(), 0);
+  const refused = await page.evaluate(() => tinyactorsCopywriter.reviewer.dispatch({ type: 'annotate' }).then(() => 'annotated', (e) => e.message));
+  assert.equal(refused, 'Select one sentence, heading or paragraph.');
+
+  // one paragraph of more than 600 characters
+  await page.evaluate(() => getSelection().selectAllChildren(document.querySelector('#long')));
+  await page.waitForFunction(() => tinyactorsCopywriter.reviewer.getState().selection?.text.startsWith('The long paragraph'));
+  assert.equal(await fits(), false);
+
+  // one heading over two Text nodes (its <em>): the first takes the text, the second loses only its selected part
+  await page.evaluate(() => {
+    const h1 = document.querySelector('h1');
+    const range = document.createRange();
+    range.setStart(h1.firstChild, 7);              // "as a "
+    range.setEnd(h1.querySelector('em').firstChild, 3); // "lib"
+    getSelection().removeAllRanges();
+    getSelection().addRange(range);
+  });
+  await page.waitForFunction(() => tinyactorsCopywriter.reviewer.getState().selection?.text === 'as a lib');
+  assert.equal(await fits(), true);
+  const shown = await page.evaluate(async () => {
+    const { reviewer } = tinyactorsCopywriter;
+    const id = await reviewer.dispatch({ type: 'annotate' });
+    await reviewer.dispatch({ type: 'edit', id, text: 'in one ' });
+    const h1 = document.querySelector('h1');
+    const during = [h1.textContent, h1.querySelector('em').textContent, document.querySelector('#lede').textContent];
+    await reviewer.dispatch({ type: 'undo', id });
+    return [...during, h1.textContent];
+  });
+  assert.deepEqual(shown, ['Actors in one rary', 'rary', 'A tiny, embeddable actor runtime for building reliable systems. Get started in minutes.', 'Actors as a library']);
   await context.close();
 });
 

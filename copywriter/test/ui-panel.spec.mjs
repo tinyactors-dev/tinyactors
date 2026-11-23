@@ -34,13 +34,24 @@ async function open(query, options = {}) {
   return { page, panel: page.locator('#panel'), errors };
 }
 
+// Polls `fn` (async, in node) until it is truthy.
+async function until(fn, ms = 6000) {
+  const end = Date.now() + ms;
+  for (;;) {
+    if (await fn()) return;
+    if (Date.now() > end) throw new Error(`not in ${ms} ms: ${fn}`);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+}
+
 const commands = (page) => page.evaluate(() => reviewer.log.map((c) => c.type));
 
 test('the list shows the annotations, filtered', async () => {
   const { page, panel, errors } = await open('');
   assert.equal(await panel.locator('.cw-row').count(), 3, 'open: suggested, previewing, draft');
   const done = panel.locator('[data-action=done]');
-  assert.equal(await done.getAttribute('aria-label'), '1 kept, 0 dismissed');
+  assert.equal(await done.getAttribute('aria-label'), 'Done: 1 kept, 0 dismissed');
+  assert.equal(await done.getAttribute('aria-expanded'), 'false', 'folded while annotations are open');
   await done.click();
   assert.equal(await panel.locator('.cw-row').count(), 4);
   assert.equal(await panel.locator('.cw-heading').textContent(), 'Actors as a library');
@@ -48,7 +59,61 @@ test('the list shows the annotations, filtered', async () => {
   for (const name of ['Page chat', 'Settings', 'Export']) {
     assert.equal(await panel.locator(`header button[aria-label="${name}"]`).count(), 1, `${name} is an icon with a name`);
   }
+  assert.equal(await panel.locator('main, [role=main]').count(), 0, 'the host page keeps its one main landmark');
   assert.deepEqual(errors, []);
+  await page.close();
+});
+
+test('the done annotations unfold by themselves when none is open', async () => {
+  const { page, panel } = await open('');
+  await page.evaluate(() => reviewer.set({ annotations: reviewer.getState().annotations.filter((a) => a.state === 'kept') }));
+  await panel.locator('.cw-row[data-state=kept]').waitFor();
+  assert.equal(await panel.locator('[data-action=done]').getAttribute('aria-expanded'), 'true');
+  await page.close();
+});
+
+test('a selection across blocks: the banner says what fits, offers no Annotate, and goes', async () => {
+  const { page, panel } = await open('');
+  await page.evaluate(() => reviewer.setSelection('Actors as a library. Everything you need', { fits: false }));
+  const hint = panel.locator('[data-banner=refused]');
+  await hint.waitFor();
+  assert.match(await hint.textContent(), /Select one sentence, heading or paragraph\./);
+  assert.equal(await panel.locator('[data-action=annotate]').count(), 0);
+  assert.equal(await panel.locator('textarea[aria-label=Message]').getAttribute('placeholder'), 'Ask about this page');
+  await until(async () => (await hint.evaluate((n) => getComputedStyle(n).visibility)) === 'hidden');
+  await page.close();
+});
+
+test('Annotate from the keyboard: the new annotation\'s composer has the focus', async () => {
+  const { page, panel } = await open('');
+  await page.evaluate(() => reviewer.setSelection('Everything you need to build actor systems'));
+  const annotate = panel.locator('[data-banner=selection] [data-action=annotate]');
+  await annotate.focus();
+  await page.keyboard.press('Enter');
+  await panel.locator('[data-view=detail]').waitFor();
+  const composer = panel.locator('textarea[aria-label=Message]');
+  await until(() => composer.evaluate((node) => node === node.getRootNode().activeElement));
+  assert.equal(await composer.getAttribute('placeholder'), 'Ask for a change');
+  await page.close();
+});
+
+test('the detail reads as a conversation: the quote, the note, each reply with its suggestions after it', async () => {
+  const { page, panel } = await open('');
+  await panel.locator('.cw-row[data-id=a4]').click();
+  const detail = panel.locator('[data-view=detail]');
+  await detail.waitFor();
+  const order = await detail.evaluate((root) => [...root.querySelectorAll('.cw-original, .cw-note, .cw-msg, .cw-card')]
+    .map((n) => n.classList.contains('cw-card') ? 'card' : n.classList.contains('cw-msg--user') ? 'user' : n.classList.contains('cw-msg') ? 'model' : n.classList[0]));
+  assert.deepEqual(order, ['cw-original', 'cw-note', 'user', 'model', 'card', 'card']);
+  const composer = panel.locator('textarea[aria-label=Message]');
+  await composer.fill('Shorter');
+  await composer.press('Enter');
+  await until(async () => (await detail.locator('.cw-card').count()) > 2);
+  const main = panel.locator('.cw-main');
+  await until(() => main.evaluate((m) => m.scrollHeight - m.scrollTop - m.clientHeight < 4));
+  const flow = await detail.evaluate((root) => [...root.querySelectorAll('.cw-msg, .cw-card')].map((n) => n.classList.contains('cw-card') ? 'card' : n.classList.contains('cw-msg--user') ? 'user' : 'model').join(' '));
+  assert.match(flow, /^user model card card user model( card)+$/, 'the newest reply and its cards at the bottom');
+  assert.ok(await main.count());
   await page.close();
 });
 
@@ -134,6 +199,19 @@ test('first run: no key leads to settings; saving one, the model and Escape', as
   assert.equal(await key.getAttribute('type'), 'text');
   assert.equal(await key.inputValue(), 'AIza-test-key', 'the draft survives the rebuild');
   assert.equal(await panel.locator('a[data-action=get-key]').getAttribute('href'), 'https://aistudio.google.com/apikey');
+  // a key Google refuses: said in a toast above the composer, not saved
+  await key.fill('AIza-bad');
+  await panel.locator('[data-action=save-key]').click();
+  const refused = panel.locator('.cw-toast--error', { hasText: 'That key was not accepted by Google.' });
+  await refused.waitFor();
+  assert.equal(await panel.locator('.cw-label .cw-ok').count(), 0, 'not shown as saved');
+  const toastBox = await refused.boundingBox();
+  for (const label of await panel.locator('.cw-label').all()) {
+    const box = await label.boundingBox();
+    assert.ok(toastBox.y >= box.y + box.height || toastBox.y + toastBox.height <= box.y, 'the toast covers no label');
+  }
+  await refused.locator('button').click();
+  await key.fill('AIza-test-key');
   await panel.locator('[data-action=save-key]').click();
   await panel.locator('.cw-label .cw-ok').waitFor();
   assert.equal(await panel.locator('[data-action=save-key]').isHidden(), true, 'Save appears only with a key typed');
@@ -146,7 +224,7 @@ test('first run: no key leads to settings; saving one, the model and Escape', as
   await page.waitForFunction(() => reviewer.getState().settings.models.length === 4);
 
   const log = await page.evaluate(() => reviewer.log);
-  assert.equal(log.find((c) => c.type === 'settings.save' && c.apiKey).apiKey, 'AIza-test-key');
+  assert.equal(log.findLast((c) => c.type === 'settings.save' && c.apiKey).apiKey, 'AIza-test-key');
   await page.keyboard.press('Escape');
   await panel.locator('[data-view=list]').waitFor();
   assert.equal(await panel.locator('[data-action=add-key]').count(), 0);
@@ -173,7 +251,7 @@ test('export: the menu, a download and a refusal', async () => {
   await page.close();
 });
 
-test('page chat: a message, the answer, a proposed annotation', async () => {
+test('page chat: a message, the answer, a link to the annotation it proposed', async () => {
   const { page, panel } = await open('');
   const composer = panel.locator('textarea[aria-label=Message]');
   await composer.fill('What should change?');
@@ -181,9 +259,35 @@ test('page chat: a message, the answer, a proposed annotation', async () => {
   await panel.locator('[data-view=chat] .cw-msg--model .cw-msg-body').waitFor();
   assert.equal(await panel.locator('[data-action=chat]').getAttribute('aria-pressed'), 'true');
   assert.equal(await page.evaluate(() => reviewer.getState().annotations.length), 5);
+  const link = panel.locator('[data-view=chat] .cw-msg--model [data-action=open-annotation]');
+  assert.match(await link.textContent(), /Everything you need to build actor systems.*Spawn, send and supervise actors/);
+  await link.click();
+  await panel.locator('[data-view=detail] .cw-card.is-chosen').waitFor();
+  const log = (await commands(page)).slice(-2);
+  assert.deepEqual(log, ['select', 'preview'], 'it opens and previews the proposal');
+  await page.keyboard.press('Escape');
+  await panel.locator('[data-view=chat]').waitFor();
   await page.keyboard.press('Escape');
   await panel.locator('[data-view=list]').waitFor();
   assert.equal(await panel.locator('.cw-row').count(), 4, 'the proposed rewrite is an open annotation');
+  await page.close();
+});
+
+test('page chat: a reply that only proposed shows the proposals as its links; an error as the annotations\' do', async () => {
+  const { page, panel } = await open('');
+  await page.evaluate(() => {
+    const [a] = reviewer.getState().annotations;
+    reviewer.set({ chat: { busy: false, error: 'Gemini\'s rate limit or quota is reached (429): wait a minute and try again.', messages: [
+      { role: 'user', text: 'Weakest line?', at: 1 },
+      { role: 'model', text: `“${a.original}” → ${a.suggestions[0].text}`, proposed: true, annotations: [a.id], at: 2 },
+    ] } });
+  });
+  await panel.locator('[data-action=chat]').click();
+  const reply = panel.locator('[data-view=chat] .cw-msg--model');
+  await reply.locator('[data-action=open-annotation]').waitFor();
+  assert.equal(await reply.locator('.cw-msg-body').count(), 0, 'the links say it: no text again');
+  const error = panel.locator('[data-view=chat] .cw-error[role=alert]');
+  assert.match(await error.textContent(), /429/);
   await page.close();
 });
 

@@ -77,7 +77,8 @@ copywriter/
     packet.mjs            the work packet: XML, Markdown, ZIP (no dependency)
     charts.mjs            the charts' text, imported by the bundle
   src/ui/                 the panel: plain DOM + Lucide icons, renders ViewState, dispatches commands
-    panel.mjs             mountPanel(root, reviewer, {layout: 'sidebar'|'sheet'})
+    panel.mjs             mountPanel(root, reviewer, {layout: 'sidebar'|'sheet'}); its scrolling area is a div, so the
+                          host page keeps its one <main>
     panel-css.mjs         its stylesheet as a string (a ShadowRoot adopts it; no bundler loader)
   src/platform/dom.mjs    the page adapter's DOM side, shared: anchors, locate, preview/revert of Text nodes, highlights
   src/platform/extension/ manifest.json, service-worker.mjs, content.mjs (page adapter), sidepanel.html/.mjs, mic.html/.mjs
@@ -221,7 +222,12 @@ from the model.
   is the DOM adapter's `band()`: above the sheet, which a preview or a
   highlight lowers to its half height first, and left of the drawer,
   below a sticky header; the extension's content script has no band and
-  scrolls the text to the viewport's middle.
+  scrolls the text to the viewport's middle.  While the sheet is open on a phone, the widget's host
+  adds half a viewport of room after the page, so its last lines can
+  scroll up above the sheet. The launcher (44 px) steps aside while the
+  page scrolls down and comes back when it scrolls up or stops; with a
+  selection that fits it stays, and a tap opens the sheet on a new
+  annotation of it.
 
 ## Actors and processors
 

@@ -249,11 +249,11 @@ export const panelCSS = String.raw`
 .cw-panel .cw-edit .cw-actions { padding-top: 0; }
 
 .cw-panel .cw-note {
-  width: 100%; resize: none; padding: 6px 0; border: 0; border-bottom: 1px solid transparent; border-radius: 0; background: none; outline: 0;
-  font-size: 13px; line-height: 1.5; color: var(--fg-2); field-sizing: content; min-height: 32px; max-height: 160px;
+  width: 100%; resize: none; padding: 2px 0; margin-top: -6px; border: 0; border-bottom: 1px solid transparent; border-radius: 0; background: none; outline: 0;
+  font-size: 12.5px; line-height: 1.5; color: var(--fg-3); field-sizing: content; min-height: 28px; max-height: 160px;
   transition: border-color var(--fast) var(--ease-step);
 }
-.cw-panel[data-layout="sheet"] .cw-note { font-size: 15px; min-height: 44px; }
+.cw-panel[data-layout="sheet"] .cw-note { font-size: 14px; min-height: 36px; }
 .cw-panel .cw-note::placeholder { color: var(--fg-4); }
 .cw-panel .cw-note:hover { border-bottom-color: var(--border-1); }
 .cw-panel .cw-note:focus { border-bottom-color: var(--accent); color: var(--fg-1); box-shadow: none; }
@@ -274,6 +274,22 @@ export const panelCSS = String.raw`
 .cw-panel .cw-msg-body ul { margin: 0; padding-left: 18px; }
 .cw-panel .cw-msg-body code { font: 12px/1.4 var(--mono); padding: 1px 4px; border-radius: 1px; background: var(--surface-2); }
 .cw-panel .cw-msg-body strong { font-weight: 600; }
+.cw-panel .cw-thread > .cw-cards { margin: 0; }
+/* a page chat's reply: the annotations it made, each a link to open */
+.cw-panel .cw-links { display: flex; flex-direction: column; gap: 6px; margin-top: 6px; }
+.cw-panel .cw-msg-body + .cw-links { margin-top: 8px; }
+.cw-panel .cw-link {
+  display: flex; flex-direction: column; align-items: flex-start; gap: 2px; width: 100%; min-height: var(--hit); padding: 7px 10px;
+  border: 1px solid var(--border-1); border-left: 2px solid var(--accent); border-radius: 2px; background: var(--surface);
+  text-align: left; color: var(--fg-1); cursor: pointer; transition: border-color var(--fast) var(--ease-step);
+}
+.cw-panel .cw-link:hover { border-color: var(--border-2); border-left-color: var(--accent); }
+.cw-panel .cw-link-from { font-size: 12.5px; color: var(--fg-3); text-decoration: line-through; text-decoration-color: var(--fg-4);
+  overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+.cw-panel .cw-link-arrow { display: none; }
+.cw-panel .cw-link-to { font: 400 15px/1.35 var(--serif); }
+.cw-panel[data-layout="sheet"] .cw-link-from { font-size: 14px; }
+.cw-panel[data-layout="sheet"] .cw-link-to { font-size: 17px; }
 .cw-panel .cw-dots { display: inline-flex; gap: 4px; padding: 8px 0; color: var(--fg-3); }
 .cw-panel .cw-dots i { width: 5px; height: 5px; border-radius: 50%; background: currentColor; opacity: .25; animation: cw-dot 1.2s infinite var(--ease-step); }
 .cw-panel .cw-dots i:nth-child(2) { animation-delay: .15s; }
@@ -320,6 +336,12 @@ export const panelCSS = String.raw`
   overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
 }
 .cw-panel[data-layout="sheet"] .cw-banner-quote { font-size: 16px; }
+/* a selection too long for one annotation: the hint shows, then goes */
+.cw-panel .cw-banner--hint { max-height: 96px; overflow: hidden; padding: 8px 12px; font-size: 13px; color: var(--fg-2); border-left-color: var(--border-2);
+  animation: cw-rise var(--base) var(--ease-out), cw-leave 400ms var(--ease-out) 4s forwards; }
+.cw-panel[data-layout="sheet"] .cw-banner--hint { font-size: 15px; }
+.cw-panel .cw-banner--hint svg.cw-icon { color: var(--fg-3); flex: none; }
+@keyframes cw-leave { to { opacity: 0; max-height: 0; padding-top: 0; padding-bottom: 0; margin-bottom: 0; visibility: hidden; } }
 
 /* composer */
 .cw-panel .cw-dock { flex: none; padding: 8px 0; padding-bottom: max(8px, env(safe-area-inset-bottom)); border-top: 1px solid var(--border-1); }
@@ -389,7 +411,7 @@ export const panelCSS = String.raw`
 .cw-panel .cw-skeleton i { display: block; height: 10px; border-radius: 1px; background: var(--surface-2); animation: cw-pulse 1.4s infinite; }
 
 /* toasts */
-.cw-panel .cw-toasts { position: absolute; left: 0; right: 0; top: 56px; z-index: 30; display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 0 12px; pointer-events: none; }
+.cw-panel .cw-toasts { position: absolute; left: 0; right: 0; bottom: 12px; z-index: 30; display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 0 12px; pointer-events: none; }
 .cw-panel .cw-toast {
   pointer-events: auto; display: flex; align-items: center; gap: 8px; max-width: 100%; padding: 6px 6px 6px 12px;
   border-radius: 2px; background: var(--fg-1); color: var(--bg); font-size: 13px; box-shadow: var(--shadow-pop);

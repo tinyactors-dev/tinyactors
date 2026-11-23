@@ -33,8 +33,8 @@ function sample(now) {
       original: 'A tiny, embeddable actor runtime for building reliable systems',
       note: 'Too generic. Say what a developer gets.',
       suggestions: [
-        { id: 's41', text: 'Run millions of actors in one process', rationale: 'States the measured claim instead of a category.' },
-        { id: 's42', text: 'Statecharts that run anywhere C runs', rationale: 'Names the model and the reach, 7 words.' },
+        { id: 's41', text: 'Run millions of actors in one process', rationale: 'States the measured claim instead of a category.', after: 2 },
+        { id: 's42', text: 'Statecharts that run anywhere C runs', rationale: 'Names the model and the reach, 7 words.', after: 2 },
       ],
       chosenID: null,
       messages: [
@@ -146,17 +146,22 @@ export function createMockReviewer({ hasKey = true, delay = 1, empty = false, st
     const reply = fresh.length
       ? `Two options that follow the voice. The first leads with **the measured claim**; the second keeps the verb first.`
       : 'These already follow the voice. Tell me what to emphasise and I will try again.';
-    update(annotationID, (a) => ({
-      ...a,
-      state: before === 'previewing' ? 'previewing' : (before === 'kept' ? 'kept' : 'suggested'),
-      suggestions: [...a.suggestions, ...(fresh.length ? fresh : [{ id: id('s'), text: `${a.original.split(' ').slice(0, 5).join(' ')}`, rationale: 'Cut to the first five words.' }])],
-      messages: text ? [...a.messages, { role: 'model', text: reply, at: Date.now() }] : a.messages,
-    }));
+    update(annotationID, (a) => {
+      const messages = [...a.messages, { role: 'model', text: reply, at: Date.now() }];
+      const brought = fresh.length ? fresh : [{ id: id('s'), text: `${a.original.split(' ').slice(0, 5).join(' ')}`, rationale: 'Cut to the first five words.' }];
+      return {
+        ...a,
+        state: before === 'previewing' ? 'previewing' : (before === 'kept' ? 'kept' : 'suggested'),
+        suggestions: [...a.suggestions, ...brought.map((s) => ({ ...s, after: messages.length }))],
+        messages,
+      };
+    });
   }
 
   const handlers = {
     async annotate({ note }) {
       if (!state.selection) throw new Error('Nothing is selected on the page.');
+      if (state.selection.fits === false) throw new Error('Select one sentence, heading or paragraph.');
       const t = Date.now();
       const annotation = {
         id: id('a'), state: 'draft', anchorFound: true, original: state.selection.text, note: note ?? '',
@@ -171,7 +176,7 @@ export function createMockReviewer({ hasKey = true, delay = 1, empty = false, st
     async ask({ id: annotationID, text }) { await ask(annotationID, text); },
     async suggest({ id: annotationID }) { await ask(annotationID, null); },
     async edit({ id: annotationID, text }) {
-      const s = { id: id('s'), text, rationale: '', own: true };
+      const s = { id: id('s'), text, rationale: '', own: true, after: get(annotationID).messages.length };
       update(annotationID, (a) => ({ ...a, suggestions: [...a.suggestions, s], chosenID: s.id, state: a.anchorFound ? 'previewing' : 'suggested' }));
     },
     async preview({ id: annotationID, suggestionID }) {
@@ -192,9 +197,9 @@ export function createMockReviewer({ hasKey = true, delay = 1, empty = false, st
       const t = Date.now();
       const proposed = {
         id: id('a'), state: 'suggested', anchorFound: true, original: 'Everything you need to build actor systems',
-        note: 'Proposed from the page chat.',
+        note: '',
         source: 'model',
-        suggestions: [{ id: id('s'), text: 'Spawn, send and supervise actors', rationale: 'Verbs first; no "everything".' }],
+        suggestions: [{ id: id('s'), text: 'Spawn, send and supervise actors', rationale: 'Verbs first; no "everything".', after: 0 }],
         chosenID: null, messages: [], createdAt: t, updatedAt: t,
       };
       set({
@@ -202,8 +207,8 @@ export function createMockReviewer({ hasKey = true, delay = 1, empty = false, st
         chat: {
           busy: false,
           messages: [...state.chat.messages, {
-            role: 'model', at: t,
-            text: 'The page has **three headings** over 8 words. I proposed a rewrite for the second one; it is in Annotations.\n\nThe lede is 26 words: split it after `C ABI`.',
+            role: 'model', at: t, annotations: [proposed.id],
+            text: 'The page has **three headings** over 8 words. The second says least: lead with the verbs.',
           }],
         },
       });
@@ -219,6 +224,7 @@ export function createMockReviewer({ hasKey = true, delay = 1, empty = false, st
     },
     async 'settings.save'(command) {
       const settings = { ...state.settings };
+      if (command.apiKey && /bad/i.test(command.apiKey)) { await wait(150); throw new Error('That key was not accepted by Google.'); }
       if (command.apiKey) settings.hasKey = true;
       if (command.rememberKey != null) settings.rememberKey = command.rememberKey;
       if (command.model) settings.model = command.model;
@@ -263,7 +269,7 @@ export function createMockReviewer({ hasKey = true, delay = 1, empty = false, st
     ready: () => (state.status === 'error' ? Promise.reject(new Error(state.error)) : Promise.resolve()),
     close() { listeners.clear(); },
     // for the preview and tests only: what the page would report, what was dispatched
-    setSelection(text) { set({ selection: text ? { text } : null }); },
+    setSelection(text, { fits = true } = {}) { set({ selection: text ? { text, fits } : null }); },
     set,
     log,
   };

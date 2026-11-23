@@ -12,7 +12,7 @@
 // before the sheet is opened. Whether the sheet is open, and how high,
 // lasts for the tab (sessionStorage), so it stays open across pages.
 
-import { createElement, PenLine, X } from 'lucide';
+import { createElement, MessageSquarePlus, PenLine, X } from 'lucide';
 import { createReviewer } from '../../core/reviewer.mjs';
 import { mountPanel } from '../../ui/panel.mjs';
 import { createDOMPage } from '../dom.mjs';
@@ -25,26 +25,34 @@ const SNAPS = { full: 0.85, half: 0.45 };  // the sheet's heights, of the viewpo
 
 const CSS = String.raw`
 :host { all: initial; }
+/* while the sheet is open, room after the page, so its last lines can
+   scroll up above the sheet at half height */
+@media not ${WIDE} { :host([data-open]) { display: block; height: calc(${SNAPS.half} * 100dvh); } }
 * { box-sizing: border-box; }
 .launcher {
   position: fixed; z-index: 2147483000;
   right: calc(16px + env(safe-area-inset-right, 0px));
   bottom: calc(16px + env(safe-area-inset-bottom, 0px));
-  width: 52px; height: 52px; padding: 0; border: 0; border-radius: 6px;
+  width: 44px; height: 44px; padding: 0; border: 0; border-radius: 6px;
   display: grid; place-items: center; cursor: pointer;
   background: #1F5E4A; color: #FFF8F0;
   box-shadow: 0 0 0 1px rgba(18,48,42,.4), 0 8px 24px rgba(40,30,20,.24);
   -webkit-tap-highlight-color: transparent;
-  transition: transform .18s cubic-bezier(.2,0,0,1), opacity .18s;
+  transition: transform .24s cubic-bezier(.2,0,0,1), opacity .24s;
 }
+/* out of the way while the reader scrolls down; back on the way up, or when they stop */
+:host([data-away]) .launcher { transform: translateY(calc(100% + 24px)); opacity: 0; pointer-events: none; }
+.launcher .on-selection { display: none; }
+:host([data-selection]) .launcher .on-selection { display: block; }
+:host([data-selection]) .launcher .idle { display: none; }
 .launcher:hover { background: #194D3D; }
 .launcher:active { transform: scale(.96); }
 .launcher:focus-visible { outline: 2px solid #1F5E4A; outline-offset: 3px; }
-.launcher svg { width: 22px; height: 22px; stroke-width: 1.75; }
+.launcher svg { width: 20px; height: 20px; stroke-width: 1.75; }
 .launcher .count {
-  position: absolute; top: -5px; right: -5px; min-width: 20px; height: 20px; padding: 0 5px;
-  border-radius: 10px; background: #FAF6EE; color: #2A2622; box-shadow: 0 0 0 1px #C9BAA0;
-  font: 600 11px/20px 'IBM Plex Mono', ui-monospace, monospace; text-align: center;
+  position: absolute; top: -6px; right: -6px; min-width: 18px; height: 18px; padding: 0 4px;
+  border-radius: 9px; background: #FAF6EE; color: #2A2622; box-shadow: 0 0 0 1px #C9BAA0;
+  font: 600 10.5px/18px 'IBM Plex Mono', ui-monospace, monospace; text-align: center;
 }
 .launcher .count:empty { display: none; }
 :host([data-open]) .launcher { opacity: 0; pointer-events: none; transform: scale(.9); }
@@ -147,7 +155,11 @@ function start() {
   launcher.className = 'launcher';
   launcher.setAttribute('aria-label', 'Open copywriter');
   launcher.title = 'Copywriter';
-  launcher.append(icon(PenLine), count);
+  const idle = icon(PenLine);
+  idle.classList.add('idle');
+  const onSelection = icon(MessageSquarePlus);
+  onSelection.classList.add('on-selection');
+  launcher.append(idle, onSelection, count);
 
   const close = document.createElement('button');
   close.type = 'button';
@@ -191,10 +203,31 @@ function start() {
     page, credentials, download, clipboard,
     wasmURL: new URL('tinyactors.wasm', import.meta.url).href,
   });
+  // With a selection the launcher annotates it: it stays in view, and a
+  // tap opens the sheet on the new annotation.
+  let selected = false;
   reviewer.subscribe((state) => {
     const n = state.annotations.filter((a) => a.state !== 'kept' && a.state !== 'dismissed').length;
     count.textContent = n ? String(n) : '';
+    selected = Boolean(state.selection && state.selection.fits !== false);
+    host.toggleAttribute('data-selection', selected);
+    launcher.setAttribute('aria-label', selected ? 'Annotate the selection' : 'Open copywriter');
+    launcher.title = selected ? 'Annotate' : 'Copywriter';
+    if (selected) host.removeAttribute('data-away');
   });
+
+  // The launcher steps aside while the page scrolls down, and comes back
+  // when it scrolls up or stops.
+  let lastY = scrollY;
+  let still = 0;
+  addEventListener('scroll', () => {
+    const y = scrollY;
+    if (y > lastY + 4 && !selected && !open) host.setAttribute('data-away', '');
+    else if (y < lastY - 4) host.removeAttribute('data-away');
+    lastY = y;
+    clearTimeout(still);
+    still = setTimeout(() => host.removeAttribute('data-away'), 700);
+  }, { passive: true });
 
   // ---- the sheet -----------------------------------------------------------------
 
@@ -220,7 +253,11 @@ function start() {
     remember();
   }
 
-  launcher.addEventListener('click', () => show(true));
+  launcher.addEventListener('click', () => {
+    const annotating = selected;
+    show(true);
+    if (annotating) reviewer.dispatch({ type: 'annotate' }).catch(() => { /* the panel's banner says why */ });
+  });
   close.addEventListener('click', () => show(false));
   shadow.addEventListener('keydown', (event) => {
     if (event.key === 'Escape' && open && event.target === close) show(false);

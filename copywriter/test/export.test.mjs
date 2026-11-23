@@ -60,12 +60,32 @@ test('export: a ZIP of packet.xml (valid), CHANGES.md, README.md and the schema'
   assert.match(changes, /^# Copy changes/);
   assert.match(changes, /## https:\/\/www\.tinyactors\.dev\/ \(tinyactors\)/);
   assert.match(changes, /Original:\n\n```text\nBuild better products\n```\n\nReplacement:\n\n```text\nShip reliable software\n```/);
-  assert.match(changes, /Why: Names the outcome & the reader\./);
-  assert.match(changes, /Reviewer's note: Too generic\./);
+  assert.match(changes, /Request: Too generic\.\n\nWhy: Names the outcome & the reader\./);
   assert.match(changes, /- element: `main > p`/);
-  assert.match(changes, /### Open note 2[\s\S]*Actors are <cheap>[\s\S]*Note: Cheap how\?/);
+  assert.match(changes, /### Open item 2[\s\S]*Actors are <cheap>[\s\S]*Request: Cheap how\?/);
   assert.doesNotMatch(changes, /Fine as it is/, 'a dismissed annotation is not exported');
-  assert.match(files['README.md'], /1 kept change\(s\) and 1 open note\(s\) on 1 page\(s\)/);
+  assert.match(files['README.md'], /1 kept change\(s\) and 1 open item\(s\) on 1 page\(s\)/);
+  reviewer.close();
+});
+
+test('export: the request is the first message when there is no note; the chat\'s proposals are open items', async () => {
+  const fetch = fakeFetch(
+    geminiReply('Shorter.', [['propose_rewrite', { replacement: 'Ship software', rationale: 'Two words fewer.' }]]),
+    geminiReply('', [['propose_rewrite', { original_text: 'Read the guide', replacement: 'Read the actor guide', rationale: 'Names which guide.' }]]));
+  const { reviewer, page, clipboard } = await setup({ fetch });
+  page.select('Build better products');
+  const id = await reviewer.dispatch({ type: 'annotate' });
+  await reviewer.dispatch({ type: 'ask', id, text: 'Say what it does.' });
+  await reviewer.dispatch({ type: 'preview', id, suggestionID: 's1' });
+  await reviewer.dispatch({ type: 'keep', id });
+  await reviewer.dispatch({ type: 'chat', text: 'Which line is vague?' });
+  assert.deepEqual(reviewer.getState().annotations.map((a) => a.state), ['suggested', 'kept']);
+  await reviewer.dispatch({ type: 'export', scope: 'page', to: 'clipboard' });
+  const changes = clipboard[0];
+  assert.match(changes, /Request: Say what it does\.\n\nWhy: Two words fewer\./);
+  assert.match(changes, /### Open item 2\n\nText:\n\n```text\nRead the guide\n```\n\nProposed:\n\n```text\nRead the actor guide\n```\n\nWhy: Names which guide\./);
+  assert.match(changes, /### Open item 2[\s\S]*- text before it: "[^"]*cheap\. "/, 'the chat\'s anchor has its context');
+  await reviewer.dispatch({ type: 'export', scope: 'page', to: 'download' });
   reviewer.close();
 });
 

@@ -19,7 +19,7 @@
 
 import {
   createElement,
-  ArchiveRestore, ArrowLeft, ArrowUp, Check, ChevronDown, ChevronRight, CircleSlash, Copy, Download,
+  ArchiveRestore, ArrowLeft, ArrowRight, ArrowUp, Check, ChevronDown, ChevronRight, CircleSlash, Copy, Download,
   Ellipsis, Eye, EyeOff, FileArchive, KeyRound, LoaderCircle, MessageSquare, MessagesSquare, Mic,
   MousePointerClick, Pencil, RefreshCw, RotateCcw, Settings, Sparkles, Trash2, TriangleAlert, Undo2, X,
 } from 'lucide';
@@ -157,7 +157,7 @@ export function mountPanel(root, reviewer, { layout = 'sidebar' } = {}) {
   // What the panel itself remembers; never the reviewer's state.
   const ui = {
     view: 'list',          // 'list' | 'chat' | 'settings' (an active annotation shows over list and chat)
-    showDone: false,       // the kept and dismissed annotations, folded under the open ones
+    showDone: null,        // the kept and dismissed annotations, folded under the open ones (null: open when nothing else is)
     menu: null,            // 'export' | 'more'
     scope: 'page',
     editing: null,         // the annotation whose own text is being written
@@ -175,6 +175,7 @@ export function mountPanel(root, reviewer, { layout = 'sidebar' } = {}) {
   let lastCount = 0;
   let alive = true;
   let scheduled = false;
+  let pointer = '';        // the last press's pointerType: a touch opens no keyboard by itself
 
   const send = (command) => {
     let result;
@@ -207,7 +208,8 @@ export function mountPanel(root, reviewer, { layout = 'sidebar' } = {}) {
     iconButton(Download, 'Export', { 'aria-haspopup': 'menu', 'aria-expanded': 'false', 'data-menu': 'export', onclick: () => toggleMenu('export') }));
   const header = h('header', { class: 'cw-header' }, lead, heading, moreAnchor, chatButton, settingsButton, exportAnchor);
 
-  const main = h('main', { class: 'cw-main', tabindex: '-1' });
+  // a div, not <main>: the host page keeps its one main landmark
+  const main = h('div', { class: 'cw-main', tabindex: '-1' });
   const banner = h('div');
   const textarea = h('textarea', { rows: '1', 'aria-label': 'Message', enterkeyhint: 'send' });
   const recLine = h('div', { class: 'cw-rec', hidden: true, 'aria-live': 'polite' });
@@ -255,7 +257,7 @@ export function mountPanel(root, reviewer, { layout = 'sidebar' } = {}) {
     if (ui.view === 'settings') return { kind: 'none' };
     const a = activeAnnotation();
     if (a) return { kind: 'ask', id: a.id, busy: a.state === 'asking', target: a.id };
-    if (ui.view !== 'chat' && state.selection) return { kind: 'annotate', busy: false, target: 'page' };
+    if (ui.view !== 'chat' && state.selection && state.selection.fits !== false) return { kind: 'annotate', busy: false, target: 'page' };
     return { kind: 'chat', busy: !!state.chat?.busy, target: 'page' };
   }
 
@@ -282,13 +284,15 @@ export function mountPanel(root, reviewer, { layout = 'sidebar' } = {}) {
   }
 
   // annotate resolves to the new annotation's id: open it, unless the
-  // reviewer already did or the user went elsewhere meanwhile
+  // reviewer already did or the user went elsewhere meanwhile; then the
+  // composer has the focus (but on touch, where it would raise a keyboard)
   function annotate(note) {
     const before = state.activeID;
+    const typing = pointer !== 'touch';
     send(note ? { type: 'annotate', note } : { type: 'annotate' }).then((id) => {
-      if (typeof id === 'string' && alive && state.activeID === before && state.activeID !== id && ui.view !== 'settings') {
-        send({ type: 'select', id });
-      }
+      if (typeof id !== 'string' || !alive || ui.view === 'settings') return;
+      if (state.activeID === before && state.activeID !== id) send({ type: 'select', id });
+      if (typing) setTimeout(() => { if (alive && state.activeID === id && !textarea.hidden) textarea.focus({ preventScroll: true }); });
     });
   }
 
@@ -346,6 +350,8 @@ export function mountPanel(root, reviewer, { layout = 'sidebar' } = {}) {
     const recording = rec.active || state.recording?.state === 'recording';
     const transcribing = state.recording?.state === 'transcribing';
     dock.hidden = m.kind === 'none';
+    // toasts sit above the composer, or at the bottom without one, never over a label
+    toasts.style.bottom = `${(dock.hidden ? 0 : dock.offsetHeight) + 12}px`;
 
     composer.classList.toggle('is-recording', recording);
     textarea.hidden = recording || transcribing;
@@ -382,6 +388,7 @@ export function mountPanel(root, reviewer, { layout = 'sidebar' } = {}) {
   function exportMenu() {
     const building = state.exporting === 'building';
     const pageKept = (state.annotations ?? []).filter((a) => a.state === 'kept').length;
+    const pageOpen = (state.annotations ?? []).filter((a) => OPEN.has(a.state)).length;
     const run = (to) => {
       ui.menu = null;
       render();
@@ -389,14 +396,15 @@ export function mountPanel(root, reviewer, { layout = 'sidebar' } = {}) {
         if (r !== FAILED) toast(to === 'clipboard' ? 'Copied for agent' : 'Work packet downloaded');
       });
     };
-    const scope = (value, text, count) => h('button', {
+    // the count is what the export carries: the kept changes and the open items
+    const scope = (value, text, kept, open) => h('button', {
       type: 'button', 'aria-pressed': String(ui.scope === value), 'data-scope': value,
-      title: `${count} kept`,
+      title: `${kept} kept · ${open} open`, 'aria-label': `${text}: ${kept} kept, ${open} open`,
       onclick: () => { ui.scope = value; render(); panel.querySelector(`[data-scope="${value}"]`)?.focus(); },
-    }, text, h('span', { class: 'cw-count' }, count));
+    }, text, h('span', { class: 'cw-count' }, kept + open));
     return h('div', { class: 'cw-menu', role: 'menu', 'aria-label': 'Export' },
       h('div', { class: 'cw-scope', role: 'group', 'aria-label': 'Scope' },
-        scope('page', 'This page', pageKept), scope('all', 'All pages', state.totals?.kept ?? pageKept)),
+        scope('page', 'This page', pageKept, pageOpen), scope('all', 'All pages', state.totals?.kept ?? pageKept, state.totals?.open ?? pageOpen)),
       h('button', {
         type: 'button', class: 'cw-menu-item', role: 'menuitem', disabled: building, 'data-action': 'export-download',
         title: 'packet.xml, CHANGES.md and README.md', onclick: () => run('download'),
@@ -474,12 +482,13 @@ export function mountPanel(root, reviewer, { layout = 'sidebar' } = {}) {
     if (done.length) {
       const kept = done.filter((a) => a.state === 'kept').length;
       const dismissed = done.length - kept;
+      const shown = ui.showDone ?? open.length === 0;
       view.append(h('button', {
-        type: 'button', class: 'cw-disclosure', 'aria-expanded': String(ui.showDone), 'data-action': 'done',
-        'aria-label': `${kept} kept, ${dismissed} dismissed`, title: `${kept} kept · ${dismissed} dismissed`,
-        onclick: () => { ui.showDone = !ui.showDone; render(); },
+        type: 'button', class: 'cw-disclosure', 'aria-expanded': String(shown), 'data-action': 'done',
+        'aria-label': `Done: ${kept} kept, ${dismissed} dismissed`, title: `Done: ${kept} kept · ${dismissed} dismissed`,
+        onclick: () => { ui.showDone = !shown; render(); },
       }, icon(ChevronRight, 'cw-chevron'), icon(Check), kept, dismissed > 0 && [icon(CircleSlash), dismissed]));
-      if (ui.showDone) view.append(h('ul', { class: 'cw-list', role: 'list', 'aria-label': 'Done' }, done.map((a) => h('li', null, row(a)))));
+      if (shown) view.append(h('ul', { class: 'cw-list', role: 'list', 'aria-label': 'Done' }, done.map((a) => h('li', null, row(a)))));
     }
     return view;
   }
@@ -505,14 +514,39 @@ export function mountPanel(root, reviewer, { layout = 'sidebar' } = {}) {
     h('span', { class: 'cw-row-text' }, h('span', { class: 'cw-row-original' }, a.original), sub));
   }
 
+  // One message. A page chat's reply that made annotations links to them;
+  // when its text only listed them (proposed), the links say it instead.
+  function message(m) {
+    const id = `m:${m.role}:${m.at}:${m.text.length}`;
+    const made = (m.annotations ?? []).map((x) => state.annotations?.find((a) => a.id === x)).filter(Boolean);
+    const node = h('div', { class: `cw-msg cw-msg--${m.role === 'user' ? 'user' : 'model'}${seen.has(id) ? '' : ' is-new'}`, title: when(m.at) },
+      !(m.proposed && made.length) && h('div', { class: 'cw-msg-body' }, markdown(m.text)),
+      made.length > 0 && h('div', { class: 'cw-links' }, made.map(link)));
+    seen.add(id);
+    return node;
+  }
+
+  // An annotation the page chat made: its text and the proposal. A tap
+  // opens it and shows the proposal on the page.
+  function link(a) {
+    const s = a.suggestions?.find((x) => x.id === a.chosenID) ?? a.suggestions?.[0];
+    return h('button', {
+      type: 'button', class: 'cw-link', 'data-action': 'open-annotation', 'data-id': a.id,
+      title: STATES[a.state]?.label ?? '', 'aria-label': `Open: ${a.original}`,
+      onclick: () => openProposal(a),
+    }, h('span', { class: 'cw-link-from' }, a.original),
+    s && [icon(ArrowRight, 'cw-link-arrow'), h('span', { class: 'cw-link-to' }, s.text)]);
+  }
+
+  async function openProposal(a) {
+    if (await send({ type: 'select', id: a.id }) === FAILED) return;
+    const first = a.suggestions?.[0];
+    if (a.state === 'suggested' && first && a.anchorFound !== false) send({ type: 'preview', id: a.id, suggestionID: first.id });
+  }
+
   function thread(messages, busy) {
     const list = h('div', { class: 'cw-thread', 'aria-live': 'polite' });
-    for (const m of messages ?? []) {
-      const id = `m:${m.role}:${m.at}:${m.text.length}`;
-      list.append(h('div', { class: `cw-msg cw-msg--${m.role === 'user' ? 'user' : 'model'}${seen.has(id) ? '' : ' is-new'}`, title: when(m.at) },
-        h('div', { class: 'cw-msg-body' }, markdown(m.text))));
-      seen.add(id);
-    }
+    for (const m of messages ?? []) list.append(message(m));
     if (busy) list.append(h('div', { class: 'cw-msg cw-msg--model' }, dots()));
     return list;
   }
@@ -531,6 +565,7 @@ export function mountPanel(root, reviewer, { layout = 'sidebar' } = {}) {
     } else {
       body.append(thread(chat.messages, chat.busy));
     }
+    if (chat.error && !chat.busy) body.append(h('div', { class: 'cw-error', role: 'alert' }, icon(TriangleAlert), h('span', null, chat.error)));
     view.append(body);
     return view;
   }
@@ -550,16 +585,35 @@ export function mountPanel(root, reviewer, { layout = 'sidebar' } = {}) {
       title: missing ? 'No longer on the page' : null,
     }, a.original, missing && h('span', { class: 'cw-missing', role: 'img', 'aria-label': 'No longer on the page' }, icon(TriangleAlert))));
 
+    // the note: why, in the reviewer's words; quiet under the quote
+    const note = h('textarea', {
+      class: 'cw-note', rows: '1', 'data-focus-key': `note:${a.id}`, 'aria-label': 'Note',
+      placeholder: 'Add a note', value: a.note ?? '',
+    });
+    const commit = () => { if (note.value !== (a.note ?? '')) send({ type: 'note', id: a.id, text: note.value }); };
+    note.addEventListener('change', commit);
+    note.addEventListener('keydown', (event) => { if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) { event.preventDefault(); note.blur(); } });
+    body.append(note);
+
+    // Then the conversation as it happened: each message, and after a
+    // model's reply the suggestions it brought; the newest at the bottom.
+    const messages = a.messages ?? [];
+    const suggestions = a.suggestions ?? [];
+    const flow = h('div', { class: 'cw-thread', 'aria-live': 'polite' });
+    const cardsAfter = (n) => {
+      const here = suggestions.filter((s) => (s.after ?? messages.length) === n);
+      if (here.length) flow.append(h('div', { class: 'cw-cards', role: 'list', 'aria-label': 'Suggestions' }, here.map((s) => card(a, s, missing))));
+    };
+    cardsAfter(0);
+    messages.forEach((m, i) => { flow.append(message(m)); cardsAfter(i + 1); });
+    if (ui.editing === a.id) flow.append(editor(a));
+    if (asking) flow.append(h('div', { class: 'cw-msg cw-msg--model' }, dots()));
+    if (flow.childNodes.length) body.append(flow);
+
     if (a.state === 'failed') {
       body.append(h('div', { class: 'cw-error', role: 'alert' }, icon(TriangleAlert), h('span', null, a.error ?? 'Gemini did not answer.'),
         hasKey && iconButton(RotateCcw, 'Try again', { 'data-action': 'retry', onclick: () => send({ type: 'suggest', id: a.id }) })));
     }
-
-    const cards = h('div', { class: 'cw-cards', role: 'list', 'aria-label': 'Suggestions' });
-    for (const s of a.suggestions ?? []) cards.append(card(a, s, missing));
-    if (ui.editing === a.id) cards.append(editor(a));
-    if (asking && !a.messages?.length) cards.append(dots());
-    body.append(cards);
 
     if (ui.editing !== a.id && !asking) {
       body.append(h('div', { class: 'cw-tools' },
@@ -571,17 +625,6 @@ export function mountPanel(root, reviewer, { layout = 'sidebar' } = {}) {
           onclick: () => { ui.editing = a.id; ui.editDraft = chosen?.text ?? a.original; render(); focusEditor(); },
         })));
     }
-
-    const note = h('textarea', {
-      class: 'cw-note', rows: '1', 'data-focus-key': `note:${a.id}`, 'aria-label': 'Note',
-      placeholder: 'Add a note', value: a.note ?? '',
-    });
-    const commit = () => { if (note.value !== (a.note ?? '')) send({ type: 'note', id: a.id, text: note.value }); };
-    note.addEventListener('change', commit);
-    note.addEventListener('keydown', (event) => { if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) { event.preventDefault(); note.blur(); } });
-    body.append(note);
-
-    if (a.messages?.length) body.append(thread(a.messages, asking));
     return view;
   }
 
@@ -678,7 +721,10 @@ export function mountPanel(root, reviewer, { layout = 'sidebar' } = {}) {
       ui.keyDraft = '';
       ui.showKey = false;
       render();
-      send({ type: 'settings.save', apiKey, rememberKey: remember.checked }).then((r) => r !== FAILED && toast('Key saved'));
+      send({ type: 'settings.save', apiKey, rememberKey: remember.checked }).then((r) => {
+        if (r !== FAILED) { toast('Key saved'); return; }
+        if (!ui.keyDraft) { ui.keyDraft = apiKey; render(); }  // refused: the key stays to fix
+      });
     });
     body.append(h('div', { class: 'cw-group' },
       h('label', { class: 'cw-label', for: 'cw-key' }, 'Gemini key',
@@ -748,6 +794,11 @@ export function mountPanel(root, reviewer, { layout = 'sidebar' } = {}) {
 
   function selectionBanner() {
     if (!state.selection || ui.view === 'settings' || state.status !== 'ready') return null;
+    if (state.selection.fits === false) {
+      // too much for one annotation: say what fits, then fade
+      return h('div', { class: 'cw-banner cw-banner--hint', 'data-banner': 'refused', role: 'status' },
+        icon(MousePointerClick), h('span', null, 'Select one sentence, heading or paragraph.'));
+    }
     return h('div', { class: 'cw-banner', 'data-banner': 'selection', title: 'Selected on the page' },
       h('div', { class: 'cw-banner-quote' }, state.selection.text),
       button('Annotate', {
@@ -775,7 +826,7 @@ export function mountPanel(root, reviewer, { layout = 'sidebar' } = {}) {
     if (ui.view === 'settings') return JSON.stringify(['settings', state.settings, ui.showKey, ui.refreshing]);
     const a = activeAnnotation();
     if (a) return JSON.stringify(['detail', a, ui.editing === a.id, state.settings?.hasKey]);
-    if (ui.view === 'chat') return JSON.stringify(['chat', state.chat, state.settings?.hasKey]);
+    if (ui.view === 'chat') return JSON.stringify(['chat', state.chat, state.settings?.hasKey, state.annotations?.map((x) => [x.id, x.state, x.chosenID])]);
     return JSON.stringify(['list', state.status, state.error, state.annotations, state.settings?.hasKey, ui.showDone]);
   }
 
@@ -808,7 +859,8 @@ export function mountPanel(root, reviewer, { layout = 'sidebar' } = {}) {
     }
 
     const n = count();
-    if (where !== lastPlace) main.scrollTop = where === 'chat' ? main.scrollHeight : 0;
+    // a conversation opens at its newest message, the list at its top
+    if (where !== lastPlace) main.scrollTop = where === 'chat' || where.startsWith('detail:') ? main.scrollHeight : 0;
     else if (n > lastCount && (nearBottom || where !== 'list')) main.scrollTop = main.scrollHeight;
     else main.scrollTop = scroll;
     lastPlace = where;
@@ -838,7 +890,7 @@ export function mountPanel(root, reviewer, { layout = 'sidebar' } = {}) {
   }
 
   function renderBanner() {
-    const key = JSON.stringify([state.selection?.text ?? null, ui.view, state.status]);
+    const key = JSON.stringify([state.selection?.text ?? null, state.selection?.fits, ui.view, state.status]);
     if (keys.banner === key) return;
     keys.banner = key;
     banner.replaceChildren(...[selectionBanner()].filter(Boolean));
@@ -868,6 +920,7 @@ export function mountPanel(root, reviewer, { layout = 'sidebar' } = {}) {
 
   // Escape goes back: a menu, a recording, an edit, then a view.
   panel.addEventListener('keydown', (event) => {
+    pointer = 'keyboard';
     if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
       const menu = event.target.closest?.('.cw-menu');
       if (!menu) return;
@@ -888,6 +941,7 @@ export function mountPanel(root, reviewer, { layout = 'sidebar' } = {}) {
 
   // a press outside an open menu closes it
   panel.addEventListener('pointerdown', (event) => {
+    pointer = event.pointerType;
     if (!ui.menu) return;
     const anchor = panel.querySelector(`[data-anchor="${ui.menu}"]`);
     if (anchor && !anchor.contains(event.target)) { ui.menu = null; render(); }
