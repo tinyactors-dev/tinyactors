@@ -24,3 +24,9 @@ value = "tinyactors.dev Cloudflare API token/credential"
 [secrets.EXE_API_KEY]
 provider = "op"
 value = "tinyactors-exe-api-key/notesPlain"
+
+# The maintainer's Google AI Studio key, for the copywriter's end-to-end
+# tests and copy evals against Gemini (copywriter/, mise run e2e).
+[secrets.GEMINI_API_KEY]
+provider = "op"
+value = "tinyactors-copywriter-gemini/credential"

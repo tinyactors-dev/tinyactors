@@ -1,0 +1,9 @@
+#!/usr/bin/env ruby
+#MISE description="A copy eval against the real Gemini: the reviewer rewrites sentences of the live home page, checked against the website's voice (tools/eval.mjs)"
+#USAGE flag "--model <model>" default="gemini-4-hydrogen" help="The Gemini model to evaluate"
+# vim:ft=ruby
+
+# GEMINI_API_KEY comes from 1Password through fnox (the root fnox.toml).
+root = File.expand_path('../..', __dir__)
+model = ENV.fetch('usage_model', 'gemini-4-hydrogen')
+exec('fnox', 'exec', '--', 'node', File.join(root, 'tools/eval.mjs'), '--model', model, chdir: root)
