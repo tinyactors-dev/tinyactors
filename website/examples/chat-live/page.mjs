@@ -75,7 +75,8 @@ function face(name, size) {
   return el('span', { class: 'chatlive__face' }, avatar(name, size), el('span', { class: 'chatlive__dot', 'aria-hidden': 'true' }));
 }
 function presence(node, state) {
-  node.className = `chatlive__face chatlive__face--${state}`;
+  const name = `chatlive__face chatlive__face--${state}`;
+  if (node.className !== name) node.className = name;
 }
 
 /** The send button's arrow. */
@@ -95,19 +96,32 @@ function section(title, ...children) {
 }
 
 /**
- * Keeps `list`'s children one per key, made by `make(key)` and brought up
- * to date by `update(node, key)`, without replacing a node whose key stays:
- * a button that has focus keeps it while the clock redraws the page.
+ * Keeps `list`'s children one per key, in the keys' order, made by
+ * `make(key)` and brought up to date by `update(node, key)`. A node whose
+ * key stays is never replaced, and moved only when the order changes: a
+ * gone key's node is removed, a new key's inserted, so a button keeps its
+ * focus and a message its text selection while the clock redraws the page.
  */
 function keyed(list, keys, make, update) {
-  if ([...list.children].map((node) => node.dataset.key).join('\n') !== keys.join('\n')) {
-    list.replaceChildren(...keys.map((key) => {
-      const node = make(key);
+  const old = new Map([...list.children].map((node) => [node.dataset.key, node]));
+  const wanted = new Set(keys);
+  for (const [key, node] of old) if (!wanted.has(key)) node.remove();
+  let next = list.firstElementChild;
+  for (const key of keys) {
+    let node = old.get(key);
+    if (!node) {
+      node = make(key);
       node.dataset.key = key;
-      return node;
-    }));
+    }
+    if (node === next) next = next.nextElementSibling;
+    else list.insertBefore(node, next);
+    update(node, key);
   }
-  for (const node of list.children) update(node, node.dataset.key);
+}
+
+/** Sets `node`'s text only when it differs, so a redraw that changes nothing changes no node. */
+function setText(node, value) {
+  if (node.textContent !== value) node.textContent = value;
 }
 
 /** `text` with each case-insensitive match of `query` marked. */
@@ -261,7 +275,9 @@ export async function mount(root) {
   back.addEventListener('click', () => { app.dataset.view = 'list'; });
   const banner = el('p', { class: 'chatlive__banner', role: 'status', hidden: '' },
     el('strong', {}, 'Connecting…'), ' For 30 seconds, new messages wait for you.');
-  const messages = el('ol', { class: 'chatlive__messages', 'aria-live': 'polite', 'aria-label': 'Messages' });
+  const messages = el('ol', { class: 'chatlive__messages', 'aria-label': 'Messages' });
+  // the list is updated in place; this region alone announces each message that reaches the screen
+  const arrived = el('p', { class: 'visually-hidden', 'aria-live': 'polite' });
   const text = el('input', { type: 'text', class: 'chatlive__text', 'aria-label': 'Message', maxlength: '200' });
   const send = el('button', { type: 'submit', class: 'chatlive__send', 'aria-label': 'Send' }, arrow());
   const join = el('button', { type: 'button', class: 'chatlive__join' });
@@ -287,7 +303,7 @@ export async function mount(root) {
     typed = -Infinity;
     chat.post(you, room, words);
   });
-  const main = el('section', { class: 'chatlive__room', 'aria-label': 'Channel' }, el('header', { class: 'chatlive__bar-title' }, back, roomTitle), banner, messages,
+  const main = el('section', { class: 'chatlive__room', 'aria-label': 'Channel' }, el('header', { class: 'chatlive__bar-title' }, back, roomTitle), banner, messages, arrived,
     el('div', { class: 'chatlive__foot' }, composer, join, signedOut, typingLine));
 
   // ---- the debugger: the clock, then its parts behind tabs
@@ -490,6 +506,15 @@ export async function mount(root) {
     return { online: told };
   }
   const asSelf = (value) => (value === 'offline' || value === null ? null : value);
+  // the page's own key for each message it shows: a message object stays the same while on the screen
+  const messageKeys = new WeakMap();
+  let counted = 0;
+  const keyOf = (message) => {
+    if (!messageKeys.has(message)) messageKeys.set(message, `m${++counted}`);
+    return messageKeys.get(message);
+  };
+  const announced = new Set();
+  let announcedView = null;
   const statusOf = (state) => (state === 'reconnecting' ? 'reconnecting' : state?.online ?? 'offline');
 
   async function render() {
@@ -515,20 +540,23 @@ export async function mount(root) {
     const roster = { ...screen.roster, [you]: yourStatus };
 
     // you, on the rail and in your menu
-    meFace.replaceChildren(...face(you, 'rail').childNodes);
+    if (meFace.dataset.who !== you) {
+      meFace.dataset.who = menuFace.dataset.who = you;
+      meFace.replaceChildren(...face(you, 'rail').childNodes);
+      menuFace.replaceChildren(...face(you, 'large').childNodes);
+    }
     presence(meFace, yourStatus);
     me.setAttribute('aria-label', `${you}, ${LABEL[yourStatus]}`);
-    menuFace.replaceChildren(...face(you, 'large').childNodes);
     presence(menuFace, yourStatus);
-    menuName.textContent = you;
-    menuStatus.textContent = LABEL[yourStatus];
-    sign.textContent = selfState ? `Sign out of ${WORKSPACE}` : `Sign in to ${WORKSPACE}`;
+    setText(menuName, you);
+    setText(menuStatus, LABEL[yourStatus]);
+    setText(sign, selfState ? `Sign out of ${WORKSPACE}` : `Sign in to ${WORKSPACE}`);
     for (const item of switchList.children) {
       const name = item.dataset.key;
       const state = STATUS[roster[name]] ?? 'unknown';
       item.setAttribute('aria-checked', String(name === you));
       presence(item.firstChild, state);
-      item.lastChild.textContent = name === you ? 'you' : state === 'unknown' ? '' : state;
+      setText(item.lastChild, name === you ? 'you' : state === 'unknown' ? '' : state);
     }
 
     // the sidebar
@@ -543,39 +571,61 @@ export async function mount(root) {
       button.setAttribute('aria-current', String(name === room));
       button.classList.toggle('chatlive__room-link--joined', screen.rooms.includes(name));
     });
-    people.replaceChildren(...PEOPLE.map((name) => {
+    keyed(people, PEOPLE, (name) => el('li', {}, face(name, 'small'), el('span', { class: 'chatlive__name' }, name),
+      el('span', { class: 'chatlive__you-mark' }, 'you'), el('span', { class: 'chatlive__presence' })), (node, name) => {
       const state = STATUS[roster[name]] ?? 'unknown';
-      const node = face(name, 'small');
-      presence(node, state);
-      return el('li', { class: `chatlive__person chatlive__person--${state}` }, node,
-        el('span', { class: 'chatlive__name' }, name),
-        name === you ? el('span', { class: 'chatlive__you-mark' }, 'you') : '',
-        el('span', { class: 'chatlive__presence' }, state === 'unknown' ? 'not on your screen' : LABEL[state].toLowerCase()));
-    }));
+      const className = `chatlive__person chatlive__person--${state}`;
+      if (node.className !== className) node.className = className;
+      presence(node.firstChild, state);
+      node.children[2].hidden = name !== you;
+      setText(node.lastChild, state === 'unknown' ? 'not on your screen' : LABEL[state].toLowerCase());
+    });
 
     // the room
     const joined = screen.rooms.includes(room);
-    roomTitle.replaceChildren(el('span', { class: 'chatlive__hash', 'aria-hidden': 'true' }, '#'), room);
+    if (roomTitle.dataset.room !== room) {
+      roomTitle.dataset.room = room;
+      roomTitle.replaceChildren(el('span', { class: 'chatlive__hash', 'aria-hidden': 'true' }, '#'), room);
+    }
     const inRoom = screen.messages.filter((message) => message.room === room);
     const here = query ? inRoom.filter((message) => message.text.toLowerCase().includes(query)) : inRoom;
     const atBottom = messages.scrollHeight - messages.scrollTop - messages.clientHeight < 40;
     const empty = !joined && !inRoom.length ? `You have not joined #${room}.`
       : query && inRoom.length ? `No messages in #${room} match “${search.value.trim()}”.`
         : 'No messages on your screen yet.';
-    messages.replaceChildren(...(here.length ? here.map((message, index) => {
-      const before = here[index - 1];
+    // one row per message, kept while the message stays on the screen; rebuilt only when its
+    // header, time or the search's highlight changes
+    const rows = new Map(here.map((message, index) => [keyOf(message), [message, here[index - 1]]]));
+    const notice = screen.notices.at(-1);
+    const keys = [...(here.length ? rows.keys() : ['empty']), ...(notice ? ['notice'] : [])];
+    keyed(messages, keys, (key) => el('li', { class: key === 'empty' ? 'chatlive__empty' : key === 'notice' ? 'chatlive__notice' : 'chatlive__message' }), (node, key) => {
+      if (key === 'empty') return setText(node, empty);
+      if (key === 'notice') return setText(node, notice);
+      const [message, before] = rows.get(key);
+      const more = Boolean(before && before.from === message.from && Math.abs(message.at - before.at) < GROUP);
+      const drawn = `${more}\n${message.at}\n${query}`;
+      if (node.drawn === drawn) return;
+      node.drawn = drawn;
       // when the post was made (step 8's store records it), or on step 5 when it reached this screen
       const stamp = el('time', { class: 'chatlive__at' }, clock(message.at));
       const body = el('p', { class: 'chatlive__body' }, ...marked(message.text, query));
-      if (before && before.from === message.from && Math.abs(message.at - before.at) < GROUP) {
-        return el('li', { class: 'chatlive__message chatlive__message--more' }, stamp, body);
-      }
-      return el('li', { class: 'chatlive__message' }, avatar(message.from, 'large'),
-        el('p', { class: 'chatlive__line' }, el('span', { class: 'chatlive__from' }, message.from), stamp), body);
-    })
-      : [el('li', { class: 'chatlive__empty' }, empty)]),
-      ...screen.notices.slice(-1).map((notice) => el('li', { class: 'chatlive__notice' }, notice)));
+      node.className = more ? 'chatlive__message chatlive__message--more' : 'chatlive__message';
+      if (more) node.replaceChildren(stamp, body);
+      else node.replaceChildren(avatar(message.from, 'large'), el('p', { class: 'chatlive__line' }, el('span', { class: 'chatlive__from' }, message.from), stamp), body);
+    });
     if (atBottom) messages.scrollTop = messages.scrollHeight;
+    // the live region says each message new to this screen and room, not those there when you came
+    const view = `${you}\n${room}`;
+    const fresh = inRoom.filter((message) => !announced.has(keyOf(message)));
+    for (const message of fresh) announced.add(keyOf(message));
+    if (view !== announcedView) {
+      announcedView = view;
+      announced.clear();
+      for (const message of inRoom) announced.add(keyOf(message));
+      setText(arrived, '');
+    } else if (fresh.length) {
+      setText(arrived, fresh.filter((message) => message.from !== you).map((message) => `${message.from}: ${message.text}`).join('\n'));
+    }
     banner.hidden = !reconnecting;
     const connected = Boolean(selfState);
     composer.hidden = !(connected && joined);
@@ -589,10 +639,10 @@ export async function mount(root) {
     text.placeholder = reconnecting ? 'Connecting…' : `Message #${room}`;
     // step 5's charts send no typing notices, and no typing.stopped for those the newest sent before a switch
     const typers = connected && chat.version() === LATEST ? (screen.typing[room] ?? []).filter((name) => name !== you) : [];
-    typingLine.textContent = typers.length === 0 ? ''
+    setText(typingLine, typers.length === 0 ? ''
       : typers.length === 1 ? `${typers[0]} is typing…`
         : typers.length === 2 ? `${typers[0]} and ${typers[1]} are typing…`
-          : 'Several people are typing…';
+          : 'Several people are typing…');
 
     // the debugger
     if (debug.hidden) return;
@@ -603,19 +653,19 @@ export async function mount(root) {
         button.setAttribute('aria-checked', String(Number(button.dataset.step) === version));
         button.disabled = migrating;
       }
-      versionAbout.textContent = VERSIONS[version].replace(/^Step \d+: /, '').replace(/^./, (first) => first.toUpperCase());
+      setText(versionAbout, VERSIONS[version].replace(/^Step \d+: /, '').replace(/^./, (first) => first.toUpperCase()));
       const agenda = chat.agenda();
       for (const card of scenarioList.children) {
         const { title } = SCENARIOS[card.dataset.key];
         const left = agenda.filter((entry) => entry.what === title).length;
-        card.querySelector('.chatlive__card-note').textContent = left ? `Running: ${left} ${left === 1 ? 'step' : 'steps'} to go` : '';
+        setText(card.querySelector('.chatlive__card-note'), left ? `Running: ${left} ${left === 1 ? 'step' : 'steps'} to go` : '');
       }
       for (const row of personList.children) {
         const name = row.dataset.key;
         // a connection is the application's: only a person who has one can lose it
         const returns = chat.reconnects(name), connected = chat.connected(name);
-        row.querySelector('.chatlive__lab-note').textContent = returns !== null ? `Reconnects at ${clock(returns)}`
-          : name === you ? (connected ? 'you' : 'you, signed out') : connected ? '' : 'Signed out';
+        setText(row.querySelector('.chatlive__lab-note'), returns !== null ? `Reconnects at ${clock(returns)}`
+          : name === you ? (connected ? 'you' : 'you, signed out') : connected ? '' : 'Signed out');
         row.classList.toggle('chatlive__lab-person--lost', returns !== null);
         for (const button of row.querySelectorAll('.chatlive__speed')) {
           button.disabled = !connected;
@@ -639,7 +689,7 @@ export async function mount(root) {
           : [el('li', { class: 'chatlive__empty' }, 'Nothing yet. Post a message or run a scenario.')]));
       }
     } else if (part === 'actors') {
-      memory.textContent = `${stats.actors} actors · ${stats.inMemory} in memory · ${stats.stored} in the store`;
+      setText(memory, `${stats.actors} actors · ${stats.inMemory} in memory · ${stats.stored} in the store`);
       keyed(actorList, actors.map((actor) => actor.name), (name) => {
         const button = el('button', { type: 'button', class: 'chatlive__actor' },
           el('span', { class: 'chatlive__dot', 'aria-hidden': 'true' }), el('code', {}, name), el('span', { class: 'chatlive__where' }));
@@ -650,17 +700,18 @@ export async function mount(root) {
         const button = node.firstChild;
         button.setAttribute('aria-current', String(name === inspected));
         button.classList.toggle('chatlive__actor--stored', actor.stored);
-        button.lastChild.textContent = actor.stored ? 'in the store' : 'in memory';
+        setText(button.lastChild, actor.stored ? 'in the store' : 'in memory');
       });
       const chart = charts[chartKey()];
       if (shown?.stored) {
         if (shownStored !== true) chart?.restart(); // nothing lit: the actor's state is in its blob
         shownStored = true;
-        stateLine.textContent = `${inspected} waits in the store; its next event loads it.`;
+        setText(stateLine, `${inspected} waits in the store; its next event loads it.`);
       } else if (shown) {
         shownStored = false;
         chart?.show(shown.value);
-        stateLine.replaceChildren(el('code', {}, inspected), ' is in ', el('code', {}, statePath(shown.value)), ` (step ${chat.version()})`);
+        const line = [inspected, ' is in ', statePath(shown.value), ` (step ${chat.version()})`];
+        if (stateLine.textContent !== line.join('')) stateLine.replaceChildren(el('code', {}, line[0]), line[1], el('code', {}, line[2]), line[3]);
       }
     }
   }
