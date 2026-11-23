@@ -1533,13 +1533,21 @@ export async function mount(root) {
     } else if (part === 'log') {
       const kind = kindPick.value;
       const entries = chat.log().filter((entry) => !kind || entry.kind === kind).reverse();
-      const signature = `${kind}\n${entries.length}\n${entries[0]?.at}\n${entries[0]?.text}`;
+      const signature = `${kind}\n${entries.length}\n${entries[0]?.id}`;
       if (signature !== logDrawn) {
         logDrawn = signature;
-        logList.replaceChildren(...(entries.length ? entries.map((entry) => el('li', { class: `chatlive__entry chatlive__entry--${entry.kind}` },
-          el('time', { class: 'chatlive__at' }, clock(entry.at)), el('span', { class: 'chatlive__kind' }, KINDS[entry.kind] ?? entry.kind),
-          el('span', { class: 'chatlive__entry-text' }, entry.text)))
-          : [el('li', { class: 'chatlive__empty' }, kind ? `No ${KINDS[kind]} entries yet.` : 'Nothing yet. Post a message or run a scenario.')]));
+        // keyed by the entry's number: a new entry is added above the rows kept, which stay
+        // as they are (a text selection in them too), and the kind filter only removes or adds rows
+        if (!entries.length) logList.replaceChildren(el('li', { class: 'chatlive__empty' }, kind ? `No ${KINDS[kind]} entries yet.` : 'Nothing yet. Post a message or run a scenario.'));
+        else {
+          const byID = new Map(entries.map((entry) => [String(entry.id), entry]));
+          keyed(logList, [...byID.keys()], (id) => {
+            const entry = byID.get(id);
+            return el('li', { class: `chatlive__entry chatlive__entry--${entry.kind}` },
+              el('time', { class: 'chatlive__at' }, clock(entry.at)), el('span', { class: 'chatlive__kind' }, KINDS[entry.kind] ?? entry.kind),
+              el('span', { class: 'chatlive__entry-text' }, entry.text));
+          }, () => {});
+        }
       }
     } else if (part === 'actors') {
       setText(memory, `${stats.actors} actors · ${stats.inMemory} in memory · ${stats.stored} in the store`);

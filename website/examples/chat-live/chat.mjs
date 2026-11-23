@@ -115,9 +115,11 @@ export async function createChat(tinyactors, { versions, version = LATEST, seed 
   const random = generator(seed);
 
   // ---- what happened, newest last: inputs, what reached a screen, faults, versions
+  // Each entry has its own number (id), which a page keys its rows by.
   const log = [];
+  let logged = 0;
   const note = (kind, text) => {
-    log.push({ at: now(), kind, text });
+    log.push({ id: ++logged, at: now(), kind, text });
     if (log.length > KEEP) log.shift();
   };
 
