@@ -16,10 +16,10 @@
   </hero>
 
   <section id="try">
-    <heading>Try the finished chat</heading>
-    <p>Each person, room and the workspace is an actor in this tab, running the charts the steps below build. Switch person from the avatar at the bottom left; the debugger at the top right loses connections and switches chart versions.</p>
+    <heading>Chat as any of six people</heading>
+    <p>Each person and channel is an actor in this tab, and you are forager: switch person from your avatar's menu. The debugger at the top right cuts a person's connection or switches the running chat between steps 5 and 9.</p>
     <playground src="../../examples/chat-live/page.mjs">
-      <description>A team chat, The Hill, with two rooms and six people, each an actor. Its debugger loses connections, makes screens drop or delay messages, runs scenarios, and moves the running chat between the tutorial's steps 5 and 9 by live migration.</description>
+      <description>A team chat, The Hill, with channels, direct messages and six people, each an actor; you are forager, and your avatar's menu signs you out or switches person. Its debugger runs the simulated clock, loses a person's connection, makes a screen drop or delay messages, runs scenarios, shows each actor's chart in its current state and a log, and moves the running chat between the tutorial's steps 5 and 9 by live migration.</description>
     </playground>
   </section>
 
