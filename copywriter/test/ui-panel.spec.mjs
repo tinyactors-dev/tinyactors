@@ -800,7 +800,7 @@ test('a site audience: its chip carries a tiny globe with the file\'s address, o
   assert.equal(await panel.locator('.cw-strip-chip[data-audience=student] .cw-site').count(), 0, 'the reviewer\'s own audience has none');
   assert.equal((await chip.textContent()).replace(/\d+\/\d+$/, ''), 'TL', 'no words beside the initials');
 
-  // the checklist: each item with its kind of page as an icon, its need in the tooltip; a claim in its fold
+  // the checklist: each item with its kind of page as an icon, its need in the tooltip; no claims
   await chip.click();
   await panel.locator('.cw-menu [data-action=open-reading]').click();
   const kinds = panel.locator('.cw-need-kind');
@@ -810,7 +810,8 @@ test('a site audience: its chip carries a tiny globe with the file\'s address, o
   assert.equal((await kinds.first().textContent()).trim(), '', 'an icon, no words');
   const host = panel.locator('.cw-check-item').last();
   await host.locator('.cw-check-line').click();
-  assert.equal(await host.locator('.cw-claimed').textContent(), 'Claimed by “Production”');
+  assert.equal(await host.locator('.cw-why').textContent(), 'Snapshots, but nothing on a crash.');
+  assert.equal(await host.locator('.cw-claimed').count(), 0, 'the page names no claims');
 
   // Settings: the page's kind, one quiet word; the audience's row its globe and dot
   await panel.locator('[data-action=settings]').click();
@@ -823,4 +824,80 @@ test('a site audience: its chip carries a tiny globe with the file\'s address, o
   await page.screenshot({ path: process.env.CW_SHOTS ? `${process.env.CW_SHOTS}/panel-settings-kind.png` : undefined });
   assert.deepEqual(errors, []);
   await page.close();
+});
+
+test('revise page: the plan lists its items quietly; accepting a rewrite makes an annotation to preview, a link an item; the export lists the criteria', async () => {
+  const { page, panel, errors } = await open('layout=sheet', { viewport: { width: 412, height: 915 }, hasTouch: true, isMobile: true });
+  const button = panel.locator('header [data-action=plan]');
+  assert.equal(await button.getAttribute('aria-label'), 'Revise page', 'an icon with a name');
+  assert.ok(await button.isVisible(), 'the page has a reading');
+  await button.click();
+  await panel.locator('[data-view=plan] .cw-spin').first().waitFor();
+  await panel.locator('.cw-plan-item').first().waitFor();
+  assert.equal(await panel.locator('.cw-heading').textContent(), 'Revise page');
+  const items = panel.locator('.cw-plan-list[aria-label=Plan] .cw-plan-item');
+  assert.equal(await items.count(), 4);
+  assert.deepEqual(await items.evaluateAll((all) => all.map((n) => n.dataset.planAction)), ['rewrite', 'link', 'add', 'move']);
+  // a link elsewhere: its target's short path, the need's audience as initials, a split glyph whose tap says why
+  const link = items.nth(1);
+  assert.equal(await link.locator('.cw-plan-target').textContent(), '/guides/snapshots/');
+  assert.equal(await link.locator('.cw-need').textContent(), 'TL');
+  assert.equal(await link.locator('.cw-need').getAttribute('title'), 'tech-lead.host-dies');
+  assert.equal(await link.locator('.cw-plan-reason').count(), 0);
+  await link.locator('[data-action=plan-why]').click();
+  assert.equal(await link.locator('.cw-plan-reason').textContent(), 'tech-lead.host-dies belongs on a how-to page: linked to /guides/snapshots/.');
+  // the copy is folded until a tap
+  const rewrite = items.first();
+  await rewrite.locator('.cw-plan-line').click();
+  await page.waitForTimeout(250);
+  assert.match(await rewrite.locator('.cw-plan-copy').textContent(), /measured on the memory page/);
+  assert.equal(await rewrite.locator('.cw-plan-criteria li').count(), 1);
+  if (process.env.CW_SHOTS) await page.screenshot({ path: `${process.env.CW_SHOTS}/panel-plan.png` });
+
+  // accept the rewrite: an annotation of the plan, opened and previewed as any other
+  await rewrite.locator('[data-action=plan-accept]').click();
+  await panel.locator('.cw-plan-item[data-id=p1][data-decision=accepted]').waitFor();
+  await panel.locator('.cw-plan-item[data-id=p1] [data-action=plan-open]').click();
+  await panel.locator('[data-view=detail]').waitFor();
+  await panel.locator('.cw-card [data-action=preview]').first().click();
+  await until(async () => (await page.evaluate(() => reviewer.getState().annotations.find((a) => a.id === 'p1-a')?.state)) === 'previewing');
+  await panel.locator('[data-action=keep]').click();
+  await panel.locator('[data-action=back]').click();
+
+  // accept the link: an open item of the page; reject the move
+  await panel.locator('.cw-plan-item[data-id=p2] [data-action=plan-accept]').click();
+  await panel.locator('.cw-plan-item[data-id=p4] [data-action=plan-reject]').click();
+  await until(async () => (await page.evaluate(() => reviewer.getState().plan.items.map((x) => x.decision).join(','))) === 'accepted,accepted,,rejected');
+  const made = await page.evaluate(() => reviewer.getState().annotations.find((a) => a.id === 'p2-a'));
+  assert.ok(made.pageLevel && made.source === 'plan');
+  assert.equal(await panel.locator('.cw-plan-item[data-id=p4]').getAttribute('data-decision'), 'rejected');
+  assert.equal(await panel.locator('[data-action=plan-accept-all]').count(), 1, 'accept all, quietly, while two are open');
+  if (process.env.CW_SHOTS) await page.screenshot({ path: `${process.env.CW_SHOTS}/panel-plan-decided.png` });
+
+  // the export: the page's acceptance criteria and the task for the other page
+  await panel.locator('[data-menu^=export]').first().click();
+  await panel.locator('[data-action=export-download]').click();
+  await until(async () => page.evaluate(() => reviewer.exported()));
+  const md = await page.evaluate(() => reviewer.exported());
+  assert.match(md, /### Acceptance criteria\n\n- \[ \] The home page says where the 530 bytes were measured\. \(tech-lead\.decide\)\n- \[ \] The home page links to \/guides\/snapshots\/ for tech-lead\.host-dies\./);
+  assert.match(md, /## Other pages[\s\S]*\/guides\/snapshots\/ answers tech-lead\.host-dies/);
+  assert.ok(!md.includes('/guides/charts/'), 'the rejected move is not exported');
+  assert.deepEqual(errors, []);
+  await page.close();
+});
+
+test('revise page: no button before a reading, and the plan view keeps decided items when planned again', async () => {
+  const { page, panel, errors } = await open('read=0');
+  assert.ok(!(await panel.locator('header [data-action=plan]').isVisible()), 'nothing read or found: nothing to plan');
+  await page.close();
+  const second = await open('');
+  await second.panel.locator('header [data-action=plan]').click();
+  await second.panel.locator('.cw-plan-item').first().waitFor();
+  await second.panel.locator('.cw-plan-item[data-id=p3] [data-action=plan-reject]').click();
+  await second.panel.locator('[data-action=plan-again]').click();
+  await until(async () => (await second.page.evaluate(() => reviewer.getState().plan.state)) === 'planned' && (await second.panel.locator('.cw-plan-item').count()) > 1);
+  assert.deepEqual(await second.page.evaluate(() => reviewer.getState().plan.items.map((x) => `${x.id}:${x.decision ?? ''}`)), ['p3:rejected', 'p1:', 'p2:', 'p4:']);
+  assert.deepEqual(errors, []);
+  assert.deepEqual(second.errors, []);
+  await second.page.close();
 });

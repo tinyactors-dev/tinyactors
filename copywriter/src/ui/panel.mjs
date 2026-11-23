@@ -24,6 +24,7 @@ import {
   MousePointerClick, Pencil, RefreshCw, RotateCcw, Settings, Sparkles, SquareDashedMousePointer, Trash2, TriangleAlert, Undo2, X,
   ScanEye, ListChecks, CircleCheck, Contrast, Circle, CirclePlus, MessageCircleQuestion, Signpost, ShieldQuestion, BookA, Link2,
   MessageCircle, UserPen, UserCheck, UserMinus, Globe, Megaphone, GraduationCap, Route, BookOpen, Lightbulb,
+  WandSparkles, PenLine, Scissors, MoveRight, FilePlus, Split, CheckCheck,
 } from 'lucide';
 import { panelCSS } from './panel-css.mjs';
 import { markPaths, markViewBox } from './mark.mjs';
@@ -66,6 +67,18 @@ const PAGE_KINDS = {
   reference: { icon: BookOpen, label: 'Reference: facts to look up' },
   explanation: { icon: Lightbulb, label: 'Explanation: reasons and limits' },
 };
+// A plan item's action: an icon each, the word in its tooltip.
+const ACTIONS = {
+  rewrite: { icon: PenLine, label: 'Rewrite here' },
+  add: { icon: Plus, label: 'Add here' },
+  cut: { icon: Scissors, label: 'Cut here' },
+  link: { icon: Link2, label: 'A line and a link here' },
+  move: { icon: MoveRight, label: 'Move to another page' },
+  new: { icon: FilePlus, label: 'A new page' },
+};
+// A target as the plan shows it: the other page's short path.
+const pathOf = (target) => { try { return new URL(target).pathname; } catch { return String(target); } };
+
 // An audience's initials: the first letters of its first two words.
 const initials = (name) => String(name || '?').split(/[\s-]+/).filter(Boolean).slice(0, 2).map((w) => w[0].toUpperCase()).join('');
 
@@ -256,6 +269,8 @@ export function mountPanel(root, reviewer, { layout = 'sidebar', onTall = null }
     refreshing: false,
     suggestDraft: null,    // the audiences ticked in the page's suggestion row, before it is accepted
     suggestKey: null,      // the suggestion that draft belongs to
+    planOpen: null,        // the plan item unfolded, its id
+    whyOpen: null,         // the plan item whose placement's reason shows, its id
   };
   const rec = { active: false, toggled: false, pendingStart: false, downAt: 0, startedAt: 0, target: null, timer: 0 };
   const seen = new Set();  // ids already drawn, so only new cards and messages animate in
@@ -299,13 +314,17 @@ export function mountPanel(root, reviewer, { layout = 'sidebar', onTall = null }
   const newChatButton = iconButton(SquarePen, 'New conversation', {
     'data-action': 'new-chat', onclick: () => send({ type: 'chat.new' }),
   });
+  const planButton = iconButton(WandSparkles, 'Revise page', {
+    'data-action': 'plan', 'aria-pressed': 'false',
+    onclick: () => (ui.view === 'plan' ? go('list') : openPlan()),
+  });
   const settingsButton = iconButton(Settings, 'Settings', {
     'data-action': 'settings', 'aria-pressed': 'false',
     onclick: () => go(ui.view === 'settings' ? 'list' : 'settings'),
   });
   const exportAnchor = h('div', { class: 'cw-anchor', 'data-anchor': 'export' },
     iconButton(Download, 'Export', { 'aria-haspopup': 'menu', 'aria-expanded': 'false', 'data-menu': 'export', onclick: () => toggleMenu('export') }));
-  const header = h('header', { class: 'cw-header' }, lead, heading, moreAnchor, newChatButton, chatButton, settingsButton, exportAnchor);
+  const header = h('header', { class: 'cw-header' }, lead, heading, moreAnchor, newChatButton, planButton, chatButton, settingsButton, exportAnchor);
 
   // a div, not <main>: the host page keeps its one main landmark
   const main = h('div', { class: 'cw-main', tabindex: '-1' });
@@ -1024,6 +1043,21 @@ export function mountPanel(root, reviewer, { layout = 'sidebar', onTall = null }
 
   // Reads the page as the audiences; the list shows each reading's chip
   // spinning, and the checklist when one was asked for opens.
+  // The page can be revised once a reading answered or found something.
+  function canPlan() {
+    return state.status === 'ready' && ((state.readings ?? []).some((r) => r.state === 'done') || (state.annotations ?? []).some((a) => a.source === 'audience'));
+  }
+
+  // The plan view; the first time, with a key, it plans at once.
+  function openPlan() {
+    if (state.activeID) send({ type: 'deselect', id: state.activeID });
+    ui.view = 'plan';
+    ui.menu = null;
+    render();
+    focusLead();
+    if (!state.plan && state.settings?.hasKey) send({ type: 'plan' });
+  }
+
   function readAs(ids) {
     ui.menu = null;
     if (ui.view === 'settings') ui.view = 'list';
@@ -1216,8 +1250,87 @@ export function mountPanel(root, reviewer, { layout = 'sidebar', onTall = null }
         onclick: () => send({ type: 'reading.open', audienceID: a.id, index: x.index }).then((id) => { if (id !== FAILED) toast('Open item added'); }),
       });
     return h('div', { class: `cw-check-item${open ? ' is-open' : ''}`, 'data-status': x.status, 'data-index': x.index },
-      line, action, h('div', { class: 'cw-fold' }, h('div', null, x.explanation && h('div', { class: 'cw-why' }, x.explanation),
-        x.claimed?.length > 0 && h('div', { class: 'cw-claimed', 'data-claimed': x.claimed.join('\n') }, `Claimed by ${x.claimed.map((c) => (c === 'the page' ? 'the page' : `“${c}”`)).join(', ')}`))));
+      line, action, h('div', { class: 'cw-fold' }, h('div', null, x.explanation && h('div', { class: 'cw-why' }, x.explanation))));
+  }
+
+  // The plan of the page: one line per item, its action as a glyph, where
+  // it goes, the needs it serves as tiny avatars; a tap unfolds its copy,
+  // why, and how to check it. Accept and reject at the line's end; a need
+  // placed elsewhere carries a split glyph whose tap says why.
+  function planView() {
+    const p = state.plan;
+    const view = h('div', { class: 'cw-view', 'data-view': 'plan' });
+    const body = h('div', { class: 'cw-plan' });
+    view.append(body);
+    const hasKey = !!state.settings?.hasKey;
+    const planning = p?.state === 'planning';
+    const all = [...(p?.items ?? []), ...(p?.newPages ?? [])];
+    const open = all.filter((x) => !x.decision);
+    const since = planning ? new Date(p.at ?? Date.now()).getTime() : 0;
+    body.append(h('div', { class: 'cw-reading-head' },
+      planning ? [icon(LoaderCircle, 'cw-spin'), h('span', null, 'Planning'), h('span', { class: 'cw-elapsed', 'data-since': String(since), 'aria-hidden': 'true' }, `${Math.max(0, Math.round((Date.now() - since) / 1000))} s`)]
+        : p ? [h('span', { class: 'cw-cover cw-cover--big', title: `${all.length - open.length} of ${all.length} decided` }, `${all.length - open.length}/${all.length}`),
+          h('span', { class: 'cw-reading-at', title: p.at ? when(p.at) : '' }, p.at ? ago(p.at) : ''),
+          p.sitePages > 0 && h('span', { class: 'cw-plan-site', title: `Placed across ${p.sitePages} pages of the site` }, icon(Globe), p.sitePages)]
+          : h('span', null, hasKey ? '' : 'Add a Gemini key to plan'),
+      h('span', { class: 'cw-grow' }),
+      p && !planning && open.length > 1 && iconButton(CheckCheck, 'Accept all', { variant: 'cw-plan-all', 'data-action': 'plan-accept-all', onclick: () => send({ type: 'plan.acceptAll' }) }),
+      hasKey && !planning && iconButton(p ? RefreshCw : WandSparkles, p ? 'Plan again' : 'Plan the page', { 'data-action': 'plan-again', onclick: () => send({ type: 'plan' }) })));
+    if (p?.state === 'failed') body.append(h('div', { class: 'cw-error', role: 'alert' }, icon(TriangleAlert), h('span', null, p.error ?? 'The plan failed.')));
+    if (!p?.items?.length && !p?.newPages?.length) {
+      if (planning) body.append(h('div', { class: 'cw-skeleton', role: 'status', 'aria-label': 'Planning' }, h('i', { style: 'width:80%' }), h('i', { style: 'width:64%' }), h('i', { style: 'width:72%' })));
+      return view;
+    }
+    body.append(h('ul', { class: 'cw-plan-list', role: 'list', 'aria-label': 'Plan' }, p.items.map((x) => h('li', null, planItem(x)))));
+    if (p.newPages.length) {
+      body.append(h('div', { class: 'cw-label', title: 'Pages the site lacks' }, icon(FilePlus), h('span', { class: 'cw-count' }, p.newPages.length)),
+        h('ul', { class: 'cw-plan-list', role: 'list', 'aria-label': 'New pages' }, p.newPages.map((x) => h('li', null, planItem({ ...x, action: 'new', target: 'new', text: x.outline.join(' · '), original: x.title, isPage: true })))));
+    }
+    return view;
+  }
+
+  // A need as a tiny avatar: its audience's initials, the need's id in the tooltip.
+  function needChip(needID) {
+    const siteID = String(needID).split('.')[0];
+    const a = (state.settings?.audiences ?? []).find((x) => x.siteID === siteID || x.id === siteID);
+    return h('span', { class: 'cw-need', title: needID, 'data-need': needID }, initials(a?.name ?? siteID));
+  }
+
+  function planItem(x) {
+    const act = ACTIONS[x.action] ?? ACTIONS.rewrite;
+    const open = ui.planOpen === x.id;
+    const why = ui.whyOpen === x.id;
+    const made = x.annotationID && state.annotations?.find((a) => a.id === x.annotationID);
+    const where = x.target === 'here' ? null : x.target === 'new' ? (x.isPage ? PAGE_KINDS[x.kind]?.label.split(':')[0] : x.where ?? 'new') : pathOf(x.target);
+    const line = h('button', {
+      type: 'button', class: 'cw-plan-line', 'aria-expanded': String(open), 'data-action': 'plan-item',
+      title: `${act.label}${where ? ` · ${where}` : ''}`,
+      onclick: () => { ui.planOpen = open ? null : x.id; render(); },
+    },
+    h('span', { class: 'cw-plan-glyph', role: 'img', 'aria-label': act.label }, icon(act.icon)),
+    h('span', { class: 'cw-plan-text' }, x.original ?? x.text),
+    h('span', { class: 'cw-plan-meta' },
+      where && h('span', { class: 'cw-plan-target', 'data-target': x.target }, where),
+      (x.needs ?? []).map(needChip)));
+    const acts = h('span', { class: 'cw-plan-acts' },
+      x.conflict && iconButton(Split, 'Why it goes there', {
+        variant: `cw-plan-split${why ? ' is-on' : ''}`, 'data-action': 'plan-why', 'aria-pressed': String(why),
+        onclick: () => { ui.whyOpen = why ? null : x.id; render(); },
+      }),
+      !x.decision && iconButton(Check, 'Accept', { variant: 'cw-plan-accept', 'data-action': 'plan-accept', onclick: () => send({ type: 'plan.accept', id: x.id }) }),
+      !x.decision && iconButton(X, 'Reject', { variant: 'cw-plan-reject', 'data-action': 'plan-reject', onclick: () => send({ type: 'plan.reject', id: x.id }) }),
+      made && iconButton(ArrowRight, 'Open it', { variant: 'cw-plan-open', 'data-action': 'plan-open', onclick: () => send({ type: 'select', id: made.id }) }),
+      x.decision === 'accepted' && !made && h('span', { class: 'cw-plan-done', role: 'img', 'aria-label': 'Accepted', title: 'Accepted' }, icon(Check)));
+    const fold = h('div', { class: 'cw-fold' }, h('div', null,
+      x.original && x.text && !x.isPage && h('div', { class: 'cw-plan-copy' }, x.text),
+      x.isPage && x.outline?.length > 0 && h('ol', { class: 'cw-plan-outline' }, x.outline.map((o) => h('li', null, o))),
+      x.targetText && h('div', { class: 'cw-plan-there', title: `For ${where}` }, icon(MoveRight), h('span', null, x.targetText)),
+      x.reason && !why && h('div', { class: 'cw-why' }, x.reason),
+      x.criteria?.length > 0 && h('ul', { class: 'cw-plan-criteria', 'aria-label': 'Acceptance criteria' }, x.criteria.map((c) => h('li', { title: c.needID ?? '' }, icon(CircleCheck), h('span', null, c.text))))));
+    return h('div', {
+      class: `cw-plan-item${open ? ' is-open' : ''}`, 'data-id': x.id, 'data-plan-action': x.action, 'data-decision': x.decision ?? '',
+      ...(x.routed ? { 'data-routed': '' } : {}),
+    }, line, acts, why && h('div', { class: 'cw-plan-reason', role: 'note' }, icon(Split), h('span', null, x.conflict)), fold);
   }
 
   function settingsView() {
@@ -1383,6 +1496,7 @@ export function mountPanel(root, reviewer, { layout = 'sidebar', onTall = null }
     const a = activeAnnotation();
     if (a) return JSON.stringify(['detail', a, ui.editing === a.id, state.settings?.hasKey, state.recording, state.settings?.audiences, state.settings?.audienceIDs]);
     if (ui.view === 'chat') return JSON.stringify(['chat', state.chat, state.settings?.hasKey, state.annotations?.map((x) => [x.id, x.state, x.chosenID]), state.recording, state.settings?.audiences, state.settings?.audienceIDs]);
+    if (ui.view === 'plan') return JSON.stringify(['plan', state.plan, ui.planOpen, ui.whyOpen, state.annotations?.map((x) => [x.id, x.state]), state.settings?.audiences, state.settings?.hasKey]);
     if (ui.view === 'reading') return JSON.stringify(['reading', ui.reading, ui.itemOpen, state.readings, state.annotations, state.settings?.audiences, state.settings?.hasKey]);
     return JSON.stringify(['list', state.status, state.error, state.annotations, state.settings?.hasKey, ui.showDone, state.picking,
       state.readings?.map((r) => [r.audienceID, r.state, r.at, r.items.map((x) => x.status)]), state.settings?.audiences, state.settings?.audienceIDs,
@@ -1404,7 +1518,7 @@ export function mountPanel(root, reviewer, { layout = 'sidebar', onTall = null }
 
     const a = activeAnnotation();
     if (ui.editing && ui.editing !== a?.id) ui.editing = null;
-    const view = ui.view === 'settings' ? settingsView() : a ? detailView(a) : ui.view === 'chat' ? chatView() : ui.view === 'reading' ? readingView() : listView();
+    const view = ui.view === 'settings' ? settingsView() : a ? detailView(a) : ui.view === 'chat' ? chatView() : ui.view === 'reading' ? readingView() : ui.view === 'plan' ? planView() : listView();
     const where = place();
     if (where !== lastPlace) view.classList.add('is-new');
     main.replaceChildren(view);
@@ -1433,7 +1547,7 @@ export function mountPanel(root, reviewer, { layout = 'sidebar', onTall = null }
     const a = activeAnnotation();
     const atHome = ui.view === 'list' && !a;
     const talking = ui.view === 'chat' && !a ? readerOfChat() : null;
-    const key = JSON.stringify([atHome, ui.view, ui.reading, !!a, state.page, state.chat?.busy, state.chat?.messages?.length > 0,
+    const key = JSON.stringify([atHome, ui.view, ui.reading, !!a, state.page, state.chat?.busy, state.chat?.messages?.length > 0, canPlan(),
       ui.view === 'reading' && audienceOf(ui.reading)?.name, talking?.name ?? null, state.chat?.audienceID ?? null]);
     if (keys.header === key) return;
     const wasHome = keys.home;
@@ -1454,11 +1568,13 @@ export function mountPanel(root, reviewer, { layout = 'sidebar', onTall = null }
     } else {
       heading.classList.remove('is-reader');
       delete heading.dataset.audience;
-      heading.textContent = ui.view === 'settings' ? 'Settings' : reader ? reader.name : (state.page?.title || state.page?.url || '');
+      heading.textContent = ui.view === 'settings' ? 'Settings' : reader ? reader.name : ui.view === 'plan' ? 'Revise page' : (state.page?.title || state.page?.url || '');
       heading.title = ui.view === 'settings' ? '' : reader ? `Read as ${reader.name}: ${state.page?.url ?? ''}`
         : [state.page?.kind, state.page?.url].filter(Boolean).join(' · ');
     }
     moreAnchor.hidden = !a;
+    planButton.hidden = !!a || !((ui.view === 'list' && canPlan()) || ui.view === 'plan');
+    planButton.setAttribute('aria-pressed', String(ui.view === 'plan'));
     chatButton.hidden = !!a;
     newChatButton.hidden = ui.view !== 'chat' || !!a || (!state.chat?.messages?.length && !state.chat?.audienceID);
     newChatButton.disabled = !!state.chat?.busy;  // the reply on its way belongs to this conversation
@@ -1489,7 +1605,7 @@ export function mountPanel(root, reviewer, { layout = 'sidebar', onTall = null }
     // and so do rewrites side by side, to compare, until one is previewed (the page then shows above)
     const shown = activeAnnotation();
     const comparing = shown?.state === 'suggested' && shown.suggestions?.at(-1)?.audienceID !== undefined;
-    const nowTall = comparing || (!shown && (ui.view === 'reading' || (ui.view === 'chat' && !!state.chat?.audienceID)));
+    const nowTall = comparing || (!shown && (ui.view === 'reading' || ui.view === 'plan' || (ui.view === 'chat' && !!state.chat?.audienceID)));
     if (nowTall !== tall) { tall = nowTall; try { onTall?.(tall); } catch { /* the host's */ } }
     renderBanner();
     placeMenus();

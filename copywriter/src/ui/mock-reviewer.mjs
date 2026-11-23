@@ -8,7 +8,39 @@
 //
 // `delay` scales every simulated wait (0 makes them immediate macrotasks).
 
+import { buildPacket } from '../core/packet.mjs';
+
 const MINUTE = 60_000;
+const SITE = 'https://www.tinyactors.dev';
+
+// The plan of the page ("Revise page"): a rewrite that fits the pitch, a
+// need of an explanation linked to its page (routed by the core), an add, a
+// move to a how-to, and a new page.
+function samplePlan() {
+  const crit = (needID, page, text) => ({ needID, page, text });
+  return {
+    items: [
+      { id: 'p1', action: 'rewrite', needs: ['tech-lead.decide'], target: 'here', original: 'An actor takes about 530 bytes in Node.js.', anchored: true,
+        text: 'An actor takes about 530 bytes in Node.js, measured on the memory page.', reason: 'The lead decides on measured numbers.',
+        criteria: [crit('tech-lead.decide', `${SITE}/`, 'The home page says where the 530 bytes were measured')], audiences: ['Tech lead who approves dependencies'], decision: null },
+      { id: 'p2', action: 'link', needs: ['tech-lead.host-dies'], target: `${SITE}/guides/snapshots/`, targetTitle: 'Snapshots', anchored: false,
+        text: 'What happens to state when the host dies? See Snapshots.', targetText: 'Say what a snapshot keeps when the host dies.',
+        reason: 'tech-lead.host-dies belongs on a how-to page: linked to /guides/snapshots/.', conflict: 'tech-lead.host-dies belongs on a how-to page: linked to /guides/snapshots/.', routed: true,
+        criteria: [crit('tech-lead.host-dies', `${SITE}/`, 'The home page links to /guides/snapshots/ for tech-lead.host-dies'), crit('tech-lead.host-dies', `${SITE}/guides/snapshots/`, '/guides/snapshots/ answers tech-lead.host-dies')],
+        audiences: ['Tech lead who approves dependencies'], decision: null },
+      { id: 'p3', action: 'add', needs: ['tech-lead.maintainer'], target: 'here', anchored: false, where: 'Like SQLite, but for actors',
+        text: 'tinyactors is maintained by its author, in the open on GitHub.', reason: 'The lead asks who maintains it.',
+        criteria: [crit('tech-lead.maintainer', `${SITE}/`, 'The home page says who maintains tinyactors')], audiences: ['Tech lead who approves dependencies'], decision: null },
+      { id: 'p4', action: 'move', needs: ['tech-lead.first-chart'], target: `${SITE}/guides/charts/`, targetTitle: 'Writing charts', original: 'Get started in minutes', anchored: true,
+        text: 'Write your first chart.', reason: 'A first chart is a how-to.', conflict: 'A first chart is a how-to.',
+        criteria: [crit('tech-lead.first-chart', `${SITE}/guides/charts/`, '/guides/charts/ answers tech-lead.first-chart')], audiences: ['Tech lead who approves dependencies'], decision: null },
+    ],
+    newPages: [
+      { id: 'n1', title: 'When to use tinyactors', kind: 'explanation', audiences: ['tech-lead'], outline: ['Use it when', 'Do not use it when'], needs: ['tech-lead.when-to-use'],
+        criteria: [crit('tech-lead.when-to-use', 'new', 'A new explanation page "When to use tinyactors" answers tech-lead.when-to-use')], reason: 'No page says when not to.', decision: null },
+    ],
+  };
+}
 
 const VOICE = `You write copy for www.tinyactors.dev.
 
@@ -44,7 +76,7 @@ function sampleReading(now) {
       { field: 'tasks', text: 'check the license', status: 'answered', explanation: 'MIT.', anchor: { quote: { exact: 'MIT licensed.', prefix: '', suffix: '' }, selector: 'footer p' }, needID: 'tech-lead.check-portability', kind: 'reference' },
       { field: 'tasks', text: 'npm install and run one chart', status: 'partial', explanation: 'The command is there, the chart is not.', needID: 'tech-lead.first-chart', kind: 'tutorial' },
       { field: 'objections', text: '"Who maintains it?"', status: 'missing', explanation: 'No maintainer is named.', needID: 'tech-lead.maintainer', kind: 'pitch' },
-      { field: 'objections', text: '"What happens when the host dies?"', status: 'partial', explanation: 'Snapshots, but nothing on a crash.', needID: 'tech-lead.host-dies', kind: 'explanation', claimed: ['Production'] },
+      { field: 'objections', text: '"What happens when the host dies?"', status: 'partial', explanation: 'Snapshots, but nothing on a crash.', needID: 'tech-lead.host-dies', kind: 'explanation' },
     ],
     findingIDs: ['f1', 'f2'],
   };
@@ -131,6 +163,7 @@ export function createMockReviewer({ hasKey = true, delay = 1, empty = false, st
   const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms * delay));
   const id = (prefix) => `${prefix}${++seq}`;
   let readingMS = 1200;  // how long a reading takes, before the delay scales it (setReadingTime)
+  let exported = null;   // the last export's CHANGES.md, built by the real packet code
 
   let state = {
     status,
@@ -156,6 +189,7 @@ export function createMockReviewer({ hasKey = true, delay = 1, empty = false, st
       audienceIDs: empty || !read ? [] : ['lead'],
     },
     annotations: empty ? [] : [...(read ? sampleFindings(now) : []), ...sample(now)],
+    plan: null,
     readings: empty || !read ? [] : [sampleReading(now)],
     activeID: null,
     chat: {
@@ -202,6 +236,29 @@ export function createMockReviewer({ hasKey = true, delay = 1, empty = false, st
   }
 
   const get = (annotationID) => state.annotations.find((a) => a.id === annotationID);
+
+  // Plan items decided: an accepted rewrite, cut, add or link is an annotation here.
+  function decide(ids, decision) {
+    const t = Date.now();
+    const made = [];
+    const mark = (x) => {
+      if (x.decision || !ids.includes(x.id)) return x;
+      const y = { ...x, decision };
+      if (decision === 'accepted' && x.action !== 'new' && (x.target === 'here' || x.action === 'link') && x.action !== 'move') {
+        y.annotationID = `${x.id}-a`;
+        made.push({
+          id: y.annotationID, state: 'suggested', anchorFound: true, source: 'plan', original: x.anchored ? x.original : x.reason,
+          ...(x.anchored ? {} : { pageLevel: true }), note: '', chosenID: null, messages: [], audiences: x.audiences,
+          suggestions: [{ id: 's1', text: x.action === 'cut' ? '' : x.text, rationale: x.reason, after: 0 }],
+          plan: { itemID: x.id, action: x.action, needs: x.needs, criteria: x.criteria, target: x.target, where: x.where ?? null },
+          createdAt: t, updatedAt: t,
+        });
+      }
+      return y;
+    };
+    const plan = { ...state.plan, items: state.plan.items.map(mark), newPages: state.plan.newPages.map(mark) };
+    set({ plan, annotations: [...made, ...state.annotations] });
+  }
 
   async function ask(annotationID, text) {
     if (!state.settings.hasKey) {
@@ -506,13 +563,40 @@ export function createMockReviewer({ hasKey = true, delay = 1, empty = false, st
         : [...state.settings.models, { id: 'gemini-4-hydrogen-lite', label: 'Gemini 4 Hydrogen Lite' }];
       set({ settings: { ...state.settings, models } });
     },
-    async export() {
+    async plan() {
+      if (!state.settings.hasKey) throw new Error('No Gemini key: add yours in Settings.');
+      const before = state.plan;
+      set({ plan: { ...(before ?? { items: [], newPages: [], sitePages: 22 }), state: 'planning', at: Date.now() } });
+      await wait(900);
+      const fresh = samplePlan();
+      const kept = (list) => (list ?? []).filter((x) => x.decision);
+      const same = (x, y) => x.action === y.action && x.target === y.target && (x.original ?? '') === (y.original ?? '');
+      set({ plan: {
+        state: 'planned', at: Date.now(), seconds: 31, sitePages: 22,
+        items: [...kept(before?.items), ...fresh.items.filter((x) => !kept(before?.items).some((y) => same(x, y)))],
+        newPages: [...kept(before?.newPages), ...fresh.newPages.filter((x) => !kept(before?.newPages).some((y) => y.title === x.title))],
+      } });
+    },
+    async 'plan.accept'({ id: itemID }) { decide([itemID], 'accepted'); },
+    async 'plan.reject'({ id: itemID }) { decide([itemID], 'rejected'); },
+    async 'plan.acceptAll'() { decide([...state.plan.items, ...state.plan.newPages].filter((x) => !x.decision).map((x) => x.id), 'accepted'); },
+    async export({ scope = 'page' } = {}) {
       set({ exporting: 'building' });
       await wait(600);
       if (state.totals.kept === 0) {
         set({ exporting: 'failed' });
         throw new Error('Nothing is kept yet: keep a suggestion first.');
       }
+      // the real packet over the mock's records: the page's annotations and its accepted plan
+      const url = state.page.url;
+      const iso = (t) => new Date(t).toISOString();
+      const records = state.annotations.map((a) => ({
+        ...a, page: url, lang: 'en', anchor: a.pageLevel ? null : { quote: { exact: a.original, prefix: '', suffix: '' }, selector: 'main p' },
+        createdAt: iso(a.createdAt), updatedAt: iso(a.updatedAt),
+      }));
+      const accepted = (list) => (list ?? []).filter((x) => x.decision === 'accepted');
+      const plans = state.plan ? [{ page: url, items: accepted(state.plan.items).map((x) => ({ ...x, original_text: x.original, target_text: x.targetText })), newPages: accepted(state.plan.newPages) }] : [];
+      exported = (await buildPacket({ annotations: records, plans, pages: { [url]: { title: state.page.title, lang: 'en', kind: state.page.kind } }, title: `Copy review (${scope})` })).changes;
       set({ exporting: 'done' });
       setTimeout(() => set({ exporting: 'idle' }), 1500 * delay);
     },
@@ -536,6 +620,7 @@ export function createMockReviewer({ hasKey = true, delay = 1, empty = false, st
     // for the preview and tests only: what the page would report, what was dispatched
     setSelection(text, { fits = true } = {}) { set({ selection: text ? { text, fits } : null }); },
     setReadingTime(ms) { readingMS = ms; },
+    exported: () => exported,
     set,
     log,
   };

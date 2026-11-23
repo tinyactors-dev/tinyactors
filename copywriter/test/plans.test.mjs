@@ -121,7 +121,7 @@ test('routing: a need of another kind than the page\'s becomes one line and a li
   assert.equal(link.conflict, 'tech-lead.host-dies belongs on a how-to page: linked to /guides/snapshots/.');
   assert.ok(link.routed);
   assert.deepEqual(link.criteria.map((c) => [c.page, c.text]), [
-    [`${SITE}/`, '/ links to /guides/snapshots/ for tech-lead.host-dies'],
+    [`${SITE}/`, 'The home page links to /guides/snapshots/ for tech-lead.host-dies'],
     [`${SITE}/guides/snapshots/`, '/guides/snapshots/ answers tech-lead.host-dies'],
   ]);
   assert.deepEqual(newPages.map((p) => [p.kind, p.audiences, p.needs]), [['tutorial', ['agent-platform'], ['agent-platform.memory']]], 'no tutorial page: a new one');
@@ -283,4 +283,20 @@ test('export: each page\'s acceptance criteria, the tasks for other pages and th
     rmSync(dir, { recursive: true, force: true });
   }
   reviewer.close();
+});
+
+test('a link\'s criteria go to their pages: the line\'s here, the answer\'s to the target or the new page; a need placed elsewhere says why', () => {
+  const needs = new Map([['tech-lead.maintainer', { kind: 'reference', siteID: 'tech-lead', text: 'Who maintains it?', audience: 'Tech lead' }]]);
+  let n = 0;
+  const { items, newPages } = planOf({ calls: [
+    { name: 'plan_item', args: { action: 'link', needs: ['tech-lead.maintainer'], target: 'new', where: 'Maintainers', text: 'See who maintains it.', reason: 'A reference answers it.',
+      criteria: ['The home page links to \'Maintainers\' for who maintains tinyactors', '\'Maintainers\' names who maintains tinyactors'] } },
+    { name: 'new_page', args: { title: 'Maintainers', kind: 'reference', audiences: ['tech-lead'], outline: ['Who'], needs: ['tech-lead.maintainer'] } },
+  ] }, { url: `${SITE}/`, kind: 'pitch', needs, pages: [], id: () => `p${++n}` });
+  assert.deepEqual(items[0].criteria.map((c) => [c.page, c.text]), [
+    [`${SITE}/`, 'The home page links to \'Maintainers\' for who maintains tinyactors'],
+    ['new', '\'Maintainers\' names who maintains tinyactors'],
+  ]);
+  assert.equal(items[0].conflict, 'A reference answers it.', 'no conflict given: the reason');
+  assert.deepEqual(newPages[0].criteria.map((c) => c.text), ['\'Maintainers\' names who maintains tinyactors'], 'the new page takes the plan\'s criterion');
 });

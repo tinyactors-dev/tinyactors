@@ -334,8 +334,22 @@ one-off Python.
   changes that name a need), "Other pages" (each target with its needs,
   what to write there and its criteria) and "Proposed pages" (kind,
   audiences, outline, criteria); `packet.xml` maps the tasks and new pages
-  to design tasks and the criteria to `acceptance`. `mise run plan-eval`
-  checks it against the API.
+  to design tasks and the criteria to `acceptance`. An item that places a
+  need elsewhere carries its `conflict` (the model's, else its reason). A
+  link's criteria are split by page: one about the link, or whose subject
+  is this page, is here's; any other the target's (a new page takes the
+  plan's criteria for it). Checked against the API on 2026-11-23 (`mise
+  run plan-eval`: the live home page read as its three audiences in 33 s
+  at medium, then planned with 22 pages of the site map; Gemini 4
+  Hydrogen at high thinking): 115 s, 12 items (3 rewrites and an add here,
+  8 links: to /chat/, /about/, /performance/, /guides/testing/,
+  /changelog/ and 3 to new pages) and 3 new pages (two explanations, "When
+  to use tinyactors" and "Failure semantics and crash recovery", and a
+  reference, "Maintainers and support"), every original on the page, no
+  number the page or the site map does not state; the core routed one
+  need (agent-platform.why-scxml, an explanation's, linked to /about/).
+  The model gave no `conflict` and wrote some criteria about this page in
+  a link's list, which is why both rules above exist.
 
 ## Layout
 
@@ -401,8 +415,18 @@ copywriter/
                           quiet word with its icon; the header's tooltip says it before the address. Checklist
                           items keep the file's order within each field, each ending in its kind of page as a
                           small icon (pitch megaphone, tutorial cap, how-to route, reference book, explanation
-                          bulb; no words, the tooltip names the need and the kind); a claimed item's fold says
-                          which sections claim it.
+                          bulb; no words, the tooltip names the need and the kind).
+                          Revise page: a wand in the header, at the list once the page has a reading or a
+                          finding, opens the plan view (and plans at once the first time); its head counts the
+                          decided items, how long ago, the site map's pages (a globe and a number), then a quiet
+                          accept-all and plan-again. One line per item: the action as a glyph (rewrite pen,
+                          add plus, cut scissors, link, move arrow, new page file-plus), the text on the page or
+                          the copy (two lines, serif), the other page's short path, each need as a tiny avatar of
+                          its audience (its id in the tooltip); accept (check) and reject (x) at the line's end,
+                          shown on hover, focus or an open line (always, faintly, on touch); a need placed
+                          elsewhere carries a split glyph whose tap shows the reason. A tap unfolds the copy,
+                          what the target gets, why, and the criteria. Accepted: an arrow opens its annotation;
+                          rejected: faded and struck. New pages follow under a file-plus count.
   src/platform/dom.mjs    the page adapter's DOM side, shared: anchors, locate, preview/revert of Text nodes, highlights
   src/platform/extension/ manifest.json, service-worker.mjs, content.mjs (page adapter), sidepanel.html/.mjs, mic.html/.mjs
   src/platform/embed/     embed.mjs (launcher, Shadow DOM, page adapter on the live DOM), loader snippet
@@ -411,7 +435,8 @@ copywriter/
                           conversations with an audience; plans.test.mjs: revising a page, the site map of
                           test/fixtures/site/); Playwright for
                           the panel over src/ui/mock-reviewer.mjs (?read=0: no reading yet; ?suggest=1: the page's
-                          audiences suggested; ?diverged=1: the site audience edited here), the extension and the widget
+                          audiences suggested; ?diverged=1: the site audience edited here; its plan, and its export
+                          built by the real packet code, `reviewer.exported()`), the extension and the widget
                           (test/fixtures/page.html links the audience files of test/fixtures/audiences/)
   mise/tasks/             build, test, charts, eval, read-eval, talk-eval, plan-eval (Ruby)
   tools/                  serve.mjs (the panel's preview), eval.mjs, read-eval.mjs, talk-eval.mjs and plan-eval.mjs (the real Gemini)

@@ -112,6 +112,7 @@ export function bestPage(pages, { kind, siteID, here }) {
 export function planOf({ calls }, { url, kind, needs = new Map(), pages = [], id }) {
   const origin = (() => { try { return new URL(url).origin; } catch { return ''; } })();
   const herePath = shortPath(url);
+  const hereName = herePath === '/' ? 'The home page' : herePath;
   const known = needs.size > 0;
   const target = (value) => {
     const t = clean(value, 400);
@@ -125,7 +126,7 @@ export function planOf({ calls }, { url, kind, needs = new Map(), pages = [], id
   const audienceOf = (ids) => [...new Set(ids.map((n) => needs.get(n)?.audience).filter(Boolean))];
   const criterion = (needID, page) => ({
     needID, page,
-    text: page === url ? `${herePath} answers ${needID}` : `${page === 'new' ? 'A new page' : shortPath(page)} answers ${needID}`,
+    text: page === url ? `${hereName} answers ${needID}` : `${page === 'new' ? 'A new page' : shortPath(page)} answers ${needID}`,
   });
 
   const newPages = [];
@@ -164,34 +165,36 @@ export function planOf({ calls }, { url, kind, needs = new Map(), pages = [], id
     let ids = strings(a.needs, 120).filter((n) => !known || needs.has(n));
     const given = strings(a.criteria ?? a.criterion, 400);
     const where = clean(a.where, 200);
-    if (to === 'new') {
-      const p = (where && newPages.find((x) => x.title.toLowerCase() === where.toLowerCase())) || newPageFor(needs.get(ids[0])?.kind || 'explanation', needs.get(ids[0])?.siteID);
-      to = 'new';
-      for (const n of ids) if (!p.needs.includes(n)) { p.needs.push(n); p.criteria.push({ needID: n, page: 'new', text: `A new ${p.kind} page "${p.title}" answers ${n}` }); }
-    }
+    const fresh = to === 'new'
+      ? (where && newPages.find((x) => x.title.toLowerCase() === where.toLowerCase())) || newPageFor(needs.get(ids[0])?.kind || 'explanation', needs.get(ids[0])?.siteID)
+      : null;
     const page = to === 'here' ? url : to;
-    // a link's criteria are of two pages: here (the line and its link) and the target (the answer);
-    // a criterion that names the target's path is the target's
+    // a link's criteria are of two pages: here (the line and its link) and the target (the answer).
+    // One about a link, or whose subject is this page, is here's; any other the target's.
     const targetPath = to !== 'here' && to !== 'new' ? shortPath(to) : '';
-    const ofTarget = (text) => Boolean(targetPath && targetPath !== '/' && text.includes(targetPath));
+    const isHere = (c) => /\blinks? (to|from)\b/i.test(c) || (herePath === '/' ? /^the home page\b/i.test(c) : c.startsWith(herePath))
+      || (targetPath && !c.includes(targetPath) && !/answers/.test(c));
+    const order = ids;
     const criteriaOf = (list) => {
-      if (action !== 'link' || to === 'new') {
+      if (action !== 'link') {
         return list.map((n) => {
-          const i = ids.indexOf(n);
+          const i = order.indexOf(n);
           return given[i] ? { needID: n, page, text: given[i] } : criterion(n, page);
         });
       }
-      const there = given.filter(ofTarget);
-      const here = given.filter((c) => !ofTarget(c));
+      const here = given.filter(isHere);
+      const there = given.filter((c) => !isHere(c));
       return list.flatMap((n, i) => [
-        here[i] ? { needID: n, page: url, text: here[i] } : { needID: n, page: url, text: `${herePath} links to ${shortPath(to)} for ${n}` },
+        here[i] ? { needID: n, page: url, text: here[i] } : { needID: n, page: url, text: `${hereName} links to ${fresh ? `the new page "${fresh.title}"` : shortPath(to)} for ${n}` },
         there[i] ? { needID: n, page: to, text: there[i] } : criterion(n, to),
       ]);
     };
     const base = {
       action, target: to, ...(original ? { original_text: original } : {}), text: action === 'cut' ? '' : text,
       ...(clean(a.target_text, 1200) ? { target_text: clean(a.target_text, 1200) } : {}),
-      ...(where ? { where } : {}), reason: clean(a.reason), ...(clean(a.conflict) ? { conflict: clean(a.conflict) } : {}),
+      ...(where || fresh ? { where: fresh ? fresh.title : where } : {}), reason: clean(a.reason),
+      // an item that places a need elsewhere says why: the conflict it settles, else its reason
+      ...(clean(a.conflict) || (to !== 'here' && clean(a.reason)) ? { conflict: clean(a.conflict) || clean(a.reason) } : {}),
       ...(to !== 'here' && to !== 'new' ? { targetTitle: titleOf(to) } : {}),
     };
     // a change here of a need whose kind is not the page's: that need is linked, not answered here
@@ -199,8 +202,17 @@ export function planOf({ calls }, { url, kind, needs = new Map(), pages = [], id
       ? ids.filter((n) => needs.get(n)?.kind && needs.get(n).kind !== kind) : [];
     const fit = ids.filter((n) => !misfit.includes(n));
     if (!misfit.length || fit.length) {
-      ids = fit;
-      items.push({ id: id(), ...base, needs: ids, criteria: criteriaOf(ids), audiences: audienceOf(ids), decision: null });
+      const criteria = criteriaOf(fit);
+      items.push({ id: id(), ...base, needs: fit, criteria, audiences: audienceOf(fit), decision: null });
+      // a new page answers the needs sent to it, by the criteria the plan gave for it
+      if (fresh) {
+        for (const n of fit) {
+          const c = criteria.find((x) => x.needID === n && x.page === 'new') || criterion(n, 'new');
+          const at = fresh.needs.indexOf(n);
+          if (at < 0) { fresh.needs.push(n); fresh.criteria.push({ ...c, page: 'new' }); }
+          else fresh.criteria = fresh.criteria.map((x) => (x.needID === n && /^A new \S+ page "/.test(x.text) ? { ...c, page: 'new' } : x));
+        }
+      }
     }
     // one link per page the misfit needs go to
     const routes = new Map();
@@ -225,7 +237,7 @@ export function planOf({ calls }, { url, kind, needs = new Map(), pages = [], id
         text: line, target_text: text, reason, conflict: reason, routed: true,
         needs: r.needs, audiences: audienceOf(r.needs), decision: null,
         criteria: r.needs.flatMap((n) => [
-          { needID: n, page: url, text: `${herePath} links to ${destPath} for ${n}` },
+          { needID: n, page: url, text: `${hereName} links to ${destPath} for ${n}` },
           { needID: n, page: dest, text: `${r.best ? shortPath(r.best.url) : `The new page "${fresh.title}"`} answers ${n}` },
         ]),
       });
