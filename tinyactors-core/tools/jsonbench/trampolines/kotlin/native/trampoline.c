@@ -236,8 +236,6 @@ JNIEXPORT jstring JNICALL Java_jsonbench_Native_sample(JNIEnv *env, jobject self
     if (s == TA_OK) s = ta_cbor_writer_bytes(&result, &out);
     if (s != TA_OK) { ta_kotlin_throw(env, "the call failed"); return NULL; }
     ta_buffer diag = {text, sizeof text - 1, 0};
-    ta_buffer in = {text, 0, 0};
-    (void)in;
     char line[2200];
     size_t k = 0;
     if (ta_cbor_diagnostic(arguments, &diag) == TA_OK) {
