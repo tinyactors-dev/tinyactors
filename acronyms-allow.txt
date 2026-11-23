@@ -81,3 +81,6 @@ projectId      copywriter/**/*                                           # work-
 sessionId      copywriter/**/*                                           # work-packet.xsd attribute
 patchId        copywriter/**/*                                           # work-packet.xsd attribute
 tabId          copywriter/spec/*                                         # Chrome tabs API field
+# The DOM's own names, which the copywriter's panel calls.
+getElementById copywriter/**/*                                           # DOM API
+pointerId      copywriter/**/*                                           # DOM PointerEvent field

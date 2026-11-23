@@ -130,7 +130,7 @@
       </onentry>
       <transition event="model.reply" target="opening">
         <assign location="suggestions" expr="suggestions.concat((_event.data.rewrites || []).map((r, i) => ({ id: 's' + (suggestions.length + i + 1), text: r.replacement, rationale: r.rationale || '' })))"/>
-        <assign location="messages" expr="messages.concat([{ role: 'model', text: _event.data.text || (_event.data.rewrites || []).length + ' rewrites proposed.', at: new Date().toISOString() }])"/>
+        <assign location="messages" expr="messages.concat([{ role: 'model', text: _event.data.text || 'Rewrites proposed: ' + (_event.data.rewrites || []).length + '.', at: new Date().toISOString() }])"/>
         <if cond="_event.data.note &amp;&amp; !note"><assign location="note" expr="_event.data.note"/></if>
         <assign location="request" expr="null"/>
       </transition>

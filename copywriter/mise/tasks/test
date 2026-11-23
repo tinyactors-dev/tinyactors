@@ -1,20 +1,31 @@
 #!/usr/bin/env ruby
-#MISE description="The copywriter's tests: node:test of the charts and the core (more steps follow: Playwright)"
+#MISE description="The copywriter's tests: node:test of the charts and the core, then the acronym check of its files"
 # vim:ft=ruby
 
 # Each step is a command run from the project's directory; the task stops
-# at the first that fails. Append a step for each new kind of test.
+# at the first that fails. Append a step for each new kind of test (the
+# Playwright runs go before the acronym check).
+
+require 'open3'
 
 ROOT = File.expand_path('../..', __dir__)
 
+# The project's files, as the root's check-acronyms names them.
+def project_files
+  out, status = Open3.capture2('git', 'ls-files', '--cached', '--others', '--exclude-standard', '--full-name', '.', chdir: ROOT)
+  abort 'test: git ls-files failed' unless status.success?
+  out.split("\n")
+end
+
 STEPS = [
-  ['node tests (charts and core)', %w[node --test test/*.test.mjs]],
+  # node expands the glob itself, so it is passed as one argument.
+  ['node tests (charts and core)', -> { %w[node --test test/*.test.mjs] }],
+  ['acronyms', -> { ['mise', 'run', '//:check-acronyms', '--', *project_files] }],
 ].freeze
 
 STEPS.each do |name, command|
   puts "test: #{name}"
-  # node expands the glob itself, so it is passed as one argument.
-  next if system(*command, chdir: ROOT)
+  next if system(*command.call, chdir: ROOT)
 
   abort "test: #{name} failed"
 end

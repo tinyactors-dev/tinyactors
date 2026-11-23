@@ -61,7 +61,7 @@
         <send type="model" event="chat" namelist="page messages request"/>
       </onentry>
       <transition event="model.reply" target="idle">
-        <assign location="messages" expr="messages.concat([{ role: 'model', text: _event.data.text || (_event.data.rewrites || []).length + ' rewrites proposed.', at: new Date().toISOString() }])"/>
+        <assign location="messages" expr="messages.concat([{ role: 'model', text: _event.data.text || 'Rewrites proposed: ' + (_event.data.rewrites || []).length + '.', at: new Date().toISOString() }])"/>
         <foreach array="(_event.data.rewrites || []).filter((r) => r.original_text)" item="rewrite">
           <assign location="spawned" expr="spawned + 1"/>
           <send type="spawn" event="spawn"><content expr="annotation(rewrite, page, lang, spawned)"/></send>
