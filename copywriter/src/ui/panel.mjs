@@ -1459,7 +1459,10 @@ export function mountPanel(root, reviewer, { layout = 'sidebar', onTall = null }
     renderHeader();
     renderMain();
     // the checklist and a reader's conversation want room: the sheet rises to its high size
-    const nowTall = !activeAnnotation() && (ui.view === 'reading' || (ui.view === 'chat' && !!state.chat?.audienceID));
+    // and so do rewrites side by side, to compare, until one is previewed (the page then shows above)
+    const shown = activeAnnotation();
+    const comparing = shown?.state === 'suggested' && shown.suggestions?.at(-1)?.audienceID !== undefined;
+    const nowTall = comparing || (!shown && (ui.view === 'reading' || (ui.view === 'chat' && !!state.chat?.audienceID)));
     if (nowTall !== tall) { tall = nowTall; try { onTall?.(tall); } catch { /* the host's */ } }
     renderBanner();
     placeMenus();

@@ -177,7 +177,7 @@ test('on a phone, the sheet resizes to where it is let go, from the grip or the 
   await context.close();
 });
 
-test('on a phone, a conversation with a reader raises the sheet to its high size, and leaving it lowers it back', async () => {
+test('on a phone, a conversation with a reader and rewrites side by side raise the sheet to its high size; leaving them lowers it back', async () => {
   const { context, page, errors, sheet, launcher } = await phone();
   await page.evaluate(() => tinyactorsCopywriter.reviewer.dispatch({ type: 'settings.save', audienceIDs: ['starter-tech-lead'] }));
   await launcher.tap();
@@ -192,6 +192,17 @@ test('on a phone, a conversation with a reader raises the sheet to its high size
   await sheet.locator('[data-action=back]').tap();
   await page.waitForTimeout(400);
   assert.ok(Math.abs(await share() - 0.4) < 0.02, `back where it was: ${await share()}`);
+  // rewrites side by side rise it to compare; a preview lowers it so the page shows
+  await page.evaluate(() => tinyactorsCopywriter.reviewer.dispatch({ type: 'settings.save', audienceIDs: ['starter-tech-lead', 'starter-workflow-tester'] }));
+  await selectText(page, '#lede', ORIGINAL);
+  await page.waitForFunction(() => tinyactorsCopywriter.reviewer.getState().selection);
+  await page.evaluate(() => tinyactorsCopywriter.reviewer.dispatch({ type: 'annotate', note: 'Sharper' }));
+  await sheet.locator('.cw-cards--compare').waitFor();
+  await page.waitForTimeout(400);
+  assert.ok(Math.abs(await share() - 0.75) < 0.02, `raised to compare: ${await share()}`);
+  await sheet.locator('.cw-cards--compare [data-action=preview]').first().tap();
+  await page.waitForTimeout(500);
+  assert.ok(await share() <= 0.41, `lowered for the preview: ${await share()}`);
   assert.deepEqual(errors, []);
   await context.close();
 });

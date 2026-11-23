@@ -252,8 +252,9 @@ copywriter/
     charts.mjs            the charts' text, imported by the bundle
   src/ui/                 the panel: plain DOM + Lucide icons, renders ViewState, dispatches commands
     panel.mjs             mountPanel(root, reviewer, {layout: 'sidebar'|'sheet', onTall?}); its scrolling area is a div, so
-                          the host page keeps its one <main>; onTall(on) when the checklist or a conversation with a
-                          reader opens (true) or closes (false): the widget's sheet rises to its high size (75%) when
+                          the host page keeps its one <main>; onTall(on) when the checklist, a conversation with a
+                          reader, or rewrites side by side waiting to be compared (until one is previewed)
+                          open (true) or close (false): the widget's sheet rises to its high size (75%) when
                           lower and goes back to where it was, unless the reader dragged it meanwhile
     panel-css.mjs         its stylesheet as a string (a ShadowRoot adopts it; no bundler loader)
                           The thread: a transcript is the user's bubble with a small mic (a bubble
