@@ -12,14 +12,13 @@
 // by a live migration, scripted scenarios, lost connections and faulty
 // screens); any actor's chart lit in the states its host reports
 // (components/live-chart.mjs); and the log of what happened.
-import { createChat, GRACE, LATEST, newestFirst, PEOPLE, SCENARIOS, VERSIONS, WORKSPACE } from './chat.mjs';
+import { createChat, elapsed as clock, GRACE, LATEST, newestFirst, PEOPLE, SCENARIOS, VERSIONS, WORKSPACE } from './chat.mjs';
 import { liveChart, statePath } from '/assets/components/live-chart.mjs';
 
 const CHARTS = ['workspace.scxml', 'room.scxml', 'user.scxml'];
 const SPEEDS = [1, 10, 60];
 const TICK = 250; // wall milliseconds between clock steps while it runs
 const AWAY = 300_000; // the user chart's timer
-const clock = (seconds) => `${Math.floor(seconds / 60)}:${String(Math.floor(seconds % 60)).padStart(2, '0')}`;
 const STATUS = { active: 'active', away: 'away', offline: 'offline', reconnecting: 'reconnecting' };
 const LABEL = { active: 'Active', away: 'Away', offline: 'Offline', reconnecting: 'Connecting…' };
 const LOSSES = [[5, '5 s'], [20, '20 s'], [120, '2 min']]; // how long a lost connection lasts: two within step 9's grace, one past it

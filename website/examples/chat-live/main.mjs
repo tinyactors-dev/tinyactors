@@ -9,13 +9,12 @@
 // Run: node main.mjs
 import * as tinyactors from '@tinyactors/wasm';
 import { readFileSync } from 'node:fs';
-import { createChat, PEOPLE } from './chat.mjs';
+import { createChat, elapsed as clock, PEOPLE } from './chat.mjs';
 
 const read = (step) => Object.fromEntries(['workspace.scxml', 'room.scxml', 'user.scxml']
   .map((name) => [name, readFileSync(new URL(`./charts/step-${step}/${name}`, import.meta.url), 'utf8')]));
 const versions = { 5: read(5), 9: read(9) };
 const messages = (chat, name) => chat.screen(name).messages.map((m) => m.text).join(' | ') || 'nothing';
-const clock = (seconds) => `${Math.floor(seconds / 60)}:${String(Math.floor(seconds % 60)).padStart(2, '0')}`;
 const timed = (chat, name) => chat.screen(name).messages.map((m) => `${m.text} at ${clock(m.at)}`).join(' | ') || 'nothing';
 
 for (const version of [5, 9]) {

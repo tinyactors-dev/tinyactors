@@ -40,6 +40,18 @@ export const LATEST = 9;
  * of one second tie on it; the stores number their posts per room, so their
  * numbers do not order posts of two rooms, and step 5's posts have none.
  */
+/**
+ * A simulated time, in seconds since the chat started, as the screens show
+ * it: m:ss under an hour, h:mm:ss from an hour on. Elapsed time, not a wall
+ * clock: the simulation has no time of day.
+ */
+export const elapsed = (seconds) => {
+  const s = Math.floor(seconds);
+  const pad = (n) => String(n).padStart(2, '0');
+  return s < 3600 ? `${Math.floor(s / 60)}:${pad(s % 60)}`
+    : `${Math.floor(s / 3600)}:${pad(Math.floor(s / 60) % 60)}:${pad(s % 60)}`;
+};
+
 export const newestFirst = (a, b) => b.at - a.at || b.order - a.order;
 // The newest messages a screen keeps of each conversation, and entries the log keeps. Per
 // conversation, so one busy channel cannot push another's posts off the screen; four times what
@@ -100,7 +112,6 @@ export async function createChat(tinyactors, { versions, version = LATEST, seed 
   const store = new Store();
   const clock = new SimulatedClock();
   const now = () => clock.now / 1000;
-  const minutes = (seconds) => `${Math.floor(seconds / 60)}:${String(Math.floor(seconds % 60)).padStart(2, '0')}`;
   const random = generator(seed);
 
   // ---- what happened, newest last: inputs, what reached a screen, faults, versions
@@ -343,7 +354,7 @@ export async function createChat(tinyactors, { versions, version = LATEST, seed 
     if (!entry) return;
     losses.delete(name);
     agenda.splice(agenda.indexOf(entry), 1);
-    note('fault', `${name}'s reconnect at ${minutes(entry.at / 1000)} is off: ${why}`);
+    note('fault', `${name}'s reconnect at ${elapsed(entry.at / 1000)} is off: ${why}`);
   };
   /** `name` signs in: a connection opens (early, if a lost one was to come back later). */
   const open = (name) => {
@@ -556,7 +567,7 @@ export async function createChat(tinyactors, { versions, version = LATEST, seed 
       if (step !== LATEST) {
         for (const [name, entry] of losses) {
           tell(name, 'disconnect');
-          note('version', `${name}'s connection is lost; step ${step} has no reconnecting, so ${name} is signed out until the reconnect at ${minutes(entry.at / 1000)}`);
+          note('version', `${name}'s connection is lost; step ${step} has no reconnecting, so ${name} is signed out until the reconnect at ${elapsed(entry.at / 1000)}`);
         }
         // step 5's workspace keeps no direct messages, and its room chart no `direct`: back on
         // step 9 the workspace would make each again and its room would let anyone join. So each

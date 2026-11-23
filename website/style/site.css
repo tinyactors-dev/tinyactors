@@ -835,7 +835,7 @@ ta-tabs { display: block; }
 .chatlive__select { height: 24px; padding: 0 4px; border: 1px solid var(--cl-line); border-radius: 6px; background: var(--cl-pane); color: var(--cl-fg); font: inherit; font-size: 13px; }
 .chatlive__log-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 0 20px 6px 0; }
 .chatlive__log-head .chatlive__hint { margin-top: 0; }
-.chatlive__entry { display: grid; grid-template-columns: 34px 62px minmax(0, 1fr); gap: 6px; padding: 3px 20px; font-size: 13px; line-height: 18px; }
+.chatlive__entry { display: grid; grid-template-columns: 44px 62px minmax(0, 1fr); gap: 6px; padding: 3px 20px; font-size: 13px; line-height: 18px; }
 .chatlive__entry:hover { background: var(--cl-hover); }
 .chatlive__entry .chatlive__at { font-size: 12px; }
 .chatlive__kind { justify-self: start; align-self: start; padding: 0 5px; border-radius: 4px; font-size: 11px; font-weight: 700; line-height: 18px; text-transform: uppercase; letter-spacing: .02em;
