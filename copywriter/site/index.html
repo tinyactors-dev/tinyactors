@@ -28,7 +28,6 @@
   main { max-width: 560px; margin: 0 auto; padding: calc(56px + env(safe-area-inset-top, 0px)) 16px calc(56px + env(safe-area-inset-bottom, 0px)); }
   h1 { font: 400 44px/1.05 Newsreader, Georgia, serif; letter-spacing: -0.02em; margin: 0 0 40px; }
   section { border-top: 1px solid var(--line); padding: 24px 0 32px; }
-  h2 { font: 500 11px/1 'IBM Plex Mono', ui-monospace, monospace; letter-spacing: .12em; text-transform: uppercase; color: var(--subtle); margin: 0 0 20px; }
   .button {
     display: inline-flex; align-items: center; gap: 8px; height: 40px; padding: 0 16px; border-radius: 2px;
     background: var(--pine); color: var(--on-pine); font-weight: 500; font-size: 14px; text-decoration: none;
@@ -54,8 +53,7 @@
 <main>
   <h1>copywriter</h1>
 
-  <section aria-labelledby="extension">
-    <h2 id="extension">Chrome</h2>
+  <section aria-label="Chrome extension">
     <a class="button" href="/copywriter/copywriter-extension.zip" download data-download>
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 15V3"/><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="m7 10 5 5 5-5"/></svg>
       Download extension
@@ -67,8 +65,7 @@
     </ol>
   </section>
 
-  <section aria-labelledby="device">
-    <h2 id="device">This device</h2>
+  <section aria-label="This device">
     <label class="switch">
       <span>Use on this device</span>
       <input type="checkbox" role="switch" id="use">
