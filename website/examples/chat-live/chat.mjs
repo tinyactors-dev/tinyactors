@@ -24,10 +24,12 @@ export const WORKSPACE = 'The Hill';
 export const PEOPLE = ['queen', 'scout', 'forager', 'nurse', 'guard', 'drone'];
 export const ROOMS = ['general', 'random'];
 export const RESIDENT = 4; // actors the host keeps in memory at rest
+/** Seconds step 8 waits before a lost connection is offline: `grace.over`'s delay in charts/step-8/user.scxml. */
+export const GRACE = 30;
 /** The versions of the charts the chat runs: the tutorial's steps. */
 export const VERSIONS = {
   5: 'Step 5: no typing indicator; a lost connection is offline at once; a late joiner sees no history',
-  8: 'Step 8: typing indicators; a lost connection has 30 seconds to come back; a late joiner sees the history',
+  8: `Step 8: typing indicators; a lost connection has ${GRACE} seconds to come back; a late joiner sees the history`,
 };
 /** The newest version: what steps 6 to 8 added is there. */
 export const LATEST = 8;

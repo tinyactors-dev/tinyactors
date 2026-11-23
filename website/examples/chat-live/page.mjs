@@ -10,7 +10,7 @@
 // by a live migration, scripted scenarios, lost connections and faulty
 // screens); any actor's chart lit in the states its host reports
 // (components/live-chart.mjs); and the log of what happened.
-import { createChat, LATEST, PEOPLE, SCENARIOS, VERSIONS, WORKSPACE } from './chat.mjs';
+import { createChat, GRACE, LATEST, PEOPLE, SCENARIOS, VERSIONS, WORKSPACE } from './chat.mjs';
 import { liveChart, statePath } from '/assets/components/live-chart.mjs';
 
 const CHARTS = ['workspace.scxml', 'room.scxml', 'user.scxml'];
@@ -20,7 +20,7 @@ const AWAY = 300_000; // the user chart's timer
 const clock = (seconds) => `${Math.floor(seconds / 60)}:${String(Math.floor(seconds % 60)).padStart(2, '0')}`;
 const STATUS = { active: 'active', away: 'away', offline: 'offline', reconnecting: 'reconnecting' };
 const LABEL = { active: 'Active', away: 'Away', offline: 'Offline', reconnecting: 'Connecting…' };
-const LOSSES = [[5, '5 s'], [30, '30 s'], [120, '2 min']]; // how long a lost connection lasts
+const LOSSES = [[5, '5 s'], [20, '20 s'], [120, '2 min']]; // how long a lost connection lasts: two within step 8's grace, one past it
 const DROPS = [0, 0.25, 0.5, 1]; // the share of deliveries a faulty screen loses
 const DELAYS = [0, 2, 10]; // seconds a faulty screen gets each delivery late
 const KINDS = { input: 'Input', screen: 'Screen', lost: 'Lost', late: 'Late', fault: 'Fault', scenario: 'Scenario', version: 'Version', data: 'Data' };
@@ -274,7 +274,7 @@ export async function mount(root) {
   const back = el('button', { type: 'button', class: 'chatlive__back', 'aria-label': 'Channels' }, icon('back'));
   back.addEventListener('click', () => { app.dataset.view = 'list'; });
   const banner = el('p', { class: 'chatlive__banner', role: 'status', hidden: '' },
-    el('strong', {}, 'Connecting…'), ' For 30 seconds, new messages wait for you.');
+    el('strong', {}, 'Connecting…'), ` For ${GRACE} seconds, new messages wait for you.`);
   const messages = el('ol', { class: 'chatlive__messages', 'aria-label': 'Messages' });
   // the list is updated in place; this region alone announces each message that reaches the screen
   const arrived = el('p', { class: 'visually-hidden', 'aria-live': 'polite' });
@@ -395,11 +395,15 @@ export async function mount(root) {
           select('delay', DELAYS, (value) => `${value} s`, (delay) => chat.setFaults(name, { ...faults(), delay }))));
     }));
 
+  const within = LOSSES.filter(([seconds]) => seconds < GRACE).map(([, label]) => label);
+  const past = LOSSES.filter(([seconds]) => seconds > GRACE).map(([, label]) => label);
   const experiments = el('div', { class: 'chatlive__panel', role: 'tabpanel', id: 'chatlive-experiments', 'aria-labelledby': 'chatlive-tab-experiments' },
     el('h4', { class: 'chatlive__subheading' }, 'Charts'), versionPick, versionAbout,
     el('p', { class: 'chatlive__hint' }, 'A switch migrates every running actor to the other charts, without a restart.'), versionNote,
     el('h4', { class: 'chatlive__subheading' }, 'Scenarios'), scenarioList,
-    el('h4', { class: 'chatlive__subheading' }, 'People'), personList);
+    el('h4', { class: 'chatlive__subheading' }, 'People'),
+    el('p', { class: 'chatlive__hint' }, `Step 8 waits ${GRACE} s before a lost connection is offline: ${within.join(' and ')} come back in time, ${past.join(' and ')} does not.`),
+    personList);
 
   // the actors, and one actor's chart
   const memory = el('p', { class: 'chatlive__memory' });
