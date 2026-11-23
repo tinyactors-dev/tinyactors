@@ -17,7 +17,7 @@ export const FUNCTIONS = Object.freeze([
           description: 'The exact text on the page to replace, copied verbatim. Omit it when the rewrite is of the selected text.',
         },
         replacement: { type: 'string', description: 'The proposed replacement, plain text.' },
-        rationale: { type: 'string', description: 'One sentence: which need of which active audience it serves (name the audience), and how it keeps to the voice.' },
+        rationale: { type: 'string', description: 'One sentence: why the rewrite is better. When audiences are active, which need of which one it serves, by name.' },
       },
       required: ['replacement', 'rationale'],
     },

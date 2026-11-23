@@ -268,13 +268,15 @@ test('audiences: the page chat proposes one and uses it; the chip names it; rewr
   const first = fetch.requests[0].body;
   assert.deepEqual(first.tools[0].functionDeclarations.map((f) => f.name), ['propose_rewrite', 'set_note', 'define_audience', 'use_audiences']);
   assert.match(first.systemInstruction.parts[0].text, /^The voice \(how to write\):\nYou edit the copy/);
-  assert.match(first.systemInstruction.parts[0].text, /No audience is chosen/);
+  assert.match(first.systemInstruction.parts[0].text, /No audience is chosen\./);
   assert.match(first.systemInstruction.parts[0].text, /who the page is for.*define_audience/);
 
   await reviewer.dispatch({ type: 'chat', text: 'What does a backend engineer want here that is missing?' });
   const second = fetch.requests[1].body.systemInstruction.parts[0].text;
   assert.match(second, /The audiences \(who reads\):\n- Skeptical backend engineer: A senior backend engineer evaluating actor runtimes\.\n {2}Knows: Queues, threads, Erlang\.\n {2}Wants: Numbers/);
   assert.match(second, /Objections: Another framework to learn\./);
+  assert.match(second, /rationale which need of which active audience/);
+  assert.doesNotMatch(first.systemInstruction.parts[0].text, /rationale which need/, 'no audience, nothing to name');
   s = reviewer.getState();
   const made = s.annotations[0];
   assert.deepEqual(made.audiences, [ENGINEER.name], 'the annotation was written for it');
