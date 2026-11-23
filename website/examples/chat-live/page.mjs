@@ -127,17 +127,51 @@ function setText(node, value) {
   if (node.textContent !== value) node.textContent = value;
 }
 
-/** `text` with each case-insensitive match of `query` marked. */
-function marked(text, query) {
-  if (!query) return [text];
+// A mention: "@" and a person's name, case-insensitive, not inside a word or an address
+// ("scout@nest"); a bare name is too often a word ("the scout's trail"). One rule for
+// the pills in a message and for Activity.
+const MENTION = new RegExp(`(^|[^\\w@])@(${PEOPLE.join('|')})\\b`, 'gi');
+
+/** The people `text` mentions, each as [start, end, name] of its "@name". */
+function mentions(text) {
+  return [...text.matchAll(MENTION)].map((found) => {
+    const start = found.index + found[1].length;
+    return [start, found.index + found[0].length, found[2].toLowerCase()];
+  });
+}
+
+/** Whether `text` mentions `name`. */
+const mentioned = (text, name) => mentions(text).some((each) => each[2] === name);
+
+/** `text`'s characters from `start` to `end`, each case-insensitive match of `query` in the whole text marked. */
+function marked(text, query, start = 0, end = text.length) {
   const parts = [];
-  const lower = text.toLowerCase();
-  let at = 0;
-  for (let found = lower.indexOf(query); found !== -1; found = lower.indexOf(query, at)) {
-    parts.push(text.slice(at, found), el('mark', {}, text.slice(found, found + query.length)));
-    at = found + query.length;
+  let at = start;
+  const lower = query ? text.toLowerCase() : '';
+  for (let found = query ? lower.indexOf(query) : -1; found !== -1 && found < end; found = lower.indexOf(query, found + query.length)) {
+    const from = Math.max(found, at);
+    const to = Math.min(found + query.length, end);
+    if (to <= from) continue;
+    parts.push(text.slice(at, from), el('mark', {}, text.slice(from, to)));
+    at = to;
   }
-  parts.push(text.slice(at));
+  parts.push(text.slice(at, end));
+  return parts.filter((part) => part !== '');
+}
+
+/**
+ * A message's text: each mention of a person a pill (yours in the pill for you), with the
+ * search's matches marked, across a pill's edge too. A pill is text in a span, no link.
+ */
+function body(text, query, you) {
+  const parts = [];
+  let at = 0;
+  for (const [start, end, name] of mentions(text)) {
+    parts.push(...marked(text, query, at, start),
+      el('span', { class: name === you ? 'chatlive__mention chatlive__mention--you' : 'chatlive__mention' }, ...marked(text, query, start, end)));
+    at = end;
+  }
+  parts.push(...marked(text, query, at));
   return parts;
 }
 
@@ -961,7 +995,7 @@ export async function mount(root) {
           : !joined && !inRoom.length ? `You have not joined #${room}.`
           : 'No messages on your screen yet.';
     // one row per message, kept while the message stays on the screen; rebuilt only when its
-    // header, time or the search's highlight changes
+    // header, time, the search's highlight or its mention of you changes
     const rows = new Map(here.map((message, index) => [keyOf(message), [message, here[index - 1]]]));
     const notice = screen.notices.at(-1);
     const keys = [...(here.length ? rows.keys() : ['empty']), ...(notice ? ['notice'] : [])];
@@ -971,16 +1005,19 @@ export async function mount(root) {
       const [message, before] = rows.get(key);
       // search results stand alone, each labelled with its channel
       const more = Boolean(!query && before && before.from === message.from && Math.abs(message.at - before.at) < GROUP);
-      const drawn = `${more}\n${message.at}\n${query}`;
+      // switching person redraws only the rows that mention the person you were or are
+      const toYou = mentioned(message.text, you);
+      const drawn = `${more}\n${message.at}\n${query}\n${toYou ? you : ''}\n${message.text}`;
       if (node.drawn === drawn) return;
       node.drawn = drawn;
       // when the post was made (step 9's store records it), or on step 5 when it reached this screen
       const stamp = el('time', { class: 'chatlive__at' }, clock(message.at));
-      const body = el('p', { class: 'chatlive__body' }, ...marked(message.text, query));
-      node.className = more ? 'chatlive__message chatlive__message--more' : 'chatlive__message';
-      if (more) node.replaceChildren(stamp, body);
+      const paragraph = el('p', { class: 'chatlive__body' }, ...body(message.text, query, you));
+      // a post someone else made that mentions you is tinted, as Activity lists it
+      node.className = `chatlive__message${more ? ' chatlive__message--more' : ''}${toYou && message.from !== you ? ' chatlive__message--you' : ''}`;
+      if (more) node.replaceChildren(stamp, paragraph);
       else node.replaceChildren(avatar(message.from, 'large'), el('p', { class: 'chatlive__line' }, el('span', { class: 'chatlive__from' }, message.from), stamp,
-        ...(query ? [channelLink(message.room)] : [])), body);
+        ...(query ? [channelLink(message.room)] : [])), paragraph);
     });
     if (atBottom) messages.scrollTop = messages.scrollHeight;
     if (!query) seen.set(`${you}\n${room}`, inRoom.length); // what is on screen now is read
@@ -1054,10 +1091,9 @@ export async function mount(root) {
     });
     // Activity: a post that mentions you by "@name" (a bare name is too often a word: "the scout's trail"),
     // and each post someone else made in a direct message with you; newest first
-    const mention = new RegExp(`(^|[^\\w@])@${you}\\b`, 'i');
     const direct = new Set(screen.dms.map((each) => each.room));
     const items = screen.messages.filter((message) => message.from !== you
-      && (direct.has(message.room) ? chat.version() === LATEST : mention.test(message.text)))
+      && (direct.has(message.room) ? chat.version() === LATEST : mentioned(message.text, you)))
       .reverse().sort((a, b) => b.at - a.at);
     activityItems = new Map(items.map((message) => [keyOf(message), message]));
     badge('activity', items.filter((message) => !read.has(message)).length, 'unread');
