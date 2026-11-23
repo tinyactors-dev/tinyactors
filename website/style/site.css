@@ -608,6 +608,10 @@ ta-tabs { display: block; }
   background: var(--cl-side); border-radius: 8px 0 0 8px; color: var(--cl-side-fg); padding-bottom: 12px; }
 .chatlive__workspace { display: flex; align-items: center; gap: 4px; flex: none; height: 49px; box-sizing: border-box; margin: 0 0 8px; padding: 0 16px;
   font-size: 18px; font-weight: 900; line-height: 1.25; color: var(--cl-side-strong); }
+.chatlive__workspace-button { all: unset; box-sizing: border-box; display: flex; align-items: center; gap: 4px; max-width: 100%; height: 32px; margin: 0 -8px; padding: 0 8px;
+  border-radius: 6px; cursor: pointer; color: inherit; }
+.chatlive__workspace-button:hover, .chatlive__workspace-button[aria-expanded="true"] { background: var(--cl-side-hover); }
+.chatlive__workspace-button:focus-visible { outline: 2px solid var(--cl-side-strong); outline-offset: -2px; }
 .chatlive__workspace .chatlive__icon { width: 16px; height: 16px; stroke-width: 2; }
 .chatlive__section { margin-top: 8px; }
 .chatlive__heading { display: flex; align-items: center; gap: 8px; height: 28px; margin: 0 8px; padding: 0 8px; border-radius: 6px;
@@ -619,10 +623,9 @@ ta-tabs { display: block; }
 .chatlive__heading:hover { background: var(--cl-side-hover); }
 .chatlive__rooms, .chatlive__people, .chatlive__actors, .chatlive__messages { margin: 0; padding: 0; list-style: none; }
 .chatlive__room-link { all: unset; box-sizing: border-box; display: flex; align-items: center; gap: 0; width: calc(100% - 16px); height: 28px; margin: 0 8px;
-  position: relative; padding: 0 8px 0 19px; border-radius: 6px; cursor: pointer; color: var(--cl-side-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  position: relative; padding: 0 8px 0 19px; border-radius: 6px; cursor: pointer; color: var(--cl-side-fg); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .chatlive__room-link .chatlive__hash { width: 21px; flex: none; font-size: 16px; }
 .chatlive__room-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
-.chatlive__room-link--joined { color: var(--cl-side-fg); }
 .chatlive__room-link.chatlive__room-link--unread { color: var(--cl-side-strong); font-weight: 700; }
 .chatlive__room-note { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 .chatlive__room-count { flex: none; min-width: 18px; height: 18px; box-sizing: border-box; margin-left: auto; padding: 0 5px; border-radius: 9px;
@@ -631,12 +634,16 @@ ta-tabs { display: block; }
 .chatlive__room-link:hover { background: var(--cl-side-hover); }
 .chatlive__room-link[aria-current="true"] { background: var(--cl-side-current); color: var(--cl-side-strong); font-weight: 700; }
 .chatlive__room-link:focus-visible { outline: 2px solid var(--cl-side-strong); outline-offset: -2px; }
+/* a channel you preview and have not joined: in the list while it is open, in italics */
+.chatlive__room-link.chatlive__room-link--preview { color: var(--cl-side-muted); font-style: italic; font-weight: 400; }
 .chatlive__add-channels { all: unset; box-sizing: border-box; display: flex; align-items: center; gap: 8px; width: calc(100% - 16px); height: 28px; margin: 0 8px;
   padding: 0 8px 0 16px; border-radius: 6px; cursor: pointer; color: var(--cl-side-fg); white-space: nowrap; }
 .chatlive__add-channels:hover { background: var(--cl-side-hover); }
 .chatlive__add-channels:focus-visible { outline: 2px solid var(--cl-side-strong); outline-offset: -2px; }
 .chatlive__plus { display: grid; place-items: center; width: 20px; height: 20px; flex: none; border-radius: 4px; background: var(--cl-side-field); font-size: 15px; line-height: 1; }
 .chatlive__menu.chatlive__add-menu { right: auto; bottom: auto; width: 240px; padding: 8px 0; }
+.chatlive__menu.chatlive__workspace-menu { right: auto; bottom: auto; width: 280px; }
+.chatlive__tile.chatlive__tile--menu { margin: 0; }
 
 /* a dialog: "Create a channel", "Browse channels" */
 .chatlive__dialog { width: min(520px, calc(100vw - 32px)); max-height: calc(100vh - 64px); box-sizing: border-box; padding: 0; border: 0; border-radius: 8px;

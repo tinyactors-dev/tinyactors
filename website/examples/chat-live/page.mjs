@@ -362,7 +362,11 @@ export async function mount(root) {
     el('span', { class: 'chatlive__plus', 'aria-hidden': 'true' }, '+'), 'Add channels');
   const addItems = [['create', 'Create a new channel'], ['browse', 'Browse channels']].map(([key, label]) => {
     const item = el('button', { type: 'button', role: 'menuitem', tabindex: '-1', class: 'chatlive__item', 'data-key': key }, label);
-    item.addEventListener('click', () => { closeAddMenu(false); return key === 'create' ? openCreate() : openBrowse(); });
+    item.addEventListener('click', () => {
+      closeAddMenu(false);
+      dialogOpener = addChannels;
+      return key === 'create' ? openCreate() : openBrowse();
+    });
     return item;
   });
   const addMenu = el('div', { role: 'menu', id: 'chatlive-add-menu', 'aria-label': 'Add channels', class: 'chatlive__menu chatlive__add-menu', hidden: '' }, ...addItems);
@@ -382,19 +386,54 @@ export async function mount(root) {
     if (refocus) addChannels.focus();
   }
   addChannels.addEventListener('click', () => (addMenu.hidden ? openAddMenu() : closeAddMenu(true)));
-  addMenu.addEventListener('keydown', (event) => {
-    const at = addItems.indexOf(document.activeElement);
-    const move = { ArrowDown: at + 1, ArrowUp: at - 1, Home: 0, End: addItems.length - 1 }[event.key];
-    if (move !== undefined) {
-      event.preventDefault();
-      addItems[(move + addItems.length) % addItems.length].focus();
-    } else if (event.key === 'Escape') {
-      event.preventDefault();
-      closeAddMenu(true);
-    } else if (event.key === 'Tab') closeAddMenu(true); // Tab goes on from the button, in the sidebar's order
-  });
+  menuKeys(addMenu, () => addItems, closeAddMenu);
   document.addEventListener('pointerdown', (event) => {
     if (!addMenu.hidden && !addMenu.contains(event.target) && !addChannels.contains(event.target)) closeAddMenu(false);
+  });
+
+  // ---- the workspace's menu, under its name, as a client's: the workspace and you, then what
+  // this chat lets you do in it (browse, create, sign in or out)
+  const workspaceButton = el('button', { type: 'button', class: 'chatlive__workspace-button', 'aria-haspopup': 'menu', 'aria-expanded': 'false',
+    'aria-controls': 'chatlive-workspace-menu' }, WORKSPACE, icon('chevron'));
+  const workspaceStatus = el('span', { class: 'chatlive__menu-status' });
+  const workspaceSign = el('button', { type: 'button', role: 'menuitem', tabindex: '-1', class: 'chatlive__item' });
+  workspaceSign.addEventListener('click', () => { closeWorkspaceMenu(true); return link() === 'signedOut' ? chat.connect(you) : chat.disconnect(you); });
+  const workspaceItems = [['browse', 'Browse channels'], ['create', 'Create a channel']].map(([key, label]) => {
+    const item = el('button', { type: 'button', role: 'menuitem', tabindex: '-1', class: 'chatlive__item', 'data-key': key }, label);
+    item.addEventListener('click', () => {
+      closeWorkspaceMenu(false);
+      dialogOpener = workspaceButton;
+      return key === 'create' ? openCreate() : openBrowse();
+    });
+    return item;
+  });
+  const workspaceMenu = el('div', { class: 'chatlive__menu chatlive__workspace-menu', hidden: '' },
+    el('div', { class: 'chatlive__menu-head' }, el('span', { class: 'chatlive__tile chatlive__tile--menu', 'aria-hidden': 'true' }, WORKSPACE.replace(/^The /, '')[0]),
+      el('span', { class: 'chatlive__menu-who' }, el('strong', { class: 'chatlive__menu-name' }, WORKSPACE), workspaceStatus)),
+    el('div', { class: 'chatlive__rule', 'aria-hidden': 'true' }),
+    el('div', { role: 'menu', id: 'chatlive-workspace-menu', 'aria-label': WORKSPACE, class: 'chatlive__menu-list' },
+      ...workspaceItems, el('div', { role: 'separator', class: 'chatlive__rule' }), workspaceSign));
+  const workspaceAll = () => [...workspaceItems, workspaceSign];
+  function openWorkspaceMenu() {
+    const at = workspaceButton.getBoundingClientRect();
+    const box = app.getBoundingClientRect();
+    workspaceMenu.style.left = `${Math.max(8, at.left - box.left)}px`;
+    workspaceMenu.style.top = `${at.bottom - box.top + 4}px`;
+    workspaceMenu.hidden = false;
+    workspaceButton.setAttribute('aria-expanded', 'true');
+    render();
+    workspaceAll()[0].focus();
+  }
+  function closeWorkspaceMenu(refocus) {
+    if (workspaceMenu.hidden) return;
+    workspaceMenu.hidden = true;
+    workspaceButton.setAttribute('aria-expanded', 'false');
+    if (refocus) workspaceButton.focus();
+  }
+  workspaceButton.addEventListener('click', () => (workspaceMenu.hidden ? openWorkspaceMenu() : closeWorkspaceMenu(true)));
+  menuKeys(workspaceMenu, workspaceAll, closeWorkspaceMenu);
+  document.addEventListener('pointerdown', (event) => {
+    if (!workspaceMenu.hidden && !workspaceMenu.contains(event.target) && !workspaceButton.contains(event.target)) closeWorkspaceMenu(false);
   });
 
   // a modal dialog: Escape and its close button close it; focus stays in it, and goes back where it came from
@@ -425,8 +464,9 @@ export async function mount(root) {
     node.showModal();
     focus.focus();
   }
-  /** Closes a dialog; focus goes to `focus`, back to "Add channels", which opened it, or with null where the caller puts it. */
-  function closeDialog(node, focus = addChannels) {
+  let dialogOpener = addChannels; // the button whose menu opened the dialog: "Add channels" or the workspace's name
+  /** Closes a dialog; focus goes to `focus`, back to the button whose menu opened it, or with null where the caller puts it. */
+  function closeDialog(node, focus = dialogOpener) {
     if (!node.open) return;
     node.close();
     focus?.focus();
@@ -555,7 +595,7 @@ export async function mount(root) {
   const people = el('ul', { class: 'chatlive__people', 'aria-label': 'People' });
   const peopleNote = el('p', { class: 'chatlive__note chatlive__note--people', 'aria-live': 'polite' });
   const sidebar = el('nav', { class: 'chatlive__sidebar', 'aria-label': WORKSPACE },
-    el('h3', { class: 'chatlive__workspace' }, WORKSPACE, icon('chevron')),
+    el('h3', { class: 'chatlive__workspace' }, workspaceButton),
     section('Channels', roomList, addChannels),
     dmSection,
     section('People', people, peopleNote));
@@ -1038,10 +1078,10 @@ export async function mount(root) {
     render();
   }
 
-  app.append(top, rail, sidebar, dmView, activityView, el('div', { class: 'chatlive__pane' }, main, debug), menu, addMenu, card, createDialog, browseDialog);
+  app.append(top, rail, sidebar, dmView, activityView, el('div', { class: 'chatlive__pane' }, main, debug), menu, addMenu, workspaceMenu, card, createDialog, browseDialog);
   // Escape on a phone goes back from a conversation to its list, as the back button does
   app.addEventListener('keydown', (event) => {
-    if (event.key !== 'Escape' || event.defaultPrevented || app.dataset.view !== 'room' || !debug.hidden || !menu.hidden || !phone()) return;
+    if (event.key !== 'Escape' || event.defaultPrevented || app.dataset.view !== 'room' || !debug.hidden || !menu.hidden || !workspaceMenu.hidden || !phone()) return;
     if (event.target.matches('input') && event.target.value) return;
     event.preventDefault();
     goBack();
@@ -1154,6 +1194,8 @@ export async function mount(root) {
     setText(menuName, you);
     setText(menuStatus, LABEL[yourStatus]);
     setText(sign, link() === 'signedOut' ? `Sign in to ${WORKSPACE}` : `Sign out of ${WORKSPACE}`);
+    setText(workspaceSign, sign.textContent);
+    setText(workspaceStatus, `${you} · ${LABEL[yourStatus]}`);
     for (const item of switchList.children) {
       const name = item.dataset.key;
       const state = STATUS[roster[name]] ?? 'unknown';
@@ -1176,7 +1218,9 @@ export async function mount(root) {
     if (!rooms.includes(room) && !(yourDM && chat.version() === LATEST)) room = 'general';
     const dm = chat.version() === LATEST ? screen.dms.find((each) => each.room === room) : undefined;
 
-    keyed(roomList, rooms, (name) => {
+    // the channels you joined, and a channel you preview (from Browse) while it is open, as a client lists them
+    const listed = rooms.filter((name) => screen.rooms.includes(name) || (name === room && !dm));
+    keyed(roomList, listed, (name) => {
       // a long name ends in an ellipsis, the whole of it in the title
       const button = el('button', { type: 'button', class: 'chatlive__room-link', title: `#${name}` },
         el('span', { class: 'chatlive__hash', 'aria-hidden': 'true' }, '#'), el('span', { class: 'chatlive__room-name' }, name),
@@ -1189,10 +1233,10 @@ export async function mount(root) {
       // a joined channel with posts you have not seen is bold, a mention of you counted on it, as a client shows them
       const { unread, mentions } = joinedHere ? unreadOf(screen, name) : { unread: false, mentions: 0 };
       button.setAttribute('aria-current', String(name === room));
-      button.classList.toggle('chatlive__room-link--joined', joinedHere);
+      button.classList.toggle('chatlive__room-link--preview', !joinedHere);
       button.classList.toggle('chatlive__room-link--unread', unread);
       const [, , note, mark] = button.children;
-      setText(note, unread ? `, unread${mentions ? `, ${mentions} ${mentions === 1 ? 'mention' : 'mentions'}` : ''}` : '');
+      setText(note, !joinedHere ? ', not joined' : unread ? `, unread${mentions ? `, ${mentions} ${mentions === 1 ? 'mention' : 'mentions'}` : ''}` : '');
       mark.hidden = !mentions;
       setText(mark, mentions ? count(mentions) : '');
     });
@@ -1502,6 +1546,25 @@ export async function mount(root) {
   }
 
   inspect(`user.${you}`);
+}
+
+/**
+ * A small menu's keys, as the avatar's: the arrows, Home and End move through `items()`, Escape
+ * closes it and puts focus back on its button, Tab closes it and goes on from the button.
+ */
+function menuKeys(menu, items, close) {
+  menu.addEventListener('keydown', (event) => {
+    const all = items();
+    const at = all.indexOf(document.activeElement);
+    const move = { ArrowDown: at + 1, ArrowUp: at - 1, Home: 0, End: all.length - 1 }[event.key];
+    if (move !== undefined) {
+      event.preventDefault();
+      all[(move + all.length) % all.length].focus();
+    } else if (event.key === 'Escape') {
+      event.preventDefault();
+      close(true);
+    } else if (event.key === 'Tab') close(true); // Tab goes on from the button, in the sidebar's order
+  });
 }
 
 function el(tag, attributes = {}, ...children) {
