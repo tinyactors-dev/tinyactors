@@ -19,7 +19,7 @@
 
 import {
   createElement,
-  ArchiveRestore, ArrowLeft, ArrowRight, ArrowUp, Check, ChevronDown, ChevronRight, CircleSlash, Copy, Download,
+  ArchiveRestore, ArrowLeft, ArrowRight, ArrowUp, Check, ChevronDown, ChevronRight, CircleSlash, Copy, Download, Drama,
   Ellipsis, Eye, EyeOff, FileArchive, KeyRound, LoaderCircle, MessageSquare, MessagesSquare, Mic,
   MousePointerClick, Pencil, RefreshCw, RotateCcw, Settings, Sparkles, Trash2, TriangleAlert, Undo2, X,
 } from 'lucide';
@@ -30,9 +30,10 @@ export { panelCSS };
 
 const SVG = 'http://www.w3.org/2000/svg';
 const KEY_URL = 'https://aistudio.google.com/apikey';
-const OPEN = new Set(['draft', 'asking', 'suggested', 'previewing', 'failed']);
+const OPEN = new Set(['draft', 'transcribing', 'asking', 'suggested', 'previewing', 'failed']);
 const STATES = {
   draft: { icon: MessageSquare, label: 'Note' },
+  transcribing: { icon: Mic, label: 'Transcribing' },
   asking: { icon: LoaderCircle, label: 'Asking Gemini', spin: true },
   suggested: { icon: Sparkles, label: 'Suggestions ready' },
   previewing: { icon: Eye, label: 'Previewing on the page' },
@@ -40,6 +41,7 @@ const STATES = {
   dismissed: { icon: CircleSlash, label: 'Dismissed' },
   failed: { icon: TriangleAlert, label: 'Failed' },
 };
+const THINKING = [['low', 'Low'], ['medium', 'Medium'], ['high', 'High'], ['xhigh', 'Extra high']];
 const PROMPTS = ['Tighten the headline', 'Which claims need a number?', 'Find sentences over 21 words'];
 const FAILED = Symbol('failed');  // what send() resolves to when the reviewer refused the command
 const HOLD_MS = 350;              // a press shorter than this toggles recording; a longer one is push-to-talk
@@ -165,6 +167,7 @@ export function mountPanel(root, reviewer, { layout = 'sidebar' } = {}) {
     showKey: false,
     keyDraft: '',
     personaDraft: null,    // { id, instructions }
+    personaShown: null,    // the persona Settings shows, when a chip opened one that is not in use
     refreshing: false,
   };
   const rec = { active: false, toggled: false, pendingStart: false, downAt: 0, startedAt: 0, target: null, timer: 0 };
@@ -224,6 +227,7 @@ export function mountPanel(root, reviewer, { layout = 'sidebar' } = {}) {
 
   function go(view) {
     ui.view = view;
+    if (view !== 'settings') ui.personaShown = null;
     ui.menu = null;
     if (view !== 'settings' && state.activeID) send({ type: 'deselect', id: state.activeID });
     render();
@@ -257,7 +261,7 @@ export function mountPanel(root, reviewer, { layout = 'sidebar' } = {}) {
   function mode() {
     if (ui.view === 'settings') return { kind: 'none' };
     const a = activeAnnotation();
-    if (a) return { kind: 'ask', id: a.id, busy: a.state === 'asking', target: a.id };
+    if (a) return { kind: 'ask', id: a.id, busy: a.state === 'asking' || a.state === 'transcribing', target: a.id };
     if (ui.view !== 'chat' && state.selection && state.selection.fits !== false) return { kind: 'annotate', busy: false, target: 'page' };
     return { kind: 'chat', busy: !!state.chat?.busy, target: 'page' };
   }
@@ -517,14 +521,50 @@ export function mountPanel(root, reviewer, { layout = 'sidebar' } = {}) {
 
   // One message. A page chat's reply that made annotations links to them;
   // when its text only listed them (proposed), the links say it instead.
+  // A spoken message carries a small mic; a reply that thought shows a
+  // quiet "Thought for N s" that unfolds its summary; persona calls are
+  // chips that open the persona in Settings.
   function message(m) {
     const id = `m:${m.role}:${m.at}:${m.text.length}`;
     const made = (m.annotations ?? []).map((x) => state.annotations?.find((a) => a.id === x)).filter(Boolean);
     const node = h('div', { class: `cw-msg cw-msg--${m.role === 'user' ? 'user' : 'model'}${seen.has(id) ? '' : ' is-new'}`, title: when(m.at) },
-      !(m.proposed && made.length) && h('div', { class: 'cw-msg-body' }, markdown(m.text)),
-      made.length > 0 && h('div', { class: 'cw-links' }, made.map(link)));
+      m.thoughts && thought(m, id),
+      !(m.proposed && made.length) && h('div', { class: `cw-msg-body${m.spoken ? ' is-spoken' : ''}` },
+        m.spoken && h('span', { class: 'cw-spoken', title: 'Spoken' }, icon(Mic), h('span', { class: 'cw-sr' }, 'Spoken: ')),
+        markdown(m.text)),
+      made.length > 0 && h('div', { class: 'cw-links' }, made.map(link)),
+      m.personas?.length > 0 && h('div', { class: 'cw-persona-chips' }, m.personas.map(personaChip)));
     seen.add(id);
     return node;
+  }
+
+  function thought(m, id) {
+    const open = ui.thoughtsOpen?.has(id);
+    const details = h('details', { class: 'cw-thought', open: !!open, 'data-thought': '' },
+      h('summary', null, icon(ChevronRight, 'cw-chevron'), m.seconds ? `Thought for ${m.seconds} s` : 'Thoughts'),
+      h('div', { class: 'cw-thought-body' }, markdown(m.thoughts)));
+    details.addEventListener('toggle', () => {
+      ui.thoughtsOpen ??= new Set();
+      if (details.open) ui.thoughtsOpen.add(id); else ui.thoughtsOpen.delete(id);
+    });
+    return details;
+  }
+
+  function personaChip(p) {
+    const persona = state.settings?.personas?.find((x) => x.id === p.id) ?? state.settings?.personas?.find((x) => x.name === p.name);
+    const active = persona && persona.id === state.settings?.personaID;
+    return h('button', {
+      type: 'button', class: `cw-persona-chip${active ? ' is-active' : ''}`, 'data-action': 'open-persona', 'data-persona': persona?.id ?? '',
+      disabled: !persona, title: `${p.action === 'define' ? 'Persona saved' : 'Persona in use'}${active ? ' · active' : ''}`,
+      'aria-label': `Persona: ${p.name}`,
+      onclick: () => { if (persona) { ui.personaShown = persona.id; ui.personaDraft = null; go('settings'); } },
+    }, icon(Drama), h('span', null, p.name));
+  }
+
+  // A clip being transcribed: the user's bubble, waiting for its words.
+  function hearing() {
+    return h('div', { class: 'cw-msg cw-msg--user', 'data-transcribing': '' },
+      h('div', { class: 'cw-msg-body is-spoken' }, h('span', { class: 'cw-spoken' }, icon(Mic)), dots()));
   }
 
   // An annotation the page chat made: its text and the proposal. A tap
@@ -545,17 +585,21 @@ export function mountPanel(root, reviewer, { layout = 'sidebar' } = {}) {
     if (a.state === 'suggested' && first && a.anchorFound !== false) send({ type: 'preview', id: a.id, suggestionID: first.id });
   }
 
-  function thread(messages, busy) {
+  function thread(messages, busy, transcribing) {
     const list = h('div', { class: 'cw-thread', 'aria-live': 'polite' });
     for (const m of messages ?? []) list.append(message(m));
-    if (busy) list.append(h('div', { class: 'cw-msg cw-msg--model' }, dots()));
+    if (transcribing) list.append(hearing());
+    else if (busy) list.append(h('div', { class: 'cw-msg cw-msg--model' }, dots()));
     return list;
   }
+
+  const hearingFor = (target) => state.recording?.state === 'transcribing' && state.recording.target === target;
 
   function chatView() {
     const chat = state.chat ?? { messages: [], busy: false };
     const view = h('div', { class: 'cw-view', 'data-view': 'chat' });
     const body = h('div', { class: 'cw-chat' });
+    const transcribing = hearingFor('page') || (chat.busy && chat.messages?.at(-1)?.role !== 'user');
     if (!chat.messages?.length && !chat.busy) {
       body.append(h('div', { class: 'cw-empty' },
         h('span', { class: 'cw-empty-icon' }, icon(MessagesSquare)),
@@ -564,7 +608,7 @@ export function mountPanel(root, reviewer, { layout = 'sidebar' } = {}) {
           type: 'button', class: 'cw-chip', onclick: () => send({ type: 'chat', text }),
         }, text)))));
     } else {
-      body.append(thread(chat.messages, chat.busy));
+      body.append(thread(chat.messages, chat.busy, transcribing));
     }
     if (chat.error && !chat.busy) body.append(h('div', { class: 'cw-error', role: 'alert' }, icon(TriangleAlert), h('span', null, chat.error)));
     view.append(body);
@@ -608,15 +652,17 @@ export function mountPanel(root, reviewer, { layout = 'sidebar' } = {}) {
     cardsAfter(0);
     messages.forEach((m, i) => { flow.append(message(m)); cardsAfter(i + 1); });
     if (ui.editing === a.id) flow.append(editor(a));
+    if (a.state === 'transcribing') flow.append(hearing());
     if (asking) flow.append(h('div', { class: 'cw-msg cw-msg--model' }, dots()));
     if (flow.childNodes.length) body.append(flow);
+    if (a.error && a.state !== 'failed') body.append(h('div', { class: 'cw-hint', role: 'status' }, a.error));
 
     if (a.state === 'failed') {
       body.append(h('div', { class: 'cw-error', role: 'alert' }, icon(TriangleAlert), h('span', null, a.error ?? 'Gemini did not answer.'),
         hasKey && iconButton(RotateCcw, 'Try again', { 'data-action': 'retry', onclick: () => send({ type: 'suggest', id: a.id }) })));
     }
 
-    if (ui.editing !== a.id && !asking) {
+    if (ui.editing !== a.id && !asking && a.state !== 'transcribing') {
       body.append(h('div', { class: 'cw-tools' },
         hasKey && (a.suggestions?.length
           ? iconButton(Sparkles, 'More suggestions', { disabled: asking, 'data-action': 'suggest', onclick: () => send({ type: 'suggest', id: a.id }) })
@@ -762,15 +808,23 @@ export function mountPanel(root, reviewer, { layout = 'sidebar' } = {}) {
             send({ type: 'models.refresh' }).finally(() => { ui.refreshing = false; render(); });
           },
         }))));
+    body.append(h('div', { class: 'cw-group' },
+      h('span', { class: 'cw-label', id: 'cw-thinking' }, 'Thinking'),
+      h('div', { class: 'cw-scope cw-thinking', role: 'group', 'aria-labelledby': 'cw-thinking', title: 'How long Gemini thinks before it answers' },
+        THINKING.map(([value, text]) => h('button', {
+          type: 'button', 'aria-pressed': String((s.thinking ?? 'high') === value), 'data-thinking': value,
+          onclick: () => { if (s.thinking !== value) send({ type: 'settings.save', thinking: value }); },
+        }, text)))));
 
     // the persona
     const personas = s.personas ?? [];
-    const persona = personas.find((p) => p.id === s.personaID) ?? personas[0];
+    const persona = personas.find((p) => p.id === ui.personaShown) ?? personas.find((p) => p.id === s.personaID) ?? personas[0];
     if (persona) {
+      const inUse = persona.id === s.personaID;
       if (ui.personaDraft?.id !== persona.id) ui.personaDraft = { id: persona.id, instructions: persona.instructions ?? '' };
-      const pick = h('select', { id: 'cw-persona', 'data-focus-key': 'persona' },
+      const pick = h('select', { id: 'cw-persona', 'data-focus-key': 'persona', title: inUse ? 'In use' : 'Not in use' },
         personas.map((p) => h('option', { value: p.id, selected: p.id === persona.id }, p.name)));
-      pick.addEventListener('change', () => { ui.personaDraft = null; send({ type: 'settings.save', personaID: pick.value }); });
+      pick.addEventListener('change', () => { ui.personaDraft = null; ui.personaShown = null; send({ type: 'settings.save', personaID: pick.value }); });
       const instructions = h('textarea', {
         class: 'cw-textarea', 'data-focus-key': `instructions:${persona.id}`, rows: '8', 'aria-label': 'Instructions',
         value: ui.personaDraft.instructions, placeholder: 'How Gemini writes for this site',
@@ -781,14 +835,26 @@ export function mountPanel(root, reviewer, { layout = 'sidebar' } = {}) {
         keep.hidden = instructions.value === (persona.instructions ?? '');
       });
       keep.addEventListener('click', () => {
-        send({ type: 'settings.save', personaID: persona.id, persona: { ...persona, instructions: instructions.value } })
+        send({ type: 'settings.save', persona: { id: persona.id, name: persona.name, instructions: instructions.value } })
           .then((r) => r !== FAILED && toast('Instructions saved'));
       });
-      body.append(h('div', { class: 'cw-group' },
-        h('label', { class: 'cw-label', for: 'cw-persona' }, 'Persona'),
-        h('div', { class: 'cw-control' }, pick, icon(ChevronDown, 'cw-caret')),
+      body.append(h('div', { class: 'cw-group', 'data-persona-shown': persona.id },
+        h('label', { class: 'cw-label', for: 'cw-persona' }, 'Persona',
+          persona.source === 'model' && h('span', { class: 'cw-ok', title: 'Defined by Gemini' }, icon(Sparkles), h('span', { class: 'cw-sr' }, 'defined by Gemini'))),
+        h('div', { class: 'cw-split' },
+          h('div', { class: 'cw-control' }, pick, icon(ChevronDown, 'cw-caret')),
+          !persona.builtIn && iconButton(Trash2, 'Delete persona', {
+            variant: 'cw-btn--danger', 'data-action': 'delete-persona',
+            onclick: () => {
+              ui.personaShown = null;
+              ui.personaDraft = null;
+              send({ type: 'settings.deletePersona', id: persona.id }).then((r) => r !== FAILED && toast(`${persona.name} deleted`));
+            },
+          })),
         instructions,
-        h('div', { class: 'cw-buttons' }, h('span', { class: 'cw-grow' }), keep)));
+        h('div', { class: 'cw-buttons' },
+          !inUse && button('Use', { variant: 'cw-btn--secondary', 'data-action': 'use-persona', onclick: () => { ui.personaShown = null; send({ type: 'settings.save', personaID: persona.id }); } }, Check),
+          h('span', { class: 'cw-grow' }), keep)));
     }
     return view;
   }
@@ -818,16 +884,16 @@ export function mountPanel(root, reviewer, { layout = 'sidebar' } = {}) {
 
   function count() {
     const a = activeAnnotation();
-    if (a) return (a.messages?.length ?? 0) + (a.suggestions?.length ?? 0) + (a.state === 'asking' ? 1 : 0);
+    if (a) return (a.messages?.length ?? 0) + (a.suggestions?.length ?? 0) + (a.state === 'asking' || a.state === 'transcribing' ? 1 : 0);
     if (ui.view === 'chat') return (state.chat?.messages?.length ?? 0) + (state.chat?.busy ? 1 : 0);
     return 0;
   }
 
   function mainKey() {
-    if (ui.view === 'settings') return JSON.stringify(['settings', state.settings, ui.showKey, ui.refreshing]);
+    if (ui.view === 'settings') return JSON.stringify(['settings', state.settings, ui.showKey, ui.refreshing, ui.personaShown]);
     const a = activeAnnotation();
-    if (a) return JSON.stringify(['detail', a, ui.editing === a.id, state.settings?.hasKey]);
-    if (ui.view === 'chat') return JSON.stringify(['chat', state.chat, state.settings?.hasKey, state.annotations?.map((x) => [x.id, x.state, x.chosenID])]);
+    if (a) return JSON.stringify(['detail', a, ui.editing === a.id, state.settings?.hasKey, state.recording, state.settings?.personas, state.settings?.personaID]);
+    if (ui.view === 'chat') return JSON.stringify(['chat', state.chat, state.settings?.hasKey, state.annotations?.map((x) => [x.id, x.state, x.chosenID]), state.recording, state.settings?.personas, state.settings?.personaID]);
     return JSON.stringify(['list', state.status, state.error, state.annotations, state.settings?.hasKey, ui.showDone]);
   }
 

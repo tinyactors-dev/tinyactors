@@ -290,6 +290,46 @@ export const panelCSS = String.raw`
 .cw-panel .cw-link-to { font: 400 15px/1.35 var(--serif); }
 .cw-panel[data-layout="sheet"] .cw-link-from { font-size: 14px; }
 .cw-panel[data-layout="sheet"] .cw-link-to { font-size: 17px; }
+/* a spoken message: a small mic before its words */
+.cw-panel .cw-spoken { display: inline-flex; vertical-align: -2px; margin-right: 6px; color: var(--fg-4); }
+.cw-panel .cw-spoken svg.cw-icon { width: 13px; height: 13px; }
+.cw-panel .cw-msg-body.is-spoken > p:first-of-type { display: inline; }
+.cw-panel .cw-msg-body.is-spoken .cw-dots { padding: 2px 0; vertical-align: middle; }
+/* a reply's thinking: quiet until opened */
+.cw-panel .cw-thought { margin-bottom: 4px; }
+.cw-panel .cw-thought > summary {
+  display: inline-flex; align-items: center; gap: 4px; min-height: 24px; list-style: none; cursor: pointer;
+  font-size: 12px; color: var(--fg-4); transition: color var(--fast) var(--ease-step);
+}
+.cw-panel .cw-thought > summary::-webkit-details-marker { display: none; }
+.cw-panel .cw-thought > summary:hover { color: var(--fg-2); }
+.cw-panel .cw-thought > summary .cw-chevron { width: 12px; height: 12px; transition: transform var(--fast) var(--ease-step); }
+.cw-panel .cw-thought[open] > summary .cw-chevron { transform: rotate(90deg); }
+.cw-panel .cw-thought-body {
+  margin: 2px 0 6px 5px; padding-left: 10px; border-left: 1px solid var(--border-1);
+  font-size: 12.5px; line-height: 1.5; color: var(--fg-3); animation: cw-in var(--fast) var(--ease-out);
+}
+.cw-panel[data-layout="sheet"] .cw-thought > summary { font-size: 13px; min-height: 32px; }
+.cw-panel[data-layout="sheet"] .cw-thought-body { font-size: 14px; }
+.cw-panel .cw-thought-body p + p { margin-top: 6px; }
+/* a persona the model saved or switched to: a chip that opens it */
+.cw-panel .cw-persona-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.cw-panel .cw-persona-chip {
+  display: inline-flex; align-items: center; gap: 6px; min-height: 28px; padding: 0 10px; max-width: 100%;
+  border: 1px solid var(--border-1); border-radius: 999px; background: var(--surface);
+  font-size: 12.5px; color: var(--fg-2); cursor: pointer; transition: border-color var(--fast) var(--ease-step), color var(--fast) var(--ease-step);
+}
+.cw-panel .cw-persona-chip span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cw-panel .cw-persona-chip svg.cw-icon { width: 14px; height: 14px; color: var(--fg-3); }
+.cw-panel .cw-persona-chip:hover { border-color: var(--border-2); color: var(--fg-1); }
+.cw-panel .cw-persona-chip.is-active { border-color: var(--accent); color: var(--accent-fg); }
+.cw-panel .cw-persona-chip.is-active svg.cw-icon { color: var(--accent-fg); }
+.cw-panel .cw-persona-chip:disabled { opacity: .5; cursor: default; }
+.cw-panel[data-layout="sheet"] .cw-persona-chip { min-height: 36px; font-size: 14px; }
+/* a short word under the thread: nothing heard */
+.cw-panel .cw-hint { padding: 6px 2px 0; font-size: 12.5px; color: var(--fg-3); animation: cw-in var(--fast) var(--ease-out); }
+/* the thinking level: a segmented control under the model */
+.cw-panel .cw-thinking { margin: 0; }
 .cw-panel .cw-dots { display: inline-flex; gap: 4px; padding: 8px 0; color: var(--fg-3); }
 .cw-panel .cw-dots i { width: 5px; height: 5px; border-radius: 50%; background: currentColor; opacity: .25; animation: cw-dot 1.2s infinite var(--ease-step); }
 .cw-panel .cw-dots i:nth-child(2) { animation-delay: .15s; }

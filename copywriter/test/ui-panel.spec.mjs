@@ -29,7 +29,9 @@ async function open(query, options = {}) {
   const errors = [];
   page.on('pageerror', (error) => errors.push(error.message));
   page.on('console', (message) => { if (message.type() === 'error') errors.push(message.text()); });
-  await page.goto(`${base}?bare=1&delay=0.05&${query}`);
+  const params = new URLSearchParams('bare=1&delay=0.05');
+  for (const [key, value] of new URLSearchParams(query)) params.set(key, value);
+  await page.goto(`${base}?${params}`);
   await page.locator('#panel .cw-panel').waitFor();
   return { page, panel: page.locator('#panel'), errors };
 }
@@ -312,6 +314,73 @@ test('push-to-talk: hold records until release, a tap toggles', async () => {
   const log = (await page.evaluate(() => reviewer.log)).filter((c) => c.type.startsWith('record.'));
   assert.deepEqual(log.map((c) => c.type), ['record.start', 'record.stop', 'record.start', 'record.stop']);
   assert.equal(log[0].target, 'page');
+  await page.close();
+});
+
+test('voice: a waiting bubble while it transcribes, then the transcript as the user\'s bubble with a mic', async () => {
+  const { page, panel, errors } = await open('delay=1');
+  await panel.locator('.cw-row[data-id=a4]').click();
+  const mic = panel.locator('[data-action=mic]');
+  await mic.click(); // a tap starts
+  await page.waitForFunction(() => reviewer.getState().recording.state === 'recording');
+  await mic.click(); // a tap stops
+  await panel.locator('[data-view=detail] [data-transcribing]').waitFor();
+  const spoken = panel.locator('[data-view=detail] .cw-msg--user .cw-msg-body.is-spoken').filter({ hasText: 'lead with the number' });
+  await spoken.waitFor();
+  assert.equal(await spoken.locator('.cw-spoken svg').count(), 1, 'a small mic, no label');
+  assert.equal(await panel.locator('[data-view=detail] [data-transcribing]').count(), 0);
+  assert.ok(!(await panel.locator('[data-view=detail]').textContent()).includes('(voice message)'));
+  assert.deepEqual(errors, []);
+  await page.close();
+});
+
+test('thinking: a reply shows a quiet "Thought for N s" that unfolds its summary', async () => {
+  const { page, panel } = await open('');
+  await panel.locator('.cw-row[data-id=a4]').click();
+  const thought = panel.locator('[data-view=detail] .cw-thought');
+  await thought.waitFor();
+  assert.equal((await thought.locator('summary').textContent()).trim(), 'Thought for 9 s');
+  assert.equal(await thought.locator('.cw-thought-body').isVisible(), false, 'collapsed');
+  await thought.locator('summary').click();
+  assert.match(await thought.locator('.cw-thought-body').textContent(), /strongest fact/);
+  // the answer is the text, not the thoughts
+  assert.ok(!(await panel.locator('[data-view=detail] .cw-msg--model .cw-msg-body').first().textContent()).includes('Finding the strongest'));
+  await page.close();
+});
+
+test('personas: the chat\'s chip opens the persona in Settings, which deletes it; the default has no delete', async () => {
+  const { page, panel } = await open('');
+  const composer = panel.locator('textarea[aria-label=Message]');
+  await composer.fill('Define a persona for a skeptical senior backend engineer and use it');
+  await composer.press('Enter');
+  const chip = panel.locator('[data-view=chat] .cw-persona-chip');
+  await chip.waitFor();
+  assert.equal(await chip.textContent(), 'Skeptical backend engineer');
+  assert.match(await chip.getAttribute('class'), /is-active/);
+  await chip.click();
+  await panel.locator('[data-view=settings]').waitFor();
+  const pick = panel.locator('#cw-persona');
+  assert.equal(await pick.locator('option:checked').textContent(), 'Skeptical backend engineer');
+  assert.match(await panel.locator('[data-view=settings] .cw-textarea').inputValue(), /senior backend engineers/);
+  await panel.locator('[data-action=delete-persona]').click();
+  await page.waitForFunction(() => reviewer.getState().settings.personas.length === 2);
+  assert.equal(await pick.locator('option:checked').textContent(), 'tinyactors.dev voice');
+  assert.equal(await panel.locator('[data-action=delete-persona]').count(), 0, 'the default cannot be deleted');
+  await pick.selectOption('plain');
+  await panel.locator('[data-action=delete-persona]').waitFor();
+  await page.close();
+});
+
+test('settings: the thinking level is a segmented control', async () => {
+  const { page, panel } = await open('');
+  await panel.locator('[data-action=settings]').click();
+  const group = panel.locator('[role=group][aria-labelledby=cw-thinking]');
+  assert.equal(await group.locator('[aria-pressed=true]').textContent(), 'High');
+  await group.locator('[data-thinking=xhigh]').click();
+  await page.waitForFunction(() => reviewer.getState().settings.thinking === 'xhigh');
+  await group.locator('[data-thinking=xhigh][aria-pressed=true]').waitFor();
+  const saved = (await page.evaluate(() => reviewer.log)).filter((c) => c.type === 'settings.save').at(-1);
+  assert.deepEqual(saved, { type: 'settings.save', thinking: 'xhigh' });
   await page.close();
 });
 

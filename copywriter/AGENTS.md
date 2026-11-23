@@ -103,6 +103,11 @@ copywriter/
     panel.mjs             mountPanel(root, reviewer, {layout: 'sidebar'|'sheet'}); its scrolling area is a div, so the
                           host page keeps its one <main>
     panel-css.mjs         its stylesheet as a string (a ShadowRoot adopts it; no bundler loader)
+                          The thread: a transcript is the user's bubble with a small mic (a bubble
+                          of dots while it is transcribed); a reply that thought has a collapsed
+                          "Thought for N s"; a persona call is a chip that opens the persona in
+                          Settings. Settings: the model, a segmented Thinking control, the persona
+                          (delete for any but the default; Use when a chip opened one not in use).
   src/platform/dom.mjs    the page adapter's DOM side, shared: anchors, locate, preview/revert of Text nodes, highlights
   src/platform/extension/ manifest.json, service-worker.mjs, content.mjs (page adapter), sidepanel.html/.mjs, mic.html/.mjs
   src/platform/embed/     embed.mjs (launcher, Shadow DOM, page adapter on the live DOM), loader snippet

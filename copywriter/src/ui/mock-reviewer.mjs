@@ -39,7 +39,8 @@ function sample(now) {
       chosenID: null,
       messages: [
         { role: 'user', text: 'What would a developer care about here?', at: at(6) },
-        { role: 'model', text: 'The headline names a category. The page\'s strongest fact is **4 million actors in 1.5 GB**, so lead with the capacity:\n\n- one rewrite states the number\n- one names `SCXML` statecharts', at: at(6) },
+        { role: 'model', text: 'The headline names a category. The page\'s strongest fact is **4 million actors in 1.5 GB**, so lead with the capacity:\n\n- one rewrite states the number\n- one names `SCXML` statecharts', at: at(6),
+          thoughts: '**Finding the strongest fact**\nThe page measures 4 million actors in 1.5 GB; the headline says none of it.', seconds: 9 },
       ],
       createdAt: at(7), updatedAt: at(6),
     },
@@ -84,7 +85,7 @@ export function createMockReviewer({ hasKey = true, delay = 1, empty = false, st
     page: { url: 'https://www.tinyactors.dev/', title: 'Actors as a library' },
     selection: null,
     settings: {
-      hasKey, rememberKey: false, model: 'gemini-4-hydrogen',
+      hasKey, rememberKey: false, model: 'gemini-4-hydrogen', thinking: 'high',
       models: [
         { id: 'gemini-4-hydrogen', label: 'Gemini 4 Hydrogen' },
         { id: 'gemini-3.8-flash', label: 'Gemini 3.8 Flash' },
@@ -92,7 +93,7 @@ export function createMockReviewer({ hasKey = true, delay = 1, empty = false, st
       ],
       personaID: 'voice',
       personas: [
-        { id: 'voice', name: 'tinyactors.dev voice', instructions: VOICE },
+        { id: 'voice', name: 'tinyactors.dev voice', instructions: VOICE, builtIn: true },
         { id: 'plain', name: 'Plain English', instructions: 'Short words. One idea per sentence.' },
       ],
     },
@@ -143,11 +144,11 @@ export function createMockReviewer({ hasKey = true, delay = 1, empty = false, st
     const pool = REWRITES.default;
     const fresh = pool.map(([t, r]) => ({ id: id('s'), text: t, rationale: r }))
       .filter((s) => !get(annotationID).suggestions.some((o) => o.text === s.text)).slice(0, 2);
-    const reply = fresh.length
+    const reply0 = fresh.length
       ? `Two options that follow the voice. The first leads with **the measured claim**; the second keeps the verb first.`
       : 'These already follow the voice. Tell me what to emphasise and I will try again.';
     update(annotationID, (a) => {
-      const messages = [...a.messages, { role: 'model', text: reply, at: Date.now() }];
+      const messages = [...a.messages, { role: 'model', text: reply0, at: Date.now(), thoughts: '**Weighing the options**\nThe voice wants the measured claim first.', seconds: 1 }];
       const brought = fresh.length ? fresh : [{ id: id('s'), text: `${a.original.split(' ').slice(0, 5).join(' ')}`, rationale: 'Cut to the first five words.' }];
       return {
         ...a,
@@ -191,9 +192,23 @@ export function createMockReviewer({ hasKey = true, delay = 1, empty = false, st
       set({ annotations: state.annotations.filter((a) => a.id !== annotationID), activeID: state.activeID === annotationID ? null : state.activeID });
     },
     async note({ id: annotationID, text }) { update(annotationID, (a) => ({ ...a, note: text })); },
-    async chat({ text }) {
-      set({ chat: { messages: [...state.chat.messages, { role: 'user', text, at: Date.now() }], busy: true } });
+    async chat({ text, spoken }) {
+      set({ chat: { messages: [...state.chat.messages, { role: 'user', text, at: Date.now(), ...(spoken ? { spoken: true } : {}) }], busy: true } });
       await wait(1100);
+      if (/persona/i.test(text)) {
+        const persona = { id: id('p'), name: 'Skeptical backend engineer', instructions: 'Readers are senior backend engineers. Prove every claim.', source: 'model' };
+        set({
+          settings: { ...state.settings, personas: [...state.settings.personas, persona], personaID: persona.id },
+          chat: {
+            busy: false,
+            messages: [...state.chat.messages, {
+              role: 'model', at: Date.now(), text: 'Saved a persona for senior backend engineers and switched to it.',
+              personas: [{ name: persona.name, action: 'define', id: persona.id }], thoughts: '**Defining the reader**\nSenior engineers distrust adjectives.', seconds: 4,
+            }],
+          },
+        });
+        return;
+      }
       const t = Date.now();
       const proposed = {
         id: id('a'), state: 'suggested', anchorFound: true, original: 'Everything you need to build actor systems',
@@ -216,11 +231,18 @@ export function createMockReviewer({ hasKey = true, delay = 1, empty = false, st
     async 'record.start'({ target }) { set({ recording: { state: 'recording', target } }); },
     async 'record.stop'({ target }) {
       set({ recording: { state: 'transcribing', target } });
+      const annotation = target && target !== 'page' && get(target);
+      if (annotation) update(target, (a) => ({ ...a, state: 'transcribing' }));
+      else set({ chat: { ...state.chat, busy: true } });
       await wait(700);
       set({ recording: { state: 'idle', target: null } });
       const text = 'Make it shorter and lead with the number.';
-      if (target && target !== 'page' && get(target)) await ask(target, text);
-      else await handlers.chat({ text });
+      if (annotation) {
+        update(target, (a) => ({ ...a, messages: [...a.messages, { role: 'user', text, at: Date.now(), spoken: true }] }));
+        await ask(target, null);
+      } else {
+        await handlers.chat({ text, spoken: true });
+      }
     },
     async 'settings.save'(command) {
       const settings = { ...state.settings };
@@ -229,8 +251,14 @@ export function createMockReviewer({ hasKey = true, delay = 1, empty = false, st
       if (command.rememberKey != null) settings.rememberKey = command.rememberKey;
       if (command.model) settings.model = command.model;
       if (command.personaID) settings.personaID = command.personaID;
+      if (command.thinking) settings.thinking = command.thinking;
       if (command.persona) settings.personas = settings.personas.map((p) => (p.id === command.persona.id ? { ...p, ...command.persona } : p));
       await wait(150);
+      set({ settings });
+    },
+    async 'settings.deletePersona'({ id: personaID }) {
+      const settings = { ...state.settings, personas: state.settings.personas.filter((p) => p.id !== personaID) };
+      if (settings.personaID === personaID) settings.personaID = settings.personas[0].id;
       set({ settings });
     },
     async 'settings.forgetKey'() { set({ settings: { ...state.settings, hasKey: false, rememberKey: false } }); },
