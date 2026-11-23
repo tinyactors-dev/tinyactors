@@ -84,14 +84,16 @@
   <section id="typing">
     <heading>6. Show who is typing</heading>
     <p>A notice for every key would flood every screen. The user's chart tells its room at most once every 3 seconds, on a timer of its own.</p>
-    <code src="../../examples/chat/6-typing/charts/user.scxml" lines="42-58" language="scxml" file="charts/user.scxml"/>
+    <code src="../../examples/chat/6-typing/charts/user.scxml" lines="45-61" language="scxml" file="charts/user.scxml"/>
     <p>Each other member's chart shows the notice for 5 seconds after the last one, restarting its timer on each.</p>
-    <code src="../../examples/chat/6-typing/charts/user.scxml" lines="60-85" language="scxml" file="charts/user.scxml"/>
-    <p>When its user disconnects, the chart cancels those timers and takes each notice off the user's screen.</p>
-    <code src="../../examples/chat/6-typing/charts/user.scxml" lines="27-39" language="scxml" file="charts/user.scxml"/>
-    <p>The program types three keys as ada and posts, then lets bob's indicator run out. Bob types again and cat disconnects: the notice leaves cat's screen at once.</p>
+    <code src="../../examples/chat/6-typing/charts/user.scxml" lines="63-88" language="scxml" file="charts/user.scxml"/>
+    <p>A post takes the typist's notice off every screen, so it ends the typist's 3 seconds too. The first key after a post is told at once.</p>
+    <code src="../../examples/chat/6-typing/charts/user.scxml" lines="107-118" language="scxml" file="charts/user.scxml"/>
+    <p>When its user disconnects, the chart cancels its timers and takes each notice off the user's screen.</p>
+    <code src="../../examples/chat/6-typing/charts/user.scxml" lines="27-42" language="scxml" file="charts/user.scxml"/>
+    <p>Ada's three keys make one notice, and bob's notice runs out by itself. Cat's disconnect takes bob's notice off cat's screen, and ada's key right after a post shows at once.</p>
     <example>
-      <code src="../../examples/chat/6-typing/main.mjs" lines="40-61" language="javascript" file="main.mjs"/>
+      <code src="../../examples/chat/6-typing/main.mjs" lines="40-70" language="javascript" file="main.mjs"/>
       <code src="../../examples/chat/6-typing/output.txt" language="text" role="output"/>
     </example>
   </section>
@@ -99,9 +101,9 @@
   <section id="reconnect">
     <heading>7. Ride out a lost connection</heading>
     <p>A phone in a tunnel loses its connection for a few seconds, and until now its user went offline at once. Now the user's chart reports <code>away</code>, as Slack shows it, and keeps new messages for 30 seconds in <code>reconnecting</code>.</p>
-    <code src="../../examples/chat/7-reconnect/charts/user.scxml" lines="194-214" language="scxml" file="charts/user.scxml"/>
+    <code src="../../examples/chat/7-reconnect/charts/user.scxml" lines="203-223" language="scxml" file="charts/user.scxml"/>
     <p>Back within 30 seconds, the history state <code>resume</code> returns the user to <code>active</code> or <code>away</code>, whose entry reports that status again. The held messages reach the screen, and the raised <code>reconnected</code> asks the workspace for the roster once the status is out.</p>
-    <code src="../../examples/chat/7-reconnect/charts/user.scxml" lines="31-66" language="scxml" file="charts/user.scxml"/>
+    <code src="../../examples/chat/7-reconnect/charts/user.scxml" lines="32-70" language="scxml" file="charts/user.scxml"/>
     <p>Ada sees bob away, then active 10 seconds later; he gets the held message and a roster with cy offline. Then he is gone for 40 seconds: only the second loss makes him offline.</p>
     <example>
       <code src="../../examples/chat/7-reconnect/main.mjs" lines="45-64" language="javascript" file="main.mjs"/>

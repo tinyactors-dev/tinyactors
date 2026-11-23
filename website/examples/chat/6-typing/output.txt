@@ -16,3 +16,9 @@ cat sees bob stop typing in general
 ada sees bob typing in general
 cat sees bob typing in general
 cat sees bob stop typing in general
+-- ada types, posts and types again at once
+bob sees ada typing in general
+ada sees ada in general: pizza?
+bob sees ada stop typing in general
+bob sees ada in general: pizza?
+bob sees ada typing in general

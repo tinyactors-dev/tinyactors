@@ -60,6 +60,14 @@ export async function run(options = {}) {
   host.actor('user.cat').send('disconnect');
   await host.idle();
 
+  client.lines.push('-- ada types, posts and types again at once');
+  ada.send('typing', { room: 'general' });
+  await host.idle();
+  ada.send('post', { room: 'general', text: 'pizza?' });
+  await host.idle();
+  ada.send('typing', { room: 'general' });
+  await host.idle();
+
   host.close();
   return client.lines;
 }

@@ -3,9 +3,10 @@
      It shows the roster the workspace sends. It joins rooms and posts to them.
      A join or a post counts as activity.
      A join of a room that does not exist fails with error.communication.
-     Typing tells the room once every 3 seconds at most; another member's
-     typing shows on the screen until that member posts, 5 seconds pass
-     after the last notice, or this user disconnects or loses the connection.
+     Typing tells the room once every 3 seconds at most, and at once after
+     a post; another member's typing shows on the screen until that member
+     posts, 5 seconds pass after the last notice, or this user disconnects
+     or loses the connection.
      A lost connection shows the user as away at once, and offline after
      30 seconds. A reconnect before then brings back the status from
      before, the messages that came meanwhile and the roster as it is now.
@@ -21,7 +22,7 @@
        datamodel="ecmascript" name="user" initial="offline">
   <datamodel>
     <data id="name"/>
-    <data id="quiet" expr="({})"/>    <!-- room -> true while this user's typing was told less than 3 s ago -->
+    <data id="quiet" expr="({})"/>    <!-- room -> the id of its quiet.over timer, while this user's typing was told less than 3 s ago -->
     <data id="typers" expr="({})"/>   <!-- "room user" -> { id, room, user }: an indicator on the screen and its timer -->
     <data id="timer"/>
     <data id="held" expr="[]"/>       <!-- messages that came while reconnecting; the rest is dropped -->
@@ -62,6 +63,9 @@
         </send>
       </foreach>
       <assign location="typers" expr="({})"/>
+      <foreach array="Object.values(quiet)" item="over">
+        <cancel sendidexpr="over"/>
+      </foreach>
       <assign location="quiet" expr="({})"/>
     </onexit>
     <history id="resume">               <!-- active or away, as before the connection was lost -->
@@ -80,21 +84,21 @@
     </transition>
 
     <!-- this user types: the room hears of it at most once every 3 seconds -->
-    <transition event="typing" cond="!quiet[_event.data.room]">
+    <transition event="typing" cond="!(_event.data.room in quiet)">
       <send targetexpr="'tinyactors://chat/@room.' + _event.data.room" event="typing">
         <param name="user" expr="name"/>
       </send>
-      <assign location="quiet[_event.data.room]" expr="true"/>
-      <send event="quiet.over" delay="3s">
+      <send event="quiet.over" delay="3s" idlocation="timer">
         <param name="room" expr="_event.data.room"/>
       </send>
+      <assign location="quiet[_event.data.room]" expr="timer"/>
       <raise event="activity"/>
     </transition>
     <transition event="typing">
       <raise event="activity"/>
     </transition>
     <transition event="quiet.over">
-      <assign location="quiet[_event.data.room]" expr="false"/>
+      <script>delete quiet[_event.data.room];</script>
     </transition>
 
     <!-- another member types: the screen shows it until 5 seconds after the last notice -->
@@ -174,6 +178,11 @@
         <param name="user" expr="name"/>
         <param name="text" expr="_event.data.text"/>
       </send>
+      <!-- the post ends this user's indicator on every screen, so the next key is told at once -->
+      <if cond="_event.data.room in quiet">
+        <cancel sendidexpr="quiet[_event.data.room]"/>
+        <script>delete quiet[_event.data.room];</script>
+      </if>
       <raise event="activity"/>
     </transition>
     <!-- before "roster": that descriptor matches roster.update too -->

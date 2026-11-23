@@ -8,14 +8,18 @@ until the typist posts, or for 5 seconds after the last one.
 ## A throttle and an expiry, as timers
 
 - `typing` (from your program, on each key) sends `typing` to the room
-  only while `quiet[room]` is false, then sets it and sends itself
-  `quiet.over` in 3 seconds. Every key still counts as activity.
+  only while `quiet` has no entry for the room, then sends itself
+  `quiet.over` in 3 seconds and keeps that timer's id in `quiet[room]`.
+  Every key still counts as activity.
+- A `post` ends the typist's indicator on every screen, so it ends the
+  quiet too: it cancels the timer and deletes the entry. Without that, the
+  first keys after a post would go untold for up to 3 seconds.
 - The room sends `others.typing` to each member but the typist.
 - A member's chart shows it (`typing` to `chat:client`) and starts a
   5-second `indicator.expired` timer, cancelling the one before. A post
   from the typist cancels it at once (`typing.stopped`).
-- Leaving `online` cancels every indicator's timer and takes each
-  indicator off this user's screen (`typing.stopped`).
+- Leaving `online` cancels every timer, the indicators' and the quiet's,
+  and takes each indicator off this user's screen (`typing.stopped`).
 
 The timer's event is `indicator.expired`, not `typing.expired`: an
 SCXML event name matches by its dotted prefix, so a transition on
@@ -46,9 +50,15 @@ cat sees bob stop typing in general
 ada sees bob typing in general
 cat sees bob typing in general
 cat sees bob stop typing in general
+-- ada types, posts and types again at once
+bob sees ada typing in general
+ada sees ada in general: pizza?
+bob sees ada stop typing in general
+bob sees ada in general: pizza?
+bob sees ada typing in general
 ```
 
 Three keys made one notice. The post ended ada's indicator on every
 screen; bob's ended by itself, 5 seconds after his last key. When cat
 disconnected, bob's indicator left cat's screen at once; ada still sees
-it.
+it. ada's key right after her post showed at once on bob's screen.
