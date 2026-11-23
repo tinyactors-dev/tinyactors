@@ -391,6 +391,8 @@ test('a database of version 1: the page\'s chat is its first conversation, an ed
   assert.deepEqual(state.chat.messages.map((m) => m.text), ['Old question', 'Old answer']);
   assert.deepEqual(state.settings.voice, { instructions: 'Edited voice.', custom: true });
   assert.equal(state.settings.thinking, 'low', 'the other settings stay');
-  assert.deepEqual(state.settings.audiences, []);
+  // no audience came from version 1; the three starting ones are added, none active
+  assert.deepEqual(state.settings.audiences.map((a) => a.source), ['starter', 'starter', 'starter']);
+  assert.deepEqual(state.settings.audienceIDs, []);
   await context.close();
 });
