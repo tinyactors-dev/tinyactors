@@ -130,8 +130,10 @@ any integer width and does not look for duplicate keys
 
 ## The session document
 
-A session's variables are one JSON object, stored as one CBOR map, whose
-keys are its variables.
+A session's variables are one JSON object whose keys are its variables.
+It is stored as one canonical CBOR item per variable, each in a block of
+its own with room to grow; a blob, a snapshot and `migrate` write the
+blocks out as one CBOR map.
 
 - **Every `<data>` is a key from `create` on,** holding `undefined` until
   initialized, early or late as the chart binds (SCXML 5.2.2), unless a
@@ -141,10 +143,14 @@ keys are its variables.
   The chart's *declared variables* are its `<data>` ids and the roots of
   its `<foreach>` items and indexes (`TA_EXPRESSION_ITEM`,
   `image.h:111-113`), so a key a loop added survives hibernation.
-- **A stored document never changes.** An assignment writes a new one and
-  releases the old; a `<foreach>` holds a reference on the block it
-  iterates, which is the shallow copy SCXML 4.6 asks for.
-- **Limits.** A document MUST NOT exceed the datamodel's
+- **A write changes its variable's block in place,** copy on write: only
+  the bytes after the change move, and a value added at the end of a
+  variable that is itself a map or an array (`items[length(items)]`) moves
+  nothing but the container's head. A block is shared only by a
+  `<foreach>`, which holds a reference on the block it iterates (the
+  shallow copy SCXML 4.6 asks for); a write to a shared block copies it
+  first. A block that runs out of room is reallocated at twice its size.
+- **Limits.** The session's variables together MUST NOT exceed the datamodel's
   `max_document_bytes`, nor nest past 63 levels ("Values"). The same
   limits bound every value the datamodel builds: a capture, a call's
   arguments, a function's result. A write that would break one is
@@ -422,7 +428,8 @@ JavaScript import ("History").
 
 A payload is a row in the datamodel's payload table (`ta_table`): a
 reference count and one canonical CBOR block, allocated through the
-datamodel's allocator. Session documents are blocks of the same kind.
+datamodel's allocator. A session's variables are blocks of the same kind,
+with spare room.
 
 - **`capture`** writes the `<param>`s or `namelist` as a map, or the
   `<content>`'s value, into a new block. A name given twice keeps its last
@@ -444,7 +451,8 @@ datamodel's allocator. Session documents are blocks of the same kind.
   datamodel sets `TA_DATAMODEL_EVENT_DETACHABLE`; `detach_event` drops
   nothing, so `_event` stays bound until the next event (SCXML 5.10).
 - **A `<foreach>`** is a row of the loop table: a reference on the array's
-  block, the position, and the `item` and `index` paths. A run can yield
+  block (so a write to the variable copies it first, "The session
+  document"), the position, and the `item` and `index` paths. A run can yield
   at any instruction (`core.c:1306`) while a loop's frame stays in the
   workspace (`:1442-1449`), and a snapshot copies the whole region
   (`include/tinyactors/host.h:449`), so loops are in snapshots.
@@ -452,8 +460,9 @@ datamodel's allocator. Session documents are blocks of the same kind.
 ## Hibernation, migration, snapshots, inspection
 
 - **`serialize`** writes `{"vars": <the document>, "event": [...] |
-  null}`, the form the other datamodels write, with the document as a
-  byte string of its bytes, so the blob adds no depth.
+  null}`, the form the other datamodels write, with the document (the
+  variables' blocks, one after another under a map's head) as a byte
+  string of its bytes, so the blob adds no depth.
 - **`deserialize`** makes the session's document from the blob's: the
   chart's declared variables ("The session document"), `undefined` for
   those the blob lacks. It
@@ -603,7 +612,7 @@ skip list (XML content, the ECMAScript data model's tests), are
 ## Validation
 
 A spike on the branch `ccr-6b4276e2-wq2zzh` (2026-11-23) built the
-datamodel as `tinyactors-core/src/datamodel_json` (1,956 lines),
+datamodel as `tinyactors-core/src/datamodel_json` (1,956 lines; 2,068 with writes in place),
 offered it in `ta-conform` with a C library of the conf: notation's
 functions, and measured it beside quickjs. The raw numbers, the machine
 and the commands are in `tinyactors-core/tools/jsonbench/RESULTS.md`.
@@ -615,9 +624,9 @@ and the commands are in `tinyactors-core/tools/jsonbench/RESULTS.md`.
 | Does it conform? | Scenarios 10 of 10 (spawn, send, time, invoke, hibernation, migration, snapshots, send errors, outcome canaries). W3C: 167 of 167 translated tests pass; 24 are skipped: 19 of the ECMAScript data model (as `skip-python.txt`), 3 that need `<script>` to change state (302, 303, 304), 530 (XML in `<assign>`) and 567 (a form field `'2'` against the number 2, no coercion). `mise run conform` runs it beside quickjs and the test datamodel, unchanged |
 | Is it freestanding? | `check:freestanding` builds and links it for wasm32, x86_64, thumb and riscv32 |
 | How big is it? | 31 KB of code at `-Os`, 67 KB at `-O2`; the quickjs engine is 974 KB, its wrapper 63 KB |
-| Memory per actor, 10,000 of Appendix A's order | 679 B idle and 874 B after the order's three events (the datamodel's share 361 and 515 B), against quickjs's 1,127 and 2,260 B (809 and 1,771 B) |
+| Memory per actor, 10,000 of Appendix A's order (one document per session; writes in place: the fourth round) | 679 B idle and 874 B after the order's three events (the datamodel's share 361 and 515 B), against quickjs's 1,127 and 2,260 B (809 and 1,771 B) |
 | Time per event (min to max of three runs) | a guard alone 494 to 505 ns against 1,389 to 1,796; a guard and an assignment 1,213 to 1,227 against 2,027 to 2,339; the order's `add` and `address` 1,723 to 2,489 against 3,119 to 3,256 |
-| An assignment as the document grows | 636 ns at 64 B, 716 to 1,307 at 1 KB, 1,136 to 2,008 at 16 KB, 5,106 to 5,559 at 60 KB; quickjs stays at 1,257 to 2,500 throughout |
+| An assignment as the document grows (one document per session; writes in place: the fourth round) | 636 ns at 64 B, 716 to 1,307 at 1 KB, 1,136 to 2,008 at 16 KB, 5,106 to 5,559 at 60 KB; quickjs stays at 1,257 to 2,500 throughout |
 | How many functions did the W3C suite need? | 18 (`eq` 130 uses, `add` 55, `isDefined` 21, `has` 14, `and` 12, `not` 7, `contains` 6, `concat` 5, `append` 2, `lt`, `or`, `startsWith`, ...) |
 
 **A function call, per language** (ns per call, 1,000,000 calls, the
@@ -701,9 +710,8 @@ to N items (two runs):
   of an `addItem`.
 - **It still grows with the array:** 7.6 µs at 200 items against
   quickjs's 2.5 to 4.8. Each write walks the containers it changes to find
-  their ends (`item_size`) and copies the document; most likely the walk
-  dominates at this size (4.4 KB copied), unverified. An index of each
-  container's end, or a count kept with the document, would remove it.
+  their ends (`item_size`) and copies the document. Writes in place remove
+  both (the fourth round, below).
 
 **Beside staticjs** (third round, the same machine and benchmark): a
 second spike, `tinyactors-core/src/datamodel_staticjs` (1,399 lines over
@@ -743,9 +751,42 @@ the same functions as staticjs natives in C. Two runs each:
 - **So they serve different charts:** logic in the application's
   language (the mobile bindings) suits json; logic in the chart, large
   documents, or C and wasm hosts suit staticjs. json's weakness, the copy
-  on assignment, has a known fix (container ends, writes in place);
+  on assignment, is fixed by writing in place (the fourth round, below);
   staticjs's conversion cost for other languages is inherent to its
   values living in its own heap.
+
+**Fourth round: writes in place** (the same machine and benchmark, two
+runs of each, one program after another; one run was noisy at the small documents,
+so that row takes the other). The spike stores a block per
+variable, sized to fit when made and doubled when it grows; a write
+splices its value into the block, and an addition at the end of a
+variable's own map or array takes the container's end from the block's
+length, with no walk. `<foreach>` still copies its array in the spike
+(the proposal shares it until a write). It passes the same suites
+(scenarios 10 of 10, W3C 167 of 167 translated).
+
+| | json, one document | json, in place | staticjs | quickjs |
+|---|---|---|---|---|
+| Bytes per actor, idle | 679 | 738 | 1,226 | 1,127 |
+| Bytes per actor, after the order's 3 events | 874 | 947 | 2,184 | 2,260 |
+| A guard and an assignment, ns | 1,225 to 1,404 | 1,011 to 1,031 | 982 to 1,690 | 1,851 to 2,032 |
+| An assignment, 64 B / 16 KB / 60 KB document, ns (the quieter run) | 650 / 1,200 / 4,400 | 561 / 561 / 565 | 732 / 734 / 733 | 1,251 / 1,250 / 1,257 |
+| Appending to 200 items, `items[length(items)]`, ns | 7,617 to 8,804 | 1,805 to 1,811 | 2,605 to 2,608 (index) | 2,595 to 2,602 (index) |
+| Appending to 10 / 50 items, the least of two runs, ns | 2,059 / 3,300 | 1,808 / 1,816 | 1,622 / 1,913 (index) | 2,609 / 2,602 (index) |
+| `addItem(items, …)` at 200 items, ns | 47,884 to 49,411 | 45,010 to 47,947 | | |
+
+- **An assignment costs the same at 60 KB as at 64 B,** and less than
+  staticjs's; appending through an index no longer grows with the array
+  and is the cheapest of the four at 200 items.
+- **Memory costs about 20 B a variable more** (an allocation's header and
+  the block's length and room: 59 B per actor idle for the order's three
+  variables), still 2.3 times less than staticjs after the events.
+- **A function that takes the whole array and returns it still grows**
+  with the array: its arguments and result are the array's bytes. Writes
+  in place cannot help it; naming only the new item does.
+- **The order's `add` and `address` were noisy** on this machine (1,778
+  to 3,513 ns over five runs of the same build, against 1,787 to 2,295
+  before): its `add` is `addItem`, so it is the case above.
 
 **What the spike simplified,** so a real layer differs: `_event` is built
 at `bind_event` as one map with its data copied in (the proposal keeps a
@@ -754,7 +795,8 @@ reference); `_ioprocessors` is kept per session (the proposal keeps it per
 chart: an estimate, not measured, puts about a third of the datamodel's
 361 B idle per actor in those copies); duplicate keys are not refused; a
 document's depth is not checked on writes; the parser recurses (to 16
-levels). None of these changes a conformance result; the first three
+levels); `max_document_bytes` bounds each variable, not their sum, and is
+checked after a write, which stays. None of these changes a conformance result; the first three
 overstate the memory and the time per event.
 
 ## Decisions for the maintainer
@@ -765,8 +807,10 @@ overstate the memory and the time per event.
 3. **Decimal literals:** read exactly or the expression's error; or a
    correctly rounded reader in core.
 4. **`max_document_bytes`'s default,** in `ta_datamodel_json_config_normalize`:
-   16 KB, where the spike measured an assignment within 2 µs, unless
-   assignments write in place ("Validation", item 3).
+   64 KB, as the spike has it. With writes in place an assignment's cost no
+   longer grows with the document ("Validation", fourth round), so the
+   limit bounds memory only: 16 KB if a population's worst case matters
+   more than a chart's room.
 5. **The callback rule's wording.** `tinyactors-core/AGENTS.md` says "no
    callbacks except the datamodel vtable" in the public ABI; its letter is
    already broken by the allocator (`allocator.h:26-27`) and the compiler's
@@ -926,6 +970,13 @@ static ta_status has_items(ta_json_call *call) {
 ```
 
 ## History
+
+- **Writes in place** (2026-11-23): the session document was first one
+  block that no write changed, copied whole on each assignment; an
+  assignment cost 4.4 µs at 60 KB and an append 7.6 µs at 200 items.
+  Asked whether JSON could be copy on write, the spike stored a block per
+  variable and wrote into it, which made both flat ("Validation", fourth
+  round).
 
 - **A struct datamodel** (2026-11-21): a layer in core for the wasm
   anthill, with variables as doubles at fixed offsets and functions

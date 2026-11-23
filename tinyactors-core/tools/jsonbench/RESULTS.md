@@ -203,3 +203,68 @@ staticjs natives in another language, per addItem call: arguments to CBOR and th
 == convert (run 2)
 staticjs natives in another language, per addItem call: arguments to CBOR and the result back 1370 ns (writing the arguments 734, reading the result 636)
 ```
+
+## Fourth round: writes in place
+
+The same machine, idle, one program after another (`json-bench 10000 200000`, `json-bench 1000 20000 append`), after the json datamodel stored a block per variable and wrote into it (sized to fit when made, doubled when it grows; an addition at the end of a variable's own map or array takes the end from the block's length). staticjs and quickjs are unchanged and rerun for the comparison. Five more runs of the json lines alone gave the order's add/address 1,778 to 3,513 ns on the same build: noise on this machine.
+
+```
+== json-bench 10000 200000 (run 1)
+json             actors 10000: bytes/actor idle 738 (datamodel 420), after the order's 3 events 947 (datamodel 589)
+json             ns/event: order's add/address 3454, a guard alone 565, a guard and an assignment 1031
+staticjs         actors 10000: bytes/actor idle 1226 (datamodel 908), after the order's 3 events 2184 (datamodel 1826)
+staticjs         ns/event: order's add/address 1645, a guard alone 1282, a guard and an assignment 1690
+staticjs+natives actors 10000: bytes/actor idle 1226 (datamodel 908), after the order's 3 events 2152 (datamodel 1794)
+staticjs+natives ns/event: order's add/address 1439, a guard alone 975, a guard and an assignment 1003
+quickjs          actors 10000: bytes/actor idle 1127 (datamodel 809), after the order's 3 events 2260 (datamodel 1771)
+quickjs          ns/event: order's add/address 2919, a guard alone 1374, a guard and an assignment 2032
+json             document of     64 bytes: an assignment 1045 ns/event
+staticjs         document of     64 bytes: an assignment 1417 ns/event
+staticjs+natives document of     64 bytes: an assignment 1448 ns/event
+quickjs          document of     64 bytes: an assignment 2343 ns/event
+json             document of   1024 bytes: an assignment 980 ns/event
+staticjs         document of   1024 bytes: an assignment 967 ns/event
+staticjs+natives document of   1024 bytes: an assignment 814 ns/event
+quickjs          document of   1024 bytes: an assignment 1265 ns/event
+json             document of  16384 bytes: an assignment 578 ns/event
+staticjs         document of  16384 bytes: an assignment 808 ns/event
+staticjs+natives document of  16384 bytes: an assignment 857 ns/event
+quickjs          document of  16384 bytes: an assignment 1326 ns/event
+json             document of  60000 bytes: an assignment 573 ns/event
+staticjs         document of  60000 bytes: an assignment 743 ns/event
+staticjs+natives document of  60000 bytes: an assignment 1593 ns/event
+quickjs          document of  60000 bytes: an assignment 2578 ns/event
+== json-bench 10000 200000 (run 2)
+json             actors 10000: bytes/actor idle 738 (datamodel 420), after the order's 3 events 947 (datamodel 589)
+json             ns/event: order's add/address 3320, a guard alone 570, a guard and an assignment 1011
+staticjs         actors 10000: bytes/actor idle 1226 (datamodel 908), after the order's 3 events 2184 (datamodel 1826)
+staticjs         ns/event: order's add/address 1643, a guard alone 800, a guard and an assignment 982
+staticjs+natives actors 10000: bytes/actor idle 1226 (datamodel 908), after the order's 3 events 2152 (datamodel 1794)
+staticjs+natives ns/event: order's add/address 1355, a guard alone 827, a guard and an assignment 971
+quickjs          actors 10000: bytes/actor idle 1127 (datamodel 809), after the order's 3 events 2260 (datamodel 1771)
+quickjs          ns/event: order's add/address 2846, a guard alone 1296, a guard and an assignment 1851
+json             document of     64 bytes: an assignment 561 ns/event
+staticjs         document of     64 bytes: an assignment 732 ns/event
+staticjs+natives document of     64 bytes: an assignment 753 ns/event
+quickjs          document of     64 bytes: an assignment 1251 ns/event
+json             document of   1024 bytes: an assignment 561 ns/event
+staticjs         document of   1024 bytes: an assignment 730 ns/event
+staticjs+natives document of   1024 bytes: an assignment 753 ns/event
+quickjs          document of   1024 bytes: an assignment 1236 ns/event
+json             document of  16384 bytes: an assignment 561 ns/event
+staticjs         document of  16384 bytes: an assignment 734 ns/event
+staticjs+natives document of  16384 bytes: an assignment 753 ns/event
+quickjs          document of  16384 bytes: an assignment 1250 ns/event
+json             document of  60000 bytes: an assignment 565 ns/event
+staticjs         document of  60000 bytes: an assignment 733 ns/event
+staticjs+natives document of  60000 bytes: an assignment 760 ns/event
+quickjs          document of  60000 bytes: an assignment 1257 ns/event
+== json-bench append (run 1)
+to  10 items, ns/event: json addItem 3942 (trusted 3291), json items[length(items)] 1808 (trusted 1791); quickjs concat 3547, items[items.length] 2609; staticjs concat 1691, items[items.length] 1622; staticjs+natives addItem 1496, newItem 1582
+to  50 items, ns/event: json addItem 12489 (trusted 10457), json items[length(items)] 1816 (trusted 1722); quickjs concat 4253, items[items.length] 2602; staticjs concat 1867, items[items.length] 1913; staticjs+natives addItem 1748, newItem 1841
+to 200 items, ns/event: json addItem 45010 (trusted 40439), json items[length(items)] 1805 (trusted 1687); quickjs concat 7080, items[items.length] 2595; staticjs concat 2331, items[items.length] 2608; staticjs+natives addItem 2467, newItem 2553
+== json-bench append (run 2)
+to  10 items, ns/event: json addItem 5712 (trusted 4931), json items[length(items)] 2948 (trusted 2802); quickjs concat 5831, items[items.length] 4518; staticjs concat 2802, items[items.length] 2792; staticjs+natives addItem 2620, newItem 2784
+to  50 items, ns/event: json addItem 17781 (trusted 11354), json items[length(items)] 2724 (trusted 2227); quickjs concat 4269, items[items.length] 2615; staticjs concat 1842, items[items.length] 2893; staticjs+natives addItem 2499, newItem 1842
+to 200 items, ns/event: json addItem 47947 (trusted 36800), json items[length(items)] 1811 (trusted 1701); quickjs concat 7126, items[items.length] 2602; staticjs concat 2331, items[items.length] 2605; staticjs+natives addItem 2451, newItem 2565
+```

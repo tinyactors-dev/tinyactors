@@ -80,13 +80,13 @@ struct ta_kotlin_table {
     uint32_t count;
     jobject functions[TA_KOTLIN_FUNCTIONS]; /* global references */
     ta_kotlin_slot slots[TA_KOTLIN_FUNCTIONS];
-    jmethodID call;  /* JsonFunction.call([B)[B */
+    jmethodID call;  /* JSONFunction.call([B)[B */
     jbyteArray arguments; /* the reused array, a global reference */
     jsize arguments_length;
     jclass bridge;   /* Bridge, a global reference */
     jmethodID call_buffer;
     unsigned char *staging; /* the direct buffer's memory */
-    jmethodID call_into;    /* Bridge.callInto(JsonFunction, [B)I */
+    jmethodID call_into;    /* Bridge.callInto(JSONFunction, [B)I */
     jmethodID set_room;     /* Bridge.setRoom(ByteBuffer) */
     unsigned char *room;    /* the room the driver lends a bytes call, TA_KOTLIN_ROOM */
     jobject room_buffer;    /* a direct ByteBuffer over it, a global reference */
@@ -322,18 +322,18 @@ JNIEXPORT void JNICALL Java_jsonbench_Native_register(JNIEnv *jni, jobject self,
     ta_kotlin_table *t = &ta_kotlin_state;
     jsize n = (*jni)->GetArrayLength(jni, functions);
     if (n > TA_KOTLIN_FUNCTIONS) { ta_kotlin_throw(jni, "too many functions"); return; }
-    jclass iface = (*jni)->FindClass(jni, "jsonbench/JsonFunction");
+    jclass iface = (*jni)->FindClass(jni, "jsonbench/JSONFunction");
     t->call = (*jni)->GetMethodID(jni, iface, "call", "([B)[B");
     jclass bridge = (*jni)->FindClass(jni, "jsonbench/Bridge");
     t->bridge = (*jni)->NewGlobalRef(jni, bridge);
-    t->call_buffer = (*jni)->GetStaticMethodID(jni, bridge, "callBuffer", "(Ljsonbench/JsonFunction;I)[B");
+    t->call_buffer = (*jni)->GetStaticMethodID(jni, bridge, "callBuffer", "(Ljsonbench/JSONFunction;I)[B");
     if (!t->call || !t->call_buffer) return; /* NoSuchMethodError pending */
     t->staging = malloc(TA_KOTLIN_STAGING);
     jobject buffer = (*jni)->NewDirectByteBuffer(jni, t->staging, TA_KOTLIN_STAGING);
     jmethodID set = (*jni)->GetStaticMethodID(jni, bridge, "setStaging", "(Ljava/nio/ByteBuffer;)V");
     if (!set) return;
     (*jni)->CallStaticVoidMethod(jni, bridge, set, buffer);
-    t->call_into = (*jni)->GetStaticMethodID(jni, bridge, "callInto", "(Ljsonbench/JsonFunction;[B)I");
+    t->call_into = (*jni)->GetStaticMethodID(jni, bridge, "callInto", "(Ljsonbench/JSONFunction;[B)I");
     t->set_room = (*jni)->GetStaticMethodID(jni, bridge, "setRoom", "(Ljava/nio/ByteBuffer;)V");
     if (!t->call_into || !t->set_room) return;
     t->room = malloc(TA_KOTLIN_ROOM);

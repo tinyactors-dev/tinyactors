@@ -36,7 +36,7 @@ val cbor = Cbor { useDefiniteLengthEncoding = true }
 /* A function behind ta_json_function: the arguments array in, one CBOR
  * item out. `arguments` is valid during the call only (the native side
  * reuses it), as the C ABI's are. */
-fun interface JsonFunction {
+fun interface JSONFunction {
     fun call(arguments: ByteArray): ByteArray
 }
 
@@ -48,18 +48,18 @@ private fun price(sku: String): Long = when (sku) {
     else -> -1
 }
 
-val functions: Array<Pair<String, JsonFunction>> = arrayOf(
-    "empty" to JsonFunction { TRUE },
-    "hasItems" to JsonFunction { a ->
+val functions: Array<Pair<String, JSONFunction>> = arrayOf(
+    "empty" to JSONFunction { TRUE },
+    "hasItems" to JSONFunction { a ->
         val arguments = cbor.decodeFromByteArray<HasItemsArguments>(a)
         cbor.encodeToByteArray(arguments.items.isNotEmpty())
     },
-    "addItem" to JsonFunction { a ->
+    "addItem" to JSONFunction { a ->
         val arguments = cbor.decodeFromByteArray<AddItemArguments>(a)
         val add = arguments.add
         cbor.encodeToByteArray(arguments.items + Item(add.sku, add.qty, price(add.sku)))
     },
-    "newItem" to JsonFunction { a ->
+    "newItem" to JSONFunction { a ->
         val add = cbor.decodeFromByteArray<NewItemArguments>(a).add
         cbor.encodeToByteArray(Item(add.sku, add.qty, price(add.sku)))
     },
@@ -72,7 +72,7 @@ object Bridge {
     @JvmStatic lateinit var staging: ByteBuffer
 
     @JvmStatic
-    fun callBuffer(function: JsonFunction, length: Int): ByteArray {
+    fun callBuffer(function: JSONFunction, length: Int): ByteArray {
         val arguments = ByteArray(length)
         staging.get(0, arguments, 0, length)
         return function.call(arguments)
@@ -88,7 +88,7 @@ object Bridge {
 
     /* the result's length, or minus the length it needs */
     @JvmStatic
-    fun callInto(function: JsonFunction, arguments: ByteArray): Int {
+    fun callInto(function: JSONFunction, arguments: ByteArray): Int {
         val result = function.call(arguments)
         if (result.size > room.capacity()) return -result.size
         room.put(0, result)
@@ -98,7 +98,7 @@ object Bridge {
 
 object Native {
     /* the functions, as global references: a function's context is its index */
-    external fun register(functions: Array<JsonFunction>)
+    external fun register(functions: Array<JSONFunction>)
     /* run the trampoline n times for function `index` in a mode of MODES
      * (its index); the elapsed nanoseconds */
     external fun bench(index: Int, n: Int, mode: Int): Long
