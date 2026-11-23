@@ -23,6 +23,7 @@ import {
   Ellipsis, Eye, EyeOff, FileArchive, KeyRound, LoaderCircle, MessageSquare, MessagesSquare, Mic, Plus, SquarePen, UsersRound,
   MousePointerClick, Pencil, RefreshCw, RotateCcw, Settings, Sparkles, SquareDashedMousePointer, Trash2, TriangleAlert, Undo2, X,
   ScanEye, ListChecks, CircleCheck, Contrast, Circle, CirclePlus, MessageCircleQuestion, Signpost, ShieldQuestion, BookA, Link2,
+  MessageCircle, UserPen,
 } from 'lucide';
 import { panelCSS } from './panel-css.mjs';
 import { markPaths, markViewBox } from './mark.mjs';
@@ -63,6 +64,9 @@ const LENGTHS = [['short', 'Short'], ['medium', 'Medium'], ['long', 'Long']];
 const TOOLS = [['search', 'Search the web', 'Google Search: answers cite the pages'], ['url', 'Read links', 'The model reads the pages a message names'], ['code', 'Run code', 'The model may compute with Python']];
 const THINKING = [['low', 'Low'], ['medium', 'Medium'], ['high', 'High'], ['xhigh', 'Extra high']];
 const PROMPTS = ['Tighten the headline', 'Which claims need a number?', 'Find sentences over 21 words'];
+// What to ask a reader first: whether they stay, and what they still miss.
+const READER_PROMPTS = ['What would make you close this tab?', 'What is missing for you?'];
+const FIELD_LABELS = { name: 'Name', description: 'Who', knows: 'Knows', wants: 'Wants', tasks: 'Came to', objections: 'Objections' };
 const FAILED = Symbol('failed');  // what send() resolves to when the reviewer refused the command
 const HOLD_MS = 350;              // a press shorter than this toggles recording; a longer one is push-to-talk
 
@@ -422,7 +426,8 @@ export function mountPanel(root, reviewer, { layout = 'sidebar' } = {}) {
 
     textarea.placeholder = !hasKey ? 'Add a Gemini key in settings to ask'
       : state.picking && !state.selection ? 'Tap text on the page'
-        : { ask: 'Ask for a change', annotate: 'What should change?', chat: 'Ask about this page' }[m.kind] ?? '';
+        : m.kind === 'chat' && state.chat?.audienceID ? 'Ask this reader'
+          : { ask: 'Ask for a change', annotate: 'What should change?', chat: 'Ask about this page' }[m.kind] ?? '';
     pickButton.hidden = recording || transcribing;
     pickButton.disabled = state.status !== 'ready';
     pickButton.setAttribute('aria-pressed', String(!!state.picking));
@@ -591,10 +596,15 @@ export function mountPanel(root, reviewer, { layout = 'sidebar' } = {}) {
   // A spoken message carries a small mic; a reply that thought shows a
   // quiet "Thought for N s" that unfolds its summary; audience calls are
   // chips that open the audience in Settings.
-  function message(m) {
+  // In a conversation with an audience (`reader`), the model's messages are
+  // the reader's: its avatar beside them, no assistant style.
+  function message(m, reader = null) {
     const id = `m:${m.role}:${m.at}:${m.text.length}`;
     const made = (m.annotations ?? []).map((x) => state.annotations?.find((a) => a.id === x)).filter(Boolean);
-    const node = h('div', { class: `cw-msg cw-msg--${m.role === 'user' ? 'user' : 'model'}${seen.has(id) ? '' : ' is-new'}`, title: when(m.at) },
+    const as = m.role === 'user' ? 'user' : reader ? 'reader' : 'model';
+    const node = h('div', { class: `cw-msg cw-msg--${as}${seen.has(id) ? '' : ' is-new'}`, title: reader && as === 'reader' ? `${reader.name} · ${when(m.at)}` : when(m.at) },
+      as === 'reader' && h('span', { class: 'cw-avatar cw-msg-avatar', 'aria-hidden': 'true' }, initials(reader.name)),
+      as === 'reader' && h('span', { class: 'cw-sr' }, `${reader.name}: `),
       m.thoughts && thought(m, id),
       !(m.proposed && made.length) && h('div', { class: `cw-msg-body${m.spoken ? ' is-spoken' : ''}` },
         m.spoken && h('span', { class: 'cw-spoken', title: 'Spoken' }, icon(Mic), h('span', { class: 'cw-sr' }, 'Spoken: ')),
@@ -624,6 +634,25 @@ export function mountPanel(root, reviewer, { layout = 'sidebar' } = {}) {
     const audiences = state.settings?.audiences ?? [];
     const audience = audiences.find((x) => x.id === c.id) ?? audiences.find((x) => x.name.toLowerCase() === c.name.toLowerCase());
     const active = audience && (state.settings?.audienceIDs ?? []).includes(audience.id);
+    // a conversation the editor opened with an audience: its avatar and name, a tap opens it
+    if (c.action === 'talk') {
+      return h('button', {
+        type: 'button', class: 'cw-audience-chip cw-talk-chip', 'data-action': 'open-talk', 'data-chat': c.chat ?? '', 'data-audience': audience?.id ?? '',
+        disabled: !audience || !c.chat, title: `Talk to ${c.name}`, 'aria-label': `Talk to ${c.name}`,
+        onclick: () => { ui.view = 'chat'; send({ type: 'chat.open', id: c.chat }); },
+      }, h('span', { class: 'cw-avatar', 'aria-hidden': 'true' }, initials(c.name)), h('span', null, c.name));
+    }
+    // the reader refined itself: what changed unfolds, struck and new
+    if (c.action === 'update') {
+      const changes = c.changes ?? [];
+      const details = h('details', { class: 'cw-update', 'data-update': '' },
+        h('summary', { class: 'cw-audience-chip', title: changes.map((x) => FIELD_LABELS[x.field] ?? x.field).join(', ') },
+          icon(UserPen), h('span', null, 'Audience updated')),
+        h('dl', { class: 'cw-diff' }, changes.map((x) => [
+          h('dt', null, FIELD_LABELS[x.field] ?? x.field),
+          h('dd', null, x.before && h('del', null, x.before), h('ins', null, x.after))])));
+      return details;
+    }
     if (c.action === 'read') {
       return h('button', {
         type: 'button', class: 'cw-audience-chip', 'data-action': 'open-reading', 'data-audience': audience?.id ?? '',
@@ -663,12 +692,27 @@ export function mountPanel(root, reviewer, { layout = 'sidebar' } = {}) {
     if (a.state === 'suggested' && first && a.anchorFound !== false && !a.pageLevel) send({ type: 'preview', id: a.id, suggestionID: first.id });
   }
 
-  function thread(messages, busy, transcribing) {
+  function thread(messages, busy, transcribing, reader = null) {
     const list = h('div', { class: 'cw-thread', 'aria-live': 'polite' });
-    for (const m of messages ?? []) list.append(message(m));
+    for (const m of messages ?? []) list.append(message(m, reader));
     if (transcribing) list.append(hearing());
-    else if (busy) list.append(h('div', { class: 'cw-msg cw-msg--model' }, dots()));
+    else if (busy) {
+      list.append(h('div', { class: `cw-msg cw-msg--${reader ? 'reader' : 'model'}` },
+        reader && h('span', { class: 'cw-avatar cw-msg-avatar', 'aria-hidden': 'true' }, initials(reader.name)), dots()));
+    }
     return list;
+  }
+
+  // The audience the open conversation is held with, or null (the editor).
+  const readerOfChat = () => (state.chat?.audienceID ? audienceOf(state.chat.audienceID) ?? { id: state.chat.audienceID, name: '?' } : null);
+
+  // Opens a conversation with an audience.
+  function talkTo(id) {
+    ui.menu = null;
+    if (state.activeID) send({ type: 'deselect', id: state.activeID });
+    ui.view = 'chat';
+    render();
+    return send({ type: 'talk', audienceID: id });
   }
 
   const hearingFor = (target) => state.recording?.state === 'transcribing' && state.recording.target === target;
@@ -678,7 +722,16 @@ export function mountPanel(root, reviewer, { layout = 'sidebar' } = {}) {
     const view = h('div', { class: 'cw-view', 'data-view': 'chat' });
     const body = h('div', { class: 'cw-chat' });
     const transcribing = hearingFor('page') || (chat.busy && chat.messages?.at(-1)?.role !== 'user');
-    if (!chat.messages?.length && !chat.busy) {
+    const reader = readerOfChat();
+    if (reader && !chat.messages?.length && !chat.busy) {
+      // a new conversation with a reader: who they are, and what to ask them first
+      body.append(h('div', { class: 'cw-empty cw-empty--reader', title: reader.description ?? '' },
+        h('span', { class: 'cw-avatar cw-avatar--big', 'aria-hidden': 'true' }, initials(reader.name)),
+        h('span', { class: 'cw-empty-name' }, reader.name),
+        state.settings?.hasKey && h('div', { class: 'cw-chips' }, READER_PROMPTS.map((text) => h('button', {
+          type: 'button', class: 'cw-chip', onclick: () => send({ type: 'chat', text }),
+        }, text)))));
+    } else if (!chat.messages?.length && !chat.busy) {
       body.append(h('div', { class: 'cw-empty' },
         h('span', { class: 'cw-empty-icon' }, icon(MessagesSquare)),
         'Ask Gemini about the whole page',
@@ -689,12 +742,14 @@ export function mountPanel(root, reviewer, { layout = 'sidebar' } = {}) {
       if (earlier.length) {
         body.append(h('ul', { class: 'cw-conversations', role: 'list', 'aria-label': 'Earlier conversations' }, earlier.map((c) => h('li', null,
           h('button', {
-            type: 'button', class: 'cw-conversation', 'data-action': 'open-chat', 'data-chat': c.id, title: when(c.at),
+            type: 'button', class: 'cw-conversation', 'data-action': 'open-chat', 'data-chat': c.id,
+            title: `${c.audienceID ? `${audienceOf(c.audienceID)?.name ?? '?'} · ` : ''}${when(c.at)}`,
             onclick: () => send({ type: 'chat.open', id: c.id }),
-          }, h('span', { class: 'cw-conversation-title' }, c.title), h('span', { class: 'cw-conversation-at' }, ago(c.at)))))));
+          }, c.audienceID && h('span', { class: 'cw-avatar', 'aria-hidden': 'true' }, initials(audienceOf(c.audienceID)?.name)),
+          h('span', { class: 'cw-conversation-title' }, c.title), h('span', { class: 'cw-conversation-at' }, ago(c.at)))))));
       }
     } else {
-      body.append(thread(chat.messages, chat.busy, transcribing));
+      body.append(thread(chat.messages, chat.busy, transcribing, reader));
     }
     if (chat.error && !chat.busy) body.append(h('div', { class: 'cw-error', role: 'alert' }, icon(TriangleAlert), h('span', null, chat.error)));
     view.append(body);
@@ -956,6 +1011,7 @@ export function mountPanel(root, reviewer, { layout = 'sidebar' } = {}) {
           disabled: !hasKey || r?.state === 'reading', 'data-action': 'read-as',
         }),
         r && item(ListChecks, 'Checklist', () => openReading(a.id), { 'data-action': 'open-reading' }),
+        item(MessageCircle, 'Talk to this reader', () => talkTo(a.id), { disabled: !hasKey, 'data-action': 'talk' }),
         item(UsersRound, 'Edit audience', () => { ui.menu = null; ui.audienceOpen = a.id; ui.audienceDraft = null; go('settings'); }, { 'data-action': 'edit-audience' }))));
     }
     const actives = active.filter((id) => audienceOf(id));
@@ -999,6 +1055,7 @@ export function mountPanel(root, reviewer, { layout = 'sidebar' } = {}) {
         !r ? 'Not read yet' : r.state === 'reading' ? 'Reading the page' : r.state === 'failed' ? '' : ago(r.at)),
       r?.state === 'reading' && dots(),
       h('span', { class: 'cw-grow' }),
+      hasKey && iconButton(MessageCircle, `Talk to ${a.name}`, { 'data-action': 'talk', onclick: () => talkTo(a.id) }),
       hasKey && r?.state !== 'reading' && iconButton(r ? RefreshCw : ScanEye, r ? 'Read again' : `Read as ${a.name}`, {
         'data-action': 'read-as', onclick: () => readAs([a.id]),
       }));
@@ -1252,7 +1309,9 @@ export function mountPanel(root, reviewer, { layout = 'sidebar' } = {}) {
   function renderHeader() {
     const a = activeAnnotation();
     const atHome = ui.view === 'list' && !a;
-    const key = JSON.stringify([atHome, ui.view, ui.reading, !!a, state.page, state.chat?.busy, state.chat?.messages?.length > 0, ui.view === 'reading' && audienceOf(ui.reading)?.name]);
+    const talking = ui.view === 'chat' && !a ? readerOfChat() : null;
+    const key = JSON.stringify([atHome, ui.view, ui.reading, !!a, state.page, state.chat?.busy, state.chat?.messages?.length > 0,
+      ui.view === 'reading' && audienceOf(ui.reading)?.name, talking?.name ?? null, state.chat?.audienceID ?? null]);
     if (keys.header === key) return;
     const wasHome = keys.home;
     keys.header = key;
@@ -1263,11 +1322,21 @@ export function mountPanel(root, reviewer, { layout = 'sidebar' } = {}) {
         : iconButton(ArrowLeft, 'Back', { 'data-action': 'back', onclick: back }));
     }
     const reader = ui.view === 'reading' && !a ? audienceOf(ui.reading) : null;
-    heading.textContent = ui.view === 'settings' ? 'Settings' : reader ? reader.name : (state.page?.title || state.page?.url || '');
-    heading.title = ui.view === 'settings' ? '' : reader ? `Read as ${reader.name}: ${state.page?.url ?? ''}` : (state.page?.url ?? '');
+    if (talking) {
+      // talking to a reader: who, as the conversation shows them
+      heading.replaceChildren(h('span', { class: 'cw-avatar', 'aria-hidden': 'true' }, initials(talking.name)), h('span', { class: 'cw-heading-name' }, talking.name));
+      heading.classList.add('is-reader');
+      heading.dataset.audience = talking.id;
+      heading.title = `Talking to ${talking.name}${talking.description ? `: ${talking.description}` : ''}`;
+    } else {
+      heading.classList.remove('is-reader');
+      delete heading.dataset.audience;
+      heading.textContent = ui.view === 'settings' ? 'Settings' : reader ? reader.name : (state.page?.title || state.page?.url || '');
+      heading.title = ui.view === 'settings' ? '' : reader ? `Read as ${reader.name}: ${state.page?.url ?? ''}` : (state.page?.url ?? '');
+    }
     moreAnchor.hidden = !a;
     chatButton.hidden = !!a;
-    newChatButton.hidden = ui.view !== 'chat' || !!a || !state.chat?.messages?.length;
+    newChatButton.hidden = ui.view !== 'chat' || !!a || (!state.chat?.messages?.length && !state.chat?.audienceID);
     newChatButton.disabled = !!state.chat?.busy;  // the reply on its way belongs to this conversation
     chatButton.setAttribute('aria-pressed', String(ui.view === 'chat'));
     chatButton.classList.toggle('cw-busy', !!state.chat?.busy && ui.view !== 'chat');

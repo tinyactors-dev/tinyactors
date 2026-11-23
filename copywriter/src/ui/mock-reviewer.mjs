@@ -145,7 +145,7 @@ export function createMockReviewer({ hasKey = true, delay = 1, empty = false, st
     readings: empty || !read ? [] : [sampleReading(now)],
     activeID: null,
     chat: {
-      id: 'c1', messages: [], busy: false,
+      id: 'c1', audienceID: null, messages: [], busy: false,
       conversations: [{ id: 'c0', title: 'Which claims need a number?', at: now - 3 * 60 * MINUTE }],
     },
     recording: { state: 'idle', target: null },
@@ -164,11 +164,13 @@ export function createMockReviewer({ hasKey = true, delay = 1, empty = false, st
     { role: 'user', text: 'Which claims need a number?', at: now - 3 * 60 * MINUTE },
     { role: 'model', text: '“Blazing-fast” needs one: the page measures events per second.', at: now - 3 * 60 * MINUTE },
   ]]]);
+  const whose = new Map(); // conversation id → the audience it is held with
   function chatSet(patch) {
     const chat = { ...state.chat, ...patch };
+    if (chat.audienceID) whose.set(chat.id, chat.audienceID);
     if (chat.messages.length) conversations.set(chat.id, chat.messages);
     chat.conversations = [...conversations.entries()].filter(([, m]) => m.length)
-      .map(([cid, m]) => ({ id: cid, title: m[0].text.slice(0, 60), at: m.at(-1).at }))
+      .map(([cid, m]) => ({ id: cid, title: m[0].text.slice(0, 60), at: m.at(-1).at, audienceID: whose.get(cid) ?? null }))
       .sort((a, b) => b.at - a.at);
     return chat;
   }
@@ -221,6 +223,34 @@ export function createMockReviewer({ hasKey = true, delay = 1, empty = false, st
     });
   }
 
+  // A reply of the reader the open conversation is held with: a
+  // correction updates the audience, "missing" notes a gap, anything else
+  // answers from the page.
+  async function readerReply(text) {
+    const audience = state.settings.audiences.find((a) => a.id === state.chat.audienceID);
+    const say = (message) => set({ chat: chatSet({ busy: false, messages: [...state.chat.messages, { role: 'model', at: Date.now(), ...message }] }) });
+    if (/actually|you'd|you would|erlang/i.test(text)) {
+      const after = `${audience.knows ? `${audience.knows.replace(/\.$/, '')}; ` : ''}Erlang and OTP, well.`;
+      const changes = [{ field: 'knows', before: audience.knows ?? '', after }];
+      set({ settings: { ...state.settings, audiences: state.settings.audiences.map((a) => (a.id === audience.id ? { ...a, knows: after } : a)) } });
+      say({ text: 'Then "actors as a library" is a claim I can check against OTP, and the page gives me no comparison.', audiences: [{ name: audience.name, action: 'update', id: audience.id, changes }] });
+      return;
+    }
+    if (/missing/i.test(text)) {
+      const t = Date.now();
+      const gap = {
+        id: id('g'), state: 'draft', anchorFound: true, pageLevel: true, source: 'audience', original: 'Name who maintains it',
+        note: '', chosenID: null, messages: [], audiences: [audience.name], suggestions: [],
+        finding: { audienceID: audience.id, kind: 'missing', explanation: 'I will not approve a dependency with no named owner.' },
+        createdAt: t, updatedAt: t,
+      };
+      set({ annotations: [gap, ...state.annotations] });
+      say({ text: 'Who maintains it. The page doesn\'t tell me whether anyone is paid to.', annotations: [gap.id] });
+      return;
+    }
+    say({ text: 'The page doesn\'t tell me what happens to state when the host dies, so I would close the tab before the license.' });
+  }
+
   const handlers = {
     async annotate({ note }) {
       if (!state.selection) throw new Error('Nothing is selected on the page.');
@@ -257,6 +287,17 @@ export function createMockReviewer({ hasKey = true, delay = 1, empty = false, st
     async chat({ text, spoken }) {
       set({ chat: chatSet({ messages: [...state.chat.messages, { role: 'user', text, at: Date.now(), ...(spoken ? { spoken: true } : {}) }], busy: true }) });
       await wait(1100);
+      if (state.chat.audienceID) { await readerReply(text); return; }
+      if (/talk to|let me talk/i.test(text)) {
+        const lead = state.settings.audiences.find((a) => a.id === 'lead') ?? state.settings.audiences[0];
+        const talkID = id('c');
+        set({ chat: chatSet({ busy: false, messages: [...state.chat.messages, {
+          role: 'model', at: Date.now(), text: `Here is ${lead.name}.`, audiences: [{ name: lead.name, action: 'talk', id: lead.id, chat: talkID }],
+        }] }) });
+        whose.set(talkID, lead.id);
+        set({ chat: chatSet({ id: talkID, audienceID: lead.id, messages: [], busy: false }) });
+        return;
+      }
       if (/search/i.test(text)) {
         set({ chat: chatSet({ busy: false, messages: [...state.chat.messages, {
           role: 'model', at: Date.now(), text: 'Akka calls itself a platform for agentic AI; Orleans a framework for distributed apps.',
@@ -310,12 +351,19 @@ export function createMockReviewer({ hasKey = true, delay = 1, empty = false, st
       });
     },
     async 'chat.new'() {
-      if (!state.chat.messages.length) return;
-      set({ chat: chatSet({ id: id('c'), messages: [], busy: false }) });
+      if (!state.chat.messages.length && !state.chat.audienceID) return;
+      set({ chat: chatSet({ id: id('c'), audienceID: null, messages: [], busy: false }) });
     },
     async 'chat.open'({ id: chatID }) {
-      if (!conversations.has(chatID)) throw new Error('No such conversation on this page.');
-      set({ chat: chatSet({ id: chatID, messages: conversations.get(chatID), busy: false }) });
+      if (!conversations.has(chatID) && !whose.has(chatID)) throw new Error('No such conversation on this page.');
+      set({ chat: chatSet({ id: chatID, audienceID: whose.get(chatID) ?? null, messages: conversations.get(chatID) ?? [], busy: false }) });
+    },
+    async talk({ audienceID }) {
+      if (!state.settings.audiences.some((a) => a.id === audienceID)) throw new Error('No such audience.');
+      if (!state.chat.messages.length && state.chat.audienceID === audienceID) return state.chat.id;
+      const talkID = id('c');
+      set({ chat: chatSet({ id: talkID, audienceID, messages: [], busy: false }) });
+      return talkID;
     },
     async read({ audienceIDs }) {
       const ids = audienceIDs ?? state.settings.audienceIDs;

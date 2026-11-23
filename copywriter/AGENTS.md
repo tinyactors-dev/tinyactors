@@ -228,6 +228,14 @@ copywriter/
                           finding's row shows its kind as the icon with the audience's initials on it
                           (no words; the tooltip names them); a page-level one is set in italics and
                           never previewed; its detail says the finding in the reader's words.
+                          Talking to an audience: "Talk to this reader" in a strip chip's menu and a
+                          button in the checklist's head. The header shows the reader (initials and
+                          name; the tooltip says who they are), the reader's messages carry their
+                          avatar in an outlined bubble (no assistant style); an empty conversation
+                          offers two first questions; an update is an "Audience updated" chip that
+                          unfolds a diff (field, old struck, new); the editor's talk_to is a chip with
+                          the reader's avatar that opens the conversation; listed conversations with a
+                          reader carry its avatar. The new-conversation button goes back to the editor.
   src/platform/dom.mjs    the page adapter's DOM side, shared: anchors, locate, preview/revert of Text nodes, highlights
   src/platform/extension/ manifest.json, service-worker.mjs, content.mjs (page adapter), sidepanel.html/.mjs, mic.html/.mjs
   src/platform/embed/     embed.mjs (launcher, Shadow DOM, page adapter on the live DOM), loader snippet

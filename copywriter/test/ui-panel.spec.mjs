@@ -500,7 +500,7 @@ test('read as an audience: the strip\'s chip shows how much the page answers; it
   await chip.click();
   const menu = panel.locator('.cw-menu[aria-label="Tech lead who approves dependencies"]');
   await menu.waitFor();
-  assert.deepEqual(await menu.locator('.cw-menu-item').allTextContents(), ['Read again', 'Checklist', 'Edit audience']);
+  assert.deepEqual(await menu.locator('.cw-menu-item').allTextContents(), ['Read again', 'Checklist', 'Talk to this reader', 'Edit audience']);
   await menu.locator('[data-action=read-as]').click();
   await until(async () => (await chip.getAttribute('data-reading')) === 'reading');
   assert.equal(await chip.locator('.cw-spin').count(), 1);
@@ -580,6 +580,86 @@ test('read as: from an audience\'s row in Settings, and from the page chat, whos
   await chip.waitFor();
   await chip.click();
   await panel.locator('[data-view=reading][data-audience=lead]').waitFor();
+  assert.deepEqual(errors, []);
+  await page.close();
+});
+
+test('talk to an audience: from the chip\'s menu; the header shows who, the reply is the reader\'s, a correction shows what changed', async () => {
+  const { page, panel, errors } = await open('');
+  await panel.locator('.cw-strip-chip[data-audience=lead]').click();
+  await panel.locator('.cw-menu [data-action=talk]').click();
+  const view = panel.locator('[data-view=chat]');
+  await view.waitFor();
+  const heading = panel.locator('.cw-heading.is-reader[data-audience=lead]');
+  await heading.waitFor();
+  assert.equal(await heading.locator('.cw-avatar').textContent(), 'TL');
+  assert.equal(await heading.locator('.cw-heading-name').textContent(), 'Tech lead who approves dependencies');
+  assert.deepEqual(await page.evaluate(() => reviewer.log.at(-1)), { type: 'talk', audienceID: 'lead' });
+  assert.equal(await panel.locator('textarea[aria-label=Message]').getAttribute('placeholder'), 'Ask this reader');
+  // what to ask a reader first
+  await view.locator('.cw-chip', { hasText: 'What would make you close this tab?' }).click();
+  const reply = view.locator('.cw-msg--reader');
+  await reply.waitFor();
+  assert.equal(await reply.locator('.cw-msg-avatar').textContent(), 'TL');
+  assert.match(await reply.locator('.cw-msg-body').textContent(), /The page doesn't tell me/);
+  assert.equal(await view.locator('.cw-msg--model').count(), 0, 'no assistant style');
+  // a correction: the audience is updated, and the chip unfolds what changed
+  const composer = panel.locator('textarea[aria-label=Message]');
+  await composer.fill('You\'d actually know Erlang well.');
+  await composer.press('Enter');
+  const update = view.locator('.cw-update');
+  await update.waitFor();
+  assert.equal((await update.locator('summary').textContent()).trim(), 'Audience updated');
+  await update.locator('summary').click();
+  assert.equal(await update.locator('.cw-diff dt').textContent(), 'Knows');
+  assert.match(await update.locator('.cw-diff ins').textContent(), /Erlang and OTP/);
+  assert.equal(await update.locator('.cw-diff del').count(), 0, 'the mock lead knew nothing before');
+  assert.match(await page.evaluate(() => reviewer.getState().settings.audiences.find((a) => a.id === 'lead').knows), /Erlang/);
+  // the new-conversation button goes back to the editor
+  await panel.locator('[data-action=new-chat]').click();
+  await until(async () => (await panel.locator('.cw-heading.is-reader').count()) === 0);
+  assert.equal(await page.evaluate(() => reviewer.getState().chat.audienceID), null);
+  assert.equal(await panel.locator('.cw-conversation .cw-avatar').first().textContent(), 'TL', 'the reader\'s conversation is listed with its avatar');
+  assert.deepEqual(errors, []);
+  await page.close();
+});
+
+test('talk to an audience: from the checklist, and from the editor (talk_to), whose chip opens the conversation again', async () => {
+  const { page, panel, errors } = await open('');
+  await panel.locator('.cw-strip-chip[data-audience=lead]').click();
+  await panel.locator('.cw-menu [data-action=open-reading]').click();
+  await panel.locator('[data-view=reading] [data-action=talk]').click();
+  await panel.locator('.cw-heading.is-reader[data-audience=lead]').waitFor();
+  // the editor: a new conversation, then "let me talk to"
+  await panel.locator('[data-action=new-chat]').click();
+  await until(async () => (await panel.locator('.cw-heading.is-reader').count()) === 0);
+  const composer = panel.locator('textarea[aria-label=Message]');
+  await composer.fill('Let me talk to the tech lead.');
+  await composer.press('Enter');
+  await panel.locator('.cw-heading.is-reader[data-audience=lead]').waitFor();
+  // back in the editor's conversation, its chip opens the reader's again
+  const editor = await page.evaluate(() => reviewer.getState().chat.conversations.find((c) => !c.audienceID && /talk to/.test(c.title)).id);
+  await panel.locator('[data-action=new-chat]').click();
+  await panel.locator(`[data-action=open-chat][data-chat="${editor}"]`).click();
+  const chip = panel.locator('[data-view=chat] [data-action=open-talk]');
+  await chip.waitFor();
+  assert.equal(await chip.locator('.cw-avatar').textContent(), 'TL');
+  await chip.click();
+  await panel.locator('.cw-heading.is-reader[data-audience=lead]').waitFor();
+  assert.deepEqual(errors, []);
+  await page.close();
+});
+
+test('a gap the reader notes is an open item, linked from its message', async () => {
+  const { page, panel, errors } = await open('');
+  await page.evaluate(() => reviewer.dispatch({ type: 'talk', audienceID: 'lead' }));
+  await panel.locator('[data-action=chat]').click();
+  await panel.locator('[data-view=chat] .cw-chip', { hasText: 'What is missing for you?' }).click();
+  const link = panel.locator('[data-view=chat] .cw-msg--reader [data-action=open-annotation]');
+  await link.waitFor();
+  assert.match(await link.textContent(), /Name who maintains it/);
+  await link.click();
+  await panel.locator('[data-view=detail] .cw-finding').waitFor();
   assert.deepEqual(errors, []);
   await page.close();
 });
