@@ -21,7 +21,7 @@ const HOST_ID = 'tinyactors-copywriter';
 const KEY = 'tinyactors-copywriter-key';
 const SHEET = 'tinyactors-copywriter-sheet';
 const WIDE = '(min-width: 900px)';
-const SNAPS = { full: 0.85, half: 0.45 };  // the sheet's heights, of the viewport
+const SNAPS = { full: 0.75, half: 0.4 };  // the sheet's heights, of the viewport
 
 const CSS = String.raw`
 :host { all: initial; }
@@ -31,7 +31,8 @@ const CSS = String.raw`
 * { box-sizing: border-box; }
 .launcher {
   position: fixed; z-index: 2147483000;
-  right: calc(16px + env(safe-area-inset-right, 0px));
+  /* bottom left: the site's own menu button is bottom right on a phone */
+  left: calc(16px + env(safe-area-inset-left, 0px));
   bottom: calc(16px + env(safe-area-inset-bottom, 0px));
   width: 44px; height: 44px; padding: 0; border: 0; border-radius: 6px;
   display: grid; place-items: center; cursor: pointer;
@@ -40,8 +41,6 @@ const CSS = String.raw`
   -webkit-tap-highlight-color: transparent;
   transition: transform .24s cubic-bezier(.2,0,0,1), opacity .24s;
 }
-/* out of the way while the reader scrolls down; back on the way up, or when they stop */
-:host([data-away]) .launcher { transform: translateY(calc(100% + 24px)); opacity: 0; pointer-events: none; }
 .launcher .on-selection { display: none; }
 :host([data-selection]) .launcher .on-selection { display: block; }
 :host([data-selection]) .launcher .idle { display: none; }
@@ -59,7 +58,7 @@ const CSS = String.raw`
 
 .sheet {
   position: fixed; z-index: 2147483001; left: 0; right: 0; bottom: 0;
-  height: calc(var(--snap, .85) * 100dvh);
+  height: calc(var(--snap, .4) * 100dvh);
   display: flex; flex-direction: column;
   background: #FAF6EE; border-radius: 12px 12px 0 0; overflow: hidden;
   box-shadow: 0 0 0 1px rgba(42,38,34,.12), 0 -12px 40px rgba(40,30,20,.22);
@@ -213,27 +212,16 @@ function start() {
     host.toggleAttribute('data-selection', selected);
     launcher.setAttribute('aria-label', selected ? 'Annotate the selection' : 'Open copywriter');
     launcher.title = selected ? 'Annotate' : 'Copywriter';
-    if (selected) host.removeAttribute('data-away');
   });
 
-  // The launcher steps aside while the page scrolls down, and comes back
-  // when it scrolls up or stops.
-  let lastY = scrollY;
-  let still = 0;
-  addEventListener('scroll', () => {
-    const y = scrollY;
-    if (y > lastY + 4 && !selected && !open) host.setAttribute('data-away', '');
-    else if (y < lastY - 4) host.removeAttribute('data-away');
-    lastY = y;
-    clearTimeout(still);
-    still = setTimeout(() => host.removeAttribute('data-away'), 700);
-  }, { passive: true });
+  // The launcher stays where it is: hiding it while the page scrolled left
+  // a reader far down a page with no way to start (the maintainer, 2026-11-23).
 
   // ---- the sheet -----------------------------------------------------------------
 
   let panel = null;
   const saved = (() => { try { return JSON.parse(storage('sessionStorage')?.getItem(SHEET) || 'null'); } catch { return null; } })();
-  let snap = saved?.snap === 'half' ? 'half' : 'full';
+  let snap = saved?.snap === 'full' ? 'full' : 'half';  // opens low, so the page stays in view
 
   function remember() {
     try { storage('sessionStorage')?.setItem(SHEET, JSON.stringify({ open, snap })); } catch { /* full */ }

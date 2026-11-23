@@ -79,8 +79,9 @@ test('on a phone: select, open, annotate, ask, preview, keep; a reload applies i
   await page.evaluate(() => getSelection().removeAllRanges());
   const sheet = page.locator('#tinyactors-copywriter .sheet');
   await sheet.locator('.cw-panel').waitFor();
+  await page.waitForTimeout(400);  // the sheet slides in
   const box = await sheet.boundingBox();
-  assert.ok(Math.abs(box.height - 844 * 0.85) < 2, `the sheet is 85% of the viewport: ${box.height}`);
+  assert.ok(Math.abs(box.height - 844 * 0.4) < 2, `the sheet opens at 40% of the viewport, the page above it: ${box.height}`);
   await sheet.locator('[data-view=detail]').waitFor();
   assert.equal(await sheet.locator('.cw-original').textContent(), ORIGINAL);
   const banner = sheet.locator('[data-banner=selection]');
@@ -141,10 +142,28 @@ async function phone() {
 
 const FAR = 'The far paragraph is where a phone\'s sheet would cover a preview.';
 
+test('on a phone, the launcher is bottom left and stays there while the page scrolls', async () => {
+  const { context, page, launcher } = await phone();
+  const before = await launcher.boundingBox();
+  assert.ok(before.x < 390 / 2, `bottom left, clear of the site's menu: x ${before.x}`);
+  for (const y of [200, 600, 1200]) {
+    await page.mouse.wheel(0, y);
+    await page.waitForTimeout(100);
+    assert.ok(await launcher.isVisible(), `visible after scrolling down ${y}`);
+    const box = await launcher.boundingBox();
+    assert.deepEqual([Math.round(box.x), Math.round(box.y)], [Math.round(before.x), Math.round(before.y)]);
+  }
+  await context.close();
+});
+
 test('on a phone, a preview shows above the sheet: lowered to half height, the text scrolled into the rest', async () => {
   const { context, page, errors, sheet, launcher } = await phone();
   await launcher.tap();
   await sheet.locator('.cw-panel').waitFor();
+  // a tap on the grip raises the sheet to its full height
+  await sheet.locator('.grip').tap();
+  await page.waitForTimeout(400);
+  assert.ok(Math.abs((await sheet.boundingBox()).height - 844 * 0.75) < 2, 'full height');
   // the paragraph sits behind the full sheet
   await page.evaluate(() => document.querySelector('#far').scrollIntoView({ block: 'end' }));
   await selectText(page, '#far', FAR);
@@ -160,7 +179,7 @@ test('on a phone, a preview shows above the sheet: lowered to half height, the t
   await page.waitForFunction((text) => document.querySelector('#far').textContent === text, REWRITE);
   await page.waitForTimeout(1200);  // the sheet's move and the smooth scroll
   const height = (await sheet.boundingBox()).height;
-  assert.ok(Math.abs(height - 844 * 0.45) < 2, `the sheet went down to half height: ${height}`);
+  assert.ok(Math.abs(height - 844 * 0.4) < 2, `the sheet went down to half height: ${height}`);
   const far = await page.locator('#far').boundingBox();
   assert.ok(far.y >= 0 && far.y + far.height <= 844 - height, `the preview is above the sheet: ${far.y}..${far.y + far.height}, the sheet from ${844 - height}`);
   const middle = far.y + far.height / 2;
@@ -228,6 +247,7 @@ test('from 900px wide, the panel is a drawer on the right', async () => {
   const sheet = page.locator('#tinyactors-copywriter .sheet');
   await sheet.locator('.cw-panel').waitFor();
   await page.waitForTimeout(400);
+  await page.waitForTimeout(400);  // the sheet slides in
   const box = await sheet.boundingBox();
   assert.deepEqual([box.x, box.y, box.width, box.height], [880, 0, 400, 800]);
   await page.locator('#tinyactors-copywriter .close').click();
