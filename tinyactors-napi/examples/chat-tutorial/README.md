@@ -10,7 +10,7 @@ run, and each adds one idea to the step before.
 5. [Hibernation](5-hibernation/): a thousand users, fifty in memory.
 6. [Who is typing](6-typing/): a throttle and an expiry, as timers.
 7. [A lost connection](7-reconnect/): a grace period, and the messages it holds.
-8. [A room's history](8-history/): posts as data the application stores, numbered by the room.
+8. [A room's history](8-history/): posts as data the application stores, numbers and times.
 9. [Direct messages](9-direct-messages/): a room of two, made once per pair, closed to others.
 
 The website runs step 9's chat in the browser:

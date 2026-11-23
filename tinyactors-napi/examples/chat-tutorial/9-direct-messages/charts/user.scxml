@@ -4,8 +4,8 @@
      A join or a post counts as activity.
      A join of a room that does not exist fails with error.communication.
      Typing tells the room once every 3 seconds at most; another member's
-     typing shows on the screen until that member posts, or for 5 seconds
-     after the last notice.
+     typing shows on the screen until that member posts, 5 seconds pass
+     after the last notice, or this user disconnects or loses the connection.
      A lost connection is not yet offline: the user reconnects within 30
      seconds without the others seeing a change, and gets the messages
      that came meanwhile.

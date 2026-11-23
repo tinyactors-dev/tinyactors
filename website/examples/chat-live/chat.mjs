@@ -169,7 +169,7 @@ export async function createChat(tinyactors, { versions, version = LATEST, seed 
   const show = (event, data) => {
     const target = screen(data.to);
     if (event === 'message') {
-      // step 9 numbers each post: a screen shows one once (it came with a join's history too)
+      // on step 9 the store numbers each post: a screen shows one once (it came with a join's history too)
       if (data.seq !== undefined && target.messages.some((m) => m.room === data.room && m.seq === data.seq)) return;
       // and a screen more than one post behind reads the gap from the store first
       if (data.seq !== undefined) {

@@ -4,8 +4,8 @@
      A join or a post counts as activity.
      A join of a room that does not exist fails with error.communication.
      Typing tells the room once every 3 seconds at most; another member's
-     typing shows on the screen until that member posts, or for 5 seconds
-     after the last notice. -->
+     typing shows on the screen until that member posts, 5 seconds pass
+     after the last notice, or this user disconnects. -->
 <scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0"
        datamodel="ecmascript" name="user" initial="offline">
   <datamodel>
