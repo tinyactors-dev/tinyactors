@@ -387,11 +387,11 @@ export async function mount(root) {
     node.showModal();
     focus.focus();
   }
-  /** Closes a dialog; focus goes to `focus`, or back to "Add channels", which opened it. */
+  /** Closes a dialog; focus goes to `focus`, back to "Add channels", which opened it, or with null where the caller puts it. */
   function closeDialog(node, focus = addChannels) {
     if (!node.open) return;
     node.close();
-    (focus ?? addChannels).focus();
+    focus?.focus();
   }
 
   // "Create a channel": the workspace's rule shown before the name is sent. The name is
@@ -459,9 +459,9 @@ export async function mount(root) {
       }
       // the creator is in the channel, and sees it open
       await chat.join(you, name);
-      closeDialog(createDialog, text);
+      closeDialog(createDialog, null);
       openRoom(name);
-      text.focus();
+      toAction = true; // in the composer, on a phone too: you made the channel to write in it
     } finally {
       creating = false;
       drawCreate();
@@ -476,11 +476,13 @@ export async function mount(root) {
   function drawBrowse() {
     if (!browseDialog.open) return;
     const screen = chat.screen(you);
-    setText(browseNote, selfState ? `${browseRooms.length} channels in ${WORKSPACE}.` : `Sign in to join a channel.`);
+    // signed in, the list says it all: each channel, and Join or Joined beside it
+    browseNote.hidden = Boolean(selfState);
+    setText(browseNote, 'Sign in to join a channel.');
     keyed(browseList, browseRooms, (name) => {
       const open = el('button', { type: 'button', class: 'chatlive__browse-name', title: `Open #${name}` },
         el('span', { class: 'chatlive__hash', 'aria-hidden': 'true' }, '#'), el('span', { class: 'chatlive__room-name' }, name));
-      open.addEventListener('click', () => { closeDialog(browseDialog, roomTitle); openRoom(name); });
+      open.addEventListener('click', () => { closeDialog(browseDialog, null); openRoom(name, true); });
       const joinOne = el('button', { type: 'button', class: 'chatlive__browse-join', 'aria-label': `Join #${name}` }, 'Join');
       joinOne.addEventListener('click', async () => {
         await chat.join(you, name);
@@ -550,16 +552,24 @@ export async function mount(root) {
     render();
   });
 
-  /** Shows `name`'s conversation; on a phone, in place of the list, with focus on its title. */
-  function openRoom(name) {
+  /**
+   * Shows `name`'s conversation. On a phone it takes the list's place, and focus goes to its title,
+   * which a screen reader reads as the new view's name. Elsewhere, with `act`, focus goes where you
+   * act in it once it is drawn: the composer, "Join channel" in a preview, or "Sign in".
+   */
+  function openRoom(name, act = false) {
     room = name;
     peopleNote.textContent = '';
     clearSearch();
     const narrow = app.dataset.view === 'list' && phone();
     app.dataset.view = 'room';
+    toAction = act && !narrow;
     render();
     if (narrow) roomTitle.focus();
   }
+  let toAction = false; // the next draw puts focus where you act in the open conversation
+  /** Where you act in the open conversation: the first of these the foot shows and enables. */
+  const action = () => [signIn, join, text].find((each) => !each.disabled && !each.closest('[hidden]'));
   // Each person's own view, as each has a client of their own: the conversation, the rail's
   // view, the Activity row picked, the search, the scroll position and, on a phone, whether
   // the list or the conversation shows. A switch puts away one person's and brings back the
@@ -1083,6 +1093,8 @@ export async function mount(root) {
     } else if (fresh.length) {
       setText(arrived, fresh.filter((message) => message.from !== you).map((message) => `${message.from}: ${message.text}`).join('\n'));
     }
+    // focus on "Sign in", "Join channel" or the composer follows what takes its place: joining puts you in the composer
+    const acting = toAction || [signIn, join, text].includes(document.activeElement);
     banner.hidden = !reconnecting;
     foot.hidden = Boolean(query); // a list of results has no composer
     composer.hidden = !(connected && joined);
@@ -1094,6 +1106,12 @@ export async function mount(root) {
     join.disabled = reconnecting;
     signedOut.hidden = connected;
     text.placeholder = reconnecting ? 'Connecting…' : dm?.with === you ? 'Jot something down' : `Message ${dm ? dm.with : `#${room}`}`;
+    if (acting) {
+      // nothing to act on (a lost connection disables the composer): a conversation just opened shows its title
+      const next = action() ?? (toAction ? roomTitle : null);
+      if (next && document.activeElement !== next) next.focus();
+      toAction = false;
+    }
     // step 5's charts send no typing notices, and no typing.stopped for those the newest sent before a switch
     const typers = connected && chat.version() === LATEST ? (screen.typing[room] ?? []).filter((name) => name !== you) : [];
     setText(typingLine, typers.length === 0 ? ''
@@ -1124,7 +1142,7 @@ export async function mount(root) {
       const button = el('button', { type: 'button', class: 'chatlive__row chatlive__row--dm' }, face(name, 'large'),
         el('span', { class: 'chatlive__row-name' }, name === you ? `${you} (you)` : name), el('time', { class: 'chatlive__row-at' }),
         el('span', { class: 'chatlive__row-text' }), el('span', { class: 'visually-hidden' }));
-      button.addEventListener('click', () => openRoom(dmRoom));
+      button.addEventListener('click', () => openRoom(dmRoom, true));
       return el('li', {}, button);
     }, (node, key) => {
       const each = dms.find((one) => dmKey(one) === key);
@@ -1164,7 +1182,7 @@ export async function mount(root) {
       button.addEventListener('click', () => {
         readOf(you).add(message);
         picked = key;
-        openRoom(message.room);
+        openRoom(message.room, true);
       });
       return el('li', {}, button);
     }, (node, key) => {
