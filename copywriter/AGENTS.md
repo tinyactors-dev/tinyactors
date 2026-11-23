@@ -251,8 +251,10 @@ copywriter/
     packet.mjs            the work packet: XML, Markdown, ZIP (no dependency)
     charts.mjs            the charts' text, imported by the bundle
   src/ui/                 the panel: plain DOM + Lucide icons, renders ViewState, dispatches commands
-    panel.mjs             mountPanel(root, reviewer, {layout: 'sidebar'|'sheet'}); its scrolling area is a div, so the
-                          host page keeps its one <main>
+    panel.mjs             mountPanel(root, reviewer, {layout: 'sidebar'|'sheet', onTall?}); its scrolling area is a div, so
+                          the host page keeps its one <main>; onTall(on) when the checklist or a conversation with a
+                          reader opens (true) or closes (false): the widget's sheet rises to its high size (75%) when
+                          lower and goes back to where it was, unless the reader dragged it meanwhile
     panel-css.mjs         its stylesheet as a string (a ShadowRoot adopts it; no bundler loader)
                           The thread: a transcript is the user's bubble with a small mic (a bubble
                           of dots while it is transcribed); a reply that thought has a collapsed
@@ -280,13 +282,25 @@ copywriter/
                           unfolds a diff (field, old struck, new); the editor's talk_to is a chip with
                           the reader's avatar that opens the conversation; listed conversations with a
                           reader carry its avatar. The new-conversation button goes back to the editor.
+                          An update's diff is word by word (`wordDiff`: only the words removed struck, the
+                          words added marked); checklist items show a capital first letter unless they start
+                          with code (`displayItem`: "npm install" stays); a reading under way counts its
+                          seconds in the checklist's head.
+                          A page's audience suggestion is a quiet dashed pill that leads the strip: every saved
+                          audience as its avatar, the suggested ones ticked first; a tap ticks or unticks
+                          (adjust), the check takes the ticked ones, the cross keeps the set in use. A strip
+                          chip's menu puts its audience on or off this page. Rewrites side by side: each card
+                          for one audience carries its avatar (no words; the tooltip names it), the one for
+                          everyone none; a row that swipes a card at a time (scroll snap, the next peeking)
+                          in the sheet, a stack in the sidebar.
   src/platform/dom.mjs    the page adapter's DOM side, shared: anchors, locate, preview/revert of Text nodes, highlights
   src/platform/extension/ manifest.json, service-worker.mjs, content.mjs (page adapter), sidepanel.html/.mjs, mic.html/.mjs
   src/platform/embed/     embed.mjs (launcher, Shadow DOM, page adapter on the live DOM), loader snippet
   site/                   the /copywriter/ page: download the extension, turn the widget on for this device
   test/                   node:test for charts and core (readings.test.mjs: the reading actors; audiences.test.mjs: pages' sets and side-by-side rewrites; talks.test.mjs:
                           conversations with an audience); Playwright for
-                          the panel over src/ui/mock-reviewer.mjs (?read=0: no reading yet), the extension and the widget
+                          the panel over src/ui/mock-reviewer.mjs (?read=0: no reading yet; ?suggest=1: the page's
+                          audiences suggested), the extension and the widget
   mise/tasks/             build, test, charts, eval, read-eval, talk-eval (Ruby)
   tools/                  serve.mjs (the panel's preview), eval.mjs, read-eval.mjs and talk-eval.mjs (the real Gemini)
   dist/                   build output (not in git): extension/, copywriter-extension.zip, site/

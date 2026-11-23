@@ -23,7 +23,7 @@ import {
   Ellipsis, Eye, EyeOff, FileArchive, KeyRound, LoaderCircle, MessageSquare, MessagesSquare, Mic, Plus, SquarePen, UsersRound,
   MousePointerClick, Pencil, RefreshCw, RotateCcw, Settings, Sparkles, SquareDashedMousePointer, Trash2, TriangleAlert, Undo2, X,
   ScanEye, ListChecks, CircleCheck, Contrast, Circle, CirclePlus, MessageCircleQuestion, Signpost, ShieldQuestion, BookA, Link2,
-  MessageCircle, UserPen,
+  MessageCircle, UserPen, UserCheck, UserMinus,
 } from 'lucide';
 import { panelCSS } from './panel-css.mjs';
 import { markPaths, markViewBox } from './mark.mjs';
@@ -60,6 +60,44 @@ const COVER = {
 const FIELDS = [['wants', 'Wants'], ['tasks', 'Came to'], ['objections', 'Objections']];
 // An audience's initials: the first letters of its first two words.
 const initials = (name) => String(name || '?').split(/[\s-]+/).filter(Boolean).slice(0, 2).map((w) => w[0].toUpperCase()).join('');
+
+// A checklist item as shown: its first letter capitalized when it starts
+// with a word, never when it starts with code ("npm install", `x.y`, a
+// path, a flag): the item itself is unchanged.
+const COMMANDS = new Set(['npm', 'npx', 'pnpm', 'yarn', 'bun', 'node', 'deno', 'pip', 'pipx', 'uv', 'python', 'python3', 'git',
+  'mise', 'cargo', 'go', 'make', 'cmake', 'docker', 'kubectl', 'curl', 'wget', 'brew', 'apt', 'gcc', 'clang', 'tsc', 'zig']);
+export function displayItem(text) {
+  const t = String(text ?? '');
+  const first = t.match(/^[^\s]+/)?.[0] ?? '';
+  const word = first.replace(/[,:;.!?]$/, '');
+  if (!/^[a-z]/.test(word) || COMMANDS.has(word) || /[`./\\_@=()<>{}\[\]#$\d]/.test(word)) return t;
+  return t[0].toUpperCase() + t.slice(1);
+}
+
+// Words removed and added between two texts, word by word (the longest
+// common subsequence of their words and punctuation): [{text, op: '=' |
+// '-' | '+'}], spaces kept with the token before them.
+export function wordDiff(before, after) {
+  // words and punctuation apart, so "libraries." → "libraries;" changes only the mark
+  const split = (x) => String(x ?? '').match(/[\p{L}\p{N}'’_-]+\s*|[^\p{L}\p{N}\s]+\s*|\s+/gu) ?? [];
+  const a = split(before);
+  const b = split(after);
+  const key = (w) => w.trim();
+  const n = a.length;
+  const m = b.length;
+  const lcs = Array.from({ length: n + 1 }, () => new Uint16Array(m + 1));
+  for (let i = n - 1; i >= 0; i--) for (let j = m - 1; j >= 0; j--) lcs[i][j] = key(a[i]) === key(b[j]) ? lcs[i + 1][j + 1] + 1 : Math.max(lcs[i + 1][j], lcs[i][j + 1]);
+  const out = [];
+  const push = (op, text) => { const last = out[out.length - 1]; if (last?.op === op) last.text += text; else out.push({ op, text }); };
+  let i = 0;
+  let j = 0;
+  while (i < n && j < m) {
+    if (key(a[i]) === key(b[j])) { push('=', b[j]); i++; j++; } else if (lcs[i + 1][j] >= lcs[i][j + 1]) push('-', a[i++]); else push('+', b[j++]);
+  }
+  while (i < n) push('-', a[i++]);
+  while (j < m) push('+', b[j++]);
+  return out;
+}
 const LENGTHS = [['short', 'Short'], ['medium', 'Medium'], ['long', 'Long']];
 const TOOLS = [['search', 'Search the web', 'Google Search: answers cite the pages'], ['url', 'Read links', 'The model reads the pages a message names'], ['code', 'Run code', 'The model may compute with Python']];
 const THINKING = [['low', 'Low'], ['medium', 'Medium'], ['high', 'High'], ['xhigh', 'Extra high']];
@@ -176,7 +214,7 @@ function seconds(ms) {
 
 // --- the panel ----------------------------------------------------------------
 
-export function mountPanel(root, reviewer, { layout = 'sidebar' } = {}) {
+export function mountPanel(root, reviewer, { layout = 'sidebar', onTall = null } = {}) {
   if (layout !== 'sidebar' && layout !== 'sheet') throw new TypeError(`layout is 'sidebar' or 'sheet', not ${layout}`);
   const doc = root.ownerDocument ?? document;
 
@@ -208,6 +246,8 @@ export function mountPanel(root, reviewer, { layout = 'sidebar' } = {}) {
     audienceOpen: null,    // the audience whose editor is open ('new' for a new one)
     audienceDraft: null,   // its fields being edited
     refreshing: false,
+    suggestDraft: null,    // the audiences ticked in the page's suggestion row, before it is accepted
+    suggestKey: null,      // the suggestion that draft belongs to
   };
   const rec = { active: false, toggled: false, pendingStart: false, downAt: 0, startedAt: 0, target: null, timer: 0 };
   const seen = new Set();  // ids already drawn, so only new cards and messages animate in
@@ -219,6 +259,11 @@ export function mountPanel(root, reviewer, { layout = 'sidebar' } = {}) {
   let alive = true;
   let scheduled = false;
   let pointer = '';        // the last press's pointerType: a touch opens no keyboard by itself
+  let tall = false;        // the view wants room (the checklist, a reader's conversation): the sheet rises
+  // elapsed seconds of whatever is under way ([data-since]: a reading), ticking without a rebuild
+  const ticker = setInterval(() => {
+    for (const node of panel.querySelectorAll('[data-since]')) node.textContent = `${Math.max(0, Math.round((Date.now() - Number(node.dataset.since)) / 1000))} s`;
+  }, 1000);
 
   const send = (command) => {
     let result;
@@ -536,7 +581,11 @@ export function mountPanel(root, reviewer, { layout = 'sidebar' } = {}) {
       view.append(h('button', { type: 'button', class: 'cw-hintrow', 'data-action': 'add-key', onclick: () => go('settings') },
         icon(KeyRound), h('span', null, 'Add a Gemini key for rewrites'), icon(ChevronRight)));
     }
-    view.append(...[audienceStrip()].filter(Boolean));
+    // the suggestion leads the strip's row (one row of avatars, not two), or stands alone
+    const suggestion = suggestionRow();
+    const strip = audienceStrip();
+    if (strip && suggestion) strip.prepend(suggestion);
+    view.append(...[strip ?? suggestion].filter(Boolean));
     const all = state.annotations ?? [];
     const open = all.filter((a) => OPEN.has(a.state));
     const done = all.filter((a) => !OPEN.has(a.state));
@@ -650,7 +699,7 @@ export function mountPanel(root, reviewer, { layout = 'sidebar' } = {}) {
           icon(UserPen), h('span', null, 'Audience updated')),
         h('dl', { class: 'cw-diff' }, changes.map((x) => [
           h('dt', null, FIELD_LABELS[x.field] ?? x.field),
-          h('dd', null, x.before && h('del', null, x.before), h('ins', null, x.after))])));
+          h('dd', null, x.before ? wordDiff(x.before, x.after).map((d) => (d.op === '-' ? h('del', null, d.text) : d.op === '+' ? h('ins', null, d.text) : d.text)) : h('ins', null, x.after))])));
       return details;
     }
     if (c.action === 'read') {
@@ -790,7 +839,11 @@ export function mountPanel(root, reviewer, { layout = 'sidebar' } = {}) {
     const flow = h('div', { class: 'cw-thread', 'aria-live': 'polite' });
     const cardsAfter = (n) => {
       const here = suggestions.filter((s) => (s.after ?? messages.length) === n);
-      if (here.length) flow.append(h('div', { class: 'cw-cards', role: 'list', 'aria-label': 'Suggestions' }, here.map((s) => card(a, s, missing || a.pageLevel))));
+      if (!here.length) return;
+      // rewrites side by side, one per audience: a row to swipe on a phone, a stack beside the page
+      const compare = here.some((s) => s.audienceID !== undefined);
+      flow.append(h('div', { class: `cw-cards${compare ? ' cw-cards--compare' : ''}`, role: 'list', 'aria-label': compare ? 'Suggestions by audience' : 'Suggestions' },
+        here.map((s) => card(a, s, missing || a.pageLevel))));
     };
     cardsAfter(0);
     messages.forEach((m, i) => { flow.append(message(m)); cardsAfter(i + 1); });
@@ -828,6 +881,8 @@ export function mountPanel(root, reviewer, { layout = 'sidebar' } = {}) {
     const fresh = !seen.has(`s:${s.id}`);
     seen.add(`s:${s.id}`);
     const why = s.own ? 'Your version' : s.rationale;
+    // a rewrite for one audience carries its avatar, one for everyone none
+    const who = s.audienceID ? audienceOf(s.audienceID) : null;
     const corner = h('div', { class: 'cw-card-corner' });
     if (kept) {
       corner.append(h('span', { class: 'cw-kept-mark', title: 'Kept' }, icon(Check), h('span', { class: 'cw-sr' }, 'Kept')));
@@ -847,9 +902,12 @@ export function mountPanel(root, reviewer, { layout = 'sidebar' } = {}) {
     }
     const hasActions = actions.childNodes.length > 0;
     return h('article', {
-      class: `cw-card${previewing ? ' is-chosen' : ''}${kept ? ' is-kept' : ''}${fresh ? ' is-new' : ''}`,
-      role: 'listitem', 'data-suggestion': s.id,
+      class: `cw-card${previewing ? ' is-chosen' : ''}${kept ? ' is-kept' : ''}${fresh ? ' is-new' : ''}${s.audienceID !== undefined ? ' is-for' : ''}`,
+      role: 'listitem', 'data-suggestion': s.id, ...(s.audienceID !== undefined ? { 'data-for': s.audienceID ?? 'everyone' } : {}),
+      ...(s.audienceID !== undefined ? { title: who ? `For ${who.name}` : 'For everyone' } : {}),
     },
+    s.audienceID && h('span', { class: 'cw-avatar cw-card-who', 'aria-hidden': 'true' }, initials(who?.name)),
+    s.audienceID !== undefined && h('span', { class: 'cw-sr' }, who ? `For ${who.name}: ` : 'For everyone: '),
     h('button', {
       type: 'button', class: 'cw-card-pick', 'data-action': 'preview',
       'aria-disabled': String(!canPreview), 'aria-pressed': String(previewing || kept),
@@ -980,6 +1038,39 @@ export function mountPanel(root, reviewer, { layout = 'sidebar' } = {}) {
     return [...new Set(ids)].map(audienceOf).filter(Boolean);
   }
 
+  // The page's audience suggestion, quietly: every saved audience as its
+  // avatar, the suggested ones ticked; a tap ticks or unticks one (adjust),
+  // the check takes the ticked ones as the page's set, the cross keeps the
+  // set in use. Nothing is applied until then.
+  function suggestionRow() {
+    const sug = state.page?.audienceSuggestion;
+    if (sug?.state !== 'ready' || state.status !== 'ready') return null;
+    const key = sug.audienceIDs.join(',');
+    if (ui.suggestKey !== key) { ui.suggestKey = key; ui.suggestDraft = [...sug.audienceIDs]; }
+    const all = state.settings?.audiences ?? [];
+    const draft = ui.suggestDraft;
+    const ordered = [...sug.audienceIDs.map(audienceOf).filter(Boolean), ...all.filter((a) => !sug.audienceIDs.includes(a.id))];
+    const names = sug.audienceIDs.map((id) => audienceOf(id)?.name).filter(Boolean).join(', ');
+    return h('div', { class: 'cw-suggest', role: 'group', 'aria-label': `Who reads this page? Suggested: ${names}`, title: `Suggested for this page: ${names}`, 'data-suggest': '' },
+      h('span', { class: 'cw-suggest-mark', 'aria-hidden': 'true' }, icon(Sparkles)),
+      ordered.map((a) => {
+        const on = draft.includes(a.id);
+        return h('button', {
+          type: 'button', class: `cw-suggest-chip${on ? ' is-on' : ''}`, 'aria-pressed': String(on), 'data-audience': a.id,
+          title: `${a.name}${on ? '' : ' · not suggested'}`, 'aria-label': a.name,
+          onclick: () => { ui.suggestDraft = on ? draft.filter((x) => x !== a.id) : [...draft, a.id]; keys.main = null; render(); },
+        }, h('span', { class: 'cw-avatar' }, initials(a.name)));
+      }),
+      iconButton(Check, 'For these readers', {
+        variant: 'cw-suggest-ok', 'data-action': 'accept-audiences', disabled: !draft.length,
+        onclick: () => {
+          const same = draft.length === sug.audienceIDs.length && draft.every((x, i) => x === sug.audienceIDs[i]);
+          send(same ? { type: 'audiences.accept' } : { type: 'settings.save', audienceIDs: ordered.map((a) => a.id).filter((x) => draft.includes(x)) });
+        },
+      }),
+      iconButton(X, 'Not now', { 'data-action': 'dismiss-audiences', onclick: () => send({ type: 'audiences.dismiss' }) }));
+  }
+
   // A row of small chips, one per audience: its initials and, once read,
   // how much of its checklist the page answers. A tap opens its menu.
   function audienceStrip() {
@@ -1011,6 +1102,10 @@ export function mountPanel(root, reviewer, { layout = 'sidebar' } = {}) {
           disabled: !hasKey || r?.state === 'reading', 'data-action': 'read-as',
         }),
         r && item(ListChecks, 'Checklist', () => openReading(a.id), { 'data-action': 'open-reading' }),
+        item(active.includes(a.id) ? UserMinus : UserCheck, active.includes(a.id) ? 'Not for this page' : 'For this page', () => {
+          ui.menu = null;
+          send({ type: 'settings.save', audienceIDs: active.includes(a.id) ? active.filter((x) => x !== a.id) : [...active, a.id] });
+        }, { 'data-action': 'toggle-page' }),
         item(MessageCircle, 'Talk to this reader', () => talkTo(a.id), { disabled: !hasKey, 'data-action': 'talk' }),
         item(UsersRound, 'Edit audience', () => { ui.menu = null; ui.audienceOpen = a.id; ui.audienceDraft = null; go('settings'); }, { 'data-action': 'edit-audience' }))));
     }
@@ -1053,6 +1148,8 @@ export function mountPanel(root, reviewer, { layout = 'sidebar' } = {}) {
       r?.state === 'done' && h('span', { class: 'cw-cover cw-cover--big', title: `${answered(r)} of ${r.items.length} answered` }, `${answered(r)}/${r.items.length}`),
       h('span', { class: 'cw-reading-at', title: r?.at ? when(r.at) : '' },
         !r ? 'Not read yet' : r.state === 'reading' ? 'Reading the page' : r.state === 'failed' ? '' : ago(r.at)),
+      r?.state === 'reading' && h('span', { class: 'cw-elapsed', 'data-since': String(new Date(r.at ?? Date.now()).getTime()), 'aria-hidden': 'true' },
+        `${Math.max(0, Math.round((Date.now() - new Date(r.at ?? Date.now()).getTime()) / 1000))} s`),
       r?.state === 'reading' && dots(),
       h('span', { class: 'cw-grow' }),
       hasKey && iconButton(MessageCircle, `Talk to ${a.name}`, { 'data-action': 'talk', onclick: () => talkTo(a.id) }),
@@ -1089,7 +1186,7 @@ export function mountPanel(root, reviewer, { layout = 'sidebar' } = {}) {
         render();
         if (!open && x.anchor) send({ type: 'reading.show', audienceID: a.id, index: x.index });
       },
-    }, h('span', { class: 'cw-check-glyph', role: 'img', 'aria-label': c.label }, icon(c.icon)), h('span', { class: 'cw-check-text' }, x.text));
+    }, h('span', { class: 'cw-check-glyph', role: 'img', 'aria-label': c.label }, icon(c.icon)), h('span', { class: 'cw-check-text' }, displayItem(x.text)));
     const action = x.status === 'answered' ? null : linked
       ? iconButton(Link2, 'Open item', { variant: 'cw-check-act is-linked', 'data-action': 'open-gap', onclick: () => send({ type: 'select', id: linked.id }) })
       : iconButton(Plus, 'Make it an open item', {
@@ -1263,7 +1360,7 @@ export function mountPanel(root, reviewer, { layout = 'sidebar' } = {}) {
     if (ui.view === 'reading') return JSON.stringify(['reading', ui.reading, ui.itemOpen, state.readings, state.annotations, state.settings?.audiences, state.settings?.hasKey]);
     return JSON.stringify(['list', state.status, state.error, state.annotations, state.settings?.hasKey, ui.showDone, state.picking,
       state.readings?.map((r) => [r.audienceID, r.state, r.at, r.items.map((x) => x.status)]), state.settings?.audiences, state.settings?.audienceIDs,
-      ui.menu?.startsWith('audience:') ? ui.menu : null]);
+      ui.menu?.startsWith('audience:') ? ui.menu : null, state.page?.audienceSuggestion, ui.suggestDraft]);
   }
 
   function renderMain() {
@@ -1361,6 +1458,9 @@ export function mountPanel(root, reviewer, { layout = 'sidebar' } = {}) {
     }
     renderHeader();
     renderMain();
+    // the checklist and a reader's conversation want room: the sheet rises to its high size
+    const nowTall = !activeAnnotation() && (ui.view === 'reading' || (ui.view === 'chat' && !!state.chat?.audienceID));
+    if (nowTall !== tall) { tall = nowTall; try { onTall?.(tall); } catch { /* the host's */ } }
     renderBanner();
     placeMenus();
     paintComposer();
@@ -1410,6 +1510,7 @@ export function mountPanel(root, reviewer, { layout = 'sidebar' } = {}) {
       if (rec.active) stopRecording();
       alive = false;
       clearInterval(rec.timer);
+      clearInterval(ticker);
       unsubscribe?.();
       panel.remove();
       if (ownStyle) style.remove();

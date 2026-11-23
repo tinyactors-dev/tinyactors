@@ -275,10 +275,25 @@ function start() {
     remember();
   }
 
+  // The checklist and a conversation with a reader want room: the sheet
+  // rises to its high size when lower, and goes back to where it was when
+  // the panel leaves them, unless the reader moved it meanwhile.
+  let beforeTall = null;
+  function raise(on) {
+    if (wide.matches) return;
+    if (on) {
+      if (size < SIZE.HIGH - 0.01) { beforeTall = size; resize(SIZE.HIGH, { animate: true }); }
+    } else if (beforeTall !== null) {
+      const back = beforeTall;
+      beforeTall = null;
+      if (Math.abs(size - SIZE.HIGH) < 0.01) resize(back, { animate: true });
+    }
+  }
+
   function show(value) {
     open = value;
     if (open) {
-      panel ??= mountPanel(body, reviewer, { layout: 'sheet' });
+      panel ??= mountPanel(body, reviewer, { layout: 'sheet', onTall: raise });
       resize(size);
       host.setAttribute('data-open', '');
     } else {
@@ -347,6 +362,7 @@ function start() {
     const velocity = (y1 - y0) / Math.max(1, t1 - t0);   // px per ms, down positive, over the last moves
     const wanted = (start - dy) / innerHeight;
     sheet.style.removeProperty('--pull');
+    beforeTall = null;  // where the reader put it stays
     if (wanted < SIZE.MIN - 0.06 || (velocity > 1.1 && wanted < SIZE.LOW)) { show(false); return; }
     resize(wanted);
   };

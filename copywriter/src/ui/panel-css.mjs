@@ -558,6 +558,40 @@ export const panelCSS = String.raw`
 .cw-panel .cw-menu--left { right: auto; left: 0; }
 .cw-panel .cw-menu-title { padding: 6px 10px 4px; font-size: 12px; color: var(--fg-3); max-width: 260px; }
 
+/* the page's audience suggestion: the avatars, the suggested ones ticked; quiet, one row */
+.cw-panel .cw-suggest {
+  display: flex; width: fit-content; max-width: calc(100% - 24px); box-sizing: border-box; align-items: center; gap: 2px; margin: 10px 12px 0; padding: 2px 2px 2px 10px;
+  border: 1px dashed var(--border-2); border-radius: 999px; animation: cw-in var(--base) var(--ease-out);
+}
+.cw-panel .cw-strip > .cw-suggest { margin: 0; }
+.cw-panel .cw-suggest-mark { display: flex; color: var(--accent-fg); margin-right: 2px; }
+.cw-panel .cw-suggest-mark svg.cw-icon { width: 13px; height: 13px; }
+.cw-panel .cw-suggest-chip { all: unset; display: inline-grid; place-items: center; width: 28px; height: 28px; border-radius: 50%; cursor: pointer; }
+.cw-panel[data-layout="sheet"] .cw-suggest-chip { width: 40px; height: 40px; }
+.cw-panel .cw-suggest-chip:focus-visible { box-shadow: var(--ring); }
+.cw-panel .cw-suggest-chip .cw-avatar { opacity: .45; transition: opacity var(--fast) var(--ease-step), background var(--fast) var(--ease-step), box-shadow var(--fast) var(--ease-step); }
+.cw-panel .cw-suggest-chip.is-on .cw-avatar { opacity: 1; background: var(--accent-subtle); color: var(--accent-fg); box-shadow: 0 0 0 1.5px var(--accent); }
+.cw-panel .cw-suggest .cw-btn { height: 28px; width: 28px; }
+.cw-panel[data-layout="sheet"] .cw-suggest .cw-btn { height: 40px; width: 40px; }
+.cw-panel .cw-suggest-ok:not(:disabled) { color: var(--accent-fg); }
+
+/* rewrites side by side: each card for one audience carries its avatar */
+.cw-panel .cw-card.is-for .cw-card-who { position: absolute; top: 9px; left: 10px; width: 20px; height: 20px; font-size: 8.5px; background: var(--accent-subtle); color: var(--accent-fg); }
+.cw-panel .cw-card.is-for:has(> .cw-card-who) .cw-card-pick { padding-left: 28px; }
+.cw-panel[data-layout="sheet"] .cw-card.is-for .cw-card-who { top: 11px; width: 24px; height: 24px; font-size: 9.5px; }
+.cw-panel[data-layout="sheet"] .cw-card.is-for:has(> .cw-card-who) .cw-card-pick { padding-left: 32px; }
+/* on a phone: a row to swipe, a card at a time with the next one peeking */
+.cw-panel[data-layout="sheet"] .cw-cards--compare {
+  flex-direction: row; align-items: flex-start; gap: 8px; overflow-x: auto; overscroll-behavior-x: contain;
+  scroll-snap-type: x mandatory; scrollbar-width: none; margin: 0 calc(-1 * var(--pad)); padding: 0 var(--pad) 2px;
+  scroll-padding-inline: var(--pad);
+}
+.cw-panel[data-layout="sheet"] .cw-cards--compare::-webkit-scrollbar { display: none; }
+.cw-panel[data-layout="sheet"] .cw-cards--compare > .cw-card { flex: 0 0 84%; scroll-snap-align: start; }
+
+/* a reading under way: its seconds */
+.cw-panel .cw-elapsed { font: 500 11.5px/1 var(--mono); font-variant-numeric: tabular-nums; color: var(--waiting); }
+
 /* a finding: its kind as the row's icon, the audience's initials on it */
 .cw-panel .cw-row-icon.is-finding { position: relative; }
 .cw-panel .cw-initials {
@@ -633,9 +667,10 @@ export const panelCSS = String.raw`
 .cw-panel .cw-diff { margin: 6px 0 0; padding: 8px 10px; border-left: 2px solid var(--accent); background: var(--surface-2); font-size: 12.5px; line-height: 1.5; animation: cw-in var(--base) var(--ease-out); }
 .cw-panel .cw-diff dt { font: 500 11px/1.4 var(--mono); color: var(--fg-3); }
 .cw-panel .cw-diff dt:not(:first-child) { margin-top: 6px; }
-.cw-panel .cw-diff dd { margin: 0; display: flex; flex-direction: column; gap: 2px; }
-.cw-panel .cw-diff del { color: var(--fg-4); }
-.cw-panel .cw-diff ins { text-decoration: none; color: var(--fg-1); }
+.cw-panel .cw-diff dd { margin: 0; color: var(--fg-2); }
+/* word by word: only the words removed are struck, the words added marked */
+.cw-panel .cw-diff del { color: var(--fg-4); text-decoration-thickness: 1px; }
+.cw-panel .cw-diff ins { text-decoration: none; color: var(--fg-1); background: var(--accent-subtle); border-radius: 2px; box-decoration-break: clone; -webkit-box-decoration-break: clone; }
 .cw-panel[data-layout="sheet"] .cw-diff { font-size: 14px; }
 
 @media (prefers-reduced-motion: reduce) {

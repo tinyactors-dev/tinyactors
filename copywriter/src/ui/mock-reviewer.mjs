@@ -40,6 +40,7 @@ function sampleReading(now) {
       { field: 'wants', text: 'The license', status: 'answered', explanation: 'MIT, in the footer.', anchor: { quote: { exact: 'MIT licensed.', prefix: '', suffix: '' }, selector: 'footer p' } },
       { field: 'tasks', text: 'Decide yes or no', status: 'partial', explanation: 'Facts, but no limits.' },
       { field: 'tasks', text: 'check the license', status: 'answered', explanation: 'MIT.', anchor: { quote: { exact: 'MIT licensed.', prefix: '', suffix: '' }, selector: 'footer p' } },
+      { field: 'tasks', text: 'npm install and run one chart', status: 'partial', explanation: 'The command is there, the chart is not.' },
       { field: 'objections', text: '"Who maintains it?"', status: 'missing', explanation: 'No maintainer is named.' },
       { field: 'objections', text: '"What happens when the host dies?"', status: 'partial', explanation: 'Snapshots, but nothing on a crash.' },
     ],
@@ -113,17 +114,28 @@ function sample(now) {
   ];
 }
 
-export function createMockReviewer({ hasKey = true, delay = 1, empty = false, status = 'ready', read = true } = {}) {
+// A rewrite per audience, when several are active: by the audience's id, and one for everyone.
+const PER_AUDIENCE = {
+  lead: ['A runtime you embed: one C core, MIT licensed', 'Names what the lead checks first: the core and the license.'],
+  student: ['Statecharts you can run in a page, in one example', 'One small example is what the student wants.'],
+  dev: ['Test a week of timeouts in milliseconds', 'The developer wants the simulated clock.'],
+};
+
+export function createMockReviewer({ hasKey = true, delay = 1, empty = false, status = 'ready', read = true, suggest = false } = {}) {
   const now = Date.now();
   let seq = 100;
   const listeners = new Set();
   const log = [];
   const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms * delay));
   const id = (prefix) => `${prefix}${++seq}`;
+  let readingMS = 1200;  // how long a reading takes, before the delay scales it (setReadingTime)
 
   let state = {
     status,
-    page: { url: 'https://www.tinyactors.dev/', title: 'Actors as a library' },
+    page: {
+      url: 'https://www.tinyactors.dev/', title: 'Actors as a library',
+      audienceSuggestion: suggest ? { state: 'ready', audienceIDs: read ? ['lead', 'student'] : ['student'] } : null,
+    },
     selection: null,
     picking: false,
     settings: {
@@ -203,6 +215,20 @@ export function createMockReviewer({ hasKey = true, delay = 1, empty = false, st
     if (!get(annotationID)) return;
     if (/fail/i.test(text ?? '')) {
       update(annotationID, (a) => ({ ...a, state: 'failed', error: 'Gemini answered 503: the model is overloaded. Try again.' }));
+      return;
+    }
+    // several audiences active, and not a finding: one rewrite each, and one for everyone
+    const active = state.settings.audienceIDs.filter((x) => state.settings.audiences.some((a) => a.id === x));
+    if (active.length > 1 && !get(annotationID).finding) {
+      update(annotationID, (a) => {
+        const messages = [...a.messages, { role: 'model', text: 'One for each reader, and one for all of them.', at: Date.now(), seconds: 1 }];
+        const n = a.suggestions.length;
+        const brought = [
+          ...active.map((x, i) => ({ id: `s${n + i + 1}`, text: (PER_AUDIENCE[x] ?? [`For ${x}: ${a.original}`, ''])[0], rationale: (PER_AUDIENCE[x] ?? ['', 'Their need first.'])[1], audienceID: x })),
+          { id: `s${n + active.length + 1}`, text: 'Run millions of actors in one process', rationale: 'The measured claim serves every reader.', audienceID: null },
+        ];
+        return { ...a, state: before === 'previewing' ? 'previewing' : 'suggested', messages, suggestions: [...a.suggestions, ...brought.map((x) => ({ ...x, after: messages.length }))] };
+      });
       return;
     }
     const pool = REWRITES.default;
@@ -370,7 +396,7 @@ export function createMockReviewer({ hasKey = true, delay = 1, empty = false, st
       if (!ids.length) throw new Error('Choose an audience first.');
       const others = state.readings.filter((r) => !ids.includes(r.audienceID));
       set({ readings: [...others, ...ids.map((audienceID) => ({ ...(state.readings.find((r) => r.audienceID === audienceID) ?? { items: [], findingIDs: [] }), audienceID, state: 'reading', at: Date.now() }))] });
-      await wait(1200);
+      await wait(readingMS);
       const fresh = ids.map((audienceID) => {
         const fid = id('f');
         return {
@@ -440,7 +466,10 @@ export function createMockReviewer({ hasKey = true, delay = 1, empty = false, st
       if (command.length) settings.length = command.length;
       if (command.tools) settings.tools = { ...settings.tools, ...command.tools };
       if (command.voice !== undefined) settings.voice = command.voice ? { instructions: command.voice, custom: command.voice !== VOICE } : { instructions: VOICE, custom: false };
-      if (command.audienceIDs) settings.audienceIDs = command.audienceIDs;
+      if (command.audienceIDs) {
+        settings.audienceIDs = command.audienceIDs;
+        state = Object.freeze({ ...state, page: { ...state.page, audienceSuggestion: null } });  // the page's set now
+      }
       if (command.audience) {
         const audience = { ...command.audience, id: command.audience.id || id('u') };
         settings.audiences = settings.audiences.some((a) => a.id === audience.id)
@@ -449,6 +478,16 @@ export function createMockReviewer({ hasKey = true, delay = 1, empty = false, st
       }
       await wait(150);
       set({ settings });
+    },
+    async 'audiences.accept'() {
+      const sug = state.page.audienceSuggestion;
+      if (sug?.state !== 'ready') throw new Error('No suggestion to accept.');
+      await wait(100);
+      set({ page: { ...state.page, audienceSuggestion: null }, settings: { ...state.settings, audienceIDs: [...sug.audienceIDs] } });
+    },
+    async 'audiences.dismiss'() {
+      if (state.page.audienceSuggestion?.state !== 'ready') throw new Error('No suggestion to dismiss.');
+      set({ page: { ...state.page, audienceSuggestion: null } });
     },
     async 'settings.deleteAudience'({ id: audienceID }) {
       set({ settings: {
@@ -494,6 +533,7 @@ export function createMockReviewer({ hasKey = true, delay = 1, empty = false, st
     close() { listeners.clear(); },
     // for the preview and tests only: what the page would report, what was dispatched
     setSelection(text, { fits = true } = {}) { set({ selection: text ? { text, fits } : null }); },
+    setReadingTime(ms) { readingMS = ms; },
     set,
     log,
   };

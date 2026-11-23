@@ -495,12 +495,12 @@ test('unmount removes the panel and its stylesheet', async () => {
 test('read as an audience: the strip\'s chip shows how much the page answers; its menu reads again; the chip spins, then counts', async () => {
   const { page, panel, errors } = await open('');
   const chip = panel.locator('.cw-strip-chip[data-audience=lead]');
-  assert.match(await chip.getAttribute('aria-label'), /^Tech lead who approves dependencies · 2 of 6 answered/);
-  assert.equal((await chip.textContent()).trim(), 'TL2/6', 'initials and a count, no name');
+  assert.match(await chip.getAttribute('aria-label'), /^Tech lead who approves dependencies · 2 of 7 answered/);
+  assert.equal((await chip.textContent()).trim(), 'TL2/7', 'initials and a count, no name');
   await chip.click();
   const menu = panel.locator('.cw-menu[aria-label="Tech lead who approves dependencies"]');
   await menu.waitFor();
-  assert.deepEqual(await menu.locator('.cw-menu-item').allTextContents(), ['Read again', 'Checklist', 'Talk to this reader', 'Edit audience']);
+  assert.deepEqual(await menu.locator('.cw-menu-item').allTextContents(), ['Read again', 'Checklist', 'Not for this page', 'Talk to this reader', 'Edit audience']);
   await menu.locator('[data-action=read-as]').click();
   await until(async () => (await chip.getAttribute('data-reading')) === 'reading');
   assert.equal(await chip.locator('.cw-spin').count(), 1);
@@ -521,8 +521,8 @@ test('the checklist: one line per item with its status; an answer shows on the p
   assert.equal(await panel.locator('.cw-heading').textContent(), 'Tech lead who approves dependencies');
   assert.deepEqual(await view.locator('.cw-label').allTextContents(), ['Wants', 'Came to', 'Objections', 'Findings2']);
   assert.deepEqual(await view.locator('.cw-check-item').evaluateAll((items) => items.map((x) => x.dataset.status)),
-    ['missing', 'answered', 'partial', 'answered', 'missing', 'partial']);
-  assert.equal(await view.locator('.cw-check-glyph[aria-label="Partly answered"]').count(), 2);
+    ['missing', 'answered', 'partial', 'answered', 'partial', 'missing', 'partial']);
+  assert.equal(await view.locator('.cw-check-glyph[aria-label="Partly answered"]').count(), 3);
   // an answered item: its text on the page, and why
   await view.locator('.cw-check-item[data-index="1"] .cw-check-line').click();
   assert.equal(await view.locator('.cw-check-item[data-index="1"]').getAttribute('class'), 'cw-check-item is-open');
@@ -660,6 +660,106 @@ test('a gap the reader notes is an open item, linked from its message', async ()
   assert.match(await link.textContent(), /Name who maintains it/);
   await link.click();
   await panel.locator('[data-view=detail] .cw-finding').waitFor();
+  assert.deepEqual(errors, []);
+  await page.close();
+});
+
+test('a page\'s suggested audiences: a quiet row of avatars, adjusted by a tap, accepted with the check or dismissed', async () => {
+  const { page, panel, errors } = await open('suggest=1&layout=sheet');
+  const row = panel.locator('[data-suggest]');
+  await row.waitFor();
+  assert.deepEqual(await row.locator('.cw-suggest-chip').evaluateAll((n) => n.map((x) => [x.dataset.audience, x.getAttribute('aria-pressed')])),
+    [['lead', 'true'], ['student', 'true']], 'the suggested ones ticked, first');
+  assert.match(await row.getAttribute('title'), /Tech lead who approves dependencies, Student/);
+  await row.locator('.cw-suggest-chip[data-audience=student]').click();
+  await row.locator('[data-action=accept-audiences]').click();
+  await until(async () => (await panel.locator('[data-suggest]').count()) === 0);
+  const last = await page.evaluate(() => reviewer.log.at(-1));
+  assert.deepEqual(last, { type: 'settings.save', audienceIDs: ['lead'] }, 'adjusted: the ticked ones are the page\'s set');
+  await page.close();
+
+  const second = await open('suggest=1');
+  await second.panel.locator('[data-suggest] [data-action=accept-audiences]').click();
+  await until(async () => (await second.panel.locator('[data-suggest]').count()) === 0);
+  assert.deepEqual(await second.page.evaluate(() => reviewer.getState().settings.audienceIDs), ['lead', 'student']);
+  assert.ok((await commands(second.page)).includes('audiences.accept'), 'unchanged: accepted as suggested');
+  await second.page.close();
+
+  const third = await open('suggest=1');
+  await third.panel.locator('[data-suggest] [data-action=dismiss-audiences]').click();
+  await until(async () => (await third.panel.locator('[data-suggest]').count()) === 0);
+  assert.ok((await commands(third.page)).includes('audiences.dismiss'));
+  assert.deepEqual(errors, []);
+  await third.page.close();
+});
+
+test('a strip chip\'s menu puts its audience on or off this page', async () => {
+  const { page, panel, errors } = await open('');
+  await panel.locator('.cw-strip-chip[data-audience=lead]').click();
+  const item = panel.locator('.cw-menu [data-action=toggle-page]');
+  assert.equal((await item.textContent()).trim(), 'Not for this page');
+  await item.click();
+  await page.waitForFunction(() => reviewer.getState().settings.audienceIDs.length === 0);
+  assert.deepEqual(errors, []);
+  await page.close();
+});
+
+test('rewrites side by side: one card per audience, by its avatar; a row to swipe on a phone, a stack beside the page', async () => {
+  for (const layout of ['sheet', 'sidebar']) {
+    const { page, panel, errors } = await open(`layout=${layout}`);
+    await page.evaluate(() => reviewer.dispatch({ type: 'settings.save', audienceIDs: ['lead', 'student'] }));
+    await panel.locator('.cw-row[data-id=a4]').click();
+    await page.evaluate(() => reviewer.dispatch({ type: 'ask', id: 'a4', text: 'For each reader' }));
+    const row = panel.locator('.cw-cards--compare');
+    await row.waitFor();
+    const cards = row.locator('.cw-card');
+    assert.deepEqual(await cards.evaluateAll((n) => n.map((x) => [x.dataset.for, x.querySelector('.cw-card-who')?.textContent ?? null])),
+      [['lead', 'TL'], ['student', 'S'], ['everyone', null]], 'the avatar names the audience; the card for everyone has none');
+    assert.deepEqual(await cards.evaluateAll((n) => n.map((x) => x.querySelector('.cw-card-text').textContent.includes('Tech lead'))), [false, false, false], 'no words for the audiences');
+    const style = await row.evaluate((n) => ({ direction: getComputedStyle(n).flexDirection, snap: getComputedStyle(n).scrollSnapType, scrolls: n.scrollWidth > n.clientWidth }));
+    if (layout === 'sheet') assert.deepEqual(style, { direction: 'row', snap: 'x mandatory', scrolls: true });
+    else assert.equal(style.direction, 'column');
+    // preview and keep work per card
+    await cards.nth(1).locator('[data-action=preview]').click();
+    await panel.locator('.cw-card.is-chosen[data-for=student] [data-action=keep]').click();
+    await page.waitForFunction(() => reviewer.getState().annotations.find((a) => a.id === 'a4').state === 'kept');
+    assert.deepEqual(errors, []);
+    await page.close();
+  }
+});
+
+test('the checklist: items shown with a capital unless they start with code; a reading under way counts its seconds', async () => {
+  const { page, panel, errors } = await open('');
+  await panel.locator('.cw-strip-chip[data-audience=lead]').click();
+  await panel.locator('.cw-menu [data-action=open-reading]').click();
+  const texts = await panel.locator('.cw-check-text').allTextContents();
+  assert.ok(texts.includes('Check the license'), texts.join(' | '));
+  assert.ok(texts.includes('npm install and run one chart'), 'code stays as it is');
+  assert.ok(await page.evaluate(() => reviewer.getState().readings[0].items.some((x) => x.text === 'check the license')), 'the item itself unchanged');
+  await page.evaluate(() => { reviewer.setReadingTime(200000); reviewer.dispatch({ type: 'read', audienceIDs: ['lead'] }); });
+  const elapsed = panel.locator('[data-view=reading] .cw-elapsed');
+  await elapsed.waitFor();
+  await until(async () => /^[1-9]\d* s$/.test(await elapsed.textContent()), 4000);
+  assert.deepEqual(errors, []);
+  await page.close();
+});
+
+test('an audience update shows word by word: only the removed words struck, the added ones marked', async () => {
+  const { page, panel, errors } = await open('');
+  await page.evaluate(() => reviewer.dispatch({ type: 'settings.save', audience: { ...reviewer.getState().settings.audiences.find((a) => a.id === 'lead'), knows: 'SQLite and embedded libraries.' } }));
+  await page.evaluate(() => reviewer.dispatch({ type: 'talk', audienceID: 'lead' }));
+  await panel.locator('[data-action=chat]').click();
+  const composer = panel.locator('textarea[aria-label=Message]');
+  await composer.fill('Actually you know Erlang.');
+  await composer.press('Enter');
+  const update = panel.locator('.cw-update');
+  await update.waitFor();
+  await update.locator('summary').click();
+  const dd = update.locator('dd');
+  assert.equal(await dd.evaluate((n) => [...n.childNodes].filter((x) => x.nodeName !== 'DEL').map((x) => x.textContent).join('')),
+    'SQLite and embedded libraries; Erlang and OTP, well.', 'without the struck words, the new text reads whole');
+  assert.deepEqual(await dd.locator('del').allTextContents(), [], 'nothing removed');
+  assert.deepEqual(await dd.locator('ins').allTextContents(), ['; Erlang and OTP, well'], 'only the added words marked');
   assert.deepEqual(errors, []);
   await page.close();
 });

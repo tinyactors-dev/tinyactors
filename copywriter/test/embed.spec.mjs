@@ -177,6 +177,25 @@ test('on a phone, the sheet resizes to where it is let go, from the grip or the 
   await context.close();
 });
 
+test('on a phone, a conversation with a reader raises the sheet to its high size, and leaving it lowers it back', async () => {
+  const { context, page, errors, sheet, launcher } = await phone();
+  await page.evaluate(() => tinyactorsCopywriter.reviewer.dispatch({ type: 'settings.save', audienceIDs: ['starter-tech-lead'] }));
+  await launcher.tap();
+  await sheet.locator('.cw-panel').waitFor();
+  await page.waitForTimeout(400);
+  const share = async () => (await sheet.boundingBox()).height / 844;
+  assert.ok(Math.abs(await share() - 0.4) < 0.02, `opens low: ${await share()}`);
+  await sheet.locator('.cw-strip-chip').first().tap();
+  await sheet.locator('.cw-menu [data-action=talk]').tap();
+  await page.waitForTimeout(400);
+  assert.ok(Math.abs(await share() - 0.75) < 0.02, `raised: ${await share()}`);
+  await sheet.locator('[data-action=back]').tap();
+  await page.waitForTimeout(400);
+  assert.ok(Math.abs(await share() - 0.4) < 0.02, `back where it was: ${await share()}`);
+  assert.deepEqual(errors, []);
+  await context.close();
+});
+
 test('on a phone, the launcher is bottom left and stays there while the page scrolls', async () => {
   const { context, page, launcher } = await phone();
   const before = await launcher.boundingBox();
