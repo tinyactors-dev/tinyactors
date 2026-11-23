@@ -16,7 +16,7 @@ TARGETS = [
   ['thumb-freestanding-eabi', %w[-mcpu=cortex_m0plus], false],
   ['riscv32-freestanding', [], false]
 ].freeze
-FLAGS = %w[-std=c11 -Os -ffreestanding -nostdlibinc -fno-builtin-malloc -Wall -Wextra -Werror -Iinclude -Isrc].freeze
+FLAGS = %w[-std=c11 -Os -ffreestanding -nostdlibinc -fno-builtin-malloc -Wall -Wextra -Werror -Iinclude -Isrc -I../staticjs/include].freeze
 
 sources = LAYERS.flat_map(&:sources)
 TARGETS.each do |triple, extra, link|
@@ -24,7 +24,7 @@ TARGETS.each do |triple, extra, link|
   objects = Core.directory('freestanding').join(triple)
   command = target.compile_command(*FLAGS, *extra)
   outputs = sources.map do |source|
-    object = objects.join("#{File.basename(source, '.c')}.o")
+    object = objects.join("#{source.delete_suffix('.c').gsub(%r{[^A-Za-z0-9_]}, '_')}.o")
     Core.compile(command, source, object)
     object.to_s
   end

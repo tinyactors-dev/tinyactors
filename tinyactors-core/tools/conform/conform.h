@@ -22,6 +22,7 @@
 
 #include "support/datamodel_test.h"
 #include <tinyactors/datamodel_json.h>
+#include <tinyactors/datamodel_staticjs.h>
 
 /* ---- bytes the program owns ---------------------------------------------------- */
 
@@ -166,6 +167,7 @@ typedef struct conform_datamodel {
     ta_datamodel_ecmascript *ecmascript;
     datamodel_test *test;
     ta_datamodel_json *json;
+    ta_datamodel_staticjs *staticjs;
     uint32_t realm;
     ta_datamodel_binding binding;
 } conform_datamodel;

@@ -63,6 +63,14 @@ module Core
     # The "json" data model (docs/proposals/json-datamodel.md): a spike, on a branch.
     Layer.new(name: 'datamodel_json', uses: %w[image base], freestanding: true,
               sources: %w[src/datamodel_json/datamodel_json.c]),
+    # staticjs (../staticjs), freestanding, with its own rules: its sources are
+    # compiled as its build compiles them, without core's warnings.
+    Layer.new(name: 'staticjs', uses: [], freestanding: true,
+              sources: Dir[File.join(__dir__, '../../staticjs/src/*.c')].reject { |s| s.end_with?('_wasm.c') }.sort.map { |s| Pathname.new(s).cleanpath.relative_path_from(Pathname.new(File.join(__dir__, '..')).cleanpath).to_s },
+              flags: %w[-std=c11 -w -I../staticjs/include -I../staticjs/src]),
+    # The "staticjs" data model over it: a spike beside the json one.
+    Layer.new(name: 'datamodel_staticjs', uses: %w[image base staticjs], freestanding: true,
+              sources: %w[src/datamodel_staticjs/datamodel_staticjs.c]),
     # The tests' data model (tests/support), linked by the test programs only.
     Layer.new(name: 'test_datamodel', uses: %w[image], libraries: %w[-lm], sources: %w[tests/support/datamodel_test.c])
   ].to_h { |layer| [layer.name, layer] }.freeze
@@ -229,12 +237,12 @@ module Core
     # The C reference implementation of the conformance suite's driver
     # protocol (../tinyactors-test/docs/driver.md); `mise run conform` runs
     # the suite against it.
-    Program.new(name: 'ta-conform', uses: %w[host runtime compile basic_http test_datamodel datamodel_json] + ECMASCRIPT,
+    Program.new(name: 'ta-conform', uses: %w[host runtime compile basic_http test_datamodel datamodel_json datamodel_staticjs] + ECMASCRIPT,
                 sources: %w[conform.c datamodel.c json_functions.c vectors.c scenario.c w3c.c].map { |s| "tools/conform/#{s}" },
                 defines: {}),
     # The json datamodel beside quickjs: bytes per actor, time per event
     # (tools/jsonbench; a spike for docs/proposals/json-datamodel.md).
-    Program.new(name: 'json-bench', uses: %w[host runtime compile datamodel_json] + ECMASCRIPT,
+    Program.new(name: 'json-bench', uses: %w[host runtime compile datamodel_json datamodel_staticjs] + ECMASCRIPT,
                 sources: %w[tools/jsonbench/bench.c], defines: {}),
     # The torture chamber's host (tools/torture/README.md).
     Program.new(name: 'torture-bench', uses: %w[host runtime compile otlp] + ECMASCRIPT,
@@ -249,7 +257,7 @@ module Core
   WARNINGS = %w[-Wall -Wextra -Wpedantic -Wshadow -Wconversion -Wno-sign-conversion -Wcast-align
                 -fno-strict-aliasing -Werror].freeze
   C_WARNINGS = %w[-std=c11 -Wstrict-prototypes -Wmissing-prototypes].freeze
-  INCLUDES = ['-Iinclude', '-Isrc', '-Itests', '-isystem', 'third_party/quickjs-ng'].freeze
+  INCLUDES = ['-Iinclude', '-Isrc', '-Itests', '-isystem', 'third_party/quickjs-ng', '-isystem', '../staticjs/include'].freeze
   # Without the host's C library headers: clang's own stdint.h and stddef.h
   # remain, and anything else fails to compile, on every host.
   FREESTANDING = %w[-ffreestanding -nostdlibinc -fno-builtin-malloc].freeze
