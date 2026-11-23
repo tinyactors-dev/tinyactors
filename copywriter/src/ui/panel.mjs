@@ -25,6 +25,7 @@ import {
   ScanEye, ListChecks, CircleCheck, Contrast, Circle, CirclePlus, MessageCircleQuestion, Signpost, ShieldQuestion, BookA, Link2,
   MessageCircle, UserPen, UserCheck, UserMinus, Globe, Megaphone, GraduationCap, Route, BookOpen, Lightbulb,
   WandSparkles, PenLine, Scissors, MoveRight, FilePlus, Split, CheckCheck,
+  LayoutGrid, GitCompareArrows, House, ArrowUpRight, CircleX, ArrowDown,
 } from 'lucide';
 import { panelCSS } from './panel-css.mjs';
 import { markPaths, markViewBox } from './mark.mjs';
@@ -271,6 +272,9 @@ export function mountPanel(root, reviewer, { layout = 'sidebar', onTall = null }
     suggestKey: null,      // the suggestion that draft belongs to
     planOpen: null,        // the plan item unfolded, its id
     whyOpen: null,         // the plan item whose placement's reason shows, its id
+    siteCell: null,        // the site view's cell unfolded: 'audienceID|needID|url'
+    sitePick: [],          // the pages ticked in the site view, to read
+    criterionOpen: null,   // the criterion whose quote shows, its id
   };
   const rec = { active: false, toggled: false, pendingStart: false, downAt: 0, startedAt: 0, target: null, timer: 0 };
   const seen = new Set();  // ids already drawn, so only new cards and messages animate in
@@ -318,13 +322,17 @@ export function mountPanel(root, reviewer, { layout = 'sidebar', onTall = null }
     'data-action': 'plan', 'aria-pressed': 'false',
     onclick: () => (ui.view === 'plan' ? go('list') : openPlan()),
   });
+  const siteButton = iconButton(LayoutGrid, 'Site', {
+    'data-action': 'site', 'aria-pressed': 'false',
+    onclick: () => (ui.view === 'site' ? go('list') : go('site')),
+  });
   const settingsButton = iconButton(Settings, 'Settings', {
     'data-action': 'settings', 'aria-pressed': 'false',
     onclick: () => go(ui.view === 'settings' ? 'list' : 'settings'),
   });
   const exportAnchor = h('div', { class: 'cw-anchor', 'data-anchor': 'export' },
     iconButton(Download, 'Export', { 'aria-haspopup': 'menu', 'aria-expanded': 'false', 'data-menu': 'export', onclick: () => toggleMenu('export') }));
-  const header = h('header', { class: 'cw-header' }, lead, heading, moreAnchor, newChatButton, planButton, chatButton, settingsButton, exportAnchor);
+  const header = h('header', { class: 'cw-header' }, lead, heading, moreAnchor, newChatButton, siteButton, planButton, chatButton, settingsButton, exportAnchor);
 
   // a div, not <main>: the host page keeps its one main landmark
   const main = h('div', { class: 'cw-main', tabindex: '-1' });
@@ -1165,6 +1173,16 @@ export function mountPanel(root, reviewer, { layout = 'sidebar', onTall = null }
         item(MessageCircle, 'Talk to this reader', () => talkTo(a.id), { disabled: !hasKey, 'data-action': 'talk' }),
         item(UsersRound, 'Edit audience', () => { ui.menu = null; ui.audienceOpen = a.id; ui.audienceDraft = null; go('settings'); }, { 'data-action': 'edit-audience' }))));
     }
+    // the page changed since it was read: check it; once checked, what changed
+    const compared = (state.readings ?? []).some((r) => r.compared);
+    if (hasKey && state.page?.changed) {
+      strip.append(button('Check changes', {
+        variant: 'cw-strip-check', 'data-action': 'check-changes', title: 'The page changed since it was read: read it again and compare',
+        onclick: () => { ui.view = 'changes'; render(); send({ type: 'verify' }); },
+      }, GitCompareArrows));
+    } else if (compared) {
+      strip.append(iconButton(GitCompareArrows, 'What changed', { variant: 'cw-strip-all', 'data-action': 'open-changes', onclick: () => go('changes') }));
+    }
     const actives = active.filter((id) => audienceOf(id));
     if (hasKey && actives.length > 1) {
       strip.append(iconButton(ScanEye, 'Read as all active', {
@@ -1289,11 +1307,20 @@ export function mountPanel(root, reviewer, { layout = 'sidebar', onTall = null }
     return view;
   }
 
-  // A need as a tiny avatar: its audience's initials, the need's id in the tooltip.
-  function needChip(needID) {
-    const siteID = String(needID).split('.')[0];
-    const a = (state.settings?.audiences ?? []).find((x) => x.siteID === siteID || x.id === siteID);
-    return h('span', { class: 'cw-need', title: needID, 'data-need': needID }, initials(a?.name ?? siteID));
+  // The needs of an item as tiny avatars, one per audience: its initials,
+  // with a count when it has several needs here ("TL×2"); the ids in the tooltip.
+  function needChips(needs) {
+    const groups = new Map();
+    for (const needID of needs ?? []) {
+      const siteID = String(needID).split('.')[0];
+      if (!groups.has(siteID)) groups.set(siteID, []);
+      groups.get(siteID).push(needID);
+    }
+    return [...groups].map(([siteID, ids]) => {
+      const a = (state.settings?.audiences ?? []).find((x) => x.siteID === siteID || x.id === siteID);
+      return h('span', { class: 'cw-need', title: ids.join('\n'), 'data-need': ids.join(' ') }, initials(a?.name ?? siteID),
+        ids.length > 1 && h('span', { class: 'cw-need-n' }, `×${ids.length}`));
+    });
   }
 
   function planItem(x) {
@@ -1311,7 +1338,7 @@ export function mountPanel(root, reviewer, { layout = 'sidebar', onTall = null }
     h('span', { class: 'cw-plan-text' }, x.original ?? x.text),
     h('span', { class: 'cw-plan-meta' },
       where && h('span', { class: 'cw-plan-target', 'data-target': x.target }, where),
-      (x.needs ?? []).map(needChip)));
+      needChips(x.needs)));
     const acts = h('span', { class: 'cw-plan-acts' },
       x.conflict && iconButton(Split, 'Why it goes there', {
         variant: `cw-plan-split${why ? ' is-on' : ''}`, 'data-action': 'plan-why', 'aria-pressed': String(why),
@@ -1331,6 +1358,164 @@ export function mountPanel(root, reviewer, { layout = 'sidebar', onTall = null }
       class: `cw-plan-item${open ? ' is-open' : ''}`, 'data-id': x.id, 'data-plan-action': x.action, 'data-decision': x.decision ?? '',
       ...(x.routed ? { 'data-routed': '' } : {}),
     }, line, acts, why && h('div', { class: 'cw-plan-reason', role: 'note' }, icon(Split), h('span', null, x.conflict)), fold);
+  }
+
+  // --- the site view ----------------------------------------------------------
+
+  // A page of the site as a column's label: the home page a house, any other
+  // the last part of its path; the title and path in the tooltip.
+  const pageLabel = (p) => (p.path === '/' ? icon(House) : String(p.path).replace(/\/$/, '').split('/').pop());
+  const pageByURL = (url) => state.site?.pages?.find((p) => p.url === url) ?? null;
+  const shortNeed = (id) => String(id).split('.').slice(1).join('.') || id;
+  const since = (at) => `${Math.max(0, Math.round((Date.now() - new Date(at ?? Date.now()).getTime()) / 1000))} s`;
+
+  // Reads the site: the ticked pages, or every page when none is ticked.
+  function readSite() {
+    const urls = [...ui.sitePick];
+    ui.sitePick = [];
+    ui.siteCell = null;
+    render();
+    return send({ type: 'site.read', ...(urls.length ? { urls } : {}) });
+  }
+
+  // Every need of the site's audiences against the pages: one small grid
+  // per audience, its pages as columns; a cell is the status of that page's
+  // latest reading as the audience (answered, partly, not; a dim dot: never
+  // read), an arrow where an accepted plan sends the need. A tap on a cell
+  // unfolds why, with the page to open; a tap on a column ticks it to read.
+  function siteView() {
+    const site = state.site ?? { state: 'none', pages: [], audiences: [] };
+    const view = h('div', { class: 'cw-view', 'data-view': 'site' });
+    const body = h('div', { class: 'cw-site-view' });
+    view.append(body);
+    const hasKey = !!state.settings?.hasKey;
+    const reading = site.state === 'reading';
+    const p = site.progress;
+    const picked = ui.sitePick.length;
+    body.append(h('div', { class: 'cw-reading-head' },
+      reading ? [icon(LoaderCircle, 'cw-spin'), h('span', { class: 'cw-cover cw-cover--big', title: `${p.done} of ${p.total} read` }, `${p.done}/${p.total}`),
+        h('span', { class: 'cw-elapsed', 'data-since': String(new Date(site.started ?? Date.now()).getTime()), 'aria-hidden': 'true' }, '')]
+        : h('span', { class: 'cw-reading-at', title: site.at ? when(site.at) : '' },
+          site.state === 'cancelled' ? 'Stopped' : p ? `${p.done - p.failed}/${p.total} read` : `${site.pages.filter((x) => x.read).length}/${site.pages.length} pages read`),
+      site.failures?.length > 0 && h('span', {
+        class: 'cw-site-failed', role: 'img', 'aria-label': `${site.failures.length} failed`,
+        title: site.failures.map((f) => `${pathOf(f.page)}${f.audienceID ? ` (${audienceOf(f.audienceID)?.name ?? f.audienceID})` : ''}: ${f.error}`).join('\n'),
+      }, icon(TriangleAlert), site.failures.length),
+      h('span', { class: 'cw-grow' }),
+      reading && iconButton(X, 'Stop reading the site', { 'data-action': 'site-cancel', onclick: () => send({ type: 'site.cancel' }) }),
+      !reading && hasKey && button(picked ? `Read ${picked}` : 'Read the site', {
+        variant: 'cw-site-read', 'data-action': 'site-read', title: picked ? `Read the ${picked} ticked page${picked > 1 ? 's' : ''} as their audiences` : 'Read every page as its audiences', onclick: readSite,
+      }, ScanEye)));
+    if (site.error) body.append(h('p', { class: 'cw-fine' }, site.error));
+    for (const a of site.audiences ?? []) {
+      if (!a.needs.length) continue;
+      const who = audienceOf(a.id) ?? { name: a.name };
+      const cols = a.pages.map(pageByURL).filter(Boolean);
+      const table = h('table', { class: 'cw-grid', 'aria-label': a.name });
+      table.append(h('thead', null, h('tr', null,
+        h('th', { class: 'cw-grid-corner', scope: 'col' }, h('span', { class: 'cw-cover', title: `${a.answered} of ${a.needs.length} needs answered on some page` }, `${a.answered}/${a.needs.length}`)),
+        cols.map((c) => {
+          const on = ui.sitePick.includes(c.url);
+          const busy = site.running?.includes(c.url);
+          return h('th', { scope: 'col', class: `${c.here ? 'is-here' : ''}${c.read ? '' : ' is-unread'}` }, h('button', {
+            type: 'button', class: `cw-grid-col${on ? ' is-on' : ''}${busy ? ' is-busy' : ''}`, 'data-url': c.url, 'aria-pressed': String(on),
+            title: `${c.title} · ${c.path}${c.read ? ` · read ${ago(c.at)}` : ' · not read'}${on ? ' · ticked to read' : ''}`,
+            'aria-label': c.title, disabled: reading,
+            onclick: () => { ui.sitePick = on ? ui.sitePick.filter((u) => u !== c.url) : [...ui.sitePick, c.url]; keys.main = null; render(); },
+          }, h('span', { class: 'cw-grid-label' }, pageLabel(c))));
+        }),
+        h('th', { class: 'cw-grid-elsewhere', scope: 'col', 'aria-label': 'Planned elsewhere' }))));
+      const rows = h('tbody');
+      for (const n of a.needs) {
+        const open = ui.siteCell?.startsWith(`${a.id}|${n.id}|`) ? ui.siteCell.split('|')[2] : null;
+        const routed = new Set(n.routes.map((r) => r.url));
+        const elsewhere = [...n.routes.filter((r) => r.url === 'new' || !a.pages.includes(r.url)), ...n.newPages.map((x) => ({ url: 'new', title: x.title, page: true }))];
+        rows.append(h('tr', { 'data-need': n.id, class: open ? 'is-open' : '' },
+          h('th', { scope: 'row', class: 'cw-grid-need', title: `${n.id}\n${n.text}` }, shortNeed(n.id)),
+          n.cells.map((c) => {
+            const col = pageByURL(c.url);
+            const st = c.status ? COVER[c.status] : null;
+            const route = routed.has(c.url) && c.status !== 'answered';
+            const title = `${col?.title ?? pathOf(c.url)} · ${st ? st.label : 'not read'}${c.explanation ? `: ${c.explanation}` : ''}${route ? ' · planned here' : ''}`;
+            return h('td', null, h('button', {
+              type: 'button', class: `cw-cell${open === c.url ? ' is-open' : ''}`, 'data-status': c.status ?? 'unknown', 'data-url': c.url,
+              ...(route ? { 'data-route': '' } : {}), title, 'aria-label': title, 'aria-expanded': String(open === c.url),
+              onclick: () => { ui.siteCell = open === c.url ? null : `${a.id}|${n.id}|${c.url}`; keys.main = null; render(); },
+            }, st ? icon(st.icon) : h('span', { class: 'cw-dot' }), route && h('span', { class: 'cw-cell-route' }, icon(MoveRight))));
+          }),
+          h('td', { class: 'cw-grid-elsewhere' }, elsewhere.length > 0 && h('span', {
+            class: 'cw-grid-planned', title: elsewhere.map((r) => `${r.page ? 'New page' : 'Planned'}: ${r.title}`).join('\n'), role: 'img', 'aria-label': 'Planned elsewhere',
+          }, icon(elsewhere.some((r) => r.url === 'new') ? FilePlus : MoveRight), elsewhere.length > 1 && h('span', { class: 'cw-need-n' }, `×${elsewhere.length}`)))));
+        if (open) {
+          const c = n.cells.find((x) => x.url === open);
+          const col = pageByURL(open);
+          rows.append(h('tr', { class: 'cw-grid-fold' }, h('td', { colspan: String(n.cells.length + 2) }, h('div', { class: 'cw-grid-why' },
+            h('div', { class: 'cw-grid-why-head' },
+              h('span', { class: 'cw-check-glyph', role: 'img', 'aria-label': c?.status ? COVER[c.status].label : 'Not read' }, c?.status ? icon(COVER[c.status].icon) : h('span', { class: 'cw-dot' })),
+              h('span', { class: 'cw-grid-why-page' }, col?.title ?? pathOf(open)),
+              !col?.here && iconButton(ArrowUpRight, `Open ${col?.title ?? 'the page'}`, { 'data-action': 'site-open', onclick: () => send({ type: 'site.open', url: open }) })),
+            h('div', { class: 'cw-check-text' }, displayItem(n.text)),
+            c?.explanation && h('div', { class: 'cw-why' }, c.explanation),
+            !c?.status && h('div', { class: 'cw-why' }, 'Not read as this audience yet.')))));
+        }
+      }
+      table.append(rows);
+      body.append(h('section', { class: 'cw-grid-block', 'data-audience': a.id },
+        h('div', { class: 'cw-grid-title', title: who.name }, avatarOf(who), h('span', null, who.name)),
+        h('div', { class: 'cw-grid-scroll' }, table)));
+    }
+    if (!(site.audiences ?? []).some((a) => a.needs.length)) body.append(h('p', { class: 'cw-fine' }, 'No page of this site names an audience yet.'));
+    return view;
+  }
+
+  // --- what changed -------------------------------------------------------------
+
+  // Since the page changed: each audience's answered count before and after
+  // (regressions first), what fell and what rose, then the page's criteria,
+  // met or not.
+  function changesView() {
+    const view = h('div', { class: 'cw-view', 'data-view': 'changes' });
+    const body = h('div', { class: 'cw-changes' });
+    view.append(body);
+    const checking = state.site?.state === 'reading';
+    const compared = (state.readings ?? []).filter((r) => r.compared)
+      .sort((x, y) => y.compared.regressed.length - x.compared.regressed.length);
+    const reading = (state.readings ?? []).some((r) => r.state === 'reading');
+    body.append(h('div', { class: 'cw-reading-head' },
+      checking || reading ? [icon(LoaderCircle, 'cw-spin'), h('span', null, 'Checking'), h('span', { class: 'cw-elapsed', 'data-since': String(Date.now()), 'aria-hidden': 'true' }, '0 s')]
+        : h('span', { class: 'cw-reading-at', title: compared[0] ? `Against the reading of ${when(compared[0].compared.before.at)}` : '' }, compared[0] ? ago(compared[0].compared.before.at) : ''),
+      h('span', { class: 'cw-grow' }),
+      !checking && state.settings?.hasKey && iconButton(RefreshCw, 'Check again', { 'data-action': 'verify', onclick: () => send({ type: 'verify' }) })));
+    for (const r of compared) {
+      const a = audienceOf(r.audienceID);
+      if (!a) continue;
+      const { before, after, improved, regressed, unchanged } = r.compared;
+      const up = after.answered - before.answered;
+      body.append(h('div', { class: 'cw-change', 'data-audience': a.id, 'data-trend': up > 0 ? 'up' : up < 0 ? 'down' : 'same' },
+        h('div', { class: 'cw-change-head', title: a.name }, avatarOf(a),
+          h('span', { class: 'cw-change-count' }, `${before.answered}/${before.total}`, icon(MoveRight), h('b', null, `${after.answered}/${after.total}`))),
+        h('ul', { class: 'cw-change-list', role: 'list' },
+          regressed.map((x) => h('li', { class: 'is-down', title: `${x.needID ?? ''} ${COVER[x.from].label} → ${COVER[x.to].label}`.trim() }, icon(ArrowDown), h('span', null, displayItem(x.text)))),
+          improved.map((x) => h('li', { class: 'is-up', title: `${x.needID ?? ''} ${COVER[x.from].label} → ${COVER[x.to].label}`.trim() }, icon(CircleCheck), h('span', null, displayItem(x.text))))),
+        unchanged > 0 && h('div', { class: 'cw-fine', title: 'Unchanged' }, `${unchanged} unchanged`)));
+    }
+    const crit = state.criteria;
+    if (crit?.items?.length) {
+      const met = crit.items.filter((c) => c.met === true).length;
+      body.append(h('div', { class: 'cw-label', title: crit.at ? `Checked ${ago(crit.at)}` : 'Not checked yet' }, icon(ListChecks), h('span', { class: 'cw-count' }, `${met}/${crit.items.length}`)),
+        h('ul', { class: 'cw-criteria', role: 'list', 'aria-label': 'Acceptance criteria' }, crit.items.map((c) => {
+          const open = ui.criterionOpen === c.id;
+          const glyph = c.met === true ? CircleCheck : c.met === false ? CircleX : Circle;
+          const label = c.met === true ? 'Met' : c.met === false ? 'Not met' : 'Not checked';
+          return h('li', { class: `cw-criterion${open ? ' is-open' : ''}`, 'data-met': String(c.met) }, h('button', {
+            type: 'button', class: 'cw-check-line', 'aria-expanded': String(open), title: `${label}${c.needID ? ` · ${c.needID}` : ''}`,
+            onclick: () => { ui.criterionOpen = open ? null : c.id; render(); },
+          }, h('span', { class: 'cw-check-glyph', role: 'img', 'aria-label': label }, icon(glyph)), h('span', { class: 'cw-check-text' }, c.text)),
+          open && h('div', { class: 'cw-why' }, c.quote ? `“${c.quote}”` : label));
+        })));
+    }
+    if (!compared.length && !crit?.items?.length && !checking && !reading) body.append(h('p', { class: 'cw-fine' }, 'Nothing to compare yet.'));
+    return view;
   }
 
   function settingsView() {
@@ -1497,8 +1682,10 @@ export function mountPanel(root, reviewer, { layout = 'sidebar', onTall = null }
     if (a) return JSON.stringify(['detail', a, ui.editing === a.id, state.settings?.hasKey, state.recording, state.settings?.audiences, state.settings?.audienceIDs]);
     if (ui.view === 'chat') return JSON.stringify(['chat', state.chat, state.settings?.hasKey, state.annotations?.map((x) => [x.id, x.state, x.chosenID]), state.recording, state.settings?.audiences, state.settings?.audienceIDs]);
     if (ui.view === 'plan') return JSON.stringify(['plan', state.plan, ui.planOpen, ui.whyOpen, state.annotations?.map((x) => [x.id, x.state]), state.settings?.audiences, state.settings?.hasKey]);
+    if (ui.view === 'site') return JSON.stringify(['site', state.site, ui.siteCell, ui.sitePick, state.settings?.audiences, state.settings?.hasKey]);
+    if (ui.view === 'changes') return JSON.stringify(['changes', state.readings, state.criteria, state.site?.state, ui.criterionOpen, state.settings?.audiences, state.settings?.hasKey]);
     if (ui.view === 'reading') return JSON.stringify(['reading', ui.reading, ui.itemOpen, state.readings, state.annotations, state.settings?.audiences, state.settings?.hasKey]);
-    return JSON.stringify(['list', state.status, state.error, state.annotations, state.settings?.hasKey, ui.showDone, state.picking,
+    return JSON.stringify(['list', state.status, state.error, state.annotations, state.settings?.hasKey, ui.showDone, state.picking, state.page?.changed,
       state.readings?.map((r) => [r.audienceID, r.state, r.at, r.items.map((x) => x.status)]), state.settings?.audiences, state.settings?.audienceIDs,
       ui.menu?.startsWith('audience:') ? ui.menu : null, state.page?.audienceSuggestion, ui.suggestDraft]);
   }
@@ -1518,7 +1705,7 @@ export function mountPanel(root, reviewer, { layout = 'sidebar', onTall = null }
 
     const a = activeAnnotation();
     if (ui.editing && ui.editing !== a?.id) ui.editing = null;
-    const view = ui.view === 'settings' ? settingsView() : a ? detailView(a) : ui.view === 'chat' ? chatView() : ui.view === 'reading' ? readingView() : ui.view === 'plan' ? planView() : listView();
+    const view = ui.view === 'settings' ? settingsView() : a ? detailView(a) : ui.view === 'chat' ? chatView() : ui.view === 'reading' ? readingView() : ui.view === 'plan' ? planView() : ui.view === 'site' ? siteView() : ui.view === 'changes' ? changesView() : listView();
     const where = place();
     if (where !== lastPlace) view.classList.add('is-new');
     main.replaceChildren(view);
@@ -1547,7 +1734,7 @@ export function mountPanel(root, reviewer, { layout = 'sidebar', onTall = null }
     const a = activeAnnotation();
     const atHome = ui.view === 'list' && !a;
     const talking = ui.view === 'chat' && !a ? readerOfChat() : null;
-    const key = JSON.stringify([atHome, ui.view, ui.reading, !!a, state.page, state.chat?.busy, state.chat?.messages?.length > 0, canPlan(),
+    const key = JSON.stringify([atHome, ui.view, ui.reading, !!a, state.page, state.chat?.busy, state.chat?.messages?.length > 0, canPlan(), state.site?.state,
       ui.view === 'reading' && audienceOf(ui.reading)?.name, talking?.name ?? null, state.chat?.audienceID ?? null]);
     if (keys.header === key) return;
     const wasHome = keys.home;
@@ -1568,13 +1755,16 @@ export function mountPanel(root, reviewer, { layout = 'sidebar', onTall = null }
     } else {
       heading.classList.remove('is-reader');
       delete heading.dataset.audience;
-      heading.textContent = ui.view === 'settings' ? 'Settings' : reader ? reader.name : ui.view === 'plan' && !a ? 'Revise page' : (state.page?.title || state.page?.url || '');
+      heading.textContent = ui.view === 'settings' ? 'Settings' : reader ? reader.name : ui.view === 'plan' && !a ? 'Revise page' : ui.view === 'site' && !a ? 'Site' : ui.view === 'changes' && !a ? 'Changes' : (state.page?.title || state.page?.url || '');
       heading.title = ui.view === 'settings' ? '' : reader ? `Read as ${reader.name}: ${state.page?.url ?? ''}`
         : [state.page?.kind, state.page?.url].filter(Boolean).join(' · ');
     }
     moreAnchor.hidden = !a;
     planButton.hidden = !!a || !((ui.view === 'list' && canPlan()) || ui.view === 'plan');
     planButton.setAttribute('aria-pressed', String(ui.view === 'plan'));
+    siteButton.hidden = !!a || !state.site || state.site.state === 'none' || ui.view === 'settings';
+    siteButton.setAttribute('aria-pressed', String(ui.view === 'site'));
+    siteButton.classList.toggle('cw-busy', state.site?.state === 'reading' && ui.view !== 'site');
     chatButton.hidden = !!a;
     newChatButton.hidden = ui.view !== 'chat' || !!a || (!state.chat?.messages?.length && !state.chat?.audienceID);
     newChatButton.disabled = !!state.chat?.busy;  // the reply on its way belongs to this conversation
@@ -1605,7 +1795,7 @@ export function mountPanel(root, reviewer, { layout = 'sidebar', onTall = null }
     // and so do rewrites side by side, to compare, until one is previewed (the page then shows above)
     const shown = activeAnnotation();
     const comparing = shown?.state === 'suggested' && shown.suggestions?.at(-1)?.audienceID !== undefined;
-    const nowTall = comparing || (!shown && (ui.view === 'reading' || ui.view === 'plan' || (ui.view === 'chat' && !!state.chat?.audienceID)));
+    const nowTall = comparing || (!shown && (ui.view === 'reading' || ui.view === 'plan' || ui.view === 'site' || ui.view === 'changes' || (ui.view === 'chat' && !!state.chat?.audienceID)));
     if (nowTall !== tall) { tall = nowTall; try { onTall?.(tall); } catch { /* the host's */ } }
     renderBanner();
     placeMenus();

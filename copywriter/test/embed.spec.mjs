@@ -455,3 +455,106 @@ test('the widget reads the page\'s audiences from its links: the files are fetch
   assert.deepEqual(errors, []);
   await context.close();
 });
+
+// A second site, on the same server: page.html as before and another page,
+// with a site map (llms.txt and each page's Markdown head) naming the tech
+// lead; Gemini reads by what each request asks, `answered` items answered.
+async function sitePhone() {
+  const base = `${origin(server)}/page`;
+  const context = await browser.newContext(PHONE);
+  await context.addInitScript(() => {
+    localStorage.setItem('tinyactors-copywriter', 'on');
+    sessionStorage.setItem('tinyactors-copywriter-key', 'AIza-test-key');
+  });
+  const lead = `${base}/audiences/tech-lead.xml`;
+  const head = (url, title, kind) => `<!-- ${url} -->\n# ${title}\n\nKind: ${kind}. For: [Tech lead who approves dependencies](${lead}).\n`;
+  const site = { text: null, answered: 1 };
+  const files = {
+    '/llms.txt': '# Fixture site\n\n## Pages\n\n- [Actors as a library](/page/page.md): the pitch\n- [Other](/page/other.md): another page\n',
+    '/page/page.md': head(`${base}/page.html`, 'Actors as a library', 'pitch'),
+    '/page/other.md': head(`${base}/other.html`, 'Other', 'how-to'),
+    '/page/other.html': '<!doctype html><html lang="en"><head><title>Other</title><meta name="page-kind" content="how-to">'
+      + `<link rel="audience" href="audiences/tech-lead.xml"></head><body><main><h1>Other</h1><p>Another page of the site.</p></main></body></html>`,
+  };
+  await context.route(`${origin(server)}/**`, async (route) => {
+    const path = new URL(route.request().url()).pathname;
+    if (files[path]) return route.fulfill({ status: 200, contentType: path.endsWith('.html') ? 'text/html' : 'text/plain', body: files[path] });
+    if (path === '/page/page.html' && site.text) {
+      const original = await (await route.fetch()).text();
+      return route.fulfill({ status: 200, contentType: 'text/html', body: original.replace('Get started in minutes.', site.text) });
+    }
+    return route.fallback();
+  });
+  await context.route('https://generativelanguage.googleapis.com/**', async (route) => {
+    const cors = { 'access-control-allow-origin': '*', 'access-control-allow-headers': '*', 'access-control-allow-methods': 'GET, POST' };
+    if (route.request().method() === 'OPTIONS') return route.fulfill({ status: 204, headers: cors });
+    const url = route.request().url();
+    let body = { models: [{ name: 'models/gemini-4-hydrogen', displayName: 'Gemini 4 Hydrogen', supportedGenerationMethods: ['generateContent'] }] };
+    if (url.includes(':generateContent')) {
+      const request = JSON.parse(route.request().postData());
+      const system = request.systemInstruction.parts[0].text;
+      const tools = (request.tools?.[0]?.functionDeclarations || []).map((f) => f.name);
+      const n = [...system.matchAll(/^(\d+)\. /gm)].length;
+      const calls = tools.includes('report_coverage')
+        ? Array.from({ length: n }, (_, i) => ({ functionCall: { name: 'report_coverage', args: { item: i + 1, status: i < site.answered ? 'answered' : 'missing', explanation: 'Read.', kind: 'pitch' } } }))
+        : [];
+      body = { candidates: [{ content: { role: 'model', parts: calls.length ? calls : [{ text: 'Fine.' }] } }] };
+    }
+    await route.fulfill({ status: 200, contentType: 'application/json', headers: cors, body: JSON.stringify(body) });
+  });
+  const page = await context.newPage();
+  const errors = [];
+  page.on('pageerror', (e) => errors.push(e.message));
+  const ready = () => page.waitForFunction(() => globalThis.tinyactorsCopywriter?.reviewer.getState().status === 'ready');
+  await page.goto(`${base}/page.html`);
+  await ready();
+  await page.evaluate(() => tinyactorsCopywriter.reviewer.dispatch({ type: 'settings.save', audienceIDs: ['site-tech-lead'] }));
+  return { context, page, errors, site, ready, base, sheet: page.locator('#tinyactors-copywriter .sheet'), launcher: page.locator('#tinyactors-copywriter .launcher') };
+}
+
+test('on a phone, the site view: every need of the tech lead against the pages; read the site; a cell opens its page', async () => {
+  const { context, page, errors, sheet, launcher, base } = await sitePhone();
+  await launcher.tap();
+  await sheet.locator('[data-action=site]').tap();
+  const grid = sheet.locator('.cw-grid-block[data-audience="site-tech-lead"]');
+  await grid.waitFor();
+  assert.equal(await grid.locator('.cw-grid-col').count(), 2, 'its two pages');
+  assert.equal(await grid.locator('.cw-cell[data-status="unknown"]').count(), await grid.locator('.cw-cell').count(), 'nothing read: every cell unknown');
+  await sheet.locator('[data-action=site-read]').tap();
+  await page.waitForFunction(() => tinyactorsCopywriter.reviewer.getState().site.state === 'done');
+  await grid.locator('.cw-cell[data-status="answered"]').first().waitFor();
+  assert.equal(await grid.locator(`.cw-cell[data-status="answered"][data-url="${base}/other.html"]`).count(), 1, 'the other page, read as served');
+  assert.ok(await grid.locator(`.cw-cell[data-status="missing"][data-url="${base}/page.html"]`).count() > 0);
+  if (process.env.CW_SHOTS) await page.screenshot({ path: `${process.env.CW_SHOTS}/widget-site-view.png` });
+  await grid.locator(`.cw-cell[data-url="${base}/other.html"]`).first().tap();
+  await sheet.locator('.cw-grid-why').waitFor();
+  await Promise.all([page.waitForURL(`${base}/other.html`), sheet.locator('[data-action=site-open]').tap()]);
+  assert.deepEqual(errors, []);
+  await context.close();
+});
+
+test('on a phone, Check changes: the page as served changed since it was read; read again, before → after', async () => {
+  const { context, page, errors, sheet, launcher, site, ready } = await sitePhone();
+  await page.evaluate(() => tinyactorsCopywriter.reviewer.dispatch({ type: 'read', audienceIDs: ['site-tech-lead'] }));
+  await launcher.tap();
+  assert.equal(await sheet.locator('[data-action=check-changes]').count(), 0, 'nothing changed yet');
+  // deployed: the page says something else, and more of the lead's needs are answered
+  site.text = 'Spawn an actor in one line; a snapshot keeps it when the host dies.';
+  site.answered = 4;
+  await page.reload();
+  await ready();
+  await page.waitForFunction(() => tinyactorsCopywriter.reviewer.getState().page.changed);
+  // the sheet stays open across the reload
+  if (!(await page.locator('#tinyactors-copywriter').evaluate((n) => n.hasAttribute('data-open')))) await launcher.tap();
+  await sheet.locator('[data-action=check-changes]').tap();
+  await page.waitForFunction(() => tinyactorsCopywriter.reviewer.getState().readings.some((r) => r.compared));
+  const change = sheet.locator('.cw-change[data-audience="site-tech-lead"]');
+  await change.waitFor();
+  assert.match(await change.locator('.cw-change-count').textContent(), /^1\/\d+4\/\d+$/);
+  assert.equal(await change.getAttribute('data-trend'), 'up');
+  assert.equal(await change.locator('.is-up').count(), 3);
+  assert.equal(await sheet.locator('[data-action=check-changes]').count(), 0);
+  if (process.env.CW_SHOTS) await page.screenshot({ path: `${process.env.CW_SHOTS}/widget-check-changes.png` });
+  assert.deepEqual(errors, []);
+  await context.close();
+});

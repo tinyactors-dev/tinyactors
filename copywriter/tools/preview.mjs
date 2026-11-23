@@ -4,7 +4,8 @@
 // ?bare=1 (the panel alone, filling the viewport), ?shadow=0 (no Shadow DOM),
 // ?read=0 (no reading of the page as an audience yet), ?suggest=1 (the page's
 // audiences suggested, not yet accepted), ?diverged=1 (the site audience
-// edited here, so it differs from its file).
+// edited here, so it differs from its file), ?site=0 (no site map), ?changed=1
+// (the page changed since it was read: Check changes).
 import { mountPanel } from '../src/ui/panel.mjs';
 import { createMockReviewer } from '../src/ui/mock-reviewer.mjs';
 
@@ -17,6 +18,8 @@ const reviewer = createMockReviewer({
   read: params.get('read') !== '0',
   suggest: params.get('suggest') === '1',
   diverged: params.get('diverged') === '1',
+  site: params.get('site') !== '0',
+  changed: params.get('changed') === '1',
 });
 document.documentElement.dataset.layout = layout;
 if (params.get('bare') === '1') document.documentElement.dataset.bare = '';

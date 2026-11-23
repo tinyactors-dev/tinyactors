@@ -485,7 +485,28 @@ copywriter/
                           shown on hover, focus or an open line (always, faintly, on touch); a need placed
                           elsewhere carries a split glyph whose tap shows the reason. A tap unfolds the copy,
                           what the target gets, why, and the criteria. Accepted: an arrow opens its annotation;
-                          rejected: faded and struck. New pages follow under a file-plus count.
+                          rejected: faded and struck. New pages follow under a file-plus count. An item's needs of
+                          one audience are one avatar with a count ("TL×2"), the ids in its tooltip; a plan counts its
+                          seconds while it plans.
+                          The site view: a grid icon in the header, on a site with a site map, opens it (rising the
+                          sheet). Its head says how many pages were read (while reading: a spinner, done/total and the
+                          seconds; a failure a warning glyph with a count, the pages in its tooltip), then "Read the
+                          site", or "Read N" once columns are ticked, and a stop while it reads. Per audience its avatar
+                          and name, then a small grid: answered/needs in the corner, its pages as columns (labels set
+                          vertically, the home page a house, this page bold, a page never read dimmed; a tap ticks it to
+                          read; one being read pulses), one row per need (its id without the audience, its words in
+                          the tooltip; the column stays as the grid scrolls sideways); a cell is the checklist glyph
+                          (answered, partly, not) or a dim dot (never read), with a tiny arrow where an accepted plan
+                          sends the need; the last column an arrow or a file-plus for routes to pages not in the grid
+                          and proposed pages. A tap on a cell unfolds the page's title, the need and why, with an
+                          open-page arrow.
+                          Check changes: on a page that changed since it was read, a quiet dashed "Check changes" ends
+                          the strip; it reads again and opens the changes view (once compared, a compare icon there
+                          opens it): per audience its avatar and before → after answered counts (the after count pine
+                          when it rose, madder when it fell), the needs that fell first (a down arrow, madder), then
+                          those that rose (a check, pine) and a count of the unchanged; then the criteria with a
+                          checklist icon and met/total, each met (check), not met (x) or not checked (circle), a tap
+                          showing its quote.
   src/platform/dom.mjs    the page adapter's DOM side, shared: anchors, locate, preview/revert of Text nodes, highlights
   src/platform/extension/ manifest.json, service-worker.mjs, content.mjs (page adapter), sidepanel.html/.mjs, mic.html/.mjs
   src/platform/embed/     embed.mjs (launcher, Shadow DOM, page adapter on the live DOM), loader snippet
@@ -497,7 +518,8 @@ copywriter/
                           check and the export's ticked criteria, against a fake Gemini that answers by what each
                           request asks); Playwright for
                           the panel over src/ui/mock-reviewer.mjs (?read=0: no reading yet; ?suggest=1: the page's
-                          audiences suggested; ?diverged=1: the site audience edited here; its plan, and its export
+                          audiences suggested; ?diverged=1: the site audience edited here; ?site=0: no site map;
+                          ?changed=1: the page changed since it was read; its site view, its plan, and its export
                           built by the real packet code, `reviewer.exported()`), the extension and the widget
                           (test/fixtures/page.html links the audience files of test/fixtures/audiences/)
   mise/tasks/             build, test, charts, eval, read-eval, talk-eval, plan-eval (Ruby)
@@ -602,7 +624,7 @@ annotation's id.
   } | null,
   site: {                                  // the site view of the open page's origin
     state,                                 // 'none' (no site map) | 'idle' | 'reading' | 'done' | 'cancelled'
-    progress: { done, failed, total } | null, running: [url], failures: [{ page, audienceID?, error }], error?,
+    progress: { done, failed, total } | null, running: [url], failures: [{ page, audienceID?, error }], started, at, error?,
     pages: [{ url, path, title, kind, audiences: [audienceID], read, at, here? }],
     audiences: [{ id, name, siteID, pages: [url], answered,   // pages: its columns; answered: needs answered somewhere
       needs: [{ id, field, text, answered: [url], cells: [{ url, status: 'answered' | 'partial' | 'missing' | null, explanation? }],

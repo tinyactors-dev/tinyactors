@@ -662,7 +662,7 @@ export function createReviewer({
   function siteView() {
     const origin = originOf(current.url);
     const map = siteMapsRead.get(origin) || [];
-    if (!map.length) return { state: 'none', pages: [], audiences: [], progress: null, running: [], failures: [] };
+    if (!map.length) return { state: 'none', pages: [], audiences: [], progress: null, running: [], failures: [], started: null, at: null };
     const grid = siteGrid({ map, audiences, readings: [...readings.values()], plans: [...plans.values()], here: current.url });
     const r = sites.get(origin);
     const jobs = r?.jobs || [];
@@ -671,7 +671,7 @@ export function createReviewer({
       state: !r ? 'idle' : r.state === 'running' ? 'reading' : r.state,
       progress: r ? { done: (r.finished || []).length, failed: (r.failed || []).length, total: jobs.length } : null,
       running, failures: (r?.failed || []).map((f) => ({ page: f.page, ...(f.audienceID ? { audienceID: f.audienceID } : {}), error: f.error })),
-      ...(r?.error ? { error: r.error } : {}),
+      started: r?.started ?? null, at: r?.at ?? null, ...(r?.error ? { error: r.error } : {}),
       ...grid,
     };
   }

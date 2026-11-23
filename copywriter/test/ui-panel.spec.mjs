@@ -844,6 +844,11 @@ test('revise page: the plan lists its items quietly; accepting a rewrite makes a
   assert.equal(await link.locator('.cw-need').textContent(), 'TL');
   assert.equal(await link.locator('.cw-need').getAttribute('title'), 'tech-lead.host-dies');
   assert.equal(await link.locator('.cw-plan-reason').count(), 0);
+  // two needs of one audience: its initials once, with a count; the ids in the tooltip
+  const add = items.nth(2);
+  assert.equal(await add.locator('.cw-need').count(), 1);
+  assert.equal(await add.locator('.cw-need').textContent(), 'TL×2');
+  assert.equal(await add.locator('.cw-need').getAttribute('title'), 'tech-lead.maintainer\ntech-lead.decide');
   await link.locator('[data-action=plan-why]').click();
   assert.equal(await link.locator('.cw-plan-reason').textContent(), 'tech-lead.host-dies belongs on a how-to page: linked to /guides/snapshots/.');
   // the copy is folded until a tap
@@ -901,4 +906,67 @@ test('revise page: no button before a reading, and the plan view keeps decided i
   assert.deepEqual(errors, []);
   assert.deepEqual(second.errors, []);
   await second.page.close();
+});
+
+test('the site view: every need of the site\'s audiences against its pages; a cell unfolds why and opens its page; read the site, stop it', async () => {
+  const { page, panel, errors } = await open('layout=sheet&delay=1', { viewport: { width: 412, height: 915 }, hasTouch: true, isMobile: true });
+  const button = panel.locator('header [data-action=site]');
+  assert.equal(await button.getAttribute('aria-label'), 'Site');
+  await button.click();
+  assert.equal(await panel.locator('.cw-heading').textContent(), 'Site');
+  const grid = panel.locator('.cw-grid-block[data-audience=lead]');
+  await grid.waitFor();
+  assert.equal(await grid.locator('.cw-grid-col').count(), 5, 'the pages the site map gives the tech lead');
+  assert.equal(await grid.locator('.cw-grid-col').first().getAttribute('aria-label'), 'Performance', 'its main pages first');
+  const rows = grid.locator('tbody tr[data-need]');
+  assert.equal(await rows.count(), 7);
+  assert.equal(await rows.first().locator('.cw-grid-need').textContent(), 'when-to-use', 'the need by its id, its words in the tooltip');
+  assert.match(await rows.first().locator('.cw-grid-need').getAttribute('title'), /^tech-lead\.when-to-use\n/);
+  assert.ok(await grid.locator('.cw-cell[data-status=unknown]').count() > 0, 'pages never read: unknown');
+  const about = grid.locator('tbody tr[data-need="tech-lead.maintainer"] .cw-cell[data-url="https://www.tinyactors.dev/about/"]');
+  assert.equal(await about.getAttribute('data-status'), 'answered');
+  assert.equal(await panel.locator('.cw-grid-why').count(), 0);
+  await about.click();
+  assert.match(await panel.locator('.cw-grid-why').textContent(), /Why tinyactors exists.*Names the maintainer\./);
+  if (process.env.CW_SHOTS) await page.screenshot({ path: `${process.env.CW_SHOTS}/panel-site.png` });
+  await panel.locator('[data-action=site-open]').click();
+  await until(async () => (await page.evaluate(() => reviewer.log.at(-1))).type === 'site.open');
+  assert.deepEqual(await page.evaluate(() => reviewer.log.at(-1)), { type: 'site.open', url: 'https://www.tinyactors.dev/about/' });
+
+  // tick two pages, read them; the count rises, then stop
+  await grid.locator('.cw-grid-col[aria-label="Performance"]').click();
+  await grid.locator('.cw-grid-col[aria-label="Testing charts"]').click();
+  assert.equal(await panel.locator('[data-action=site-read]').textContent(), 'Read 2');
+  await panel.locator('[data-action=site-read]').click();
+  await panel.locator('[data-view=site] .cw-spin').first().waitFor();
+  assert.match(await panel.locator('[data-view=site] .cw-cover--big').textContent(), /^\d\/2$/);
+  await panel.locator('[data-action=site-cancel]').click();
+  await until(async () => (await panel.locator('[data-view=site] .cw-reading-at').textContent()) === 'Stopped');
+  assert.deepEqual(errors, []);
+  await page.close();
+});
+
+test('check changes: the page changed since it was read; before → after per audience, regressions first, the criteria met or not', async () => {
+  const { page, panel, errors } = await open('changed=1');
+  const check = panel.locator('[data-action=check-changes]');
+  assert.equal(await check.textContent(), 'Check changes');
+  await check.click();
+  assert.equal(await panel.locator('.cw-heading').textContent(), 'Changes');
+  const change = panel.locator('.cw-change[data-audience=lead]');
+  await change.waitFor();
+  assert.equal(await change.locator('.cw-change-count').textContent(), '2/73/7');
+  assert.equal(await change.getAttribute('data-trend'), 'up');
+  assert.deepEqual(await change.locator('li').evaluateAll((all) => all.map((n) => n.className)), ['is-down', 'is-up', 'is-up'], 'the regression first');
+  const criteria = panel.locator('.cw-criterion');
+  assert.deepEqual(await criteria.evaluateAll((all) => all.map((n) => n.dataset.met)), ['true', 'false']);
+  await criteria.first().locator('.cw-check-line').click();
+  assert.match(await criteria.first().locator('.cw-why').textContent(), /See Snapshots/);
+  if (process.env.CW_SHOTS) await page.screenshot({ path: `${process.env.CW_SHOTS}/panel-changes.png` });
+  // back at the list, the strip opens what changed
+  await panel.locator('[data-action=back]').click();
+  assert.equal(await panel.locator('[data-action=check-changes]').count(), 0);
+  await panel.locator('[data-action=open-changes]').click();
+  await panel.locator('.cw-change').waitFor();
+  assert.deepEqual(errors, []);
+  await page.close();
 });

@@ -9,6 +9,7 @@
 // `delay` scales every simulated wait (0 makes them immediate macrotasks).
 
 import { buildPacket } from '../core/packet.mjs';
+import { siteGrid } from '../core/grid.mjs';
 
 const MINUTE = 60_000;
 const SITE = 'https://www.tinyactors.dev';
@@ -28,7 +29,7 @@ function samplePlan() {
         reason: 'tech-lead.host-dies belongs on a how-to page: linked to /guides/snapshots/.', conflict: 'tech-lead.host-dies belongs on a how-to page: linked to /guides/snapshots/.', routed: true,
         criteria: [crit('tech-lead.host-dies', `${SITE}/`, 'The home page links to /guides/snapshots/ for tech-lead.host-dies'), crit('tech-lead.host-dies', `${SITE}/guides/snapshots/`, '/guides/snapshots/ answers tech-lead.host-dies')],
         audiences: ['Tech lead who approves dependencies'], decision: null },
-      { id: 'p3', action: 'add', needs: ['tech-lead.maintainer'], target: 'here', anchored: false, where: 'Like SQLite, but for actors',
+      { id: 'p3', action: 'add', needs: ['tech-lead.maintainer', 'tech-lead.decide'], target: 'here', anchored: false, where: 'Like SQLite, but for actors',
         text: 'tinyactors is maintained by its author, in the open on GitHub.', reason: 'The lead asks who maintains it.',
         criteria: [crit('tech-lead.maintainer', `${SITE}/`, 'The home page says who maintains tinyactors')], audiences: ['Tech lead who approves dependencies'], decision: null },
       { id: 'p4', action: 'move', needs: ['tech-lead.first-chart'], target: `${SITE}/guides/charts/`, targetTitle: 'Writing charts', original: 'Get started in minutes', anchored: true,
@@ -148,6 +149,28 @@ function sample(now) {
   ];
 }
 
+// The site map of the sample site: six pages, their kinds and audiences.
+const SITE_MAP = [
+  ['/', 'tinyactors: like SQLite, but for actors', 'pitch', ['agent-platform', 'tech-lead', 'workflow-tester']],
+  ['/chat/', 'Build a team chat with tinyactors', 'tutorial', ['agent-platform', 'workflow-tester']],
+  ['/guides/testing/', 'Testing charts', 'how-to', ['workflow-tester', 'tech-lead']],
+  ['/performance/', 'Performance', 'reference', ['tech-lead', 'agent-platform']],
+  ['/about/', 'Why tinyactors exists', 'explanation', ['tech-lead']],
+  ['/guides/snapshots/', 'Snapshots', 'how-to', ['tech-lead', 'agent-platform']],
+].map(([path, title, kind, audiences]) => ({ url: `${SITE}${path}`, path, title, kind, audiences, description: '' }));
+
+// The tech lead's readings of the other pages, for the site view.
+function siteReadings(now) {
+  const item = (needID, status, explanation) => ({ field: 'wants', text: needID, needID, status, explanation });
+  return [
+    { page: `${SITE}/about/`, audienceID: 'lead', state: 'done', at: now - 30 * MINUTE, items: [
+      item('tech-lead.when-to-use', 'partial', 'Why it exists, not when not to use it.'), item('tech-lead.maintainer', 'answered', 'Names the maintainer.'),
+      item('tech-lead.host-dies', 'missing', '')] },
+    { page: `${SITE}/guides/snapshots/`, audienceID: 'lead', state: 'done', at: now - 25 * MINUTE, items: [
+      item('tech-lead.host-dies', 'answered', 'A snapshot restores every actor.'), item('tech-lead.decide', 'missing', '')] },
+  ];
+}
+
 // A rewrite per audience, when several are active: by the audience's id, and one for everyone.
 const PER_AUDIENCE = {
   lead: ['A runtime you embed: one C core, MIT licensed', 'Names what the lead checks first: the core and the license.'],
@@ -155,7 +178,7 @@ const PER_AUDIENCE = {
   dev: ['Test a week of timeouts in milliseconds', 'The developer wants the simulated clock.'],
 };
 
-export function createMockReviewer({ hasKey = true, delay = 1, empty = false, status = 'ready', read = true, suggest = false, diverged = false } = {}) {
+export function createMockReviewer({ hasKey = true, delay = 1, empty = false, status = 'ready', read = true, suggest = false, diverged = false, site = true, changed = false } = {}) {
   const now = Date.now();
   let seq = 100;
   const listeners = new Set();
@@ -170,6 +193,7 @@ export function createMockReviewer({ hasKey = true, delay = 1, empty = false, st
     page: {
       url: 'https://www.tinyactors.dev/', title: 'Actors as a library', kind: 'pitch', mainAudienceID: read ? 'lead' : null,
       audienceSuggestion: suggest ? { state: 'ready', audienceIDs: read ? ['lead', 'student'] : ['student'] } : null,
+      changed: changed && read,
     },
     selection: null,
     picking: false,
@@ -190,6 +214,11 @@ export function createMockReviewer({ hasKey = true, delay = 1, empty = false, st
     },
     annotations: empty ? [] : [...(read ? sampleFindings(now) : []), ...sample(now)],
     plan: null,
+    criteria: changed && read ? { at: null, items: [
+      { id: 'c1', text: 'The home page links to /guides/snapshots/ for tech-lead.host-dies', needID: 'tech-lead.host-dies', page: `${SITE}/`, from: { page: `${SITE}/`, itemID: 'p2' }, met: null },
+      { id: 'c2', text: 'The home page says who maintains tinyactors', needID: 'tech-lead.maintainer', page: `${SITE}/`, from: { page: `${SITE}/`, itemID: 'p3' }, met: null },
+    ] } : null,
+    site: { state: 'none', pages: [], audiences: [], progress: null, running: [], failures: [], started: null, at: null },
     readings: empty || !read ? [] : [sampleReading(now)],
     activeID: null,
     chat: {
@@ -336,7 +365,61 @@ export function createMockReviewer({ hasKey = true, delay = 1, empty = false, st
     say({ text: 'The page doesn\'t tell me what happens to state when the host dies, so I would close the tab before the license.' });
   }
 
+  // The site view over the sample site map: this page's readings and the other pages'.
+  let others = read ? siteReadings(now) : [];
+  function siteState(over = {}) {
+    const audiences = state.settings.audiences.filter((a) => a.source === 'site').map((a) => ({
+      ...a, items: [...new Map([...(state.readings.find((r) => r.audienceID === a.id)?.items ?? []), ...others.flatMap((r) => r.items)]
+        .filter((x) => x.needID).map((x) => [x.needID, { id: x.needID.split('.').slice(1).join('.'), field: x.field, text: x.text }])).values()],
+    }));
+    const readings = [...state.readings.map((r) => ({ ...r, page: state.page.url })), ...others];
+    const grid = siteGrid({ map: SITE_MAP, audiences, readings, plans: state.plan ? [{ page: state.page.url, ...state.plan }] : [], here: state.page.url });
+    return { ...state.site, ...grid, ...over };
+  }
+  if (site) state.site = siteState({ state: 'idle' });
+
   const handlers = {
+    async 'site.read'({ urls } = {}) {
+      const pages = urls?.length ? urls : SITE_MAP.map((p) => p.url);
+      const total = pages.length;
+      const started = Date.now();
+      set({ site: siteState({ state: 'reading', progress: { done: 0, failed: 0, total }, running: pages.slice(0, 3), started }) });
+      for (let i = 0; i < total; i++) {
+        await wait(400);
+        if (state.site.state !== 'reading') return;
+        const url = pages[i];
+        if (url !== state.page.url) {
+          others = [...others.filter((r) => r.page !== url), { page: url, audienceID: 'lead', state: 'done', at: Date.now(), items: [
+            { field: 'wants', text: 'tech-lead.decide', needID: 'tech-lead.decide', status: i % 2 ? 'answered' : 'partial', explanation: 'Read just now.' }] }];
+        }
+        set({ site: siteState({ state: 'reading', progress: { done: i + 1, failed: 0, total }, running: pages.slice(i + 1, i + 4), started }) });
+      }
+      set({ site: siteState({ state: 'done', running: [], at: Date.now() }) });
+    },
+    async 'site.cancel'() {
+      if (state.site.state !== 'reading') throw new Error('The site is not being read.');
+      set({ site: siteState({ state: 'cancelled', running: [], at: Date.now() }) });
+    },
+    async 'site.open'() {},
+    async verify() {
+      if (!state.readings.length) throw new Error('Read the page as an audience first.');
+      set({ site: siteState({ state: 'reading', progress: { done: 0, failed: 0, total: state.readings.length + 1 }, running: [state.page.url], started: Date.now() }) });
+      await wait(readingMS);
+      const rank = { missing: 0, partial: 1, answered: 2 };
+      const readings = state.readings.map((r) => {
+        const after = r.items.map((x, i) => ({ ...x, status: i === 0 ? 'answered' : i === 1 ? 'partial' : i === 5 ? 'answered' : x.status }));
+        const changes = after.map((x, i) => ({ needID: x.needID, text: x.text, from: r.items[i].status, to: x.status }));
+        const count = (list) => list.filter((x) => x.status === 'answered').length;
+        return { ...r, items: after, at: Date.now(), history: [{ at: r.at, answered: count(r.items), total: r.items.length }, ...(r.history ?? [])], compared: {
+          before: { at: r.at, answered: count(r.items), total: r.items.length }, after: { answered: count(after), total: after.length },
+          improved: changes.filter((c) => rank[c.to] > rank[c.from]), regressed: changes.filter((c) => rank[c.to] < rank[c.from]),
+          unchanged: changes.filter((c) => c.to === c.from).length,
+        } };
+      });
+      const criteria = state.criteria && { at: Date.now(), items: state.criteria.items.map((c, i) => ({ ...c, met: i === 0, ...(i === 0 ? { quote: 'What happens when the host dies? See Snapshots.' } : {}) })) };
+      set({ readings, criteria, page: { ...state.page, changed: false } });
+      set({ site: siteState({ state: 'done', running: [], at: Date.now() }) });
+    },
     async annotate({ note }) {
       if (!state.selection) throw new Error('Nothing is selected on the page.');
       if (state.selection.fits === false) throw new Error('Select one sentence, heading or paragraph.');
