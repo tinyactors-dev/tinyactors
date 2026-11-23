@@ -826,12 +826,24 @@ export async function mount(root) {
     } finally { rendering = false; }
   }
 
+  // The page state a draw depends on: who you are, the open conversation, the search, the rail's
+  // view and the debugger's selections. A click can change it while a draw waits for the host.
+  const viewOf = () => [you, room, query, search.value, railView, inspected, part, debug.hidden, kindPick.value, picked].join('\n');
+
   async function draw() {
     swapDraft();
-    const screen = chat.screen(you);
+    const drawing = viewOf();
     const showActors = !debug.hidden && part === 'actors';
     const [actors, stats, self, shown] = await Promise.all([chat.actors(), showActors ? chat.stats() : null, chat.state(`user.${you}`),
       inspected && showActors ? chat.state(inspected) : null]);
+    // the state changed during the wait: what was read is another view's (another person's
+    // actor, screen or chart), so this draw shows nothing, and render() draws again. Past this
+    // check the draw does not wait, so the page state it reads is the state `drawing` recorded.
+    if (viewOf() !== drawing) {
+      again = true;
+      return;
+    }
+    const screen = chat.screen(you);
     selfState = yours(self);
     const yourStatus = statusOf(selfState);
     const reconnecting = yourStatus === 'reconnecting';
