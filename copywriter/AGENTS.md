@@ -357,7 +357,18 @@ one-off Python.
   accepted, the rewrite previewed in the hero. The site map leaves the
   page out by its path, so a URL with a query does not list itself. A
   plan thinks at `medium` unless the reviewer picked `low` or `xhigh`
-  (`planThinking`; high is the default, not a choice), measured below.
+  (`planThinking`; high is the default, not a choice): `mise run
+  plan-eval` on 2026-11-23, the live home page, high then medium: 85 s
+  against 40 s, 12 items against 11 (3 and 2 rewrites, 1 add each, 8
+  links), 5 new pages against 3 (medium merged "when to use" with "how it
+  compares" and crash recovery with the single process), no original off
+  the page either way, and the same names the site does not state in
+  both (Rivet, Cloudflare Durable Objects, XState in a comparison item).
+  The evals' invented-fact check (`tools/facts.mjs`) reports numbers,
+  capitalized names not at a sentence's start, CamelCase, acronyms,
+  `@scope/packages`, `node:modules`, calls and code in backticks, and
+  URLs that no page of the site states (every page's Markdown in
+  llms.txt), as a line per item, never a failure.
 - **The site view** (the maintainer, 2026-11-23: the last step of the
   audience work). Every need of the site's audiences against the pages
   (`siteGrid` in `src/core/grid.mjs`, from the store's readings and plans
@@ -406,6 +417,29 @@ one-off Python.
   read (each site reading checks every page it reads). The export ticks
   the criteria the last check found met ("- [x] … Met already: “quote”.",
   "Met already:" in `packet.xml`'s acceptance).
+  Checked against the API on 2026-11-23 (`mise run site-eval`: the live
+  site, six pages (/, /chat/, /guides/testing/, /performance/, /about/,
+  /guides/snapshots/) read as their own audiences, 13 readings at most
+  three at once, Gemini 4 Hydrogen, readings at medium): 162 s, none
+  failed, 25 to 43 s a reading; answered on some page read: agent-platform
+  5/11, tech-lead 5/13, workflow-tester 6/10. Against the content's
+  `answers=` (website/build/needs.json): 8 claims the readings found only
+  partial (agent-platform.memory on / without the benchmark,
+  .idle-sessions on / and /chat/ without the store's setup,
+  .agent-charts on /, tech-lead.failure-semantics on / and
+  /guides/snapshots/ without what a crash loses, .test-suite on / with no
+  link to the suite, workflow-tester.test-timeouts on /guides/testing/
+  with no CI command), and 16 needs found answered where the content
+  claims nothing (tech-lead.license on every page from the footer,
+  .release-history from the top bar, the chat tutorial's code-first,
+  evaluate, simulated-clock, written-flow, no-mocks and one-workflow).
+  `tools/verify-eval.mjs` (the live home page read and planned at medium,
+  a rewrite and a link accepted and kept, the page as served then the
+  changed one): the change was seen, Check changes took 36 s, 2/11 → 2/11,
+  4/13 → 4/13 (tech-lead.release-history fell to partial,
+  .lock-in rose), 4/10 → 5/10; of the three criteria for the page two
+  were met with quotes and the link's (a claim about /performance/ too)
+  not.
 
 ## Layout
 
@@ -522,9 +556,9 @@ copywriter/
                           ?changed=1: the page changed since it was read; its site view, its plan, and its export
                           built by the real packet code, `reviewer.exported()`), the extension and the widget
                           (test/fixtures/page.html links the audience files of test/fixtures/audiences/)
-  mise/tasks/             build, test, charts, eval, read-eval, talk-eval, plan-eval (Ruby)
+  mise/tasks/             build, test, charts, eval, read-eval, talk-eval, plan-eval, site-eval (Ruby)
   tools/                  serve.mjs (the panel's preview), eval.mjs, read-eval.mjs, talk-eval.mjs, plan-eval.mjs and
-                          site-eval.mjs (the real Gemini); facts.mjs (the evals' check for invented facts: numbers, names,
+                          site-eval.mjs, verify-eval.mjs (the real Gemini); facts.mjs (the evals' check for invented facts: numbers, names,
                           packages and URLs no page of the site states, from every page's Markdown in llms.txt)
   dist/                   build output (not in git): extension/, copywriter-extension.zip, site/
 ```

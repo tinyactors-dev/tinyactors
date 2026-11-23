@@ -486,6 +486,9 @@ export function createReviewer({
   const pageProcessor = {
     async receive(send) {
       const { event, data } = send;
+      // an answer that comes after close() has no host to go to
+      const original = send;
+      send = { answer: (...args) => (closed ? false : original.answer(...args)), fail: () => (closed ? false : original.fail()) };
       if (event === 'locate') {
         let found = false;
         try { found = Boolean(await page.locate(data.anchor)); } catch { /* not found */ }
