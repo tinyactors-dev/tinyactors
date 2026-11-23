@@ -39,12 +39,15 @@ const commands = (page) => page.evaluate(() => reviewer.log.map((c) => c.type));
 test('the list shows the annotations, filtered', async () => {
   const { page, panel, errors } = await open('');
   assert.equal(await panel.locator('.cw-row').count(), 3, 'open: suggested, previewing, draft');
-  await panel.locator('[data-filter=kept]').click();
-  assert.equal(await panel.locator('.cw-row').count(), 1);
-  await panel.locator('[data-filter=all]').click();
+  const done = panel.locator('[data-action=done]');
+  assert.equal(await done.getAttribute('aria-label'), '1 kept, 0 dismissed');
+  await done.click();
   assert.equal(await panel.locator('.cw-row').count(), 4);
-  assert.match(await panel.locator('.cw-subtitle').textContent(), /tinyactors\.dev/);
-  assert.match(await panel.locator('.cw-totals').textContent(), /3 kept · 3 open · 3 pages/);
+  assert.equal(await panel.locator('.cw-heading').textContent(), 'Actors as a library');
+  assert.equal(await panel.locator('.cw-heading').getAttribute('title'), 'https://www.tinyactors.dev/');
+  for (const name of ['Page chat', 'Settings', 'Export']) {
+    assert.equal(await panel.locator(`header button[aria-label="${name}"]`).count(), 1, `${name} is an icon with a name`);
+  }
   assert.deepEqual(errors, []);
   await page.close();
 });
@@ -66,21 +69,22 @@ test('annotate, ask, preview, keep, back', async () => {
   await composer.fill('Lead with what a developer gets');
   await composer.press('Enter');
   assert.equal(await composer.inputValue(), '');
-  await panel.locator('[data-thinking], .cw-thinking').first().waitFor();
+  await panel.locator('[data-thinking]').first().waitFor();
   await detail.locator('.cw-card').first().waitFor();
   assert.ok(await detail.locator('.cw-msg--user').count() >= 1);
   assert.ok(await detail.locator('.cw-msg--model strong').count() >= 1, 'markdown bold');
 
+  assert.equal(await detail.locator('[data-action=keep]').count(), 0, 'Keep appears only on a previewed card');
   await detail.locator('[data-action=preview]').first().click();
   await detail.locator('.cw-card.is-chosen [data-action=keep]').waitFor();
   assert.equal(await detail.locator('.cw-original.is-replaced').count(), 1);
   await detail.locator('[data-action=keep]').click();
-  await panel.locator('.cw-badge[data-state=kept]').first().waitFor();
+  await detail.locator('.cw-card.is-kept').waitFor();
 
   await page.keyboard.press('Escape');
   await panel.locator('[data-view=list]').waitFor();
-  await panel.locator('[data-filter=kept]').click();
-  assert.equal(await panel.locator('.cw-row').count(), 2);
+  await panel.locator('[data-action=done]').click();
+  assert.equal(await panel.locator('.cw-row[data-state=kept]').count(), 2);
   assert.deepEqual(
     (await commands(page)).filter((t) => t !== 'select'),
     ['annotate', 'ask', 'preview', 'keep', 'deselect'],
@@ -119,19 +123,20 @@ test('the composer keeps its text and focus across state updates', async () => {
 
 test('first run: no key leads to settings; saving one, the model and Escape', async () => {
   const { page, panel } = await open('key=0');
-  assert.equal(await panel.locator('[data-notice=first-run]').count(), 1);
+  assert.equal(await panel.locator('[data-action=add-key]').count(), 1);
   assert.equal(await panel.locator('[data-action=send]').isDisabled(), true);
   await panel.locator('[data-action=add-key]').click();
   await panel.locator('[data-view=settings]').waitFor();
   const key = panel.locator('input.cw-key');
   assert.equal(await key.getAttribute('type'), 'password');
   await key.fill('AIza-test-key');
-  await panel.locator('[aria-label="Show key"]').click();
+  await panel.locator('[data-action=show-key]').click();
   assert.equal(await key.getAttribute('type'), 'text');
   assert.equal(await key.inputValue(), 'AIza-test-key', 'the draft survives the rebuild');
   assert.equal(await panel.locator('a[data-action=get-key]').getAttribute('href'), 'https://aistudio.google.com/apikey');
   await panel.locator('[data-action=save-key]').click();
-  await panel.locator('.cw-group-title .cw-badge', { hasText: 'Saved' }).waitFor();
+  await panel.locator('.cw-label .cw-ok').waitFor();
+  assert.equal(await panel.locator('[data-action=save-key]').isHidden(), true, 'Save appears only with a key typed');
   await panel.locator('.cw-toast', { hasText: 'Key saved' }).waitFor();
   assert.equal(await key.inputValue(), '');
 
@@ -144,13 +149,13 @@ test('first run: no key leads to settings; saving one, the model and Escape', as
   assert.equal(log.find((c) => c.type === 'settings.save' && c.apiKey).apiKey, 'AIza-test-key');
   await page.keyboard.press('Escape');
   await panel.locator('[data-view=list]').waitFor();
-  assert.equal(await panel.locator('[data-notice=first-run]').count(), 0);
+  assert.equal(await panel.locator('[data-action=add-key]').count(), 0);
   await page.close();
 });
 
 test('export: the menu, a download and a refusal', async () => {
   const { page, panel } = await open('');
-  await panel.locator('[data-menu=export-foot]').click();
+  await panel.locator('[data-menu=export]').click();
   const menu = panel.locator('.cw-menu[role=menu]');
   await menu.waitFor();
   await menu.locator('[data-scope=all]').click();
@@ -159,10 +164,10 @@ test('export: the menu, a download and a refusal', async () => {
   assert.deepEqual((await page.evaluate(() => reviewer.log)).at(-1), { type: 'export', scope: 'all', to: 'download' });
 
   await page.evaluate(() => reviewer.set({ totals: { kept: 0, open: 1, pages: 1 } }));
-  await panel.locator('[data-menu=export-head]').click();
+  await panel.locator('[data-menu=export]').click();
   await page.keyboard.press('Escape');
   assert.equal(await menu.count(), 0, 'Escape closes the menu');
-  await panel.locator('[data-menu=export-head]').click();
+  await panel.locator('[data-menu=export]').click();
   await panel.locator('[data-action=export-clipboard]').click();
   await panel.locator('.cw-toast--error', { hasText: 'Nothing is kept yet' }).waitFor();
   await page.close();
@@ -173,9 +178,12 @@ test('page chat: a message, the answer, a proposed annotation', async () => {
   const composer = panel.locator('textarea[aria-label=Message]');
   await composer.fill('What should change?');
   await composer.press('Enter');
-  await panel.locator('[data-view=chat] .cw-msg--model').waitFor();
-  assert.equal(await panel.locator('[data-tab=chat]').getAttribute('aria-selected'), 'true');
-  assert.match(await panel.locator('[data-tab=notes] .cw-count').textContent(), /5/);
+  await panel.locator('[data-view=chat] .cw-msg--model .cw-msg-body').waitFor();
+  assert.equal(await panel.locator('[data-action=chat]').getAttribute('aria-pressed'), 'true');
+  assert.equal(await page.evaluate(() => reviewer.getState().annotations.length), 5);
+  await page.keyboard.press('Escape');
+  await panel.locator('[data-view=list]').waitFor();
+  assert.equal(await panel.locator('.cw-row').count(), 4, 'the proposed rewrite is an open annotation');
   await page.close();
 });
 
@@ -189,6 +197,8 @@ test('push-to-talk: hold records until release, a tap toggles', async () => {
   assert.equal(await mic.getAttribute('aria-pressed'), 'true');
   await page.mouse.up();
   await page.waitForFunction(() => reviewer.log.some((c) => c.type === 'record.stop'));
+  await page.waitForFunction(() => reviewer.getState().recording.state === 'idle');
+  await page.waitForTimeout(20);
   await page.mouse.down();
   await page.mouse.up();
   await page.waitForTimeout(50);
@@ -207,7 +217,7 @@ test('sheet: tap targets of 44px, light and dark', async () => {
     await page.evaluate(() => reviewer.setSelection('Everything you need to build actor systems'));
     await panel.locator('[data-banner=selection]').waitFor();
     const small = await panel.locator('.cw-panel').evaluate((root) => [...root.querySelectorAll('button')]
-      .filter((b) => b.offsetParent && !b.closest('.cw-segmented, .cw-toast'))
+      .filter((b) => b.offsetParent && !b.closest('.cw-toast'))
       .map((b) => [b.getAttribute('aria-label') ?? b.textContent.trim(), b.getBoundingClientRect().height])
       .filter(([, height]) => height < 43.5));
     assert.deepEqual(small, []);

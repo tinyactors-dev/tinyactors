@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Copywriter panel preview</title>
+<style>
+  @font-face { font-family: 'IBM Plex Sans'; font-weight: 400; src: url(/fonts/IBMPlexSans-400.woff2) format('woff2'); }
+  @font-face { font-family: 'IBM Plex Sans'; font-weight: 500; src: url(/fonts/IBMPlexSans-500.woff2) format('woff2'); }
+  @font-face { font-family: 'IBM Plex Sans'; font-weight: 600; src: url(/fonts/IBMPlexSans-600.woff2) format('woff2'); }
+  @font-face { font-family: 'IBM Plex Mono'; font-weight: 500; src: url(/fonts/IBMPlexMono-500.woff2) format('woff2'); }
+  @font-face { font-family: 'Newsreader'; font-weight: 400; src: url(/fonts/Newsreader-400.woff2) format('woff2'); }
+  :root { color-scheme: light dark; --paper: #F4EEE2; --ink: #2A2622; --muted: #5C544B; }
+  @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { --paper: #18120D; --ink: #F1E6D2; --muted: #CBBBA2; } }
+  :root[data-theme="dark"] { --paper: #18120D; --ink: #F1E6D2; --muted: #CBBBA2; }
+  html, body { margin: 0; height: 100%; background: var(--paper); color: var(--ink); font: 16px/1.6 'IBM Plex Sans', system-ui, sans-serif; }
+  body { display: grid; grid-template-columns: 1fr 400px; }
+  #page { padding: 48px; overflow: auto; max-width: 720px; }
+  #page h1 { font: 400 44px/1.05 Newsreader, Georgia, serif; letter-spacing: -0.02em; margin: 0 0 16px; }
+  #page h2 { font: 400 28px/1.2 Newsreader, Georgia, serif; margin: 40px 0 8px; }
+  #page p { color: var(--muted); max-width: 60ch; }
+  .dev { display: flex; gap: 8px; flex-wrap: wrap; margin: 32px 0; }
+  .dev button { font: inherit; font-size: 13px; padding: 6px 10px; }
+  #panel { height: 100vh; border-left: 1px solid #DACEB8; }
+  /* the panel alone, as the side panel shows it */
+  :root[data-bare] body { display: block; }
+  :root[data-bare] #page { display: none; }
+  :root[data-bare] #panel { border: 0; height: 100vh; height: 100dvh; }
+  /* a phone: the page behind, the embed shell's bottom sheet in front */
+  :root[data-layout="sheet"]:not([data-bare]) body { display: block; }
+  :root[data-layout="sheet"]:not([data-bare]) #page { padding: 24px 20px 50vh; }
+  :root[data-layout="sheet"]:not([data-bare]) #page h1 { font-size: 34px; }
+  :root[data-layout="sheet"]:not([data-bare]) #panel {
+    position: fixed; left: 0; right: 0; bottom: 0; height: 82vh; height: 82dvh; border: 0;
+    border-radius: 12px 12px 0 0; overflow: hidden; box-shadow: 0 -12px 40px rgba(40,30,20,.22);
+  }
+</style>
+<script type="module" src="/preview.js"></script>
+</head>
+<body>
+<article id="page">
+  <h1>Actors as a library</h1>
+  <p>A tiny, embeddable actor runtime for building reliable systems. Get started in minutes.</p>
+  <h2>Everything you need to build actor systems</h2>
+  <p>Blazing-fast message passing between your actors, powered by a revolutionary new design.</p>
+  <p>Supervision trees keep your system alive when things go wrong.</p>
+  <div class="dev">
+    <button type="button" data-select="Everything you need to build actor systems">Select a heading</button>
+    <button type="button" data-select="">Clear selection</button>
+  </div>
+</article>
+<div id="panel"></div>
+</body>
+</html>
