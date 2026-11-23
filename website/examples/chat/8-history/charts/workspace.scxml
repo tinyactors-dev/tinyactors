@@ -1,0 +1,88 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- A workspace. It is the collection actor of its rooms: it decides
+     which rooms exist, and it alone spawns them.
+     It keeps the roster: each user's status. A user who comes online gets
+     the whole roster. The other online users get each change; a status
+     that did not change tells nobody. -->
+<scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0"
+       datamodel="ecmascript" name="workspace" initial="ready">
+  <script>
+    // Why a new room is refused, or null.
+    function refusal(rooms, name) {
+      if (!/^[a-z0-9-]{1,32}$/.test(name)) return 'invalid name';
+      if (rooms.includes(name)) return 'exists';
+      return null;
+    }
+
+    // The users who are online, but `except`.
+    function online(roster, except) {
+      return Object.keys(roster).filter((user) => roster[user] !== 'offline' &amp;&amp; user !== except);
+    }
+
+    function cameOnline(roster, event) {
+      return (roster[event.data.user] ?? 'offline') === 'offline' &amp;&amp; event.data.status !== 'offline';
+    }
+  </script>
+  <datamodel>
+    <data id="rooms" expr="[]"/>          <!-- the names of the rooms, spawned or being spawned -->
+    <data id="creating" expr="({})"/>     <!-- spawn sendid -> { name, by } -->
+    <data id="sendid"/>
+    <data id="roster" expr="({})"/>       <!-- user -> offline, active or away -->
+    <data id="arriving"/>                 <!-- the status event brings its user online -->
+  </datamodel>
+  <state id="ready">
+    <!-- The name joins rooms when the spawn is sent: a second room.create
+         for it may come before the Spawner answers, and it is refused. -->
+    <transition event="room.create" cond="refusal(rooms, _event.data.name) === null">
+      <send type="spawn" event="spawn" idlocation="sendid">
+        <param name="chart" expr="'room'"/>
+        <param name="name" expr="'room.' + _event.data.name"/>
+        <param name="params" expr="({ name: _event.data.name })"/>
+      </send>
+      <assign location="rooms" expr="rooms.concat([_event.data.name])"/>
+      <assign location="creating[sendid]" expr="({ name: _event.data.name, by: _event.origin })"/>
+    </transition>
+    <transition event="room.create">
+      <send targetexpr="_event.origin" event="room.refused">
+        <param name="name" expr="_event.data.name"/>
+        <param name="reason" expr="refusal(rooms, _event.data.name)"/>
+      </send>
+    </transition>
+
+    <!-- the Spawner answers by the sendid of the spawn -->
+    <transition event="spawned" cond="_event.sendid in creating">
+      <send targetexpr="creating[_event.sendid].by" event="room.created">
+        <param name="name" expr="creating[_event.sendid].name"/>
+      </send>
+      <script>delete creating[_event.sendid];</script>
+    </transition>
+
+    <!-- a status that did not change (a user back from a lost connection) tells nobody -->
+    <transition event="status" cond="roster[_event.data.user] === _event.data.status"/>
+    <transition event="status">
+      <assign location="arriving" expr="cameOnline(roster, _event)"/>
+      <assign location="roster[_event.data.user]" expr="_event.data.status"/>
+      <if cond="arriving">
+        <send targetexpr="_event.origin" event="roster">
+          <param name="roster" expr="roster"/>
+        </send>
+      </if>
+      <foreach array="online(roster, _event.data.user)" item="user">
+        <send targetexpr="'tinyactors://chat/@user.' + user" event="roster.update">
+          <content expr="_event.data"/>
+        </send>
+      </foreach>
+    </transition>
+    <transition event="roster.get">
+      <send targetexpr="_event.origin" event="roster">
+        <param name="roster" expr="roster"/>
+      </send>
+    </transition>
+
+    <transition event="rooms.list">
+      <send targetexpr="_event.origin" event="rooms">
+        <param name="rooms" expr="rooms"/>
+      </send>
+    </transition>
+  </state>
+</scxml>

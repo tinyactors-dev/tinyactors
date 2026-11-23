@@ -1,11 +1,11 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <page xmlns="https://www.tinyactors.dev/ns/site" id="chat" path="/chat/">
   <title>Build a team chat with tinyactors</title>
-  <description>Try a team chat in your browser, then build it in seven steps, from one room to users who ride out a lost connection.</description>
+  <description>Try a team chat in your browser, then build it in eight steps, from one room to a history for late joiners.</description>
 
   <hero>
     <headline>Build a team chat</headline>
-    <lede>Try the finished chat in this tab, then build it in seven steps, each a program you can run.</lede>
+    <lede>Try the finished chat in this tab, then build it in eight steps, each a program you can run.</lede>
     <install>
       <command package="node" guide="https://github.com/tinyactors-dev/tinyactors-napi#readme">npm install @tinyactors/node</command>
     </install>
@@ -17,9 +17,9 @@
 
   <section id="try">
     <heading>Try the finished chat</heading>
-    <p>Each person, room and the workspace is an actor in this tab, running the charts the steps below build. Post as anyone, then skip five minutes to watch people go away.</p>
+    <p>Each person, room and the workspace is an actor in this tab, running the charts the steps below build. Switch person from the avatar at the bottom left; the debugger at the top right loses connections and switches chart versions.</p>
     <playground src="../../examples/chat-live/page.mjs">
-      <description>A chat with two rooms and six people, each person, room and the workspace an actor. You post as one person at a time, and beside the chat, any actor's chart shows the state it is in.</description>
+      <description>A team chat, The Hill, with two rooms and six people, each an actor. Its debugger loses connections, makes screens drop or delay messages, runs scenarios, and moves the running chat between the tutorial's steps 5 and 8 by live migration.</description>
     </playground>
   </section>
 
@@ -104,6 +104,19 @@
     <example>
       <code src="../../examples/chat/7-reconnect/main.mjs" lines="40-58" language="javascript" file="main.mjs"/>
       <code src="../../examples/chat/7-reconnect/output.txt" language="text" role="output"/>
+    </example>
+  </section>
+
+  <section id="history">
+    <heading>8. Show a room's history to late joiners</heading>
+    <p>A member who joins late saw nothing said before, and a member who joined twice got every post twice. The room now numbers each post and keeps the last 50.</p>
+    <code src="../../examples/chat/8-history/charts/room.scxml" lines="34-45" language="scxml" file="charts/room.scxml"/>
+    <p>A join sends the kept posts back, and adds the member only once.</p>
+    <code src="../../examples/chat/8-history/charts/room.scxml" lines="15-23" language="scxml" file="charts/room.scxml"/>
+    <p>Cat joins after two posts and sees both; bob joins a second time, and the third post reaches him once.</p>
+    <example>
+      <code src="../../examples/chat/8-history/main.mjs" lines="46-51" language="javascript" file="main.mjs"/>
+      <code src="../../examples/chat/8-history/output.txt" language="text" role="output"/>
     </example>
   </section>
 

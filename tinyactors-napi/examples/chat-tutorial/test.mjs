@@ -6,3 +6,4 @@ import './4-roster/test.mjs';
 import './5-hibernation/test.mjs';
 import './6-typing/test.mjs';
 import './7-reconnect/test.mjs';
+import './8-history/test.mjs';

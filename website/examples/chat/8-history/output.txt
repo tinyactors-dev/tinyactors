@@ -1,0 +1,13 @@
+-- ada and bob join and talk
+ada joins general and sees nothing yet
+bob joins general and sees nothing yet
+ada sees post 1 from ada: hi bob
+bob sees post 1 from ada: hi bob
+ada sees post 2 from bob: hi ada
+bob sees post 2 from bob: hi ada
+-- cat joins late, bob joins again
+cat joins general and sees ada: hi bob | bob: hi ada
+bob joins general and sees ada: hi bob | bob: hi ada
+ada sees post 3 from ada: welcome, cat
+bob sees post 3 from ada: welcome, cat
+cat sees post 3 from ada: welcome, cat
