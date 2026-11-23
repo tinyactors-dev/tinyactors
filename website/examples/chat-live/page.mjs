@@ -245,12 +245,15 @@ export async function mount(root) {
     button.addEventListener('click', () => showView(key));
     return [key, button];
   }));
-  function showView(key) {
+  function pickView(key) {
     railView = key;
     for (const [name, button] of Object.entries(railTabs)) {
       if (name === key) button.setAttribute('aria-current', 'page');
       else button.removeAttribute('aria-current');
     }
+  }
+  function showView(key) {
+    pickView(key);
     app.dataset.view = 'list'; // a phone shows the view in place of the conversation
     render();
   }
@@ -274,8 +277,7 @@ export async function mount(root) {
       item.addEventListener('click', () => {
         closeMenu(true);
         if (name === you) return;
-        you = name;
-        inspect(`user.${you}`);
+        switchTo(name);
       });
       return item;
     }));
@@ -557,6 +559,28 @@ export async function mount(root) {
     app.dataset.view = 'room';
     render();
     if (narrow) roomTitle.focus();
+  }
+  // Each person's own view, as each has a client of their own: the conversation, the rail's
+  // view, the Activity row picked, the search, the scroll position and, on a phone, whether
+  // the list or the conversation shows. A switch puts away one person's and brings back the
+  // other's, so nobody's posts are read because someone else had them open.
+  const views = new Map();
+  const firstView = () => ({ room: 'general', railView: 'home', picked: null, search: '', scroll: null, shows: 'room' });
+  let scrollTo; // the scroll position the next draw restores: a number, null for the end, undefined for none
+  function switchTo(name) {
+    const end = messages.scrollHeight - messages.scrollTop - messages.clientHeight < 40;
+    views.set(you, { room, railView, picked, search: search.value, scroll: end ? null : messages.scrollTop, shows: app.dataset.view });
+    const view = views.get(name) ?? firstView();
+    you = name;
+    room = view.room;
+    picked = view.picked;
+    search.value = view.search;
+    query = view.search.trim().toLowerCase();
+    scrollTo = view.scroll;
+    app.dataset.view = view.shows;
+    pickView(view.railView);
+    peopleNote.textContent = '';
+    inspect(`user.${you}`);
   }
   /** A phone shows the list or the conversation, with a back button. */
   const phone = () => getComputedStyle(back).display !== 'none';
@@ -1019,7 +1043,10 @@ export async function mount(root) {
       else node.replaceChildren(avatar(message.from, 'large'), el('p', { class: 'chatlive__line' }, el('span', { class: 'chatlive__from' }, message.from), stamp,
         ...(query ? [channelLink(message.room)] : [])), paragraph);
     });
-    if (atBottom) messages.scrollTop = messages.scrollHeight;
+    if (scrollTo !== undefined) {
+      messages.scrollTop = scrollTo ?? messages.scrollHeight; // a person's view brought back where they left it
+      scrollTo = undefined;
+    } else if (atBottom) messages.scrollTop = messages.scrollHeight;
     if (!query) seen.set(`${you}\n${room}`, inRoom.length); // what is on screen now is read
     // the live region says each message new to this screen and room, not those there when you came
     const view = `${you}\n${room}`;
@@ -1096,6 +1123,11 @@ export async function mount(root) {
       && (direct.has(message.room) ? chat.version() === LATEST : mentioned(message.text, you)))
       .reverse().sort((a, b) => b.at - a.at);
     activityItems = new Map(items.map((message) => [keyOf(message), message]));
+    // the row current while its conversation is open, however it was opened: the one you
+    // picked there, else the conversation's newest
+    const current = query ? null
+      : picked && activityItems.get(picked)?.room === room ? picked
+        : [...activityItems].find(([, message]) => message.room === room)?.[0] ?? null;
     badge('activity', items.filter((message) => !read.has(message)).length, 'unread');
     markRead.hidden = items.every((message) => read.has(message));
     setText(activityEmpty, items.length ? '' : `Posts that mention @${you} and direct messages to you show here.`);
@@ -1116,7 +1148,7 @@ export async function mount(root) {
       const button = node.firstChild;
       const unread = !read.has(activityItems.get(key));
       button.classList.toggle('chatlive__row--unread', unread);
-      button.setAttribute('aria-current', String(!query && key === picked && activityItems.get(key).room === room));
+      button.setAttribute('aria-current', String(key === current));
       setText(button.lastChild, unread ? ', unread' : '');
     });
 
