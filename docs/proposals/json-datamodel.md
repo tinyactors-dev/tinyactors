@@ -705,6 +705,48 @@ to N items (two runs):
   dominates at this size (4.4 KB copied), unverified. An index of each
   container's end, or a count kept with the document, would remove it.
 
+**Beside staticjs** (third round, the same machine and benchmark): a
+second spike, `tinyactors-core/src/datamodel_staticjs` (1,399 lines over
+the staticjs library, `../staticjs`), compiles each chart's expressions
+into staticjs programs whose globals are the chart's variables, `_event`,
+the system variables, `In` and the functions registered for the chart
+(staticjs native functions); a session holds a staticjs value per
+variable, and a write rebuilds the containers along its path. It passes
+the same suites: scenarios 10 of 10, W3C 167 of 167 translated
+(`confStaticjs.xsl`, the same 24 skipped). "staticjs" runs the
+ECMAScript charts as written; "+ natives" runs the json charts, calling
+the same functions as staticjs natives in C. Two runs each:
+
+| | json | staticjs | staticjs + natives | quickjs |
+|---|---|---|---|---|
+| Code at `-Os` | 31 KB | 438 KB (the library 418, the datamodel 20) | the same | 974 KB at `-O2` |
+| Bytes per actor, idle | 679 | 1,226 (about 900 with `_ioprocessors` shared per chart) | 1,226 | 1,127 |
+| Bytes per actor, after the order's 3 events | 874 | 2,184 | 2,152 | 2,260 |
+| A guard alone, ns | 506 to 524 | 758 to 770 | 776 to 945 | 1,132 |
+| A guard and an assignment, ns | 1,225 to 1,404 | 884 to 899 | 898 to 907 | 1,715 |
+| The order's `add` and `address`, ns | 1,787 to 2,295 | 1,629 to 1,638 | 1,352 to 1,530 | 2,687 to 2,694 |
+| An assignment, 64 B / 16 KB / 60 KB document, ns | 650 / 1,200 / 4,400 | 725 / 740 / 725 | 755 / 765 / 755 | 1,240 / 1,260 / 1,235 |
+| Appending to 200 items, ns | 7,617 to 8,804 (`items[length(items)]`) | 2,381 to 2,392 (`concat`), 2,642 to 2,780 (index) | 2,512 to 4,380 | 2,566 to 2,895 (index) |
+| A function in another language, per `addItem` call | its arguments are already CBOR | | + 1,370 to 1,601 ns to write the arguments as CBOR and read the result back | |
+
+- **staticjs wins on writes and in C:** a value is shared, not copied,
+  so an assignment costs the same at 60 KB as at 64 B, appending does not
+  grow with the array, and a guard with an assignment is faster than json's.
+- **json wins on memory, size and calls into another language:** 2.5
+  times less memory per actor after the events (a CBOR document against a
+  heap object per value), 14 times less code, and a function in Swift,
+  Kotlin or Go gets its arguments as the CBOR its binding decodes, where a
+  staticjs native's arguments are staticjs values a binding in another
+  language must first write as CBOR (or walk item by item through C).
+  That conversion alone, 1.4 to 1.6 µs a call, is more than a whole json
+  event.
+- **So they serve different charts:** logic in the application's
+  language (the mobile bindings) suits json; logic in the chart, large
+  documents, or C and wasm hosts suit staticjs. json's weakness, the copy
+  on assignment, has a known fix (container ends, writes in place);
+  staticjs's conversion cost for other languages is inherent to its
+  values living in its own heap.
+
 **What the spike simplified,** so a real layer differs: `_event` is built
 at `bind_event` as one map with its data copied in (the proposal keeps a
 reference); a `<foreach>` copies its array (the proposal keeps a
