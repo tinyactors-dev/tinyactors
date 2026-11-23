@@ -548,19 +548,42 @@ export async function mount(root) {
     section('People', people, peopleNote));
   /** The direct message on your screen with `name`, or undefined. */
   const dmWith = (name) => chat.screen(you).dms.find((dm) => dm.with === name);
+  /**
+   * Whether you can message `name` now: '' when you can, else why not. A direct message your screen
+   * has always opens (to read it; while you reconnect the composer waits); a new one needs your actor
+   * signed in and connected, since it asks the workspace.
+   */
+  function messageBlock(name) {
+    if (chat.version() !== LATEST) return 'older';
+    if (dmWith(name)) return '';
+    if (waiting()) return 'waiting';
+    if (!selfState?.online) return 'signedOut';
+    return '';
+  }
+  /** The sentence that says why you cannot message `name` (`block` from messageBlock). */
+  function messageNote(name, block) {
+    const self = name === you;
+    if (block === 'waiting') return `You’re reconnecting. ${self ? 'Open your notes' : `Message ${name}`} once you’re back.`;
+    return self ? 'Sign in to open your notes.' : `Sign in to message ${name}.`;
+  }
   /** Opens your direct message with `name` (yourself: your notes); the workspace makes it the first time. */
   async function openDM(name, act = false) {
     peopleNote.textContent = '';
-    if (chat.version() !== LATEST) {
+    const block = messageBlock(name);
+    if (block === 'older') {
       peopleNote.textContent = `Step ${chat.version()}’s charts have no direct messages. Switch to step ${LATEST} in the debugger.`;
       return;
     }
-    // signed in, your actor asks the workspace; signed out or connecting, a direct message your screen has still opens
+    if (block) {
+      peopleNote.textContent = messageNote(name, block);
+      return;
+    }
+    // signed in, your actor asks the workspace; otherwise the direct message your screen has opens
     const who = you; // the person who clicked: a switch while the workspace answers does not change who opens it
     const made = selfState?.online && !waiting() ? await chat.openDM(who, name) : dmWith(name)?.room ?? null;
     if (who !== you) return made && openFor(who, made);
     if (!made) {
-      peopleNote.textContent = `Sign in to message ${name}.`;
+      peopleNote.textContent = messageNote(name, messageBlock(name) || 'signedOut');
       return;
     }
     openRoom(made, act);
@@ -727,15 +750,13 @@ export async function mount(root) {
     if (cardStatus.className !== className) cardStatus.className = className;
     cardStatus.hidden = state === 'unknown';
     setText(cardStatus.lastChild, LABEL[state] ?? '');
-    // step 5 has no direct messages; signed out, only one your screen has still opens
-    const older = chat.version() !== LATEST;
-    const signedOut = !older && !selfState?.online && !dmWith(name);
-    const hide = older || signedOut;
-    if (hide && document.activeElement === cardMessage) card.focus();
-    cardMessage.hidden = hide;
+    // step 5 has no direct messages; signed out or reconnecting, only one your screen has still opens
+    const block = messageBlock(name);
+    if (block && document.activeElement === cardMessage) card.focus();
+    cardMessage.hidden = Boolean(block);
     cardMessage.title = self ? 'Open your notes' : `Message ${name}`;
-    setText(cardNote, older ? `Step ${chat.version()}’s charts have no direct messages.` : signedOut ? self ? 'Sign in to open your notes.' : `Sign in to message ${name}.` : '');
-    cardNote.hidden = !hide;
+    setText(cardNote, block === 'older' ? `Step ${chat.version()}’s charts have no direct messages.` : block ? messageNote(name, block) : '');
+    cardNote.hidden = !block;
   }
   cardMessage.addEventListener('click', () => {
     const name = cardPill.dataset.person;
