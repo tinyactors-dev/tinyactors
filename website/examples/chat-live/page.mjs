@@ -195,6 +195,10 @@ export async function mount(root) {
   // your connection is lost and its reconnect pending (or signed in with none): your user actor
   // drops what you do until it is back, so the page sends nothing and says why
   const waiting = () => chat.reconnects(you) !== null || (Boolean(selfState) && !chat.connected(you));
+  // your screen's connection, which is your device's: the application's connection decides it, not
+  // your actor's state. While a lost one comes back you are reconnecting, even when your actor is
+  // offline to the others past the grace: a phone in a tunnel cannot sign in early.
+  const link = () => (waiting() ? 'reconnecting' : chat.connected(you) ? 'connected' : 'signedOut');
   let shownStored = null; // whether the inspected actor was in the store when last drawn
   let query = ''; // the search, lowercased
   let part = 'experiments'; // the debugger's tab
@@ -294,7 +298,7 @@ export async function mount(root) {
   const menuName = el('strong', { class: 'chatlive__menu-name' });
   const menuStatus = el('span', { class: 'chatlive__menu-status' });
   const sign = el('button', { type: 'button', role: 'menuitem', tabindex: '-1', class: 'chatlive__item' });
-  sign.addEventListener('click', () => { closeMenu(true); return selfState ? chat.disconnect(you) : chat.connect(you); });
+  sign.addEventListener('click', () => { closeMenu(true); return link() === 'signedOut' ? chat.connect(you) : chat.disconnect(you); });
   const switchList = el('div', { role: 'group', 'aria-labelledby': 'chatlive-switch', class: 'chatlive__switch' },
     ...PEOPLE.map((name) => {
       const item = el('button', { type: 'button', role: 'menuitemradio', tabindex: '-1', class: 'chatlive__item chatlive__item--person', 'data-key': name },
@@ -441,8 +445,8 @@ export async function mount(root) {
   /** What is wrong with the name in the field, or '' when the workspace may take it. */
   function nameProblemText() {
     const name = nameField.value;
-    if (waiting()) return 'You’re reconnecting. Create the channel once you’re back.';
-    if (!selfState) return 'Sign in to create a channel.';
+    if (link() === 'reconnecting') return 'You’re reconnecting. Create the channel once you’re back.';
+    if (link() === 'signedOut') return 'Sign in to create a channel.';
     if (!name) return '';
     if (/[^a-z0-9-]/.test(name)) return 'Use only lowercase letters, numbers and dashes.';
     if (!NAME.test(name)) return 'Start with a letter or number.';
@@ -453,7 +457,7 @@ export async function mount(root) {
     setText(nameCount, String(NAME_MAX - nameField.value.length));
     const problem = nameProblemText();
     setText(nameProblem, problem);
-    nameField.setAttribute('aria-invalid', String(Boolean(problem) && Boolean(nameField.value) && Boolean(selfState) && !waiting()));
+    nameField.setAttribute('aria-invalid', String(Boolean(problem) && Boolean(nameField.value) && link() === 'connected'));
     createButton.disabled = creating || Boolean(problem) || !nameField.value;
   }
   nameField.addEventListener('input', () => {
@@ -505,8 +509,8 @@ export async function mount(root) {
     if (!browseDialog.open) return;
     const screen = chat.screen(you);
     // signed in, the list says it all: each channel, and Join or Joined beside it
-    const away = waiting();
-    browseNote.hidden = Boolean(selfState) && !away;
+    const away = link() === 'reconnecting';
+    browseNote.hidden = link() === 'connected';
     setText(browseNote, away ? 'You’re reconnecting. Join a channel once you’re back.' : 'Sign in to join a channel.');
     keyed(browseList, browseRooms, (name) => {
       const open = el('button', { type: 'button', class: 'chatlive__browse-name', title: `Open #${name}` },
@@ -523,7 +527,7 @@ export async function mount(root) {
     }, (node, name) => {
       const joined = screen.rooms.includes(name);
       node.children[1].hidden = !joined;
-      node.children[2].hidden = joined || (!selfState && !away);
+      node.children[2].hidden = joined || link() === 'signedOut';
       node.children[2].disabled = away;
     });
   }
@@ -556,8 +560,8 @@ export async function mount(root) {
   function messageBlock(name) {
     if (chat.version() !== LATEST) return 'older';
     if (dmWith(name)) return '';
-    if (waiting()) return 'waiting';
-    if (!selfState?.online) return 'signedOut';
+    if (link() === 'reconnecting') return 'waiting';
+    if (link() === 'signedOut' || !selfState?.online) return 'signedOut';
     return '';
   }
   /** The sentence that says why you cannot message `name` (`block` from messageBlock). */
@@ -745,7 +749,7 @@ export async function mount(root) {
       cardName.dataset.who = `${name}\n${self}`;
       cardName.replaceChildren(name, ...(self ? [el('span', { class: 'chatlive__profile-you' }, ' (you)')] : []));
     }
-    const state = self ? statusOf(selfState) : STATUS[chat.screen(you).roster[name]] ?? 'unknown';
+    const state = self ? yourStatusNow() : STATUS[chat.screen(you).roster[name]] ?? 'unknown';
     const className = `chatlive__profile-status chatlive__profile-status--${state}`;
     if (cardStatus.className !== className) cardStatus.className = className;
     cardStatus.hidden = state === 'unknown';
@@ -1058,6 +1062,8 @@ export async function mount(root) {
   const announced = new Set();
   let announcedView = null;
   const statusOf = (state) => (state === 'reconnecting' ? 'reconnecting' : state?.online ?? 'offline');
+  /** Your status on your own screen: your connection's while it is lost or closed, else your actor's. */
+  const yourStatusNow = () => ({ reconnecting: 'reconnecting', signedOut: 'offline' })[link()] ?? statusOf(selfState);
 
   /** The top of a conversation: a channel's name and who created it, or the person a direct message is with. */
   function drawBeginning(node, dm, name) {
@@ -1110,9 +1116,9 @@ export async function mount(root) {
     }
     const screen = chat.screen(you);
     selfState = yours(self);
-    const yourStatus = statusOf(selfState);
+    const yourStatus = yourStatusNow();
     const reconnecting = yourStatus === 'reconnecting';
-    const cut = reconnecting || waiting(); // what you do now would be dropped: the composer and Join wait
+    const cut = reconnecting; // what you do now would be dropped: the composer and Join wait
     const roster = { ...screen.roster, [you]: yourStatus };
 
     // you, on the rail and in your menu
@@ -1126,7 +1132,7 @@ export async function mount(root) {
     presence(menuFace, yourStatus);
     setText(menuName, you);
     setText(menuStatus, LABEL[yourStatus]);
-    setText(sign, selfState ? `Sign out of ${WORKSPACE}` : `Sign in to ${WORKSPACE}`);
+    setText(sign, link() === 'signedOut' ? `Sign in to ${WORKSPACE}` : `Sign out of ${WORKSPACE}`);
     for (const item of switchList.children) {
       const name = item.dataset.key;
       const state = STATUS[roster[name]] ?? 'unknown';
@@ -1221,7 +1227,7 @@ export async function mount(root) {
     }
     if (dm) presence(titleFace, dm.with === you ? yourStatus : STATUS[roster[dm.with]] ?? 'unknown');
     main.setAttribute('aria-label', dm ? 'Direct message' : 'Channel');
-    const connected = Boolean(selfState);
+    const connected = link() !== 'signedOut';
     // a channel you have not joined shows its latest posts from the store (a preview): they are
     // not on your screen, so search and Activity, which read your screen, leave them out
     const preview = connected && !joined && !dm ? chat.preview(room) : null;
@@ -1297,6 +1303,10 @@ export async function mount(root) {
     // focus on "Sign in", "Join channel" or the composer follows what takes its place: joining puts you in the composer
     const acting = toAction || [signIn, join, text].includes(document.activeElement);
     banner.hidden = !reconnecting;
+    // past the grace (or on step 5, at once) the others see you offline; step 9 catches up from the store
+    setText(banner.lastChild, chat.version() !== LATEST ? ' The others see you as offline until you’re back.'
+      : selfState ? ` The others see you as away, and new messages wait ${GRACE} seconds for you.`
+        : ' The others now see you as offline. You’ll get the messages from meanwhile when you’re back.');
     foot.hidden = Boolean(query); // a list of results has no composer
     composer.hidden = !(connected && joined);
     composer.classList.toggle('chatlive__composer--off', cut);
