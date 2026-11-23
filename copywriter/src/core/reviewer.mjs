@@ -244,6 +244,7 @@ export function createReviewer({
       try { host.actor(`session ${current.url}`).terminate(); } catch { /* none */ }
     }
     previewed.clear();
+    selection = null;
     activeID = null;
     current = { url: info.url || '', title: info.title || '', lang: info.lang || 'en' };
     pages[current.url] = { title: current.title, lang: current.lang };
@@ -277,7 +278,7 @@ export function createReviewer({
         pages[r.page] ??= { title: '', lang: r.lang };
       }
       page.onSelection?.((s) => { selection = s && s.text ? s : null; publish(); });
-      page.onNavigate?.(() => { run(openPage); });
+      page.onNavigate?.(() => navigate());
       await openPage();
       if (closed) return;
       status = 'ready';
@@ -294,16 +295,17 @@ export function createReviewer({
   const booted = boot();
   booted.catch(() => { /* in ViewState */ });
 
-  // Commands run one at a time, in order.
-  let queue = Promise.resolve();
-  function run(fn) {
-    const next = queue.then(async () => {
-      await booted;
-      if (closed) throw new Error('The reviewer is closed.');
-      return fn();
-    });
-    queue = next.catch(() => {});
-    return next;
+  // Commands wait for the boot and for a page being opened, not for each
+  // other: a selection or a note goes through while the model works.
+  let opening = booted;
+  function navigate() {
+    opening = opening.catch(() => {}).then(() => (closed ? undefined : openPage()));
+    opening.catch((e) => { error = e.message; publish(); });
+  }
+  async function run(fn) {
+    await opening;
+    if (closed) throw new Error('The reviewer is closed.');
+    return fn();
   }
 
   // ---- commands ----------------------------------------------------------

@@ -246,3 +246,25 @@ test('annotate without a selection is refused; an unknown command too', async ()
   await assert.rejects(reviewer.dispatch({ type: 'fly' }), /Unknown command/);
   reviewer.close();
 });
+
+test('commands do not wait for each other: a note and a selection go through while the model works', async () => {
+  let release;
+  const gate = new Promise((resolve) => { release = resolve; });
+  const fetch = fakeFetch(twoRewrites);
+  const slow = async (url, init) => { await gate; return fetch(url, init); };
+  const { reviewer, page } = await setup({ fetch: slow });
+  page.select('Build better products');
+  const id = await reviewer.dispatch({ type: 'annotate' });
+  const asking = reviewer.dispatch({ type: 'ask', id, text: 'Shorter.' });
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.equal(find(reviewer, id).state, 'asking');
+  await reviewer.dispatch({ type: 'deselect' });
+  reviewer.dispatch({ type: 'note', id, text: 'Typed while it works.' });
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.equal(find(reviewer, id).note, 'Typed while it works.');
+  assert.equal(reviewer.getState().activeID, null);
+  release();
+  await asking;
+  assert.equal(find(reviewer, id).state, 'suggested');
+  reviewer.close();
+});

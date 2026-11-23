@@ -103,7 +103,8 @@ reviewer.ready()               // a promise: settles once booted, rejects when b
 reviewer.close()
 ```
 
-Commands run one at a time, in order; `annotate` resolves to the new
+Commands do not wait for each other (a note goes through while the model
+works), only for the boot and a page being opened; `annotate` resolves to the new
 annotation's id.
 
 ### ViewState
