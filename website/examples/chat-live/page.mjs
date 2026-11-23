@@ -199,11 +199,25 @@ export async function mount(root) {
   // the newest message of each room or direct message you have seen, by "you\nroom": a newer one is
   // unread (a screen keeps a conversation's latest messages only, so counting them would stop at the cap)
   const seen = new Map();
-  /** Whether `name`'s newest message on your screen came after the one you saw last there; never for the open one. */
-  const unreadOn = (screen, name) => {
-    const last = screen.messages.findLast((message) => message.room === name);
-    return name !== room && Boolean(last) && last !== seen.get(`${you}\n${name}`);
+  /**
+   * What is unread in `name` on your screen: whether someone else posted there after the message
+   * you saw last, or after your own last post (you read up to it), and how many of those posts
+   * mention you. Never in the open conversation.
+   */
+  const unreadOf = (screen, name) => {
+    const found = { unread: false, mentions: 0 };
+    if (name === room) return found;
+    const last = seen.get(`${you}\n${name}`);
+    for (let index = screen.messages.length - 1; index >= 0; index--) {
+      const message = screen.messages[index];
+      if (message.room !== name) continue;
+      if (message === last || message.from === you) break;
+      found.unread = true;
+      if (mentioned(message.text, you)) found.mentions++;
+    }
+    return found;
   };
+  const unreadOn = (screen, name) => unreadOf(screen, name).unread;
   const chat = await createChat(tinyactors, { versions: texts, version: LATEST, onChange: () => render() });
   // The people already talking: scout and forager in general, scout's find.
   await chat.connect('scout');
@@ -1109,13 +1123,22 @@ export async function mount(root) {
     keyed(roomList, rooms, (name) => {
       // a long name ends in an ellipsis, the whole of it in the title
       const button = el('button', { type: 'button', class: 'chatlive__room-link', title: `#${name}` },
-        el('span', { class: 'chatlive__hash', 'aria-hidden': 'true' }, '#'), el('span', { class: 'chatlive__room-name' }, name));
+        el('span', { class: 'chatlive__hash', 'aria-hidden': 'true' }, '#'), el('span', { class: 'chatlive__room-name' }, name),
+        el('span', { class: 'chatlive__room-note' }), el('span', { class: 'chatlive__room-count', 'aria-hidden': 'true', hidden: '' }));
       button.addEventListener('click', () => openRoom(name));
       return el('li', {}, button);
     }, (node, name) => {
       const button = node.firstChild;
+      const joinedHere = screen.rooms.includes(name);
+      // a joined channel with posts you have not seen is bold, a mention of you counted on it, as a client shows them
+      const { unread, mentions } = joinedHere ? unreadOf(screen, name) : { unread: false, mentions: 0 };
       button.setAttribute('aria-current', String(name === room));
-      button.classList.toggle('chatlive__room-link--joined', screen.rooms.includes(name));
+      button.classList.toggle('chatlive__room-link--joined', joinedHere);
+      button.classList.toggle('chatlive__room-link--unread', unread);
+      const [, , note, mark] = button.children;
+      setText(note, unread ? `, unread${mentions ? `, ${mentions} ${mentions === 1 ? 'mention' : 'mentions'}` : ''}` : '');
+      mark.hidden = !mentions;
+      setText(mark, mentions ? count(mentions) : '');
     });
     // a person: avatar, presence, name; `note` says more to a screen reader. One button, which opens the direct message
     const personButton = (name, open) => {

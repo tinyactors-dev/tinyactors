@@ -619,10 +619,15 @@ ta-tabs { display: block; }
 .chatlive__heading:hover { background: var(--cl-side-hover); }
 .chatlive__rooms, .chatlive__people, .chatlive__actors, .chatlive__messages { margin: 0; padding: 0; list-style: none; }
 .chatlive__room-link { all: unset; box-sizing: border-box; display: flex; align-items: center; gap: 0; width: calc(100% - 16px); height: 28px; margin: 0 8px;
-  padding: 0 8px 0 19px; border-radius: 6px; cursor: pointer; color: var(--cl-side-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  position: relative; padding: 0 8px 0 19px; border-radius: 6px; cursor: pointer; color: var(--cl-side-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .chatlive__room-link .chatlive__hash { width: 21px; flex: none; font-size: 16px; }
 .chatlive__room-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .chatlive__room-link--joined { color: var(--cl-side-fg); }
+.chatlive__room-link.chatlive__room-link--unread { color: var(--cl-side-strong); font-weight: 700; }
+.chatlive__room-note { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+.chatlive__room-count { flex: none; min-width: 18px; height: 18px; box-sizing: border-box; margin-left: auto; padding: 0 5px; border-radius: 9px;
+  background: #7d3986; color: #fff; font-size: 11px; font-weight: 700; line-height: 18px; text-align: center; }
+.chatlive__room-count[hidden] { display: none; }
 .chatlive__room-link:hover { background: var(--cl-side-hover); }
 .chatlive__room-link[aria-current="true"] { background: var(--cl-side-current); color: var(--cl-side-strong); font-weight: 700; }
 .chatlive__room-link:focus-visible { outline: 2px solid var(--cl-side-strong); outline-offset: -2px; }
