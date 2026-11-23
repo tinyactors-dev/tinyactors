@@ -1351,7 +1351,9 @@ export async function mount(root) {
       if (node.drawn === drawn) return;
       node.drawn = drawn;
       // when the post was made (step 9's store records it), or on step 5 when it reached this screen
-      const stamp = el('time', { class: 'chatlive__at' }, clock(message.at));
+      // past an hour (h:mm:ss) the stamp is marked long, past ten hours longer, so a follow-up's still fits the avatar's column
+      const long = message.at >= 36000 ? ' chatlive__at--long chatlive__at--longer' : message.at >= 3600 ? ' chatlive__at--long' : '';
+      const stamp = el('time', { class: `chatlive__at${long}` }, clock(message.at));
       const paragraph = el('p', { class: 'chatlive__body' }, ...body(message.text, query, you));
       // a post someone else made that mentions you is tinted, as Activity lists it
       node.className = `chatlive__message${more ? ' chatlive__message--more' : ''}${toYou && message.from !== you ? ' chatlive__message--you' : ''}`;

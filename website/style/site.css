@@ -780,6 +780,9 @@ ta-tabs { display: block; }
 .chatlive__message--more { padding-top: 2px; padding-bottom: 2px; margin-top: -8px; }
 .chatlive__message--more .chatlive__at { visibility: hidden; justify-self: end; align-self: center; font-size: 11px; }
 .chatlive__message--more:hover .chatlive__at { visibility: visible; }
+/* h:mm:ss in the 36px column: a size smaller, its digits closer; from ten hours it reaches 4px into the gap before the text */
+.chatlive__message--more .chatlive__at--long { font-size: 10px; letter-spacing: -0.02em; }
+.chatlive__message--more .chatlive__at--longer { margin-right: -4px; }
 .chatlive__empty, .chatlive__notice { padding: 4px 20px; color: var(--cl-muted); font-style: italic; }
 /* the top of a conversation: the channel's name, or the person, large, then a line about it */
 .chatlive__beginning { padding: 12px 20px 16px; }
