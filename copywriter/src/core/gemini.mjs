@@ -17,7 +17,7 @@ export const FUNCTIONS = Object.freeze([
           description: 'The exact text on the page to replace, copied verbatim. Omit it when the rewrite is of the selected text.',
         },
         replacement: { type: 'string', description: 'The proposed replacement, plain text.' },
-        rationale: { type: 'string', description: 'One sentence: why it serves the style guide and the reader.' },
+        rationale: { type: 'string', description: 'One sentence: which need of which active audience it serves (name the audience), and how it keeps to the voice.' },
       },
       required: ['replacement', 'rationale'],
     },
@@ -32,25 +32,29 @@ export const FUNCTIONS = Object.freeze([
     },
   },
   {
-    name: 'define_persona',
-    description: 'Create or update a persona: a named voice or audience whose instructions guide every rewrite while it is active. Call it when the reviewer describes an audience, a reader or a voice. A persona of the same name is updated.',
+    name: 'define_audience',
+    description: 'Create or update an audience: a kind of reader of the page (not a writing voice). Call it when the reviewer describes who reads, or asks who the page is for. An audience of the same name is updated.',
     parameters: {
       type: 'object',
       properties: {
-        name: { type: 'string', description: 'A short name, such as "Skeptical CTO".' },
-        instructions: { type: 'string', description: 'The style guide for this persona, as instructions to a copy editor: who reads, what they need, the voice, what to avoid.' },
-        use: { type: 'boolean', description: 'True to make it the active persona now.' },
+        name: { type: 'string', description: 'A short name for the reader, such as "Skeptical senior backend engineer".' },
+        description: { type: 'string', description: 'Who they are, in one or two sentences.' },
+        knows: { type: 'string', description: 'What they already know.' },
+        wants: { type: 'string', description: 'The information they want from the page.' },
+        tasks: { type: 'string', description: 'The tasks they came to the page to do.' },
+        objections: { type: 'string', description: 'Their doubts and objections.' },
+        use: { type: 'boolean', description: 'True to make it one of the active audiences now.' },
       },
-      required: ['name', 'instructions'],
+      required: ['name', 'description'],
     },
   },
   {
-    name: 'use_persona',
-    description: 'Make a saved persona the active one, by its name.',
+    name: 'use_audiences',
+    description: 'Set the active audiences, by their names: the rewrites are then written for them. An empty list writes for no audience in particular.',
     parameters: {
       type: 'object',
-      properties: { name: { type: 'string', description: 'The persona\'s name.' } },
-      required: ['name'],
+      properties: { names: { type: 'array', items: { type: 'string' }, description: 'The audiences\' names.' } },
+      required: ['names'],
     },
   },
 ]);
@@ -182,8 +186,8 @@ export function callResults({ parts, calls }) {
 const CALL_RESULTS = Object.freeze({
   propose_rewrite: 'Shown to the reviewer as a proposal to preview.',
   set_note: 'Saved as the note.',
-  define_persona: 'Saved; the reviewer sees it in Settings.',
-  use_persona: 'It is the active persona now.',
+  define_audience: 'Saved; the reviewer sees it in Settings.',
+  use_audiences: 'They are the active audiences now.',
 });
 
 /**
@@ -232,15 +236,16 @@ export async function generate({
 /**
  * What the copywriter's processors need from a reply: the text, the
  * rewrites (`propose_rewrite`'s arguments), a note (`set_note`), the
- * persona calls (`define_persona`, `use_persona`, as `{action: 'define'
- * | 'use', name, instructions?, use?}`) and the thought summary. Calls of
- * other names, or with the wrong types, are dropped.
+ * audience calls (`define_audience` as `{action: 'define', name,
+ * description, knows?, wants?, tasks?, objections?, use}`, `use_audiences`
+ * as `{action: 'use', names}`) and the thought summary. Calls of other
+ * names, or with the wrong types, are dropped.
  */
 export function reading({ text, calls, thoughts = '' }) {
   const rewrites = [];
-  const personas = [];
+  const audiences = [];
   let note = null;
-  const name = (a) => (typeof a.name === 'string' ? a.name.trim().slice(0, 80) : '');
+  const clean = (value, max = 600) => (typeof value === 'string' ? value.trim().slice(0, max) : '');
   for (const call of calls) {
     const a = call.args;
     if (call.name === 'propose_rewrite' && typeof a.replacement === 'string' && a.replacement.trim()) {
@@ -249,13 +254,15 @@ export function reading({ text, calls, thoughts = '' }) {
       rewrites.push(r);
     } else if (call.name === 'set_note' && typeof a.note === 'string') {
       note = a.note.trim();
-    } else if (call.name === 'define_persona' && name(a) && typeof a.instructions === 'string' && a.instructions.trim()) {
-      personas.push({ action: 'define', name: name(a), instructions: a.instructions.trim(), use: a.use === true });
-    } else if (call.name === 'use_persona' && name(a)) {
-      personas.push({ action: 'use', name: name(a) });
+    } else if (call.name === 'define_audience' && clean(a.name, 80) && clean(a.description)) {
+      const audience = { action: 'define', name: clean(a.name, 80), description: clean(a.description), use: a.use === true };
+      for (const field of ['knows', 'wants', 'tasks', 'objections']) if (clean(a[field])) audience[field] = clean(a[field]);
+      audiences.push(audience);
+    } else if (call.name === 'use_audiences' && Array.isArray(a.names)) {
+      audiences.push({ action: 'use', names: a.names.map((n) => clean(n, 80)).filter(Boolean) });
     }
   }
-  return { text, rewrites, note, personas, thoughts };
+  return { text, rewrites, note, audiences, thoughts };
 }
 
 /** What the transcription asks of the model. */

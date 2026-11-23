@@ -33,6 +33,15 @@ const cases = [
   { kind: 'heading', words: [1, 8], note: 'Make this heading say what the reader gets.' },
   { kind: 'paragraph', words: [4, 42], note: 'Tighten this. Keep every fact.' },
   { kind: 'paragraph', words: [4, 42], note: 'Too abstract: lead with what the code does.' },
+  // under an audience: the rationale names it
+  { kind: 'paragraph', words: [4, 42], note: 'Rewrite it for this reader.', audience: {
+    name: 'Skeptical backend engineer',
+    description: 'A senior backend engineer evaluating actor runtimes for a service at work.',
+    knows: 'Threads, queues, Erlang and Akka.',
+    wants: 'Concrete numbers and what the runtime does not do.',
+    tasks: 'Decide in five minutes whether to try it.',
+    objections: 'Another framework to learn; hype.',
+  } },
 ];
 
 // Pick real sentences from the page: a short line for the heading, longer ones for paragraphs.
@@ -42,6 +51,7 @@ const paragraphs = lines.filter((l) => l.split(/\s+/).length >= 12 && l.split(/\
 cases[0].original = heading;
 cases[1].original = paragraphs[0];
 cases[2].original = paragraphs[1];
+cases[3].original = paragraphs[2] || paragraphs[0];
 
 const page = fakePage({ url: 'https://www.tinyactors.dev/', title: 'tinyactors', text });
 const reviewer = await createReviewer({
@@ -53,6 +63,11 @@ await reviewer.dispatch({ type: 'settings.save', model: values.model, thinking: 
 
 let failures = 0;
 for (const c of cases) {
+  if (c.audience) {
+    await reviewer.dispatch({ type: 'settings.save', audience: c.audience });
+    const { id } = reviewer.getState().settings.audiences.find((a) => a.name === c.audience.name);
+    await reviewer.dispatch({ type: 'settings.save', audienceIDs: [id] });
+  }
   page.select(c.original);
   const started = performance.now();
   const id = await reviewer.dispatch({ type: 'annotate', note: c.note });
@@ -60,7 +75,7 @@ for (const c of cases) {
   const seconds = ((performance.now() - started) / 1000).toFixed(1);
   const reply = a.messages.findLast((m) => m.role === 'model');
   const thought = reply?.thoughts ? `, thought summary ${reply.thoughts.length} characters` : ', no thought summary';
-  console.log(`\n[${c.kind}] ${c.original}\n  note: ${c.note}  (${seconds} s, state ${a.state}${thought})`);
+  console.log(`\n[${c.kind}${c.audience ? `, for ${c.audience.name}` : ''}] ${c.original}\n  note: ${c.note}  (${seconds} s, state ${a.state}${thought})`);
   if (a.state === 'failed') { console.log(`  FAIL ${a.error}`); failures++; continue; }
   if (a.suggestions.length === 0) { console.log(`  FAIL no rewrites; the model said: ${a.messages.at(-1)?.text}`); failures++; continue; }
   for (const s of a.suggestions) {
@@ -77,6 +92,7 @@ for (const c of cases) {
     if (numbers.length) problems.push(`a number not on the page: ${numbers.join(', ')}`);
     const words = s.text.trim().split(/\s+/).slice(1).filter((w) => /^[a-z]/i.test(w));
     if (c.kind === 'heading' && words.length > 1 && words.filter((w) => /^[A-Z][a-z]/.test(w)).length > words.length / 2) problems.push('title case');
+    if (c.audience && !/engineer/i.test(s.rationale)) problems.push('the rationale names no audience');
     if (problems.length) failures++;
     console.log(`  ${problems.length ? 'FAIL' : 'ok  '} ${s.text}${problems.length ? `  (${problems.join(', ')})` : ''}\n       ${s.rationale}`);
   }

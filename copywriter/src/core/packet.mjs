@@ -96,7 +96,7 @@ export async function buildPacket({ annotations, pages = {}, title = 'Copy revie
     entries.push(`<copy-change id="item-${n}" observationRef="observation-${n}" anchorRef="anchor-${n}" revisionRef="revision-${n}" operation="replace_text" accepted="true">`
       + `<expected>${escapeText(a.original)}</expected>`
       + `<replacement>${escapeText(kept.text)}</replacement>`
-      + `<rationale>${escapeText([request(a) && `Asked: ${request(a)}`, kept.rationale].filter(Boolean).join(' ') || '')}</rationale>`
+      + `<rationale>${escapeText([request(a) && `Asked: ${request(a)}`, kept.rationale, writtenFor(a) && `Written for: ${writtenFor(a)}.`].filter(Boolean).join(' ') || '')}</rationale>`
       + `<acceptance>${escapeText(`${a.page} shows the replacement exactly where it showed the expected text, in the same element.`)}</acceptance>`
       + '</copy-change>');
   }
@@ -104,7 +104,7 @@ export async function buildPacket({ annotations, pages = {}, title = 'Copy revie
     const n = number.get(a);
     entries.push(`<design-task id="item-${n}" observationRef="observation-${n}" status="open">`
       + `<summary>${escapeText(summary(a))}</summary>`
-      + `<instructions>${escapeText(`Revise the text "${a.original}" on ${a.page} to address it${proposed(a).length ? `; proposed: ${proposed(a).map((x) => `"${x.text}"`).join(', ')}` : ''}.`)}</instructions>`
+      + `<instructions>${escapeText(`Revise the text "${a.original}" on ${a.page} to address it${writtenFor(a) ? `, for ${writtenFor(a)}` : ''}${proposed(a).length ? `; proposed: ${proposed(a).map((x) => `"${x.text}"`).join(', ')}` : ''}.`)}</instructions>`
       + `<acceptance>${escapeText('The reviewer agrees the note is addressed.')}</acceptance>`
       + '</design-task>');
   }
@@ -154,18 +154,23 @@ function changesMarkdown(items, pages, at) {
       lines.push(`### Change ${n}`, '', 'Original:', '', fence(a.original), '', 'Replacement:', '', fence(kept.text), '');
       if (request(a)) lines.push(`Request: ${request(a)}`, '');
       if (kept.rationale) lines.push(`Why: ${kept.rationale}`, '');
+      if (writtenFor(a)) lines.push(`Written for: ${writtenFor(a)}`, '');
       lines.push(...anchorLines(a), '');
     }
     for (const a of items.notes.filter((c) => c.page === url)) {
       n += 1;
       lines.push(`### Open item ${n}`, '', 'Text:', '', fence(a.original), '');
       if (request(a)) lines.push(`Request: ${request(a)}`, '');
+      if (writtenFor(a)) lines.push(`Written for: ${writtenFor(a)}`, '');
       for (const p of proposed(a)) lines.push(`Proposed${p.own ? ' (by the reviewer)' : ''}:`, '', fence(p.text), '', ...(p.rationale && !p.own ? [`Why: ${p.rationale}`, ''] : []));
       lines.push(...anchorLines(a), '');
     }
   }
   return lines.join('\n');
 }
+
+// The audiences an annotation's rewrites were written for, as a list of names.
+const writtenFor = (a) => (a.audiences || []).join(', ');
 
 function anchorLines(a) {
   const quote = a.anchor?.quote || {};

@@ -1,26 +1,32 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
-  One page under review: the page-level conversation with the model. When
+  One conversation with the model about a page under review. A page has
+  any number of them; the core keeps their list and runs the one that is
+  open as an actor of this chart (named `conversation <page> <id>`), so a
+  new conversation starts from nothing and the model reads only this one.
+  When
   the model proposes a rewrite of a piece of the page (`propose_rewrite`
   with `original_text`, and the anchor the model processor found for it),
   this actor spawns an annotation actor for it, and the model's message
   names the annotations it made (`annotations`; `proposed` when the model
   said nothing but the proposals). A spoken message (`chat` with a clip)
   is transcribed first, and the transcript is the user's message. The
-  persona calls of a reply (`define_persona`, `use_persona`) go to the
-  `settings` processor, and the model's message names them (`personas`).
+  audience calls of a reply (`define_audience`, `use_audiences`) go to the
+  `settings` processor, and the model's message names them (`audiences`).
 
-    model    chat         → model.reply {text, proposed?, rewrites, personas, thoughts?, seconds?} | model.error {message}
+    model    chat         → model.reply {text, proposed?, rewrites, audiences, for, thoughts?, seconds?} | model.error {message}
              transcribe   → model.transcript {text} | model.error {message}   (the clip's id)
     spawn    spawn        → spawned {name, address}    (tinyactors' Spawner)
-    settings persona      → persona.saved {name, id, action} | persona.refused {name, message}
-    store    chat         {page, messages}, after every change
-    ui       chat         {page, messages, busy, error}, after every change
+    settings audience     → audience.saved {ids: {name: id}} | audience.refused {message}
+    store    chat         {page, id, messages}, after every change
+    ui       chat         {page, id, messages, busy, error}, after every change
 -->
 <scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0"
-       datamodel="ecmascript" name="session" initial="live">
+       datamodel="ecmascript" name="conversation" initial="live">
   <datamodel>
     <data id="page"/>
+    <!-- the conversation's id among the page's -->
+    <data id="id"/>
     <data id="lang" expr="'en'"/>
     <data id="messages" expr="[]"/>
     <data id="busy" expr="false"/>
@@ -46,17 +52,19 @@
           original: rewrite.original_text,
           anchor: rewrite.anchor || { quote: { exact: rewrite.original_text, prefix: '', suffix: '' }, selector: '' },
           suggestions: [{ id: 's1', text: rewrite.replacement, rationale: rewrite.rationale || '', after: 0 }],
+          audiences: rewrite.for || [],
         },
       };
     }
 
     // The model's message of a reply: its words, the annotations its
-    // rewrites made, the persona calls and the summary of its thinking.
+    // rewrites made, the audience calls and the summary of its thinking.
     function reply(data, pending) {
       var m = { role: 'model', text: data.text || 'No change proposed.', at: new Date().toISOString() };
       if (pending.length) m.annotations = pending.map((p) => p.name);
       if (data.proposed) m.proposed = true;
-      if (data.personas &amp;&amp; data.personas.length) m.personas = data.personas.map((p) => ({ name: p.name, action: p.action }));
+      var named = (data.audiences || []).flatMap((c) => (c.action === 'use' ? c.names : [c.name]).map((name) => ({ name: name, action: c.action })));
+      if (named.length) m.audiences = named;
       if (data.thoughts) m.thoughts = data.thoughts;
       if (data.seconds) m.seconds = data.seconds;
       return m;
@@ -66,15 +74,15 @@
   <state id="live" initial="idle">
     <!-- Every state raises `changed`: the conversation goes to the panel and to the store. -->
     <transition event="changed">
-      <send type="ui" event="chat" namelist="page messages busy error"/>
-      <send type="store" event="chat" namelist="page messages"/>
+      <send type="ui" event="chat" namelist="page id messages busy error"/>
+      <send type="store" event="chat" namelist="page id messages"/>
     </transition>
-    <!-- the settings processor's answers: a saved persona's id on the chip; a refusal is the error -->
-    <transition event="persona.saved">
-      <assign location="messages" expr="messages.map((m) => m.personas ? Object.assign({}, m, { personas: m.personas.map((p) => (p.name === _event.data.name &amp;&amp; !p.id ? Object.assign({}, p, { id: _event.data.id }) : p)) }) : m)"/>
+    <!-- the settings processor's answers: a saved audience's id on its chip; a refusal is the error -->
+    <transition event="audience.saved">
+      <assign location="messages" expr="messages.map((m) => m.audiences ? Object.assign({}, m, { audiences: m.audiences.map((a) => (!a.id &amp;&amp; _event.data.ids[a.name] ? Object.assign({}, a, { id: _event.data.ids[a.name] }) : a)) }) : m)"/>
       <raise event="changed"/>
     </transition>
-    <transition event="persona.refused">
+    <transition event="audience.refused">
       <assign location="error" expr="_event.data.message"/>
       <raise event="changed"/>
     </transition>
@@ -126,8 +134,8 @@
         <foreach array="pending" item="spawn">
           <send type="spawn" event="spawn"><content expr="spawn"/></send>
         </foreach>
-        <foreach array="_event.data.personas || []" item="call">
-          <send type="settings" event="persona"><content expr="call"/></send>
+        <foreach array="_event.data.audiences || []" item="call">
+          <send type="settings" event="audience"><content expr="call"/></send>
         </foreach>
         <assign location="pending" expr="[]"/>
       </transition>

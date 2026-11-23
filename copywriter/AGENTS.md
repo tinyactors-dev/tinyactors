@@ -71,7 +71,9 @@ one-off Python.
   page. Embedded: the site's page. Charts run on `datamodel: 'quickjs'`, so
   the extension's CSP needs only `'wasm-unsafe-eval'`.
 - **Storage.** IndexedDB (`copywriter` database) in the panel's origin:
-  annotations per page URL, settings (not the key), personas. Kept changes
+  annotations per page URL, the page chat's conversations per page URL,
+  settings (not the key: the model, thinking, the voice when edited, the
+  active audiences), audiences (one list for every page). Kept changes
   are re-applied to a page when it is opened again.
 - **Export.** A ZIP with `packet.xml` (valid against `spec/work-packet.xsd`,
   copied into the ZIP), `CHANGES.md` (a prompt a coding agent can follow:
@@ -93,14 +95,28 @@ one-off Python.
   height. It ends with an annotation of the pick (the sheet rises again
   and shows it), the pick button again, or Escape. Selecting text still
   works outside pick mode.
-- **Persona.** The default style guide is the website's voice
-  (`website/AGENTS.md`, "The voice: short and literal"), editable in
-  Settings but never deleted; more personas can be added in Settings or by
-  the model (`define_persona`, `use_persona`, from the page chat or an
-  annotation's conversation), and every persona but the default can be
-  deleted. The system instruction names the active persona, then its
-  instructions, and tells the model it may define one when the reviewer
-  describes an audience or a voice.
+- **Voice and audiences** (the maintainer, 2026-11-23: a persona is who
+  reads, not how we write). The **voice** is how to write: the website's
+  voice (`website/AGENTS.md`, "The voice: short and literal") by default,
+  editable in Settings, never deleted; saved empty it is the default
+  again. The **audiences** are who reads: each a name, who they are, what
+  they know, what they want from the page, the tasks they came to do and
+  their objections. None by default; one or several are active. They are
+  added and edited in Settings or by the model (`define_audience`,
+  `use_audiences`, from the page chat or an annotation's conversation;
+  asked "who is this page for?" it proposes them), and deleted in
+  Settings. The system instruction gives the voice, then the active
+  audiences, and asks each rewrite's rationale to name the audience need
+  it serves; an annotation keeps the names of the audiences its rewrites
+  were written for (`audiences`), which the export prints ("Written
+  for"). The database's version 2 moved an edited default persona's
+  instructions to the voice and dropped the other personas.
+- **Conversations.** The page chat has any number of conversations per
+  page; a new one starts empty and the model reads only the open one.
+  Each is an actor of `charts/conversation.scxml` while it is open (the
+  core ends it and starts another on `chat.new` and `chat.open`), and a
+  record in the store. A page opens on its newest. The database's version
+  2 made a page's one chat its conversation `c0`.
 
 ## Layout
 
@@ -120,9 +136,9 @@ copywriter/
     panel-css.mjs         its stylesheet as a string (a ShadowRoot adopts it; no bundler loader)
                           The thread: a transcript is the user's bubble with a small mic (a bubble
                           of dots while it is transcribed); a reply that thought has a collapsed
-                          "Thought for N s"; a persona call is a chip that opens the persona in
-                          Settings. Settings: the model, a segmented Thinking control, the persona
-                          (delete for any but the default; Use when a chip opened one not in use).
+                          "Thought for N s"; an audience call is a chip that opens the audience in
+                          Settings. Settings: the model, a segmented Thinking control, the voice,
+                          the audiences (each a switch, an editor and delete).
   src/platform/dom.mjs    the page adapter's DOM side, shared: anchors, locate, preview/revert of Text nodes, highlights
   src/platform/extension/ manifest.json, service-worker.mjs, content.mjs (page adapter), sidepanel.html/.mjs, mic.html/.mjs
   src/platform/embed/     embed.mjs (launcher, Shadow DOM, page adapter on the live DOM), loader snippet
@@ -164,9 +180,10 @@ annotation's id.
   settings: {
     hasKey, rememberKey, model, models: [{ id, label }],
     thinking,                              // 'low' | 'medium' | 'high' | 'xhigh'
-    personaID, personas: [{ id, name, instructions,
-      builtIn?,                            // true: the default, which cannot be deleted
-      source? }],                          // 'model': defined by the model (define_persona)
+    voice: { instructions, custom },       // how to write; custom false: the default voice
+    audiences: [{ id, name, description, knows?, wants?, tasks?, objections?,
+      source? }],                          // who reads; source 'model': defined by the model (define_audience)
+    audienceIDs,                           // the active audiences, in order
   },
   annotations: [{                          // this page's, newest first
     id, state,                             // 'draft' | 'transcribing' | 'asking' | 'suggested' | 'previewing' | 'kept' | 'dismissed' | 'failed'
@@ -176,12 +193,15 @@ annotation's id.
     suggestions: [{ id, text, rationale, own?, after? }],   // own: the user's text (edit); after: the number of
                                            // messages before it (it follows the reply that brought it)
     chosenID,                              // suggestion previewed or kept
+    audiences,                             // the names of the audiences its last rewrites were written for
     messages: [message],                   // below
     error?, createdAt, updatedAt,
   }],
   activeID: string | null,
-  chat: {                                  // page-level conversation
-    messages: [message],                   // below
+  chat: {                                  // the page chat's open conversation
+    id, messages: [message],               // below
+    conversations: [{ id, title, at }],    // this page's conversations with a message, newest first; title: the
+                                           //   first message, cut at 60 characters
     busy, error?,                          // busy while transcribing or asking; error: the last request failed
   },                                       //   (until the next message), or 'Nothing was heard.'
   recording: { state: 'idle' | 'recording' | 'transcribing', target: annotationID | 'page' | null },
@@ -194,7 +214,7 @@ message = {
   spoken?,                                 // a user message: true when it is a clip's transcript
   annotations?,                            // a page chat's model message: the ids of the annotations its rewrites made
   proposed?,                               // true: the model said nothing, the text lists its proposals
-  personas?: [{ name, action, id? }],      // a model message: its persona calls ('define' | 'use'); id once saved
+  audiences?: [{ name, action, id? }],     // a model message: its audience calls ('define' | 'use'); id once saved
   thoughts?, seconds?,                     // a model message: the summary of its thinking, and the request's seconds
 }
 ```
@@ -218,10 +238,12 @@ transcript exists; then the message shows, and the conversation goes on
 | `undo` | `id` | the page shows the original again; back to `suggested` |
 | `dismiss` / `reopen` / `delete` | `id` | |
 | `note` | `id`, `text` | sets the note |
-| `chat` | `text` | a page-level message; the model may create annotations (`propose_rewrite`) |
+| `chat` | `text` | a message in the open conversation; the model may create annotations (`propose_rewrite`) |
+| `chat.new` | | a new, empty conversation (none when the open one is empty) |
+| `chat.open` | `id` | opens an earlier conversation of this page |
 | `record.start` / `record.stop` | `target` | push-to-talk: the clip is transcribed, and the transcript is the next message for `target`; an empty one is not sent ("Nothing was heard.") |
-| `settings.save` | `apiKey?`, `rememberKey?`, `model?`, `personaID?`, `persona?`, `thinking?` | a new key is checked with models.list first: one Google refuses is not saved ("That key was not accepted by Google."); `persona` `{id?, name, instructions}` creates or updates one |
-| `settings.deletePersona` | `id` | any persona but the default; the active one gives way to the default |
+| `settings.save` | `apiKey?`, `rememberKey?`, `model?`, `thinking?`, `voice?`, `audience?`, `audienceIDs?` | a new key is checked with models.list first: one Google refuses is not saved ("That key was not accepted by Google."); `voice` is the instructions ('' for the default); `audience` `{id?, name, description, knows?, wants?, tasks?, objections?}` creates or updates one; `audienceIDs` sets the active ones |
+| `settings.deleteAudience` | `id` | deletes an audience (it stops being active) |
 | `settings.forgetKey` | | |
 | `models.refresh` | | |
 | `export` | `scope: 'page' \| 'all'`, `to: 'download' \| 'clipboard'` | |
@@ -296,13 +318,14 @@ from the model.
 
 ## Actors and processors
 
-Charts in `charts/`, one actor per annotation plus one per page session.
+Charts in `charts/`, one actor per annotation plus one for the page
+chat's open conversation.
 Actors reach the world only through `<send type="...">` to I/O processors
 the core registers: `page`, `model`, `store`, `ui`, `settings` (the
-personas the model defines or uses: it saves them and answers
-`persona.saved {name, id, action}` or `persona.refused {name, message}`),
+audiences the model defines or chooses: it saves them and answers
+`audience.saved {ids: {name: id}}` or `audience.refused {message}`),
 and `spawn` (the
-package's `Spawner`: the session actor spawns an annotation actor for each
+package's `Spawner`: the conversation actor spawns an annotation actor for each
 `propose_rewrite` of the page chat that names `original_text`). When the
 model answers the page chat with function calls only, the `model`
 processor sends their results back once (the model's turn as it came,
@@ -321,9 +344,10 @@ and sends `model` a `transcribe` of that id, which answers
 
 The model's tools (`src/core/gemini.mjs`, `FUNCTIONS`): `propose_rewrite
 {original_text?, replacement, rationale}`, `set_note {note}`,
-`define_persona {name, instructions, use?}` (create or update by name;
-`use: true` makes it active) and `use_persona {name}`. A reply's persona
-calls go from the actor to `settings`; a reply of persona calls only says
+`define_audience {name, description, knows?, wants?, tasks?, objections?,
+use?}` (create or update by name; `use: true` makes it active) and
+`use_audiences {names}` (the active ones). A reply's audience calls go
+from the actor to `settings`; a reply of audience calls only says
 what was saved.
 
 `src/core/charts.mjs` is generated by `mise run charts` from

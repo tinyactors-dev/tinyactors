@@ -16,7 +16,10 @@ test('boots: ready, the page, default settings, no annotations', async () => {
   assert.equal(s.settings.model, 'gemini-4-hydrogen');
   assert.equal(s.settings.models[0].id, 'gemini-4-hydrogen');
   assert.equal(s.settings.hasKey, true);
-  assert.equal(s.settings.personas[0].name, 'tinyactors voice');
+  assert.match(s.settings.voice.instructions, /short and literal/);
+  assert.equal(s.settings.voice.custom, false);
+  assert.deepEqual(s.settings.audiences, []);
+  assert.deepEqual(s.settings.audienceIDs, []);
   assert.deepEqual(s.annotations, []);
   assert.ok(Object.isFrozen(s) && Object.isFrozen(s.settings));
   reviewer.close();
@@ -39,7 +42,7 @@ test('annotate, ask, two rewrites, preview, keep; a reload re-applies the kept t
   assert.deepEqual(a.suggestions.map((s) => s.text), ['Ship reliable software', 'Run statecharts as actors']);
   assert.deepEqual(a.messages.map((m) => [m.role, m.text]), [['user', 'Too generic.'], ['model', 'Two plainer headlines.']]);
 
-  // What went to Gemini: the key in its header, the model, tools, the persona, the selection.
+  // What went to Gemini: the key in its header, the model, tools, the voice, the selection.
   const request = fetch.requests[0];
   assert.match(request.url, /\/v1beta\/models\/gemini-4-hydrogen:generateContent$/);
   assert.equal(request.headers['x-goog-api-key'], 'AIza-test-key-123');
@@ -199,7 +202,7 @@ test('the page chat: the model\'s rewrites of the page\'s text become annotation
   assert.equal(found.suggestions[0].text, 'An actor costs 287 bytes');
   const missing = s.annotations.find((a) => a.original === 'Not on this page');
   assert.equal(missing.anchorFound, false);
-  assert.deepEqual((await store.chat(page.url)).map((m) => m.text), ['What is vague here?', 'Two lines are vague.']);
+  assert.deepEqual((await store.conversations(page.url))[0].messages.map((m) => m.text), ['What is vague here?', 'Two lines are vague.']);
 
   await reviewer.dispatch({ type: 'preview', id: found.id, suggestionID: 's1' });
   assert.match(page.text, /An actor costs 287 bytes/);

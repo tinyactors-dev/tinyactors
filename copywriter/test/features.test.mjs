@@ -241,105 +241,152 @@ test('thinking: an answer cut at MAX_TOKENS keeps its words; one cut before any 
   reviewer.close();
 });
 
-test('personas: the page chat defines one and uses it; the chip names it; the next request follows it', async () => {
+const ENGINEER = {
+  name: 'Skeptical backend engineer',
+  description: 'A senior backend engineer evaluating actor runtimes.',
+  knows: 'Queues, threads, Erlang.',
+  wants: 'Numbers: memory per actor, throughput.',
+  tasks: 'Decide whether to try tinyactors.',
+  objections: 'Another framework to learn.',
+};
+
+test('audiences: the page chat proposes one and uses it; the chip names it; rewrites are written for it and say so', async () => {
   const store = createMemoryStore();
   const fetch = fakeFetch(
-    geminiReply('Saved a persona for senior backend engineers and switched to it.', [
-      ['define_persona', { name: 'Skeptical backend engineer', instructions: 'Readers are senior backend engineers. Prove every claim.', use: true }],
-    ]),
-    geminiReply('Rewritten for them.', [['propose_rewrite', { original_text: 'Actors are cheap', replacement: 'An actor costs 287 bytes', rationale: 'A number.' }]]),
+    geminiReply('This page is for backend engineers evaluating runtimes.', [['define_audience', { ...ENGINEER, use: true }]]),
+    geminiReply('The second line gives no number.', [['propose_rewrite', { original_text: 'Actors are cheap', replacement: 'An actor costs 287 bytes', rationale: 'Serves the skeptical backend engineer\'s want for numbers.' }]]),
   );
-  const { reviewer } = await setup({ fetch, store });
-  await reviewer.dispatch({ type: 'chat', text: 'Define a persona for a skeptical senior backend engineer and use it' });
-  const s = reviewer.getState();
-  const persona = s.settings.personas.find((p) => p.name === 'Skeptical backend engineer');
-  assert.ok(persona, 'saved');
-  assert.equal(persona.source, 'model');
-  assert.equal(s.settings.personaID, persona.id, 'in use');
-  assert.deepEqual(s.chat.messages.at(-1).personas, [{ name: 'Skeptical backend engineer', action: 'define', id: persona.id }]);
-  assert.equal((await store.personas())[0].instructions, 'Readers are senior backend engineers. Prove every claim.');
-  assert.equal((await store.settings()).personaID, persona.id);
-  // the tools and the system instruction
+  const { reviewer, page, clipboard } = await setup({ fetch, store });
+  await reviewer.dispatch({ type: 'chat', text: 'Who is this page for?' });
+  let s = reviewer.getState();
+  const engineer = s.settings.audiences.find((a) => a.name === ENGINEER.name);
+  assert.deepEqual({ ...engineer, id: undefined }, { ...ENGINEER, id: undefined, source: 'model' });
+  assert.deepEqual(s.settings.audienceIDs, [engineer.id], 'in use');
+  assert.deepEqual(s.chat.messages.at(-1).audiences, [{ name: ENGINEER.name, action: 'define', id: engineer.id }]);
+  assert.deepEqual((await store.settings()).audienceIDs, [engineer.id]);
+  // the tools and the system instruction: the voice is how, the audiences who
   const first = fetch.requests[0].body;
-  assert.deepEqual(first.tools[0].functionDeclarations.map((f) => f.name), ['propose_rewrite', 'set_note', 'define_persona', 'use_persona']);
-  assert.match(first.systemInstruction.parts[0].text, /^Active persona: tinyactors voice/);
-  assert.match(first.systemInstruction.parts[0].text, /define a persona for it with define_persona/);
+  assert.deepEqual(first.tools[0].functionDeclarations.map((f) => f.name), ['propose_rewrite', 'set_note', 'define_audience', 'use_audiences']);
+  assert.match(first.systemInstruction.parts[0].text, /^The voice \(how to write\):\nYou edit the copy/);
+  assert.match(first.systemInstruction.parts[0].text, /No audience is chosen/);
+  assert.match(first.systemInstruction.parts[0].text, /who the page is for.*define_audience/);
 
-  await reviewer.dispatch({ type: 'chat', text: 'Now rewrite the weakest line.' });
+  await reviewer.dispatch({ type: 'chat', text: 'What does a backend engineer want here that is missing?' });
   const second = fetch.requests[1].body.systemInstruction.parts[0].text;
-  assert.match(second, /^Active persona: Skeptical backend engineer\nReaders are senior backend engineers/);
-  assert.match(second, /Saved personas: tinyactors voice\./);
-  assert.equal(reviewer.getState().annotations[0].suggestions[0].text, 'An actor costs 287 bytes');
+  assert.match(second, /The audiences \(who reads\):\n- Skeptical backend engineer: A senior backend engineer evaluating actor runtimes\.\n {2}Knows: Queues, threads, Erlang\.\n {2}Wants: Numbers/);
+  assert.match(second, /Objections: Another framework to learn\./);
+  s = reviewer.getState();
+  const made = s.annotations[0];
+  assert.deepEqual(made.audiences, [ENGINEER.name], 'the annotation was written for it');
+  // the export says what it was written for
+  await reviewer.dispatch({ type: 'preview', id: made.id, suggestionID: 's1' });
+  await reviewer.dispatch({ type: 'keep', id: made.id });
+  await reviewer.dispatch({ type: 'export', to: 'clipboard' });
+  assert.match(clipboard[0], /Written for: Skeptical backend engineer/);
+  assert.match(page.text, /An actor costs 287 bytes/);
   reviewer.close();
 });
 
-test('personas: defined again by name it is updated; use_persona switches; an unknown name is the chat\'s error', async () => {
+test('audiences: defined again by name it is updated; use_audiences sets the active ones; an unknown name is the chat\'s error', async () => {
   const fetch = fakeFetch(
-    geminiReply('', [['define_persona', { name: 'CTO', instructions: 'Short.' }]]),
+    geminiReply('Two readers.', [['define_audience', { name: 'CTO', description: 'Buys it.' }], ['define_audience', { name: 'Student', description: 'Learns it.' }]]),
+    geminiReply('Updated.', [['define_audience', { name: 'cto', description: 'Signs the budget.', use: true }]]),
+    geminiReply('', [['use_audiences', { names: ['Student', 'CTO'] }]]),
     geminiReply(''), // the calls' results sent back: still no words
-    geminiReply('Updated.', [['define_persona', { name: 'cto', instructions: 'Shorter.', use: true }]]),
-    geminiReply('Back to the default.', [['use_persona', { name: 'tinyactors voice' }]]),
-    geminiReply('Switching.', [['use_persona', { name: 'Nobody' }]]),
+    geminiReply('Switching.', [['use_audiences', { names: ['Nobody'] }]]),
   );
   const { reviewer } = await setup({ fetch });
-  await reviewer.dispatch({ type: 'chat', text: 'A CTO persona' });
+  await reviewer.dispatch({ type: 'chat', text: 'Who reads this?' });
   let s = reviewer.getState();
-  assert.equal(s.chat.messages.at(-1).text, 'Persona “CTO” saved.', 'calls only: it says what was saved');
-  assert.equal(s.settings.personaID, 'tinyactors-voice', 'not used: use was not true');
-  const id = s.settings.personas.find((p) => p.name === 'CTO').id;
+  assert.deepEqual(s.settings.audiences.map((a) => a.name), ['CTO', 'Student']);
+  assert.deepEqual(s.settings.audienceIDs, [], 'defined, not in use');
+  const cto = s.settings.audiences.find((a) => a.name === 'CTO').id;
 
-  await reviewer.dispatch({ type: 'chat', text: 'Shorter, and use it' });
+  await reviewer.dispatch({ type: 'chat', text: 'Write for the CTO' });
   s = reviewer.getState();
-  assert.equal(s.settings.personas.filter((p) => p.name.toLowerCase() === 'cto').length, 1);
-  assert.equal(s.settings.personas.find((p) => p.id === id).instructions, 'Shorter.');
-  assert.equal(s.settings.personaID, id);
+  assert.equal(s.settings.audiences.length, 2);
+  assert.equal(s.settings.audiences.find((a) => a.id === cto).description, 'Signs the budget.');
+  assert.deepEqual(s.settings.audienceIDs, [cto]);
 
-  await reviewer.dispatch({ type: 'chat', text: 'Back' });
-  assert.equal(reviewer.getState().settings.personaID, 'tinyactors-voice');
-  await reviewer.dispatch({ type: 'chat', text: 'Use Nobody' });
+  await reviewer.dispatch({ type: 'chat', text: 'Both' });
   s = reviewer.getState();
-  assert.equal(s.chat.error, 'No persona named “Nobody”.');
-  assert.equal(s.settings.personaID, 'tinyactors-voice');
+  assert.equal(s.chat.messages.at(-1).text, 'Writing for “Student”, “CTO”.', 'calls only: it says what changed');
+  assert.equal(s.settings.audienceIDs.length, 2);
+  await reviewer.dispatch({ type: 'chat', text: 'Nobody' });
+  s = reviewer.getState();
+  assert.equal(s.chat.error, 'No audience named “Nobody”.');
+  assert.equal(s.settings.audienceIDs.length, 2, 'unchanged');
   reviewer.close();
 });
 
-test('personas: an annotation\'s conversation may define one too, through the same processor', async () => {
+test('audiences: an annotation\'s conversation may define one too; Settings edits, chooses and deletes them', async () => {
   const fetch = fakeFetch(geminiReply('For a CTO.', [
-    ['define_persona', { name: 'CTO', instructions: 'Lead with cost.', use: true }],
-    ['propose_rewrite', { replacement: 'Cut your costs', rationale: 'r' }],
+    ['define_audience', { name: 'CTO', description: 'Signs the budget.', use: true }],
+    ['propose_rewrite', { replacement: 'Cut your costs', rationale: 'Serves the CTO.' }],
   ]));
-  const { reviewer, page } = await setup({ fetch });
+  const store = createMemoryStore();
+  const { reviewer, page } = await setup({ fetch, store });
   page.select('Build better products');
   const id = await reviewer.dispatch({ type: 'annotate', note: 'Write it for a CTO.' });
-  const s = reviewer.getState();
-  const cto = s.settings.personas.find((p) => p.name === 'CTO');
-  assert.equal(s.settings.personaID, cto.id);
-  const a = find(reviewer, id);
-  assert.deepEqual(a.messages.at(-1).personas, [{ name: 'CTO', action: 'define', id: cto.id }]);
-  assert.equal(a.suggestions[0].text, 'Cut your costs');
+  let s = reviewer.getState();
+  const cto = s.settings.audiences.find((a) => a.name === 'CTO');
+  assert.deepEqual(s.settings.audienceIDs, [cto.id]);
+  assert.deepEqual(find(reviewer, id).messages.at(-1).audiences, [{ name: 'CTO', action: 'define', id: cto.id }]);
+  assert.deepEqual(find(reviewer, id).audiences, [], 'written before the audience was in use');
+
+  await reviewer.dispatch({ type: 'settings.save', audience: { id: cto.id, name: 'CTO', description: 'Signs the budget.', objections: 'Lock-in.' } });
+  s = reviewer.getState();
+  assert.equal(s.settings.audiences[0].objections, 'Lock-in.');
+  assert.equal(s.settings.audiences[0].source, 'model', 'still the model\'s');
+  await reviewer.dispatch({ type: 'settings.save', audience: { name: 'Student', description: 'Learns it.' } });
+  const student = reviewer.getState().settings.audiences.find((a) => a.name === 'Student');
+  await reviewer.dispatch({ type: 'settings.save', audienceIDs: [student.id, cto.id] });
+  assert.deepEqual(reviewer.getState().settings.audienceIDs, [student.id, cto.id]);
+  await assert.rejects(reviewer.dispatch({ type: 'settings.save', audience: { name: ' ' } }), /needs a name/);
+  await reviewer.dispatch({ type: 'settings.deleteAudience', id: cto.id });
+  s = reviewer.getState().settings;
+  assert.deepEqual(s.audiences.map((a) => a.name), ['Student']);
+  assert.deepEqual(s.audienceIDs, [student.id]);
+  assert.deepEqual((await store.settings()).audienceIDs, [student.id]);
   reviewer.close();
 });
 
-test('personas: any but the default can be deleted; deleting the active one goes back to the default', async () => {
-  const fetch = fakeFetch(geminiReply('Saved.', [['define_persona', { name: 'CTO', instructions: 'Lead with cost.', use: true }]]));
+test('conversations: a new one starts empty, the model reads only it; the earlier ones are listed and reopen', async () => {
   const store = createMemoryStore();
-  const { reviewer } = await setup({ fetch, store });
-  await reviewer.dispatch({ type: 'chat', text: 'A CTO' });
-  const s = reviewer.getState().settings;
-  const cto = s.personas.find((p) => p.name === 'CTO');
-  assert.equal(s.personas[0].builtIn, true);
-  assert.equal(cto.builtIn, undefined);
-  await assert.rejects(reviewer.dispatch({ type: 'settings.deletePersona', id: 'tinyactors-voice' }), /cannot be deleted/);
-  // edited in Settings, it stays the model's
-  await reviewer.dispatch({ type: 'settings.save', persona: { id: cto.id, name: 'CTO', instructions: 'Lead with cost and risk.' } });
-  assert.equal(reviewer.getState().settings.personas.find((p) => p.id === cto.id).source, 'model');
-  await reviewer.dispatch({ type: 'settings.deletePersona', id: cto.id });
-  const after = reviewer.getState().settings;
-  assert.deepEqual(after.personas.map((p) => p.name), ['tinyactors voice']);
-  assert.equal(after.personaID, 'tinyactors-voice');
-  assert.deepEqual(await store.personas(), []);
-  assert.equal((await store.settings()).personaID, 'tinyactors-voice');
+  const fetch = fakeFetch(geminiReply('One.'), geminiReply('Two.'), geminiReply('Three.'));
+  const { reviewer, page } = await setup({ fetch, store });
+  await reviewer.dispatch({ type: 'chat', text: 'First question about the headline' });
+  const first = reviewer.getState().chat.id;
+  assert.deepEqual(reviewer.getState().chat.conversations.map((c) => c.title), ['First question about the headline']);
+
+  await reviewer.dispatch({ type: 'chat.new' });
+  let chat = reviewer.getState().chat;
+  assert.notEqual(chat.id, first);
+  assert.deepEqual(chat.messages, []);
+  await reviewer.dispatch({ type: 'chat.new' }); // already new: nothing
+  assert.equal(reviewer.getState().chat.id, chat.id);
+  await reviewer.dispatch({ type: 'chat', text: 'A'.repeat(80) });
+  chat = reviewer.getState().chat;
+  assert.deepEqual(chat.messages.map((m) => m.text), ['A'.repeat(80), 'Two.']);
+  assert.ok(!JSON.stringify(fetch.requests[1].body.contents).includes('First question'), 'the model reads this conversation only');
+  assert.deepEqual(chat.conversations.map((c) => c.id), [chat.id, first], 'newest first');
+  assert.equal(chat.conversations[0].title, `${'A'.repeat(59)}…`);
+
+  await reviewer.dispatch({ type: 'chat.open', id: first });
+  chat = reviewer.getState().chat;
+  assert.equal(chat.id, first);
+  assert.deepEqual(chat.messages.map((m) => m.text), ['First question about the headline', 'One.']);
+  await reviewer.dispatch({ type: 'chat', text: 'And again?' });
+  assert.match(JSON.stringify(fetch.requests[2].body.contents), /First question/, 'its own history');
+  await assert.rejects(reviewer.dispatch({ type: 'chat.open', id: 'nope' }), /No such conversation/);
   reviewer.close();
+
+  // a new panel opens the newest conversation; the others are listed
+  const again = await setup({ store, page });
+  chat = again.reviewer.getState().chat;
+  assert.equal(chat.id, first);
+  assert.equal(chat.conversations.length, 2);
+  again.reviewer.close();
 });
 
 test('pick mode: start, a tap is the selection, annotating it ends pick mode; stop and Escape end it too', async () => {

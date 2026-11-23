@@ -36,7 +36,7 @@ test('models.refresh falls back to the hard-coded list on a refusal or with no k
   assert.equal((await listModels('k', { fetch: async () => { throw new Error('offline'); } })).fallback, true);
 });
 
-test('settings: the key saved and forgotten, the model, a persona of the user\'s own', async () => {
+test('settings: the key saved and forgotten, the model, the voice edited and reset', async () => {
   const fetch = fakeFetch(listed, geminiReply('ok', [['propose_rewrite', { replacement: 'x', rationale: '' }]]));
   const { reviewer, credentials, store, page } = await setup({ key: null, fetch });
   assert.equal(reviewer.getState().settings.hasKey, false);
@@ -47,18 +47,19 @@ test('settings: the key saved and forgotten, the model, a persona of the user\'s
   assert.equal(credentials.get(), 'AIza-new');
   assert.equal(s.models.length, 2, 'a saved key refreshes the models');
 
-  await reviewer.dispatch({ type: 'settings.save', model: 'gemini-4-carbon', persona: { id: 'terse', name: 'Terse', instructions: 'Use five words.' }, personaID: 'terse' });
+  await reviewer.dispatch({ type: 'settings.save', model: 'gemini-4-carbon', voice: 'Use five words.' });
   s = reviewer.getState().settings;
   assert.equal(s.model, 'gemini-4-carbon');
-  assert.equal(s.personaID, 'terse');
-  assert.deepEqual(s.personas.map((p) => p.name), ['tinyactors voice', 'Terse']);
-  assert.deepEqual(await store.settings(), { model: 'gemini-4-carbon', personaID: 'terse', thinking: 'high' });
+  assert.deepEqual(s.voice, { instructions: 'Use five words.', custom: true });
+  assert.deepEqual(await store.settings(), { model: 'gemini-4-carbon', thinking: 'high', audienceIDs: [], voice: 'Use five words.' });
 
   page.select('Read the guide');
   await reviewer.dispatch({ type: 'annotate', note: 'x' });
   const request = fetch.requests[1];
   assert.match(request.url, /gemini-4-carbon:generateContent/);
-  assert.match(request.body.systemInstruction.parts[0].text, /^Active persona: Terse\nUse five words\./);
+  assert.match(request.body.systemInstruction.parts[0].text, /^The voice \(how to write\):\nUse five words\.\n\nNo audience is chosen/);
+  await reviewer.dispatch({ type: 'settings.save', voice: '' });
+  assert.deepEqual([reviewer.getState().settings.voice.custom, (await store.settings()).voice], [false, undefined], 'empty: the default again');
 
   await reviewer.dispatch({ type: 'settings.forgetKey' });
   assert.equal(reviewer.getState().settings.hasKey, false);
@@ -160,7 +161,7 @@ test('gemini: contents merge turns, a reply\'s text and calls are read, bad call
     ['set_note', { note: 'Vague.' }],
     ['delete_page', {}],
   ])));
-  assert.deepEqual(read, { text: 'Done.', rewrites: [{ original_text: 'Old', replacement: 'New', rationale: 'why' }], note: 'Vague.', personas: [], thoughts: '' });
+  assert.deepEqual(read, { text: 'Done.', rewrites: [{ original_text: 'Old', replacement: 'New', rationale: 'why' }], note: 'Vague.', audiences: [], thoughts: '' });
   assert.throws(() => parse({ promptFeedback: { blockReason: 'SAFETY' } }), /blocked the request \(SAFETY\)/);
 });
 

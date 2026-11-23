@@ -5,21 +5,25 @@
 //   annotations(page?)            every annotation record, or one page's
 //   putAnnotation(record)         by (record.page, record.id)
 //   deleteAnnotation(page, id)
-//   chat(page) → messages         the page-level conversation
-//   putChat(page, messages)
-//   settings() → object           {model, personaID, ...}
+//   conversations(page) → [record]  the page chat's conversations, {page, id, messages, updatedAt}
+//   putConversation(record)         by (record.page, record.id)
+//   settings() → object             {model, thinking, voice?, audienceIDs}
 //   putSettings(settings)
-//   personas() → [persona]        the user's own; the default is not stored
-//   putPersona(persona)           by persona.id
-//   deletePersona(id)
+//   audiences() → [audience]        who reads: {id, name, description, knows?, wants?, tasks?, objections?, source?}
+//   putAudience(audience)           by audience.id
+//   deleteAudience(id)
+//
+// Version 2 of the database replaced a page's one chat with conversations
+// (the old chat is the conversation `c0`) and the personas with the voice
+// (an edited default persona's instructions are the voice) and audiences.
 
 const copy = (value) => (value === undefined ? undefined : structuredClone(value));
 
 /** A store in memory, for tests. `dump()` is every record as JSON text. */
 export function createMemoryStore() {
   const annotations = new Map();
-  const chats = new Map();
-  const personas = new Map();
+  const conversations = new Map();
+  const audiences = new Map();
   let settings = {};
   const key = (page, id) => `${page}\n${id}`;
   return {
@@ -28,16 +32,16 @@ export function createMemoryStore() {
     },
     async putAnnotation(record) { annotations.set(key(record.page, record.id), copy(record)); },
     async deleteAnnotation(page, id) { annotations.delete(key(page, id)); },
-    async chat(page) { return copy(chats.get(page)) || []; },
-    async putChat(page, messages) { chats.set(page, copy(messages)); },
+    async conversations(page) { return [...conversations.values()].filter((c) => c.page === page).map(copy); },
+    async putConversation(record) { conversations.set(key(record.page, record.id), copy(record)); },
     async settings() { return copy(settings); },
     async putSettings(value) { settings = copy(value); },
-    async personas() { return [...personas.values()].map(copy); },
-    async putPersona(persona) { personas.set(persona.id, copy(persona)); },
-    async deletePersona(id) { personas.delete(id); },
+    async audiences() { return [...audiences.values()].map(copy); },
+    async putAudience(audience) { audiences.set(audience.id, copy(audience)); },
+    async deleteAudience(id) { audiences.delete(id); },
     dump() {
       return JSON.stringify({
-        annotations: [...annotations.values()], chats: [...chats.entries()], settings, personas: [...personas.values()],
+        annotations: [...annotations.values()], conversations: [...conversations.values()], settings, audiences: [...audiences.values()],
       });
     },
   };
@@ -51,14 +55,39 @@ const request = (r) => new Promise((resolve, reject) => {
 /** The IndexedDB store: the `copywriter` database of `indexedDB`. */
 export function createIndexedDBStore({ indexedDB = globalThis.indexedDB, name = 'copywriter' } = {}) {
   const opening = new Promise((resolve, reject) => {
-    const open = indexedDB.open(name, 1);
-    open.onupgradeneeded = () => {
+    const open = indexedDB.open(name, 2);
+    open.onupgradeneeded = (event) => {
       const db = open.result;
-      const annotations = db.createObjectStore('annotations', { keyPath: ['page', 'id'] });
-      annotations.createIndex('page', 'page');
-      db.createObjectStore('chats', { keyPath: 'page' });
-      db.createObjectStore('settings', { keyPath: 'key' });
-      db.createObjectStore('personas', { keyPath: 'id' });
+      const tx = open.transaction;
+      if (event.oldVersion < 1) {
+        const annotations = db.createObjectStore('annotations', { keyPath: ['page', 'id'] });
+        annotations.createIndex('page', 'page');
+        db.createObjectStore('settings', { keyPath: 'key' });
+      }
+      const conversations = db.createObjectStore('conversations', { keyPath: ['page', 'id'] });
+      conversations.createIndex('page', 'page');
+      db.createObjectStore('audiences', { keyPath: 'id' });
+      if (event.oldVersion === 1) {
+        // a page's one chat is its first conversation; an edited default persona is the voice
+        tx.objectStore('chats').openCursor().onsuccess = (e) => {
+          const cursor = e.target.result;
+          if (!cursor) { db.deleteObjectStore('chats'); return; }
+          const { page, messages } = cursor.value;
+          if (messages?.length) conversations.put({ page, id: 'c0', messages, updatedAt: messages.at(-1)?.at || '' });
+          cursor.continue();
+        };
+        const settings = tx.objectStore('settings');
+        tx.objectStore('personas').get('tinyactors-voice').onsuccess = (e) => {
+          const voice = e.target.result?.instructions;
+          settings.get('settings').onsuccess = (g) => {
+            const value = g.target.result?.value || {};
+            delete value.personaID;
+            if (voice) value.voice = voice;
+            settings.put({ key: 'settings', value });
+            db.deleteObjectStore('personas');
+          };
+        };
+      }
     };
     open.onsuccess = () => resolve(open.result);
     open.onerror = () => reject(open.error);
@@ -82,13 +111,13 @@ export function createIndexedDBStore({ indexedDB = globalThis.indexedDB, name = 
     },
     putAnnotation(record) { return run('annotations', 'readwrite', (s) => s.put(record)); },
     deleteAnnotation(page, id) { return run('annotations', 'readwrite', (s) => s.delete([page, id])); },
-    async chat(page) { return (await run('chats', 'readonly', (s) => s.get(page)))?.messages || []; },
-    putChat(page, messages) { return run('chats', 'readwrite', (s) => s.put({ page, messages })); },
+    conversations(page) { return run('conversations', 'readonly', (s) => s.index('page').getAll(page)); },
+    putConversation(record) { return run('conversations', 'readwrite', (s) => s.put(record)); },
     async settings() { return (await run('settings', 'readonly', (s) => s.get('settings')))?.value || {}; },
     putSettings(value) { return run('settings', 'readwrite', (s) => s.put({ key: 'settings', value })); },
-    personas() { return run('personas', 'readonly', (s) => s.getAll()); },
-    putPersona(persona) { return run('personas', 'readwrite', (s) => s.put(persona)); },
-    deletePersona(id) { return run('personas', 'readwrite', (s) => s.delete(id)); },
+    audiences() { return run('audiences', 'readonly', (s) => s.getAll()); },
+    putAudience(audience) { return run('audiences', 'readwrite', (s) => s.put(audience)); },
+    deleteAudience(id) { return run('audiences', 'readwrite', (s) => s.delete(id)); },
     async close() { (await opening).close(); },
   };
 }
