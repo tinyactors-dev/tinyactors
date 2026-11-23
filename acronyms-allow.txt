@@ -73,3 +73,11 @@ sessionId      website/components/chart.mjs                              # @tiny
 # The DOM's PointerEvent names a pointer's id `pointerId`; the anthill's
 # zoom and pan track pointers by it.
 pointerId      website/examples/anthill/page.mjs                         # DOM PointerEvent field
+
+# The copywriter's work packet (copywriter/spec/work-packet.xsd, the
+# design packet's schema) names its attributes `projectId`, `sessionId` and
+# `patchId`; the design packet's README quotes Chrome's `tabId`.
+projectId      copywriter/**/*                                           # work-packet.xsd attribute
+sessionId      copywriter/**/*                                           # work-packet.xsd attribute
+patchId        copywriter/**/*                                           # work-packet.xsd attribute
+tabId          copywriter/spec/*                                         # Chrome tabs API field

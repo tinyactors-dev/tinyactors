@@ -1,0 +1,21 @@
+#!/usr/bin/env ruby
+#MISE description="The copywriter's tests: node:test of the charts and the core (more steps follow: Playwright)"
+# vim:ft=ruby
+
+# Each step is a command run from the project's directory; the task stops
+# at the first that fails. Append a step for each new kind of test.
+
+ROOT = File.expand_path('../..', __dir__)
+
+STEPS = [
+  ['node tests (charts and core)', %w[node --test test/*.test.mjs]],
+].freeze
+
+STEPS.each do |name, command|
+  puts "test: #{name}"
+  # node expands the glob itself, so it is passed as one argument.
+  next if system(*command, chdir: ROOT)
+
+  abort "test: #{name} failed"
+end
+puts 'test: passed'

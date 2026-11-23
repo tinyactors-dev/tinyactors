@@ -1,0 +1,81 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  One page under review: the page-level conversation with the model. When
+  the model proposes a rewrite of a piece of the page (`propose_rewrite`
+  with `original_text`), this actor spawns an annotation actor for it.
+
+    model  chat           → model.reply {text, rewrites} | model.error {message}
+    spawn  spawn          → spawned {name, address}    (tinyactors' Spawner)
+    store  chat           {page, messages}, after every change
+    ui     chat           {page, messages, busy}, after every change
+-->
+<scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0"
+       datamodel="ecmascript" name="session" initial="live">
+  <datamodel>
+    <data id="page"/>
+    <data id="lang" expr="'en'"/>
+    <data id="messages" expr="[]"/>
+    <data id="busy" expr="false"/>
+    <!-- what the next model request carries besides the messages: {clip} -->
+    <data id="request" expr="null"/>
+    <data id="spawned" expr="0"/>
+  </datamodel>
+
+  <script>
+    // The Spawner's request for the annotation actor a rewrite becomes.
+    // A helper of the chart: it reads nothing but its arguments.
+    function annotation(rewrite, page, lang, n) {
+      var id = 'm' + Date.now().toString(36) + '-' + n;
+      return {
+        chart: 'annotation',
+        name: id,
+        params: {
+          id: id, page: page, lang: lang, source: 'model', state: 'new',
+          original: rewrite.original_text,
+          anchor: { quote: { exact: rewrite.original_text, prefix: '', suffix: '' }, selector: '' },
+          suggestions: [{ id: 's1', text: rewrite.replacement, rationale: rewrite.rationale || '' }],
+        },
+      };
+    }
+  </script>
+
+  <state id="live" initial="idle">
+    <!-- Every state raises `changed`: the conversation goes to the panel and to the store. -->
+    <transition event="changed">
+      <send type="ui" event="chat" namelist="page messages busy"/>
+      <send type="store" event="chat" namelist="page messages"/>
+    </transition>
+
+    <state id="idle">
+      <onentry><assign location="busy" expr="false"/><raise event="changed"/></onentry>
+      <transition event="chat" target="asking">
+        <assign location="messages" expr="messages.concat([{ role: 'user', text: _event.data.text || '(voice message)', at: new Date().toISOString() }])"/>
+        <assign location="request" expr="({ clip: _event.data.clip || null })"/>
+      </transition>
+    </state>
+
+    <state id="asking">
+      <onentry>
+        <assign location="busy" expr="true"/>
+        <raise event="changed"/>
+        <send type="model" event="chat" namelist="page messages request"/>
+      </onentry>
+      <transition event="model.reply" target="idle">
+        <assign location="messages" expr="messages.concat([{ role: 'model', text: _event.data.text || (_event.data.rewrites || []).length + ' rewrites proposed.', at: new Date().toISOString() }])"/>
+        <foreach array="(_event.data.rewrites || []).filter((r) => r.original_text)" item="rewrite">
+          <assign location="spawned" expr="spawned + 1"/>
+          <send type="spawn" event="spawn"><content expr="annotation(rewrite, page, lang, spawned)"/></send>
+        </foreach>
+        <assign location="request" expr="null"/>
+      </transition>
+      <transition event="model.error" target="idle">
+        <assign location="messages" expr="messages.concat([{ role: 'model', text: 'Error: ' + _event.data.message, at: new Date().toISOString() }])"/>
+        <assign location="request" expr="null"/>
+      </transition>
+      <transition event="error.communication" target="idle">
+        <assign location="messages" expr="messages.concat([{ role: 'model', text: 'Error: the model could not be reached.', at: new Date().toISOString() }])"/>
+        <assign location="request" expr="null"/>
+      </transition>
+    </state>
+  </state>
+</scxml>

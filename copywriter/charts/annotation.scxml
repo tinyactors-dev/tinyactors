@@ -1,0 +1,209 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  One annotation: a piece of the page's text, the user's note about it, the
+  model's rewrites, and the user's decision. The actor reaches the world only
+  through four I/O processors:
+
+    model  rewrite        → model.reply {text, rewrites, note} | model.error {message}
+    page   locate         → page.located {found}
+           preview        → page.previewed {ok}
+           revert         (no answer)
+    store  save, delete   (no answer)
+    ui     changed        its record, after every change
+           removed        {id, page}, when it is deleted
+
+  The record is the datamodel but `request`. `state` names the decision for
+  the store; an actor spawned with a stored record starts from it.
+-->
+<scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0"
+       datamodel="ecmascript" name="annotation" initial="live">
+  <datamodel>
+    <data id="id"/>
+    <data id="page"/>
+    <data id="lang" expr="'en'"/>
+    <data id="original" expr="''"/>
+    <data id="anchor" expr="null"/>
+    <data id="anchorFound" expr="true"/>
+    <data id="note" expr="''"/>
+    <data id="source" expr="'typed'"/>
+    <data id="suggestions" expr="[]"/>
+    <data id="chosenID" expr="null"/>
+    <data id="messages" expr="[]"/>
+    <data id="error" expr="null"/>
+    <data id="createdAt" expr="null"/>
+    <data id="updatedAt" expr="null"/>
+    <data id="state" expr="'new'"/>
+    <!-- what the next model request carries besides the messages: {clip} or {more} -->
+    <data id="request" expr="null"/>
+  </datamodel>
+
+  <state id="live" initial="restore">
+    <!-- Every state raises `changed`: the record goes to the panel and to the store. -->
+    <transition event="changed">
+      <assign location="updatedAt" expr="new Date().toISOString()"/>
+      <send type="ui" event="changed" namelist="id page lang original anchor anchorFound note source suggestions chosenID messages error createdAt updatedAt state"/>
+      <send type="store" event="save" namelist="id page lang original anchor anchorFound note source suggestions chosenID messages error createdAt updatedAt state"/>
+    </transition>
+    <transition event="note">
+      <assign location="note" expr="_event.data.text"/>
+      <raise event="changed"/>
+    </transition>
+    <transition event="page.located">
+      <assign location="anchorFound" expr="_event.data.found"/>
+      <raise event="changed"/>
+    </transition>
+    <transition event="page.previewed">
+      <assign location="anchorFound" expr="_event.data.ok"/>
+      <raise event="changed"/>
+    </transition>
+    <transition event="delete" target="deleted"/>
+
+    <!-- A new actor, or one the store gave back: go to the state it was in. -->
+    <state id="restore">
+      <onentry>
+        <if cond="!createdAt"><assign location="createdAt" expr="new Date().toISOString()"/></if>
+      </onentry>
+      <transition cond="state === 'kept'" target="kept">
+        <send type="page" event="preview">
+          <content expr="({ id, anchor, text: suggestions.find((s) => s.id === chosenID).text })"/>
+        </send>
+      </transition>
+      <transition cond="state === 'new' &amp;&amp; note" target="asking">
+        <assign location="messages" expr="[{ role: 'user', text: note, at: createdAt }]"/>
+      </transition>
+      <transition target="open">
+        <send type="page" event="locate"><content expr="({ id, anchor })"/></send>
+      </transition>
+    </state>
+
+    <!-- Waiting for the user: ask, edit, preview or dismiss. -->
+    <state id="open" initial="opening">
+      <state id="opening">
+        <transition cond="state === 'failed'" target="failed"/>
+        <transition cond="state === 'dismissed'" target="dismissed"/>
+        <transition cond="suggestions.length > 0" target="suggested"/>
+        <transition target="draft"/>
+      </state>
+      <state id="draft">
+        <onentry><assign location="state" expr="'draft'"/><raise event="changed"/></onentry>
+      </state>
+      <state id="suggested">
+        <onentry><assign location="state" expr="'suggested'"/><raise event="changed"/></onentry>
+      </state>
+      <state id="failed">
+        <onentry><assign location="state" expr="'failed'"/><raise event="changed"/></onentry>
+      </state>
+      <state id="dismissed">
+        <onentry><assign location="state" expr="'dismissed'"/><raise event="changed"/></onentry>
+        <transition event="reopen" target="opening">
+          <assign location="state" expr="'open'"/>
+          <assign location="error" expr="null"/>
+        </transition>
+        <!-- a dismissed annotation takes no other command until it is reopened -->
+        <transition event="ask suggest edit preview dismiss"/>
+      </state>
+
+      <transition event="ask" target="asking">
+        <assign location="messages" expr="messages.concat([{ role: 'user', text: _event.data.text || '(voice message)', at: new Date().toISOString() }])"/>
+        <assign location="request" expr="({ clip: _event.data.clip || null })"/>
+      </transition>
+      <transition event="suggest" target="asking">
+        <assign location="request" expr="({ more: true })"/>
+      </transition>
+      <transition event="edit" target="previewing">
+        <assign location="suggestions" expr="suggestions.concat([{ id: 's' + (suggestions.length + 1), text: _event.data.text, rationale: 'Your own text', own: true }])"/>
+        <assign location="chosenID" expr="suggestions[suggestions.length - 1].id"/>
+      </transition>
+      <transition event="preview" cond="suggestions.some((s) => s.id === _event.data.suggestionID)" target="previewing">
+        <assign location="chosenID" expr="_event.data.suggestionID"/>
+      </transition>
+      <transition event="dismiss" target="dismissed"/>
+    </state>
+
+    <!-- The model is working on it. -->
+    <state id="asking">
+      <onentry>
+        <assign location="state" expr="'asking'"/>
+        <assign location="error" expr="null"/>
+        <raise event="changed"/>
+        <send type="model" event="rewrite" namelist="id page original note messages suggestions request"/>
+      </onentry>
+      <transition event="model.reply" target="opening">
+        <assign location="suggestions" expr="suggestions.concat((_event.data.rewrites || []).map((r, i) => ({ id: 's' + (suggestions.length + i + 1), text: r.replacement, rationale: r.rationale || '' })))"/>
+        <assign location="messages" expr="messages.concat([{ role: 'model', text: _event.data.text || (_event.data.rewrites || []).length + ' rewrites proposed.', at: new Date().toISOString() }])"/>
+        <if cond="_event.data.note &amp;&amp; !note"><assign location="note" expr="_event.data.note"/></if>
+        <assign location="request" expr="null"/>
+      </transition>
+      <transition event="model.error" target="failed">
+        <assign location="error" expr="_event.data.message"/>
+        <assign location="request" expr="null"/>
+      </transition>
+      <transition event="error.communication" target="failed">
+        <assign location="error" expr="'The model could not be reached.'"/>
+        <assign location="request" expr="null"/>
+      </transition>
+    </state>
+
+    <!-- The page shows the chosen suggestion in place of the original. -->
+    <state id="previewing">
+      <onentry>
+        <assign location="state" expr="'previewing'"/>
+        <assign location="error" expr="null"/>
+        <raise event="changed"/>
+        <send type="page" event="preview">
+          <content expr="({ id, anchor, text: suggestions.find((s) => s.id === chosenID).text })"/>
+        </send>
+      </onentry>
+      <transition event="page.previewed" cond="!_event.data.ok" target="suggested">
+        <assign location="anchorFound" expr="false"/>
+        <assign location="chosenID" expr="null"/>
+        <assign location="error" expr="'The text is no longer on the page.'"/>
+      </transition>
+      <transition event="preview" cond="suggestions.some((s) => s.id === _event.data.suggestionID)" target="previewing">
+        <assign location="chosenID" expr="_event.data.suggestionID"/>
+      </transition>
+      <transition event="edit" target="previewing">
+        <assign location="suggestions" expr="suggestions.concat([{ id: 's' + (suggestions.length + 1), text: _event.data.text, rationale: 'Your own text', own: true }])"/>
+        <assign location="chosenID" expr="suggestions[suggestions.length - 1].id"/>
+      </transition>
+      <transition event="keep" target="kept"/>
+      <!-- Anything else puts the original back first. -->
+      <transition event="undo" target="suggested">
+        <send type="page" event="revert"><content expr="({ id })"/></send>
+        <assign location="chosenID" expr="null"/>
+      </transition>
+      <transition event="dismiss" target="dismissed">
+        <send type="page" event="revert"><content expr="({ id })"/></send>
+        <assign location="chosenID" expr="null"/>
+      </transition>
+      <transition event="ask" target="asking">
+        <send type="page" event="revert"><content expr="({ id })"/></send>
+        <assign location="chosenID" expr="null"/>
+        <assign location="messages" expr="messages.concat([{ role: 'user', text: _event.data.text || '(voice message)', at: new Date().toISOString() }])"/>
+        <assign location="request" expr="({ clip: _event.data.clip || null })"/>
+      </transition>
+      <transition event="suggest" target="asking">
+        <send type="page" event="revert"><content expr="({ id })"/></send>
+        <assign location="chosenID" expr="null"/>
+        <assign location="request" expr="({ more: true })"/>
+      </transition>
+    </state>
+
+    <!-- Approved: the page shows it whenever it is opened, and the export carries it. -->
+    <state id="kept">
+      <onentry><assign location="state" expr="'kept'"/><raise event="changed"/></onentry>
+      <transition event="undo" target="suggested">
+        <send type="page" event="revert"><content expr="({ id })"/></send>
+        <assign location="chosenID" expr="null"/>
+      </transition>
+    </state>
+  </state>
+
+  <final id="deleted">
+    <onentry>
+      <send type="page" event="revert"><content expr="({ id })"/></send>
+      <send type="store" event="delete"><content expr="({ id, page })"/></send>
+      <send type="ui" event="removed"><content expr="({ id, page })"/></send>
+    </onentry>
+  </final>
+</scxml>
