@@ -1,7 +1,7 @@
 // Pages that say what they are for (website/README.md, "Audiences and page
 // kinds: the convention"): the audience files a page links seed the store
-// and are its set, their needs are the checklist with their ids, the
-// sections' claims are checked by a reading, the page's kind goes into the
+// and are its set, their needs are the checklist with their ids, a reading
+// judges each from the page's text, the page's kind goes into the
 // instructions, and the export names needs, kinds and the audiences the
 // reviewer edited. Against a fake page, the published audience files
 // (test/fixtures/audiences/) and a fake Gemini.
@@ -20,13 +20,8 @@ const TEXT = 'Actors as a library. Four million actors fit in 1.5 GB. When the p
 const HOME = {
   kind: 'pitch',
   audiences: [file('agent-platform'), file('tech-lead'), file('workflow-tester')],
-  answers: [],
-  sections: [
-    { anchor: 'Production', selector: 'main > section:nth-of-type(2)', answers: ['tech-lead.failure-semantics'] },
-    { anchor: 'Memory', selector: 'main > section:nth-of-type(3)', answers: ['agent-platform.memory', 'tech-lead.same-everywhere'] },
-  ],
 };
-const TESTING = { kind: 'how-to', audiences: [file('workflow-tester'), file('agent-platform')], answers: [], sections: [] };
+const TESTING = { kind: 'how-to', audiences: [file('workflow-tester'), file('agent-platform')] };
 
 const homePage = (purpose = HOME) => fakePage({ url: `${SITE}/`, title: 'tinyactors', text: TEXT, purpose });
 const system = (request) => request.body.systemInstruction.parts[0].text;
@@ -176,8 +171,8 @@ test('a file that cannot be fetched keeps the stored copy; one never stored is l
   reviewer.close();
 });
 
-// A reading as the tech lead on the home page: one claim confirmed, one
-// doubted, and a finding about the doubted one.
+// A reading as the tech lead on the home page: one need answered, one
+// missing, and a doubt about the missing one.
 const READING = (n) => geminiReply('', [
   ['report_coverage', { item: n('failure-semantics'), status: 'answered', answer_text: 'A snapshot keeps every actor.', explanation: 'It says what a snapshot keeps.', kind: 'explanation' }],
   ['report_coverage', { item: n('same-everywhere'), status: 'missing', explanation: 'The section shows memory, not portability.', kind: 'reference' }],
@@ -185,7 +180,7 @@ const READING = (n) => geminiReply('', [
   ['report_finding', { kind: 'doubt', item: n('same-everywhere'), original_text: 'Four million actors fit in 1.5 GB.', need: 'Show the chart running in each runtime', explanation: 'Memory says nothing of running the same everywhere.', replacement: '' }],
 ]);
 
-test('a reading checks the file\'s needs with their ids, the sections\' claims and the page\'s kind; a doubted claim is a finding with its need', async () => {
+test('a reading checks the file\'s needs with their ids and the page\'s kind, from the text alone; a doubt names its need', async () => {
   const fetch = fakeFetch();
   const { reviewer } = await setup({ page: homePage(), fetch });
   const lead = reviewer.getState().settings.audiences.find((a) => a.id === 'site-tech-lead');
@@ -195,11 +190,7 @@ test('a reading checks the file\'s needs with their ids, the sections\' claims a
   const asked = system(fetch.requests[0]);
   assert.match(asked, /The page is a pitch: the reader is deciding whether to adopt it/);
   assert.match(asked, /2\. \[Wants\] The failure semantics of one process: what is lost, what a snapshot or migration keeps \(tech-lead\.failure-semantics\)/);
-  assert.match(asked, /What the page claims to answer/);
-  assert.match(asked, /- 2\. The failure semantics[^\n]*: claimed by the section “Production”/);
-  assert.match(asked, /- 3\. One chart running the same everywhere: claimed by the section “Memory”/);
-  assert.match(asked, /report_finding of kind doubt, with item set to its number/);
-  assert.ok(!/agent-platform\.memory/.test(asked), 'only this audience\'s claims');
+  assert.ok(!/claim(s|ed) (to answer|by)/.test(asked), 'the page lists no claims: the reading judges the text');
   const declared = fetch.requests[0].body.tools[0].functionDeclarations;
   assert.ok(declared.find((f) => f.name === 'report_coverage').parameters.required.includes('kind'));
 
@@ -209,7 +200,7 @@ test('a reading checks the file\'s needs with their ids, the sections\' claims a
   assert.deepEqual(Object.keys(byNeed).slice(0, 3), ['tech-lead.when-to-use', 'tech-lead.failure-semantics', 'tech-lead.same-everywhere'], 'in the file\'s order');
   assert.equal(byNeed['tech-lead.failure-semantics'].status, 'answered');
   assert.equal(byNeed['tech-lead.failure-semantics'].kind, 'explanation');
-  assert.deepEqual(byNeed['tech-lead.failure-semantics'].claimed, ['Production']);
+  assert.equal(byNeed['tech-lead.failure-semantics'].claimed, undefined, 'no item is claimed');
   assert.equal(byNeed['tech-lead.same-everywhere'].status, 'missing');
   assert.equal(byNeed['tech-lead.decide'].kind, 'pitch');
   const doubt = reviewer.getState().annotations.find((a) => a.finding?.kind === 'doubt');

@@ -31,11 +31,10 @@
 
   An item of `items`: {field: 'wants' | 'tasks' | 'objections', text,
   status: 'answered' | 'partial' | 'missing', anchor?, explanation,
-  annotationID?, needID?, kind?, claimed?}: the anchor of the text that
-  answers it, and the open item made of it; for a site audience's item,
-  its need's reference (`audience.need`), the kind of page it belongs on
-  (pitch, tutorial, how-to, reference, explanation) and the headings of
-  the sections that claim to answer it (`data-answers`). A finding:
+  annotationID?, needID?, kind?}: the anchor of the text that answers it,
+  and the open item made of it; for a site audience's item, its need's
+  reference (`audience.need`) and the kind of page it belongs on (pitch,
+  tutorial, how-to, reference, explanation). A finding:
   {kind: 'objection' | 'task' | 'doubt' | 'jargon' | 'missing', anchor?,
   original_text?, need, explanation, replacement?, section?, needID?};
   one without an anchor is page-level; needID: the item it is about.

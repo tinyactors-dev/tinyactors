@@ -3,14 +3,17 @@
 // read as each audience the page links (its <link rel="audience"> files,
 // which seed the store as they would in the widget). It prints each
 // reading's time, its findings per kind and placement, the checklist with
-// each need's id and kind, the claims the page's sections make
-// (data-answers) as confirmed or doubted, and checks that every anchored
+// each need's id and kind, the claims the page's sources make (the
+// `answers` of its purpose and sections in website/content/, read with
+// sxml: the HTML no longer carries them) as confirmed or doubted by the
+// readings, and checks that every anchored
 // finding quotes text on the page and every rewrite adds no number the
 // page lacks.
 //
 //   mise run read-eval [-- --url URL --model M --thinking T]   (GEMINI_API_KEY through fnox; READ_EVAL_RAW=1 prints the calls)
 
 import { parseArgs } from 'node:util';
+import { execFileSync } from 'node:child_process';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
@@ -29,6 +32,28 @@ const key = process.env.GEMINI_API_KEY;
 if (!key) { console.error('read-eval: GEMINI_API_KEY is not set (run through fnox)'); process.exit(2); }
 
 const here = dirname(fileURLToPath(import.meta.url));
+
+// What the page's sources claim it answers: the needs its purpose and each
+// section name in `answers`, from website/content/pages and content/guides,
+// as [{need, section}] (section: the heading, or 'the page').
+function claimsOf(url) {
+  const path = new URL(url).pathname;
+  const content = join(here, '../../website/content');
+  const query = `declare namespace s="https://www.tinyactors.dev/ns/site"; declare variable $path external;
+    string-join(for $p in collection()/s:page[@path = $path] return (
+      tokenize($p/s:purpose/@answers) ! ("the page" || "&#9;" || .),
+      $p/s:section[@answers] ! (let $h := normalize-space(s:heading) return tokenize(@answers) ! ($h || "&#9;" || .))), "&#10;")`;
+  const claims = [];
+  for (const dir of ['pages', 'guides']) {
+    const out = execFileSync('mise', ['x', '--', 'sxml', 'xquery', `--collection=${join(content, dir)}`, `--param=path=${path}`, '--method=text', `--expression=${query}`],
+      { cwd: join(here, '..'), encoding: 'utf8' });
+    for (const line of out.split('\n').filter(Boolean)) {
+      const [section, need] = line.split('\t');
+      claims.push({ need, section });
+    }
+  }
+  return claims;
+}
 const { outputFiles } = await esbuild.build({
   stdin: { contents: `import { createDOMPage } from './src/platform/dom.mjs'; window.cwPage = createDOMPage();`, resolveDir: join(here, '..') },
   bundle: true, format: 'iife', write: false, logLevel: 'silent',
@@ -64,6 +89,7 @@ const audiences = linkedIDs.map((id) => reviewer.getState().settings.audiences.f
   .filter((a) => a && (!values.only || a.name.includes(values.only)));
 console.log(`page kind: ${reviewer.getState().page.kind ?? '(none)'}; linked audiences: ${audiences.map((a) => `${a.siteID} (${a.items?.length ?? 0} needs)`).join(', ') || '(none)'}`);
 if (!audiences.length) { console.error('read-eval: the page links no audience'); process.exit(2); }
+const claimed = claimsOf(values.url);
 const claims = { confirmed: [], doubted: [] };
 const started = performance.now();
 await reviewer.dispatch({ type: 'read', audienceIDs: audiences.map((a) => a.id) });
@@ -89,17 +115,17 @@ for (const r of state.readings) {
   const statuses = { answered: 0, partial: 0, missing: 0 };
   for (const x of r.items) statuses[x.status]++;
   console.log(`checklist ${statuses.answered}/${r.items.length} answered, ${statuses.partial} partial, ${statuses.missing} missing; answered with an anchor: ${r.items.filter((x) => x.status === 'answered' && x.anchor).length}`);
-  for (const x of r.items) console.log(`  ${{ answered: '✓', partial: '◐', missing: '○' }[x.status]} [${x.field}${x.kind ? `, ${x.kind}` : ''}] ${x.needID ?? ''} ${x.text}${x.claimed ? `  (claimed by ${x.claimed.join(', ')})` : ''}${x.anchor ? `  ⟶ “${x.anchor.quote.exact.slice(0, 60)}”` : ''}\n      ${x.explanation}`);
+  for (const x of r.items) console.log(`  ${{ answered: '✓', partial: '◐', missing: '○' }[x.status]} [${x.field}${x.kind ? `, ${x.kind}` : ''}] ${x.needID ?? ''} ${x.text}${claimed.some((c) => c.need === x.needID) ? `  (claimed by ${claimed.filter((c) => c.need === x.needID).map((c) => c.section).join(', ')})` : ''}${x.anchor ? `  ⟶ “${x.anchor.quote.exact.slice(0, 60)}”` : ''}\n      ${x.explanation}`);
   const kinds2 = {};
   for (const x of r.items) kinds2[x.kind ?? '?'] = (kinds2[x.kind ?? '?'] || 0) + 1;
   console.log(`needs by kind of page: ${JSON.stringify(kinds2)}; without a kind: ${r.items.filter((x) => !x.kind).length}`);
-  for (const x of r.items.filter((y) => y.claimed)) {
+  for (const x of r.items.filter((y) => claimed.some((c) => c.need === y.needID))) {
     const doubt = found.find((a) => a.finding.kind === 'doubt' && a.finding.needID === x.needID);
-    const entry = { need: x.needID, sections: x.claimed, status: x.status, explanation: x.explanation, ...(doubt ? { doubt: doubt.finding.explanation } : {}) };
+    const entry = { need: x.needID, sections: claimed.filter((c) => c.need === x.needID).map((c) => c.section), status: x.status, explanation: x.explanation, ...(doubt ? { doubt: doubt.finding.explanation } : {}) };
     (x.status === 'answered' && !doubt ? claims.confirmed : claims.doubted).push(entry);
   }
 }
-console.log(`\n=== claims (data-answers): ${claims.confirmed.length} confirmed, ${claims.doubted.length} doubted`);
+console.log(`\n=== claims (website/content answers=): ${claimed.length} claimed, ${claims.confirmed.length} confirmed, ${claims.doubted.length} doubted`);
 for (const c of claims.confirmed) console.log(`  ✓ ${c.need} by ${c.sections.join(', ')}`);
 for (const c of claims.doubted) console.log(`  ? ${c.need} by ${c.sections.join(', ')}: ${c.status}. ${c.explanation}${c.doubt ? `\n      doubt: ${c.doubt}` : ''}`);
 reviewer.close();

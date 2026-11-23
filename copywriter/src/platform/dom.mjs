@@ -572,16 +572,12 @@ export function createDOMPage({ doc = document, exclude = () => false, keepSelec
 
   /**
    * What the page says it is for (website/README.md, "Audiences and page
-   * kinds: the convention"): its kind, the audience files it links (absolute
-   * URLs, in order: the first is its main audience), the needs it answers as
-   * a whole, and each section that names needs or a kind of its own, by its
-   * heading's text (or its CSS path when it has none).
+   * kinds: the convention"): its kind and the audience files it links
+   * (absolute URLs, in order: the first is its main audience).
    */
   function purpose() {
     const head = doc.head || doc.documentElement;
-    const words = (value) => String(value || '').split(/\s+/).filter(Boolean);
-    const meta = (name) => head.querySelector(`meta[name="${name}"]`)?.getAttribute('content') || '';
-    const kind = meta('page-kind').trim() || null;
+    const kind = head.querySelector('meta[name="page-kind"]')?.getAttribute('content')?.trim() || null;
     const audiences = [];
     for (const link of head.querySelectorAll('link[rel~="audience"][href]')) {
       try {
@@ -589,18 +585,7 @@ export function createDOMPage({ doc = document, exclude = () => false, keepSelec
         if (!audiences.includes(url)) audiences.push(url);
       } catch { /* not a URL */ }
     }
-    const sections = [];
-    for (const el of doc.querySelectorAll('[data-answers], [data-kind]')) {
-      if (exclude(el)) continue;
-      const heading = el.querySelector('h1, h2, h3, h4, h5, h6');
-      const selector = cssPath(el);
-      sections.push({
-        anchor: heading ? normalize(heading.textContent) : selector, selector,
-        ...(el.dataset.kind ? { kind: el.dataset.kind.trim() } : {}),
-        answers: words(el.dataset.answers),
-      });
-    }
-    return { kind, audiences, answers: words(meta('page-answers')), sections };
+    return { kind, audiences };
   }
 
   /** The anchor of the first place `text` is on the page, or null. */

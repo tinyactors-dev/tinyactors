@@ -1,8 +1,9 @@
 // What a page says about itself (website/README.md, "Audiences and page
-// kinds: the convention"): its kind, the audiences it links (one published
-// file each, in the namespace below) and the needs its sections claim to
-// answer. This module reads an audience file into the store's shape and
-// keeps a site audience's items, edits and divergence from its file.
+// kinds: the convention"): its kind and the audiences it links (one
+// published file each, in the namespace below). This module reads an
+// audience file into the store's shape and keeps a site audience's items,
+// edits and divergence from its file, and reads a site's map: its other
+// pages with their kind and audiences, from its llms.txt.
 //
 // An audience file is parsed with the browser's DOMParser where there is
 // one (the side panel, the widget), else with the small namespace-aware
@@ -237,4 +238,81 @@ export function edited(audience) {
   const next = { ...audience, items: itemsOf(audience) };
   next.diverged = differences(next).length > 0;
   return next;
+}
+
+// ---- the site map --------------------------------------------------------
+
+// The sections of llms.txt that list no pages of the site.
+const NOT_PAGES = new Set(['packages', 'audiences', 'elsewhere']);
+
+/**
+ * The pages llms.txt lists (llmstxt.org): `[{title, md, description}]`,
+ * each entry `- [title](url): description` under a section other than
+ * Packages, Audiences and Elsewhere, whose URL is the page's Markdown
+ * (website/render/markdown.xsl writes "/x/" as /x/index.md).
+ */
+export function parseLLMS(text, origin) {
+  const pages = [];
+  let section = '';
+  for (const line of String(text).split('\n')) {
+    const heading = /^##\s+(.+?)\s*$/.exec(line);
+    if (heading) { section = heading[1].toLowerCase(); continue; }
+    const entry = /^- \[(.+?)\]\((\S+?)\)(?::\s*(.*))?$/.exec(line);
+    if (!entry || NOT_PAGES.has(section)) continue;
+    let md;
+    try { md = new URL(entry[2], origin).href; } catch { continue; }
+    if (!/\.md$/.test(new URL(md).pathname) || (origin && new URL(md).origin !== new URL(origin).origin)) continue;
+    if (!pages.some((p) => p.md === md)) pages.push({ title: entry[1], md, description: entry[3] || '' });
+  }
+  return pages;
+}
+
+/** The HTML page of a page's Markdown: /x/index.md is /x/, /x.md is /x. */
+export const htmlOf = (md) => md.replace(/index\.md$/, '').replace(/\.md$/, '');
+
+/**
+ * What a page's Markdown says of it in its head (markdown.xsl's page-md):
+ * `<!-- URL -->`, `# title`, then `Kind: <kind>. For: [name](file), ….`
+ * → `{url?, title?, kind, audiences: [{name, url, id}]}` (the audience's
+ * id is its file's name without .xml); `kind` null without that line.
+ */
+export function parsePageHead(markdown) {
+  const lines = String(markdown).split('\n').slice(0, 12);
+  const url = lines.map((l) => /^<!--\s*(\S+)\s*-->$/.exec(l.trim())?.[1]).find(Boolean);
+  const title = lines.map((l) => /^#\s+(.+)$/.exec(l)?.[1]).find(Boolean);
+  const line = lines.find((l) => /^Kind: /.test(l)) || '';
+  const kind = /^Kind: ([a-z-]+)\./.exec(line)?.[1];
+  const audiences = [...line.slice(line.indexOf('For:') + 1).matchAll(/\[([^\]]+)\]\(([^)\s]+)\)/g)]
+    .map(([, name, file]) => ({ name, url: file, id: file.split('/').pop().replace(/\.xml$/, '') }));
+  return { ...(url ? { url } : {}), ...(title ? { title } : {}), kind: PAGE_KINDS.includes(kind) ? kind : null, audiences };
+}
+
+/** The most pages of a site map read. */
+export const MAX_SITE_PAGES = 60;
+
+/**
+ * A site's map: its pages from `${origin}/llms.txt`, each page's head read
+ * from its Markdown, `[{url, path, title, kind, audiences: [id],
+ * description}]`, at most MAX_SITE_PAGES, six fetches at a time. A site
+ * without llms.txt has none ([]); a page whose Markdown cannot be read
+ * keeps its title, with no kind. `fetchText(url) → text`.
+ */
+export async function siteMap(origin, fetchText) {
+  let listed;
+  try { listed = parseLLMS(await fetchText(`${origin}/llms.txt`), origin).slice(0, MAX_SITE_PAGES); } catch { return []; }
+  const pages = new Array(listed.length);
+  let next = 0;
+  const work = async () => {
+    for (let i = next++; i < listed.length; i = next++) {
+      const entry = listed[i];
+      let head = { kind: null, audiences: [] };
+      try { head = parsePageHead(await fetchText(entry.md)); } catch { /* the title from llms.txt */ }
+      const url = head.url || htmlOf(entry.md);
+      let path = url;
+      try { path = new URL(url).pathname; } catch { /* as it is */ }
+      pages[i] = { url, path, title: entry.title, kind: head.kind, audiences: head.audiences.map((a) => a.id), description: entry.description };
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(6, listed.length) }, work));
+  return pages;
 }

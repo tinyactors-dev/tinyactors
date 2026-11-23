@@ -95,14 +95,19 @@ one-off Python.
   last set of audiences used), audiences (one list for every page), each
   page's own set of audiences (`pages`, by URL; the database's version 4
   added it: the settings' `audienceIDs` stay as the last set used, the set
-  of every page without its own, and no page gets one by the upgrade). Kept changes
+  of every page without its own, and no page gets one by the upgrade),
+  and each page's revision plan (`plans`, by page URL; version 5). Kept changes
   are re-applied to a page when it is opened again.
 - **Export.** A ZIP with `packet.xml` (valid against `spec/work-packet.xsd`,
   copied into the ZIP), `CHANGES.md` (a prompt a coding agent can follow:
   per page, its kind and audiences, the original text, the replacement,
-  the note, the anchor, the need a finding or gap is about; then the site
+  the note, the anchor, the need a finding or gap is about, and the
+  page's acceptance criteria; then the tasks a plan gave other pages
+  ("Other pages"), the pages it proposed ("Proposed pages") and the site
   audiences the reviewer edited, as tasks to update them) and
-  `README.md`. On a phone, "Copy for agent" puts `CHANGES.md` on the
+  `README.md` (which tells the coding agent to check each criterion and
+  to update the `answers` of the page's sources in `website/content/` for
+  the needs its changes answer, pointing at website/README.md). On a phone, "Copy for agent" puts `CHANGES.md` on the
   clipboard, since a download there is awkward.
 - **Pick mode.** The main way to choose what to review (the maintainer,
   2026-11-23: selecting text on a phone raises the system's text menu over
@@ -160,11 +165,11 @@ one-off Python.
   convention"). A page's head names its kind (`<meta name="page-kind">`:
   `pitch`, the maintainer's fifth kind for a reader deciding whether to
   adopt, then Diátaxis's `tutorial`, `how-to`, `reference`,
-  `explanation`), its audiences (`<link rel="audience">`, one file each, in
-  order: the first is the main audience) and maybe the needs it answers
-  whole (`<meta name="page-answers">`); a section names the needs its text
-  answers (`data-answers="audience.need …"`) and its own kind where it
-  differs (`data-kind`). The page adapter reads them (`page.purpose()`);
+  `explanation`) and its audiences (`<link rel="audience">`, one file each,
+  in order: the first is the main audience). Which needs a page or a
+  section answers is not in the HTML (the maintainer, 2026-11-23): the
+  site's sources say it (`answers` in `website/content/`), which only the
+  repository's tools read. The page adapter reads the head (`page.purpose()`);
   the core fetches each linked file (`fetchFile`: the widget's same-origin
   fetch, the side panel's, whose host permissions cover http(s)) and
   parses it (`src/core/site.mjs`: DOMParser in a browser, a small
@@ -183,20 +188,19 @@ one-off Python.
   chose one for it; it is never asked for a suggestion, which only pages
   without links get. Deleting a site audience lasts until a page links it
   again. The structure is used: a reading's checklist is the file's needs
-  with their ids (`needID`, `audience.need`); the sections' claims
-  (`data-answers`, and `page-answers` for the page) are listed for the
-  model as the writer's claims to check (`CLAIM_RULES`): a claim the text
-  does not hold is a partial or missing item and a `doubt` finding naming
-  its item (`needID`); each item gets the kind of page where it belongs
-  (`report_coverage`'s `kind`). Rewrites and the page chat are told the
+  with their ids (`needID`, `audience.need`), each judged from the page's
+  text alone; a `doubt` finding names its item (`needID`); each item gets
+  the kind of page where it belongs (`report_coverage`'s `kind`). Rewrites and the page chat are told the
   page's kind and what it requires (`KIND_RULES` in `src/core/site.mjs`),
   its main audience, and that the kind wins (`KIND_WINS`: a need that
   belongs on another kind of page gets a link, not a paragraph, and the
   rationale says so). The export prints each page's kind beside its
   audiences ("Kind: pitch. For: …"), each finding's and gap's need, and
   each gap's kind. Checked against the API on 2026-11-23 (`mise run
-  read-eval`, which now reads a page as the audiences it links and sorts
-  the sections' claims into confirmed and doubted; Gemini 4 Hydrogen,
+  read-eval`, which reads a page as the audiences it links and sorts the
+  claims of its sources (the `answers` of its purpose and sections in
+  `website/content/pages` and `content/guides`, read with sxml) into
+  confirmed and doubted by the readings' statuses; Gemini 4 Hydrogen,
   readings at medium): the home page (pitch, three audiences, 34 needs)
   in 42 s side by side, 27 to 42 s a reading, 6 to 8 findings each, every
   need given a kind; of its 11 claims 6 were confirmed and 5 doubted, each
@@ -290,6 +294,48 @@ one-off Python.
   of the fields it touched. Asked to note every gap, the first answer
   noted three or four; `TALK_RULES` now asks for the one that matters
   most, at most one per answer, none already noted or found.
+- **Revising a page** (the maintainer, 2026-11-23: conflicting needs of
+  different audiences are resolved by placement). "Revise page" makes one
+  plan for the whole page from everything the reviewer gathered: the
+  page's kind and audiences (main first), every need with what the last
+  readings found of it (status, the kind of page it belongs on), the open
+  findings, the kept changes and open notes, the voice, the items the
+  reviewer already decided, and the **site map**: the site's other pages
+  with their kind and audiences, from `${origin}/llms.txt` and the first
+  line of each page's Markdown ("Kind: … For: [name](file), …",
+  website/render/markdown.xsl), read once per origin and session
+  (`siteMap` in `src/core/site.mjs`; none for a site without llms.txt,
+  and a page whose Markdown fails keeps its title). One request at the
+  reviewer's thinking level, with `PLAN_FUNCTIONS` only (`src/core/plan.mjs`):
+  `plan_item {action: rewrite | add | cut | link | move, needs, target:
+  'here' | a URL or path | 'new', original_text?, text, target_text?,
+  where?, reason, criteria, conflict?}` and `new_page {title, kind,
+  audiences, outline, needs?, reason?}` (`PLAN_RULES`). The page's kind
+  and main audience win on it: a need that belongs on another kind of page
+  gets one short line and a link here plus a task for the page of its
+  kind and audience, an existing one or a new one; never a paragraph here.
+  `planOf` enforces it whatever the model did: a rewrite or an add here of
+  a need whose kind (from the readings) is not the page's keeps the needs
+  that fit, and each other need becomes a `link` (`routed`) to the best
+  page of its kind (its audience's main page first; `bestPage`) or to a
+  new page, its `conflict` saying where ("tech-lead.failure-semantics
+  belongs on an explanation page: linked to /about/."). Every item carries
+  a criterion per need, checkable by reading the site, each naming its
+  page (a link has one here and one for its target); unknown need ids and
+  actions are dropped, a cut of text not on the page too. The reviewer
+  accepts or rejects each item (or accepts all): an accepted rewrite or
+  cut is an annotation here (source `plan`, the plan's text its
+  suggestion, '' for a cut, previewed and kept as usual), an add a
+  page-level open item with the drafted copy, a link an annotation of the
+  sentence it replaces (or a page-level item) plus a task for its target,
+  a move or a new page a task only. Planning again replaces the undecided
+  items and keeps the decided ones, as readings do. The export lists each
+  page's "Acceptance criteria" (of its accepted items, and of kept
+  changes that name a need), "Other pages" (each target with its needs,
+  what to write there and its criteria) and "Proposed pages" (kind,
+  audiences, outline, criteria); `packet.xml` maps the tasks and new pages
+  to design tasks and the criteria to `acceptance`. `mise run plan-eval`
+  checks it against the API.
 
 ## Layout
 
@@ -302,7 +348,8 @@ copywriter/
     gemini.mjs            generateContent with tools and thinking, transcription
     store.mjs             IndexedDB (and an in-memory store for tests)
     packet.mjs            the work packet: XML, Markdown, ZIP (no dependency)
-    site.mjs              what a page says it is for: audience files (parse, items, edits, divergence), page kinds
+    site.mjs              what a page says it is for: audience files (parse, items, edits, divergence), page kinds, the site map
+    plan.mjs              the revision plan: its functions and rules, planOf (read and route the items), bestPage
     charts.mjs            the charts' text, imported by the bundle
   src/ui/                 the panel: plain DOM + Lucide icons, renders ViewState, dispatches commands
     panel.mjs             mountPanel(root, reviewer, {layout: 'sidebar'|'sheet', onTall?}); its scrolling area is a div, so
@@ -361,12 +408,13 @@ copywriter/
   src/platform/embed/     embed.mjs (launcher, Shadow DOM, page adapter on the live DOM), loader snippet
   site/                   the /copywriter/ page: download the extension, turn the widget on for this device
   test/                   node:test for charts and core (readings.test.mjs: the reading actors; audiences.test.mjs: pages' sets and side-by-side rewrites; site.test.mjs: what pages say they are for, site audiences; talks.test.mjs:
-                          conversations with an audience); Playwright for
+                          conversations with an audience; plans.test.mjs: revising a page, the site map of
+                          test/fixtures/site/); Playwright for
                           the panel over src/ui/mock-reviewer.mjs (?read=0: no reading yet; ?suggest=1: the page's
                           audiences suggested; ?diverged=1: the site audience edited here), the extension and the widget
                           (test/fixtures/page.html links the audience files of test/fixtures/audiences/)
-  mise/tasks/             build, test, charts, eval, read-eval, talk-eval (Ruby)
-  tools/                  serve.mjs (the panel's preview), eval.mjs, read-eval.mjs and talk-eval.mjs (the real Gemini)
+  mise/tasks/             build, test, charts, eval, read-eval, talk-eval, plan-eval (Ruby)
+  tools/                  serve.mjs (the panel's preview), eval.mjs, read-eval.mjs, talk-eval.mjs and plan-eval.mjs (the real Gemini)
   dist/                   build output (not in git): extension/, copywriter-extension.zip, site/
 ```
 
@@ -375,7 +423,7 @@ copywriter/
 `createReviewer({page, credentials, download, clipboard, store?, wasmURL?, fetch?, fetchFile?, recorder?})`
 (`src/core/reviewer.mjs`; `store` defaults to IndexedDB, `wasmURL` to the
 package's own `tinyactors.wasm`, `fetchFile(url) → text` (an audience
-file) to the platform's `fetch`; `fetch` (Gemini's) and `recorder` are for tests)
+file, llms.txt, a page's Markdown) to the platform's `fetch`; `fetch` (Gemini's) and `recorder` are for tests)
 returns:
 
 ```js
@@ -424,7 +472,8 @@ annotation's id.
   annotations: [{                          // this page's, newest first
     id, state,                             // 'draft' | 'transcribing' | 'asking' | 'suggested' | 'previewing' | 'kept' | 'dismissed' | 'failed'
     original, anchorFound,                 // anchorFound false: the text is no longer on the page
-    source,                                // 'typed' | 'model' (made by the page chat) | 'audience' (a reading's finding)
+    source,                                // 'typed' | 'model' (made by the page chat) | 'audience' (a reading's finding) | 'plan'
+    plan?: { itemID, action, needs, criteria, target, where },  // source 'plan': the accepted item it was made of
     finding?: { audienceID, kind, explanation, need?, section?, item?, needID? },  // source 'audience': kind 'objection' |
                                            //   'task' | 'doubt' | 'jargon' | 'missing'; section: the heading a page-level
                                            //   one belongs under; item: {field, status, needID?, kind?} of the checklist gap it
@@ -442,15 +491,25 @@ annotation's id.
   readings: [{                             // this page's last reading per saved audience, in Settings' order
     audienceID, state,                     // 'reading' | 'done' | 'failed'
     at,                                    // when it was answered (while reading: when it started)
-    items: [{ field, text, status, explanation, anchor?, annotationID?, needID?, kind?, claimed? }],
+    items: [{ field, text, status, explanation, anchor?, annotationID?, needID?, kind? }],
                                            // the checklist: field 'wants' | 'tasks' | 'objections'; status 'answered' |
                                            //   'partial' | 'missing'; anchor: the text that answers it; annotationID:
                                            //   the open item made of it (reading.open), while it exists; needID: a site
-                                           //   need's reference; kind: the kind of page it belongs on; claimed: the
-                                           //   headings of the sections that claim to answer it ('the page': page-answers)
+                                           //   need's reference; kind: the kind of page it belongs on
     findingIDs,                            // the annotations its findings made, while they exist
     error?, seconds?,
   }],
+  plan: {                                  // the open page's revision plan, once asked for; else null
+    state,                                 // 'planning' | 'planned' | 'failed'
+    at, seconds?, error?, sitePages,       // sitePages: the other pages of the site map it was made with
+    items: [{ id, action, needs, target, targetTitle?, original?, anchored, text, targetText?, where?, reason,
+      criteria: [{ needID, text, page }], conflict?, routed?, audiences, decision, annotationID? }],
+                                           // action 'rewrite' | 'add' | 'cut' | 'link' | 'move'; target 'here', a URL or
+                                           //   'new'; anchored: original is on the page; conflict: why the need is placed
+                                           //   where it is; routed: the core made it a link; decision null | 'accepted' |
+                                           //   'rejected'; annotationID: the annotation an accepted one made, while it exists
+    newPages: [{ id, title, kind, audiences, outline, needs, criteria, reason, decision }],
+  } | null,
   activeID: string | null,
   chat: {                                  // the page chat's open conversation
     id, messages: [message],               // below
@@ -510,7 +569,10 @@ transcript exists; then the message shows, and the conversation goes on
 | `read` | `audienceIDs?` | reads the page as each audience (default: the active ones), side by side; settles when every reading has answered. An audience already reading is skipped ("Already reading as …" when all are); a failed reading is retried |
 | `reading.show` | `audienceID`, `index` | highlights the text that answers a checklist item |
 | `reading.open` | `audienceID`, `index` | makes a partial or missing item an open item (a page-level annotation of kind `missing`); resolves to its id |
-| `export` | `scope: 'page' \| 'all'`, `to: 'download' \| 'clipboard'` | the kept changes, the open items, and the checklist gaps not made into open items |
+| `plan` | | plans the page ("Revise page"); refused without a key, while planning, and before any reading or finding ("Read the page as an audience first."); settles when the plan answered, rejecting with its error |
+| `plan.accept` / `plan.reject` | `id` | decides an item or a new page of the plan; an accepted rewrite, cut, add or link makes its annotation |
+| `plan.acceptAll` | | accepts every item and new page not decided yet |
+| `export` | `scope: 'page' \| 'all'`, `to: 'download' \| 'clipboard'` | the kept changes, the open items, the checklist gaps not made into open items, and the accepted plan: criteria, tasks for other pages, proposed pages |
 
 ## Platform adapters (what each platform gives the core)
 
@@ -535,11 +597,8 @@ page = {
   pick?(on),                     // pick mode on or off; → boolean (false: the page cannot). A pick is reported
                                  //   through onSelection and returned by selection(), like a selection
   onPickEnd?(fn),                // fn() when the page ended pick mode itself (Escape)
-  purpose?(),                    // → { kind | null, audiences: [absolute URL], answers: [needID],
-                                 //     sections: [{ anchor, selector, kind?, answers: [needID] }] }: what the head's
-                                 //   meta page-kind, link rel=audience (in order) and meta page-answers say, and each
-                                 //   [data-answers] or [data-kind] element (anchor: its first heading's text, else its
-                                 //   CSS path)
+  purpose?(),                    // → { kind | null, audiences: [absolute URL] }: what the head's meta page-kind
+                                 //   and link rel=audience (in order) say
 }
 anchor = { quote: { exact, prefix, suffix }, selector }   // W3C text quote + CSS path of the nearest element
 credentials = { get(), set(key, { remember }), forget(), remembered() }
@@ -603,9 +662,8 @@ sitePages}`; `accept`, `reject` and `acceptAll` decide items, an accepted
 rewrite, cut, add or link spawning an annotation of source `plan` whose
 `plan` names the item, its needs and criteria; a re-plan keeps the decided
 items; its header draws the flow). A reading's checklist items
-of a site audience carry `needID` (`audience.need`), `kind` (the kind of
-page the need belongs on) and `claimed` (the sections that claim to answer
-it); a finding about one carries its `needID`, and so does an open item
+of a site audience carry `needID` (`audience.need`) and `kind` (the kind
+of page the need belongs on); a finding about one carries its `needID`, and so does an open item
 made of a gap. An annotation's `ask` and `suggest` carry the page's
 active audiences; with two or more (and no finding) its rewrite request
 is per audience (`request.audienceIDs`) and each suggestion keeps the
@@ -658,7 +716,10 @@ sends `model` a `read {page, audienceID}`, answered `model.reading
 {items, findings, thoughts?, seconds?}` with the findings' anchors and
 the items' found, at most `MAX_FINDINGS`. A page's suggestion asks with
 `SUGGEST_FUNCTIONS` only (`page_audiences {names}`, `suggestedNames`
-reads it).
+reads it). A plan asks with `PLAN_FUNCTIONS` only (`plan_item`,
+`new_page`; `planOf` reads and routes them): the plan actor sends `model`
+a `plan {page}`, answered `model.plan {items, newPages, sitePages,
+thoughts?, seconds?}` with each item's `original_text` anchored.
 
 `src/core/charts.mjs` is generated by `mise run charts` from
 `charts/*.scxml` and `spec/work-packet.xsd` (string constants, so the

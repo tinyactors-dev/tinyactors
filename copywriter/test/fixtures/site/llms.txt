@@ -1,0 +1,56 @@
+# tinyactors
+
+> Like SQLite, but for actors: statecharts that run in your process.
+
+tinyactors runs millions of statecharts inside your program, in Node.js, Python, a browser or C. A statechart is a composable state machine that describes a reactive system formally and is easy to verify.
+
+## Packages
+
+- @tinyactors/node 0.4.0 (Node.js and Bun): `npm install @tinyactors/node`
+- tinyactors 0.4.0 (Python): `pip install tinyactors`
+- @tinyactors/wasm 0.4.0 (Browsers): `npm install @tinyactors/wasm`
+- tinyactors-core 0.3.0 (C): `curl -L https://github.com/tinyactors-dev/tinyactors-core/releases/download/v0.3.0/tinyactors-0.3.0-src.tar.gz | tar xz`
+
+## Audiences
+
+- [Agent-platform engineer](https://www.tinyactors.dev/audiences/agent-platform.xml): A senior backend engineer building a multi-tenant backend for AI agents, chats or realtime sessions, in Node.js or Bun, evaluating a runtime for one long-lived stateful unit per session or tenant.
+- [Workflow developer who tests](https://www.tinyactors.dev/audiences/workflow-tester.xml): A backend developer, often in Python, whose long-running business logic (retries, timeouts, payments, multi-day waits) is hard to test and has been hand-rolled as state machines or considered for Temporal.
+- [Tech lead who approves dependencies](https://www.tinyactors.dev/audiences/tech-lead.xml): An architect or tech lead deciding whether the team may depend on tinyactors across services, clients and devices (Node.js, Python, the browser, C), and accountable when it fails.
+
+## Pages
+
+- [tinyactors: like SQLite, but for actors](https://www.tinyactors.dev/index.md): tinyactors runs millions of statecharts inside your program, in Node.js, Python, a browser or C: composable state machines that describe a reactive system formally.
+- [Build a team chat with tinyactors](https://www.tinyactors.dev/chat/index.md): Try a team chat in your browser, then build it in nine steps, from one room to direct messages between two people.
+- [Property testing a statechart](https://www.tinyactors.dev/property-testing/index.md): Replace unit tests with properties: generate worlds from seeds, find the run that breaks the chart, shrink it, and read its trace. In your browser.
+- [Telemetry: every step is a span](https://www.tinyactors.dev/telemetry/index.md): tinyactors reports what its actors do as OpenTelemetry: a span for each step, logs and metrics, with W3C trace context across actors and systems.
+- [Memory, capacity and performance](https://www.tinyactors.dev/performance/index.md): What a tinyactors actor costs in memory, how to size a host, how each operation's cost holds as the population doubles, and its conformance to SCXML.
+- [A million ants in your browser](https://www.tinyactors.dev/anthill/index.md): Two anthills in a browser tab, where every ant and queen is a tinyactors actor running on WebAssembly.
+- [Why tinyactors exists](https://www.tinyactors.dev/about/index.md): Why tinyactors exists, in its author's words.
+
+## Guides
+
+- [All guides](https://www.tinyactors.dev/guides/index.md): Steps for each task with tinyactors, from writing a chart to running millions of actors, each with a program that runs.
+- [Writing charts](https://www.tinyactors.dev/guides/charts/index.md): Write an actor's behaviour as an SCXML chart in JavaScript, and compile your charts into one image a host runs.
+- [Testing your charts](https://www.tinyactors.dev/guides/testing/index.md): Test a chart's retries and timeouts in milliseconds: your test answers each of its sends and moves a simulated clock.
+- [The quickjs sandbox](https://www.tinyactors.dev/guides/quickjs/index.md): Run charts your users upload in QuickJS, an engine inside the package that stops a runaway loop or allocation with an error.
+- [I/O processors](https://www.tinyactors.dev/guides/io-processors/index.md): Charts send events to I/O processors, objects of your own that do the I/O and send the answers back as events.
+- [Invoked services](https://www.tinyactors.dev/guides/services/index.md): Run a connection, a subprocess or a long computation for as long as a chart's state is active, with SCXML's invoke.
+- [Other systems](https://www.tinyactors.dev/guides/other-systems/index.md): Send events to actors in other processes and machines: a function you write carries each message, and the other host takes it unchanged.
+- [When the actor is not there](https://www.tinyactors.dev/guides/missing-actors/index.md): A send to a hibernated actor wakes it, and a send to no actor fails at once. Choose, for each kind of actor, how your application avoids or handles the failure.
+- [Capacity and memory](https://www.tinyactors.dev/guides/capacity/index.md): A tinyactors actor takes about 530 bytes started and 120 hibernated, and each operation costs about the same at four million actors as at two.
+- [Hibernation](https://www.tinyactors.dev/guides/hibernation/index.md): Keep only the busy actors in memory: the host writes the others to blobs in your store and wakes them when they have work.
+- [Migration](https://www.tinyactors.dev/guides/migration/index.md): Move running actors to a chart's new version, each at rest, keeping its session, states and queue while the host goes on working.
+- [Snapshots](https://www.tinyactors.dev/guides/snapshots/index.md): host.snapshot() copies a running tinyactors host into bytes, two million actors in 165 MB, and Host.restore runs the copy in this process or another.
+- [Inspecting a host](https://www.tinyactors.dev/guides/inspection/index.md): Read which state a running actor is in and what its variables hold, and count what each chart has done.
+- [Telemetry](https://www.tinyactors.dev/guides/telemetry/index.md): Export each step an actor takes as an OpenTelemetry span, with its logs and metrics, as OTLP bytes your code sends to a collector.
+- [In the browser](https://www.tinyactors.dev/guides/browser/index.md): Run the charts you run on Node.js in a page or a Worker with @tinyactors/wasm, the same API on core compiled to WebAssembly.
+
+## Optional
+
+- [tinyactors changelog](https://www.tinyactors.dev/changelog/index.md): Every release of tinyactors for Node.js, browsers, Python and C: what changed, and what a program must change to upgrade.
+
+## Elsewhere
+
+- [GitHub](https://github.com/tinyactors-dev/tinyactors)
+- [npm](https://www.npmjs.com/package/@tinyactors/node)
+- [PyPI](https://pypi.org/project/tinyactors/)
