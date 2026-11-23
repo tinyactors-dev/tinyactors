@@ -14,6 +14,10 @@ module Website
   REPO = ROOT.parent
   CONTENT = ROOT.join('content')
   SCHEMA = ROOT.join('schema/site.xsd')
+  # The published format of an audience file (/audiences/audience.xsd).
+  AUDIENCE_SCHEMA = ROOT.join('schema/audience.xsd')
+  # The needs report: which pages and sections answer each audience's needs.
+  NEEDS = ROOT.join('render/needs.xq')
   STYLESHEET = ROOT.join('render/site.xsl')
   BUILD = ROOT.join('build')
   SITE = BUILD.join('site')
@@ -62,11 +66,28 @@ module Website
     FileUtils.mkdir_p(SITE)
     packages!
     run('sxml', 'transform', "--result-directory=#{SITE}", "--param=version=#{version}", STYLESHEET, CONTENT.join('site.xml'))
+    FileUtils.cp(AUDIENCE_SCHEMA, SITE.join('audiences/audience.xsd'))
+    needs!
     assets!
     vendor!
     live!
     copywriter!
     puts "website: built #{SITE.relative_path_from(ROOT)} (#{SITE.glob('**/*').count(&:file?)} files)"
+  end
+
+  # The needs report (render/needs.xq) into build/needs.json, not
+  # published: for each audience's need, the pages and sections that answer
+  # it, and the needs none does, which are the editors' work list. The
+  # build prints the counts and never fails on an unanswered need.
+  def needs!
+    out, ok = capture('sxml', 'xquery', "--context-item=#{CONTENT.join('site.xml')}", '--method=json', NEEDS)
+    fail!("render/needs.xq failed:\n#{out}") unless ok
+    BUILD.join('needs.json').write(out)
+    report = JSON.parse(out)
+    report['audiences'].each do |audience|
+      puts "website: #{audience['id']}: #{audience['answered']} of #{audience['needs'].size} needs answered"
+    end
+    puts "website: unanswered needs (build/needs.json): #{report['unanswered'].join(', ')}" unless report['unanswered'].empty?
   end
 
   # What the pages append to the URLs of the stylesheet and the scripts

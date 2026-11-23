@@ -61,7 +61,7 @@
   </xsl:function>
 
   <!-- llms.txt: the name, the tagline, the home page's lede, the packages,
-       then the pages: those outside a navigation group under "Pages", each
+       the audiences each page names in its first line, then the pages: those outside a navigation group under "Pages", each
        group under its label, the optional ones under "Optional", and the
        links to other sites. Each entry has its page's description. -->
   <xsl:function name="f:llms" as="xs:string">
@@ -74,6 +74,8 @@
       <xsl:sequence select="$home/s:hero/s:lede ! f:md-inline(.)"/>
       <xsl:sequence select="'## ' || 'Packages' || $blank || string-join(
                               $site/s:packages/s:package ! f:llms-package(.), $nl)"/>
+      <xsl:sequence select="'## ' || 'Audiences' || $blank || string-join(
+                              $site/s:audiences/s:audience ! ('- ' || f:audience-link(@id) || ': ' || normalize-space(s:description)), $nl)"/>
       <xsl:sequence select="f:llms-section('Pages', $order[not(f:optional(.)) and not(@id = $grouped)], false())"/>
       <xsl:for-each select="$site/s:nav/s:group">
         <xsl:variable name="ids" select="s:link/@to"/>
@@ -137,10 +139,24 @@
     <xsl:param name="page" as="element(s:page)"/>
     <xsl:variable name="blocks" as="xs:string*">
       <xsl:sequence select="'&lt;!-- ' || $origin || $page/@path || ' --&gt;' || $nl || '# ' || normalize-space($page/s:title)"/>
+      <xsl:sequence select="$page/s:purpose ! f:purpose-md(.)"/>
       <xsl:sequence select="'> ' || normalize-space($page/s:description)"/>
       <xsl:apply-templates select="$page/(s:hero, s:reference, s:section)" mode="md"/>
     </xsl:variable>
     <xsl:sequence select="string-join($blocks[. != ''], $blank) || $nl"/>
+  </xsl:function>
+
+  <!-- A page's purpose, in one line: its kind, and its audiences in
+       order, each linked to its file (/audiences/<id>.xml), as the HTML's
+       head names them. -->
+  <xsl:function name="f:purpose-md" as="xs:string">
+    <xsl:param name="purpose" as="element(s:purpose)"/>
+    <xsl:sequence select="'Kind: ' || $purpose/@kind || '. For: ' || string-join(tokenize($purpose/@for) ! f:audience-link(.), ', ') || '.'"/>
+  </xsl:function>
+
+  <xsl:function name="f:audience-link" as="xs:string">
+    <xsl:param name="id" as="xs:string"/>
+    <xsl:sequence select="'[' || normalize-space($site/s:audiences/s:audience[@id = $id]/s:name) || '](' || $origin || '/audiences/' || $id || '.xml)'"/>
   </xsl:function>
 
   <!-- The hero's headline is the HTML's first heading; here the page's

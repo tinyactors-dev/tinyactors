@@ -2,6 +2,7 @@
 <page xmlns="https://www.tinyactors.dev/ns/site" id="changelog" path="/changelog/">
   <title>tinyactors changelog</title>
   <description>Every release of tinyactors for Node.js, browsers, Python and C: what changed, and what a program must change to upgrade.</description>
+  <purpose kind="reference" for="tech-lead agent-platform" answers="tech-lead.release-history"/>
 
   <reference>
     <headline>Changelog</headline>

@@ -2,6 +2,7 @@
 <page xmlns="https://www.tinyactors.dev/ns/site" id="chat" path="/chat/">
   <title>Build a team chat with tinyactors</title>
   <description>Try a team chat in your browser, then build it in nine steps, from one room to direct messages between two people.</description>
+  <purpose kind="tutorial" for="agent-platform workflow-tester"/>
 
   <hero>
     <headline>Build a team chat</headline>
@@ -71,7 +72,7 @@
     </example>
   </section>
 
-  <section id="hibernation">
+  <section id="hibernation" answers="agent-platform.idle-sessions">
     <heading>5. Keep idle users out of memory</heading>
     <p>Most users sit idle, yet each one's actor stays in memory. Give the host a <code>store</code> and a <code>resident</code> bound, and actors past the bound wait in the store.</p>
     <example>

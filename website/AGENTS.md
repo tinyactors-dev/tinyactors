@@ -61,6 +61,29 @@ rules.
   host); the root `GLOSSARY.md` defines them. The product name is
   lowercase.
 
+## Purposes and audiences
+
+- **Every page declares its purpose** (`<purpose kind for>` after its
+  description; only the 404 has none): its kind and its audiences, the
+  main audience first. The five kinds: `pitch` (deciding whether to adopt
+  the idea: a claim, a demonstration that runs, proof with its source, a
+  next step), `tutorial` (learning by doing), `how-to` (reaching a goal),
+  `reference` (looking up facts), `explanation` (understanding why).
+  The guides are `how-to`, the changelog `reference`.
+- **Audiences live in `site.xml` only**, each need one line with a short,
+  stable id: change the text freely, keep the id. A new need is a new id.
+- **Mark only the answers a section's text gives** (`answers`), and a
+  section's `kind` only where it differs from the page's. An unanswered
+  need is work, listed in `build/needs.json`; never mark it answered to
+  empty the list.
+- **Conflicting needs are resolved by placement.** The page's purpose
+  wins: a tutorial does not stop for a pitch's proof, a pitch does not
+  turn into reference. Link the other need to the page that answers it,
+  or write that page; never squeeze it in.
+- The published convention (head links, `data-answers`, the audience
+  files and `schema/audience.xsd`) is README.md's "Audiences and page
+  kinds": tools on other sites rely on it, so change it there first.
+
 ## The guides
 
 - **The guides are the site's**, one page each in `content/guides/`
@@ -125,7 +148,7 @@ The wording of each point is the content's (`content/site.xml`,
 - `mise run test` before every commit that changes this directory. It
   validates the content, checks that the schema refuses every document in
   `test/invalid/` by the rule its comment names, checks that the build
-  refuses `test/broken-link/`, builds the site, resolves every internal
+  refuses each site in `test/broken-*/` with its message, builds the site, resolves every internal
   link and anchor, and runs the examples.
 - A new refusal the schema makes gets a document in `test/invalid/` with
   `expect: <rule>` in its first comment.

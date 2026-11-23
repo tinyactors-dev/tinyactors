@@ -8,9 +8,12 @@
 
   It writes one HTML file per page (a path "/x/" as x/index.html, "/404" as
   404.html), sitemap.xml, and the site for agents (render/markdown.xsl):
-  each page as Markdown beside its HTML, llms.txt and llms-full.txt. It stops with a message when a link
-  names a page or a section that does not exist, or two pages share an id
-  or a path: what the schema cannot see across documents.
+  each page as Markdown beside its HTML, llms.txt and llms-full.txt; and
+  each audience as /audiences/<id>.xml with their index. It stops with a
+  message when a link names a page or a section that does not exist, two
+  pages share an id or a path, or a purpose or a section names an audience
+  or a need site.xml does not define: what the schema cannot see across
+  documents.
 
   Everything about how a page looks is here and in style/; nothing about it
   is in the content.
@@ -54,6 +57,7 @@
       </urlset>
     </xsl:result-document>
     <xsl:call-template name="markdown"/>
+    <xsl:call-template name="audiences"/>
   </xsl:template>
 
   <!-- What the schema cannot check: names across documents. -->
@@ -77,6 +81,19 @@
         <xsl:message terminate="yes">site: {f:where(.)}: a link to the section "{@section}", which the page "{@to}" does not have</xsl:message>
       </xsl:if>
     </xsl:for-each>
+    <xsl:variable name="audiences" select="$site/s:audiences/s:audience"/>
+    <xsl:for-each select="$pages/s:purpose">
+      <xsl:variable name="purpose" select="."/>
+      <xsl:for-each select="tokenize(@for)[not(. = $audiences/@id)]">
+        <xsl:message terminate="yes">site: {f:where($purpose)}: the audience "{.}", which site.xml does not define</xsl:message>
+      </xsl:for-each>
+    </xsl:for-each>
+    <xsl:for-each select="$pages//(s:purpose, s:section)[@answers]">
+      <xsl:variable name="at" select="."/>
+      <xsl:for-each select="tokenize(@answers)[not(. = f:needs($audiences))]">
+        <xsl:message terminate="yes">site: {f:where($at)}: the need "{.}", which site.xml's audiences do not define</xsl:message>
+      </xsl:for-each>
+    </xsl:for-each>
   </xsl:template>
 
   <!-- ===================================================== a page -->
@@ -98,6 +115,16 @@
         <meta property="og:description" content="{normalize-space(s:description)}"/>
         <meta property="og:url" content="{$origin}{@path}"/>
         <meta name="color-scheme" content="light dark"/>
+        <!-- What the page is for, and whom (README.md, "Audiences and page kinds"). -->
+        <xsl:for-each select="s:purpose">
+          <meta name="page-kind" content="{@kind}"/>
+          <xsl:if test="@answers">
+            <meta name="page-answers" content="{normalize-space(@answers)}"/>
+          </xsl:if>
+          <xsl:for-each select="tokenize(@for)">
+            <link rel="audience" href="/audiences/{.}.xml"/>
+          </xsl:for-each>
+        </xsl:for-each>
         <link rel="icon" href="/assets/brand/favicon.svg" type="image/svg+xml"/>
         <link rel="icon" href="/assets/brand/favicon.ico" sizes="any"/>
         <link rel="apple-touch-icon" href="/assets/brand/apple-touch-icon.png"/>
@@ -336,10 +363,39 @@
     </p>
   </xsl:template>
 
+  <!-- ===================================================== audiences -->
+
+  <!-- Each audience of site.xml as /audiences/<id>.xml, and their index,
+       in the format of schema/audience.xsd (copied beside them by the
+       build): what a page's <link rel="audience"> names. -->
+  <xsl:template name="audiences">
+    <xsl:for-each select="$site/s:audiences/s:audience">
+      <xsl:result-document href="audiences/{@id}.xml" method="xml" indent="yes">
+        <audience xmlns="https://www.tinyactors.dev/ns/audience" id="{@id}" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="https://www.tinyactors.dev/ns/audience audience.xsd">
+          <xsl:for-each select="s:name, s:description, s:knows, s:want, s:task, s:objection">
+            <xsl:element name="{local-name()}" namespace="https://www.tinyactors.dev/ns/audience">
+              <xsl:copy-of select="@id"/>
+              <xsl:value-of select="normalize-space(.)"/>
+            </xsl:element>
+          </xsl:for-each>
+        </audience>
+      </xsl:result-document>
+    </xsl:for-each>
+    <xsl:result-document href="audiences/index.xml" method="xml" indent="yes">
+      <audiences xmlns="https://www.tinyactors.dev/ns/audience" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="https://www.tinyactors.dev/ns/audience audience.xsd">
+        <xsl:for-each select="$site/s:audiences/s:audience">
+          <item id="{@id}" href="{@id}.xml">{normalize-space(s:name)}</item>
+        </xsl:for-each>
+      </audiences>
+    </xsl:result-document>
+  </xsl:template>
+
   <!-- ===================================================== sections -->
 
   <xsl:template match="s:section">
     <section id="{@id}" class="section" aria-labelledby="{@id}-heading">
+      <xsl:if test="@kind"><xsl:attribute name="data-kind" select="@kind"/></xsl:if>
+      <xsl:if test="@answers"><xsl:attribute name="data-answers" select="normalize-space(@answers)"/></xsl:if>
       <div class="wrap">
         <header class="section__head">
           <h2 id="{@id}-heading"><xsl:apply-templates select="s:heading/node()"/></h2>
@@ -842,6 +898,12 @@
       <xsl:if test="empty($svg/@fill)"><xsl:attribute name="fill" select="'currentColor'"/></xsl:if>
       <xsl:copy-of select="$svg/* except $svg/*:title"/>
     </svg>
+  </xsl:function>
+
+  <!-- Every need of these audiences, as "audience.need". -->
+  <xsl:function name="f:needs" as="xs:string*">
+    <xsl:param name="audiences" as="element(s:audience)*"/>
+    <xsl:sequence select="$audiences ! (let $a := @id return (s:want, s:task, s:objection) ! ($a || '.' || @id))"/>
   </xsl:function>
 
   <xsl:function name="f:where" as="xs:string">

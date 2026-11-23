@@ -2,6 +2,7 @@
 <page xmlns="https://www.tinyactors.dev/ns/site" id="property-testing" path="/property-testing/">
   <title>Property testing a statechart</title>
   <description>Replace unit tests with properties: generate worlds from seeds, find the run that breaks the chart, shrink it, and read its trace. In your browser.</description>
+  <purpose kind="tutorial" for="workflow-tester agent-platform"/>
 
   <hero>
     <headline>Test properties, <em>not runs</em></headline>
@@ -22,7 +23,7 @@
     <code src="../../examples/property/payment.scxml" language="scxml" file="payment.scxml"/>
   </section>
 
-  <section id="world">
+  <section id="world" answers="workflow-tester.no-mocks">
     <heading>2. Make the world data</heading>
     <p>The chart only sees events. So a world is an array: does the service answer charge 1, charge 2, and so on.</p>
     <code src="../../examples/property/property.mjs" lines="10-41" language="javascript" file="property.mjs"/>

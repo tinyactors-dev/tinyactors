@@ -2,6 +2,7 @@
 <page xmlns="https://www.tinyactors.dev/ns/site" id="guide-capacity" path="/guides/capacity/">
   <title>Capacity and memory</title>
   <description>A tinyactors actor takes about 530 bytes started and 120 hibernated, and each operation costs about the same at four million actors as at two.</description>
+  <purpose kind="how-to" for="agent-platform tech-lead"/>
   <hero>
     <headline>Fit millions of actors in one process</headline>
     <lede>On Node.js a started actor takes about 530 bytes and a hibernated one about 120, so four million fit in one process. Each operation costs about the same at four million actors as at two.</lede>
@@ -114,7 +115,7 @@ host.close();
     <p>That host reached 35 workspaces at once. A million actors sending to each other reached 92.</p>
   </section>
 
-  <section id="what-an-actor-costs">
+  <section id="what-an-actor-costs" answers="agent-platform.memory">
     <heading>Measure what one actor costs</heading>
     <p>The <link href="https://github.com/tinyactors-dev/tinyactors/tree/main/tinyactors-napi/examples/memory">memory program</link> measures the resident memory that one more actor, message or delayed send adds to a process. Run it with your chart, on your runtime and datamodel, the engine chart code runs in: native or quickjs.</p>
     <code language="shell">node examples/memory/main.mjs --counts 1000000 --datamodel native</code>

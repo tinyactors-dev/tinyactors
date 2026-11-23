@@ -2,6 +2,7 @@
 <page xmlns="https://www.tinyactors.dev/ns/site" id="guide-inspection" path="/guides/inspection/">
   <title>Inspecting a host</title>
   <description>Read which state a running actor is in and what its variables hold, and count what each chart has done.</description>
+  <purpose kind="how-to" for="agent-platform tech-lead"/>
   <hero>
     <headline>Ask a running host what its actors do</headline>
     <lede><code>await actor.state()</code> tells you which state a running actor is in, and <code>await host.hostStats()</code> counts what each chart has done.</lede>
@@ -105,7 +106,7 @@ state: "held" history: {"back":{"reviewing":"legal"}}
     <p>The host reads timers and history only when asked, so keeping them adds nothing to an event's work.</p>
   </section>
 
-  <section id="the-methods">
+  <section id="the-methods" kind="reference">
     <heading>Pick the method for your question</heading>
     <p>Each of these calls, the typed methods, takes one object of params and resolves with one result object:</p>
     <table>

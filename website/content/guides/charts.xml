@@ -2,6 +2,7 @@
 <page xmlns="https://www.tinyactors.dev/ns/site" id="guide-charts" path="/guides/charts/">
   <title>Writing charts</title>
   <description>Write an actor's behaviour as an SCXML chart in JavaScript, and compile your charts into one image a host runs.</description>
+  <purpose kind="how-to" for="agent-platform workflow-tester"/>
   <hero>
     <headline>Write chart logic in JavaScript</headline>
     <lede>A chart's conditions, data and scripts are plain JavaScript that reads the actor's variables by name. Your charts compile into one image: bytes a host runs, in this process or another.</lede>

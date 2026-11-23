@@ -2,6 +2,7 @@
 <page xmlns="https://www.tinyactors.dev/ns/site" id="guide-other-systems" path="/guides/other-systems/">
   <title>Other systems</title>
   <description>Send events to actors in other processes and machines: a function you write carries each message, and the other host takes it unchanged.</description>
+  <purpose kind="how-to" for="agent-platform tech-lead"/>
   <hero>
     <headline>Send events to actors in other processes</headline>
     <lede>An actor sends to an actor on another machine by its address. A function you write carries the message, and the other side's host takes it unchanged, a Python host included.</lede>

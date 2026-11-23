@@ -1,0 +1,3 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Every page but the 404 says what it is for, and whom. expect: cvc-assertion: element 'Q{https://www.tinyactors.dev/ns/site}page' breaks the assertion '(: every page but the 404 declares its purpose :) -->
+<page xmlns="https://www.tinyactors.dev/ns/site" id="t" path="/t/"><title>T</title><description>A test page.</description><hero><headline>T</headline><lede>Lede.</lede></hero></page>

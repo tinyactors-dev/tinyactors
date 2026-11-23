@@ -2,6 +2,7 @@
 <page xmlns="https://www.tinyactors.dev/ns/site" id="about" path="/about/">
   <title>Why tinyactors exists</title>
   <description>Why tinyactors exists, in its author's words.</description>
+  <purpose kind="explanation" for="tech-lead agent-platform"/>
 
   <hero>
     <headline>Model <em>every</em> system as a statechart</headline>

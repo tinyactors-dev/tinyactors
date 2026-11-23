@@ -2,12 +2,13 @@
 <page xmlns="https://www.tinyactors.dev/ns/site" id="guide-testing" path="/guides/testing/">
   <title>Testing your charts</title>
   <description>Test a chart's retries and timeouts in milliseconds: your test answers each of its sends and moves a simulated clock.</description>
+  <purpose kind="how-to" for="workflow-tester agent-platform"/>
   <hero>
     <headline>Test an hour of timeouts in milliseconds</headline>
     <lede>A payment that retries every 30 seconds runs all three attempts in a test that takes milliseconds. The test answers the chart's sends and moves its clock.</lede>
   </hero>
 
-  <section id="three-tools">
+  <section id="three-tools" answers="workflow-tester.no-mocks workflow-tester.simulated-clock">
     <heading>Replace the chart's services and its clock</heading>
     <p>A chart reaches the world only through sends. The host passes each send to a handler you give it, an I/O processor.</p>
     <list>
@@ -18,7 +19,7 @@
     <p>To check properties over generated runs instead of single cases, read <link to="property-testing"/>.</p>
   </section>
 
-  <section id="a-test">
+  <section id="a-test" answers="workflow-tester.simulated-clock workflow-tester.test-timeouts">
     <heading>Check each step of a retrying payment</heading>
     <p>This chart charges a card, retries when no answer comes within 30 seconds, and gives up after the third attempt. Its test moves the clock 30 seconds at a time and checks each charge.</p>
     <example>

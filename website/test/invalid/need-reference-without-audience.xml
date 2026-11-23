@@ -1,0 +1,3 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- A need is named with its audience, as "audience.need". expect: cvc-pattern-valid -->
+<page xmlns="https://www.tinyactors.dev/ns/site" id="t" path="/t/"><title>T</title><description>A test page.</description><purpose kind="how-to" for="a"/><hero><headline>T</headline><lede>Lede.</lede></hero><section id="s" answers="host-dies"><heading>S</heading><p>Text.</p></section></page>

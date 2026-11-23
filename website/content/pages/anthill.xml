@@ -2,6 +2,7 @@
 <page xmlns="https://www.tinyactors.dev/ns/site" id="anthill" path="/anthill/">
   <title>A million ants in your browser</title>
   <description>Two anthills in a browser tab, where every ant and queen is a tinyactors actor running on WebAssembly.</description>
+  <purpose kind="pitch" for="agent-platform tech-lead"/>
 
   <hero>
     <headline>Watch a million ants forage and fight</headline>
@@ -41,7 +42,7 @@
     <p>The rest slider sets how long ants stay in the hill between outings, so shorter rests mean more messages a second. The time per message stays level as you add ants, and the real-time chart shows whether your device keeps up.</p>
   </section>
 
-  <section id="node">
+  <section id="node" answers="tech-lead.same-everywhere">
     <heading>The same world runs in Node.js</heading>
     <p>With a simulated clock and a fixed seed, every run prints the same five minutes of both colonies.</p>
     <example>

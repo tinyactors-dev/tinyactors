@@ -2,6 +2,7 @@
 <page xmlns="https://www.tinyactors.dev/ns/site" id="guide-telemetry" path="/guides/telemetry/">
   <title>Telemetry</title>
   <description>Export each step an actor takes as an OpenTelemetry span, with its logs and metrics, as OTLP bytes your code sends to a collector.</description>
+  <purpose kind="how-to" for="agent-platform tech-lead"/>
   <hero>
     <headline>See what your actors did in OpenTelemetry</headline>
     <lede>Each step an actor takes becomes a span with its event and the states it left and entered, in the caller's trace when it passes one. Your code sends the OTLP bytes to the collector it chooses.</lede>

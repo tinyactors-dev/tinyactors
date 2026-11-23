@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- A section that answers a need its audience does not have: the build
+     refuses it. expect: the need "tech-lead.host-dies", which site.xml's audiences do not define -->
+<site xmlns="https://www.tinyactors.dev/ns/site" origin="https://www.tinyactors.dev">
+  <name>t</name>
+  <tagline>A test site.</tagline>
+  <audiences><audience id="tech-lead"><name>Tech lead</name><description>A reader.</description><knows>Little.</knows><want id="license">The license</want><task id="decide">Decide yes or no</task></audience></audiences>
+  <nav><link to="home">Home</link></nav>
+  <pages><page src="pages/home.xml"/></pages>
+  <footer><links><link href="https://example.com">Example</link></links></footer>
+</site>

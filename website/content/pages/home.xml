@@ -2,6 +2,7 @@
 <page xmlns="https://www.tinyactors.dev/ns/site" id="home" path="/">
   <title>tinyactors: like SQLite, but for actors</title>
   <description>tinyactors runs millions of statecharts inside your program, in Node.js, Python, a browser or C: composable state machines that describe a reactive system formally.</description>
+  <purpose kind="pitch" for="agent-platform tech-lead workflow-tester"/>
 
   <hero>
     <headline>Like SQLite, but for <em>actors</em></headline>
@@ -18,7 +19,7 @@
     </actions>
   </hero>
 
-  <section id="actors">
+  <section id="actors" answers="workflow-tester.written-flow">
     <heading>Write each actor's behavior as one chart</heading>
     <p>A statechart is a composable state machine of states, events and transitions. Because it isolates effects as events, your code can simulate runs in tests.</p>
     <p>A tinyactors actor runs a chart instead of arbitrary code like Erlang or Akka, keeping behavior readable and easy to verify.</p>
@@ -26,13 +27,13 @@
     <code src="../../examples/simulate/payment.scxml" lines="4-15" language="scxml" file="payment.scxml"/>
   </section>
 
-  <section id="agents">
+  <section id="agents" answers="agent-platform.agent-charts">
     <heading>Hand a chart to a coding agent</heading>
     <p>Statecharts make behavior readable and checkable, but writing every state by hand cost more than most teams would pay. A coding agent does that writing for you, and that changes the trade.</p>
     <p>The chart sends an event for every effect, and your code performs it. A simulated clock runs its timeouts, so the agent tests each change in milliseconds.</p>
   </section>
 
-  <section id="process">
+  <section id="process" answers="agent-platform.in-backend agent-platform.another-runtime agent-platform.memory workflow-tester.no-server workflow-tester.needs-cluster tech-lead.same-everywhere tech-lead.test-suite">
     <heading>Run millions of actors in your process</heading>
     <list>
       <item><term>It runs inside your program</term><text>tinyactors is a library on your own event loop, so your actors deploy with your program.</text></item>
@@ -52,7 +53,7 @@
     <p>With <code>attempts &lt; 4</code> in the chart, the loop stops at seed 10: it charged the card four times. <link href="https://github.com/tinyactors-dev/tinyactors/blob/main/website/examples/simulate/simulate.mjs">The whole program</link> is 44 lines.</p>
   </section>
 
-  <section id="build">
+  <section id="build" answers="agent-platform.idle-sessions">
     <heading>Conquer complexity</heading>
     <p>A team chat like Slack looks simple: rooms and messages. Its hard part is the state: who is in which room, and who is online as people come and go.</p>
     <p>The tutorial builds one in five steps, and each part of that state lives in an actor:</p>
@@ -66,7 +67,7 @@
     </actions>
   </section>
 
-  <section id="production">
+  <section id="production" answers="tech-lead.failure-semantics">
     <heading>Run actors in production</heading>
     <p>An actor in production stands for an entity, such as an account, and lives as long as it does. So you change and watch actors that are already running.</p>
     <list>

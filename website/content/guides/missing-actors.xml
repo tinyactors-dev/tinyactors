@@ -2,6 +2,7 @@
 <page xmlns="https://www.tinyactors.dev/ns/site" id="guide-missing-actors" path="/guides/missing-actors/">
   <title>When the actor is not there</title>
   <description>A send to a hibernated actor wakes it, and a send to no actor fails at once. Choose, for each kind of actor, how your application avoids or handles the failure.</description>
+  <purpose kind="how-to" for="agent-platform"/>
   <hero>
     <headline>Decide what sends to missing actors do</headline>
     <lede>A send to an actor asleep in your store wakes it, and a send to no actor fails at once. Your application chooses, per kind of actor, whether to avoid that failure or handle it.</lede>

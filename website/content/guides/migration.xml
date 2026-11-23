@@ -2,6 +2,7 @@
 <page xmlns="https://www.tinyactors.dev/ns/site" id="guide-migration" path="/guides/migration/">
   <title>Migration</title>
   <description>Move running actors to a chart's new version, each at rest, keeping its session, states and queue while the host goes on working.</description>
+  <purpose kind="how-to" for="agent-platform tech-lead"/>
   <hero>
     <headline>Upgrade running actors in place</headline>
     <lede>An order waiting a week for delivery can move to its chart's next version and keep the state it reached. Two million actors, most of them hibernated, moved while events kept coming.</lede>
@@ -22,7 +23,7 @@
     <p>An actor found by name is replaced when its owner spawns the new version under the name (<link to="guide-io-processors" section="updating-through-names">updating through names</link>). Migrate the actors that must not wait for their end.</p>
   </section>
 
-  <section id="moving-running-actors">
+  <section id="moving-running-actors" answers="tech-lead.failure-semantics">
     <heading>Move the actors and carry their variables</heading>
     <p><code>host.migrate()</code> moves the running actors to the newest version of their chart, during the next turns.</p>
     <p>A moved actor keeps its session, its active states, its queue and its delayed sends with their data. Its states are matched by id (<link to="guide-migration" section="states-the-new-version-enters">below</link>).</p>

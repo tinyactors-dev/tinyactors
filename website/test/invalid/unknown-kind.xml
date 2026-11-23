@@ -1,0 +1,3 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- A purpose's kind is one of pitch, tutorial, how-to, reference and explanation. expect: cvc-enumeration-valid -->
+<page xmlns="https://www.tinyactors.dev/ns/site" id="t" path="/t/"><title>T</title><description>A test page.</description><purpose kind="landing" for="a"/><hero><headline>T</headline><lede>Lede.</lede></hero></page>

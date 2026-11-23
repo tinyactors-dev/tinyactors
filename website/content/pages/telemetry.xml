@@ -2,6 +2,7 @@
 <page xmlns="https://www.tinyactors.dev/ns/site" id="telemetry" path="/telemetry/">
   <title>Telemetry: every step is a span</title>
   <description>tinyactors reports what its actors do as OpenTelemetry: a span for each step, logs and metrics, with W3C trace context across actors and systems.</description>
+  <purpose kind="pitch" for="tech-lead agent-platform"/>
 
   <hero>
     <headline>Every step is a <em>span</em></headline>

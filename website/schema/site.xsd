@@ -11,13 +11,16 @@
   looks. A claim cannot be written without its source.
 
   XSD 1.1 (sxml validate). Links between documents (a link's or an action's
-  `to` naming a page, a section's anchor) are checked when the site is built,
-  since a schema sees one document at a time.
+  `to` naming a page, a section's anchor) and a page's references to the
+  audiences of site.xml (a purpose's `for`, a section's `answers`) are
+  checked when the site is built, since a schema sees one document at a
+  time.
 -->
 <xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"
            xmlns="https://www.tinyactors.dev/ns/site"
            targetNamespace="https://www.tinyactors.dev/ns/site"
            elementFormDefault="qualified"
+           xpathDefaultNamespace="##targetNamespace"
            version="1.1">
 
   <!-- ===================================================== the site -->
@@ -31,6 +34,7 @@
       <xs:sequence>
         <xs:element name="name" type="plain"/>
         <xs:element name="tagline" type="plain"/>
+        <xs:element ref="audiences"/>
         <xs:element name="nav" type="navigation"/>
         <xs:element name="pages">
           <xs:complexType>
@@ -99,6 +103,10 @@
         </xs:simpleType>
       </xs:attribute>
     </xs:complexType>
+    <xs:key name="audience-ids">
+      <xs:selector xpath="audiences/audience"/>
+      <xs:field xpath="@id"/>
+    </xs:key>
     <xs:unique name="package-ids">
       <xs:selector xpath="packages/package"/>
       <xs:field xpath="@id"/>
@@ -108,6 +116,136 @@
       <xs:field xpath="@src"/>
     </xs:unique>
   </xs:element>
+
+  <!-- ===================================================== audiences -->
+
+  <xs:element name="audiences">
+    <xs:annotation><xs:documentation>
+      Who reads the site, defined once. Each page names its audiences in
+      its `purpose`, and each section names the needs it answers, by these
+      ids. The build publishes each audience as /audiences/&lt;id&gt;.xml
+      (schema/audience.xsd), which every page's head links to.
+    </xs:documentation></xs:annotation>
+    <xs:complexType>
+      <xs:sequence>
+        <xs:element ref="audience" maxOccurs="unbounded"/>
+      </xs:sequence>
+    </xs:complexType>
+  </xs:element>
+
+  <xs:element name="audience">
+    <xs:annotation><xs:documentation>
+      One kind of reader: who they are (`name`, `description`), what they
+      know already (`knows`), and their needs, one line each: what they
+      want to find (`want`), what they came to do (`task`), and what makes
+      them doubt (`objection`, in their words). A need's id is short and
+      stable; a page names it as "audience.need" ("tech-lead.host-dies"),
+      so it is unique within its audience.
+    </xs:documentation></xs:annotation>
+    <xs:complexType>
+      <xs:sequence>
+        <xs:element name="name" type="plain"/>
+        <xs:element name="description" type="words"/>
+        <xs:element name="knows" type="words"/>
+        <xs:element name="want" type="need" maxOccurs="unbounded"/>
+        <xs:element name="task" type="need" maxOccurs="unbounded"/>
+        <xs:element name="objection" type="need" minOccurs="0" maxOccurs="unbounded"/>
+      </xs:sequence>
+      <xs:attribute name="id" type="audience-id" use="required"/>
+    </xs:complexType>
+    <xs:unique name="need-ids">
+      <xs:selector xpath="want|task|objection"/>
+      <xs:field xpath="@id"/>
+    </xs:unique>
+  </xs:element>
+
+  <xs:complexType name="need">
+    <xs:annotation><xs:documentation>One need of an audience, one line: its text, and its id within the audience.</xs:documentation></xs:annotation>
+    <xs:simpleContent>
+      <xs:extension base="words">
+        <xs:attribute name="id" type="audience-id" use="required"/>
+      </xs:extension>
+    </xs:simpleContent>
+  </xs:complexType>
+
+  <xs:simpleType name="audience-id">
+    <xs:annotation><xs:documentation>An audience's or a need's id: lowercase words joined by hyphens ("agent-platform", "host-dies").</xs:documentation></xs:annotation>
+    <xs:restriction base="xs:token">
+      <xs:pattern value="[a-z][a-z0-9]*(-[a-z0-9]+)*"/>
+    </xs:restriction>
+  </xs:simpleType>
+
+  <xs:simpleType name="words">
+    <xs:annotation><xs:documentation>Plain text with no markup, which may wrap across lines.</xs:documentation></xs:annotation>
+    <xs:restriction base="xs:token">
+      <xs:minLength value="1"/>
+    </xs:restriction>
+  </xs:simpleType>
+
+  <!-- ===================================================== purposes -->
+
+  <xs:element name="purpose">
+    <xs:annotation><xs:documentation>
+      What a page is for, and whom: its kind, and its audiences in order,
+      the first its main audience (`for`, ids of site.xml's audiences).
+      `answers` names needs the page answers as a whole ("audience.need"),
+      where no one section does. When needs conflict, the page's purpose
+      wins: a need of another kind or audience is linked to the page that
+      answers it, never squeezed in. The build checks every id against
+      site.xml, since a schema sees one document at a time.
+    </xs:documentation></xs:annotation>
+    <xs:complexType>
+      <xs:attribute name="kind" type="kind" use="required"/>
+      <xs:attribute name="for" type="audience-ids" use="required"/>
+      <xs:attribute name="answers" type="need-references"/>
+    </xs:complexType>
+  </xs:element>
+
+  <xs:simpleType name="kind">
+    <xs:annotation><xs:documentation>
+      What a reader came to do on a page or a section, from Diátaxis's four
+      kinds of documentation and one more:
+      `pitch`: decide whether to adopt the idea; a claim, a demonstration
+      that runs, proof with its source, and a next step.
+      `tutorial`: learn by doing; steps that each run, in order.
+      `how-to`: reach a goal they already have; the steps to it.
+      `reference`: look up a fact; complete and terse.
+      `explanation`: understand why; the reasons and the trade.
+    </xs:documentation></xs:annotation>
+    <xs:restriction base="xs:token">
+      <xs:enumeration value="pitch"/>
+      <xs:enumeration value="tutorial"/>
+      <xs:enumeration value="how-to"/>
+      <xs:enumeration value="reference"/>
+      <xs:enumeration value="explanation"/>
+    </xs:restriction>
+  </xs:simpleType>
+
+  <xs:simpleType name="audience-ids">
+    <xs:annotation><xs:documentation>Audience ids, in order, each once.</xs:documentation></xs:annotation>
+    <xs:restriction>
+      <xs:simpleType><xs:list itemType="audience-id"/></xs:simpleType>
+      <xs:minLength value="1"/>
+      <xs:assertion test="(: each audience once :) count($value) eq count(distinct-values($value))"/>
+    </xs:restriction>
+  </xs:simpleType>
+
+  <xs:simpleType name="need-references">
+    <xs:annotation><xs:documentation>Needs, each as "audience.need" ("tech-lead.host-dies"), each once.</xs:documentation></xs:annotation>
+    <xs:restriction>
+      <xs:simpleType>
+        <xs:list>
+          <xs:simpleType>
+            <xs:restriction base="xs:token">
+              <xs:pattern value="[a-z][a-z0-9]*(-[a-z0-9]+)*\.[a-z][a-z0-9]*(-[a-z0-9]+)*"/>
+            </xs:restriction>
+          </xs:simpleType>
+        </xs:list>
+      </xs:simpleType>
+      <xs:minLength value="1"/>
+      <xs:assertion test="(: each need once :) count($value) eq count(distinct-values($value))"/>
+    </xs:restriction>
+  </xs:simpleType>
 
   <xs:element name="packages">
     <xs:annotation><xs:documentation>
@@ -215,6 +353,7 @@
         <xs:element name="description" type="sentence">
           <xs:annotation><xs:documentation>One or two sentences for search results, link previews and llms.txt.</xs:documentation></xs:annotation>
         </xs:element>
+        <xs:element ref="purpose" minOccurs="0"/>
         <xs:choice>
           <xs:sequence>
             <xs:element ref="hero"/>
@@ -232,6 +371,8 @@
         </xs:simpleType>
       </xs:attribute>
       <xs:assert test="(: never 'formal verification': there is no model checker :) not(contains(lower-case(normalize-space(.)), 'formal verification'))"/>
+      <xs:assert test="(: every page but the 404 declares its purpose :) exists(purpose) or @path = '/404'"/>
+      <xs:assert test="(: a section's kind differs from its page's :) every $kind in section/@kind satisfies $kind != string(purpose/@kind)"/>
     </xs:complexType>
   </xs:element>
 
@@ -298,12 +439,21 @@
   </xs:element>
 
   <xs:element name="section">
+    <xs:annotation><xs:documentation>
+      A part of a page: a heading, then its blocks. `kind` is the section's
+      own kind, only where it differs from its page's (a pitch's section of
+      reference numbers); `answers` names the needs of site.xml's audiences
+      the section's text answers ("tech-lead.host-dies"), only those it
+      actually answers.
+    </xs:documentation></xs:annotation>
     <xs:complexType>
       <xs:sequence>
         <xs:element name="heading" type="title"/>
         <xs:group ref="blocks" maxOccurs="unbounded"/>
       </xs:sequence>
       <xs:attribute name="id" type="xs:ID" use="required"/>
+      <xs:attribute name="kind" type="kind"/>
+      <xs:attribute name="answers" type="need-references"/>
     </xs:complexType>
   </xs:element>
 

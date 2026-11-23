@@ -2,12 +2,13 @@
 <page xmlns="https://www.tinyactors.dev/ns/site" id="guide-hibernation" path="/guides/hibernation/">
   <title>Hibernation</title>
   <description>Keep only the busy actors in memory: the host writes the others to blobs in your store and wakes them when they have work.</description>
+  <purpose kind="how-to" for="agent-platform tech-lead"/>
   <hero>
     <headline>Keep waiting actors out of memory</headline>
     <lede>An actor that waits days for its next event can wait as bytes in your database instead. Two million actors ran with at most 1000 in memory, about 150 bytes of memory each.</lede>
   </hero>
 
-  <section id="a-store-and-a-bound">
+  <section id="a-store-and-a-bound" answers="agent-platform.idle-sessions">
     <heading>Cap how many actors stay in memory</heading>
     <p>Most actors spend most of their time waiting: an order for a payment, a session for its user. Hibernation turns a waiting actor into a blob, a <code>Buffer</code> your store keeps.</p>
     <p>Give the host a store, which puts the blobs where you choose, and the most actors it may hold in memory.</p>
@@ -192,7 +193,7 @@ variable 'seen' cannot be stored: only plain objects, arrays and Uint8Arrays are
     <p>The <link to="guide-capacity">capacity guide</link> says how many actors a host holds and how much memory it needs.</p>
   </section>
 
-  <section id="at-scale">
+  <section id="at-scale" answers="agent-platform.memory">
     <heading>Run two million actors with 1000 in memory</heading>
     <p><link href="https://github.com/tinyactors-dev/tinyactors-napi/blob/main/tools/stress.mjs"><code>tools/stress.mjs</code></link> (<code>mise run stress</code>) runs this guide's pattern at scale, with the actors past the bound in SQLite.</p>
     <p>Its 200,000 events went to actors drawn at random, so nearly every event woke one and the sweep sent another back. Each run woke 199,870 actors from the store.</p>

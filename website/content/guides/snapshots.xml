@@ -2,12 +2,13 @@
 <page xmlns="https://www.tinyactors.dev/ns/site" id="guide-snapshots" path="/guides/snapshots/">
   <title>Snapshots</title>
   <description>host.snapshot() copies a running tinyactors host into bytes, two million actors in 165 MB, and Host.restore runs the copy in this process or another.</description>
+  <purpose kind="how-to" for="tech-lead agent-platform"/>
   <hero>
     <headline>Copy a running application, and run the copy</headline>
     <lede>A host of two million actors makes a 165 MB snapshot in about a tenth of a second. Restore it in another process and rehearse a deploy on the copy.</lede>
   </hero>
 
-  <section id="what-it-holds">
+  <section id="what-it-holds" answers="tech-lead.failure-semantics">
     <heading>Copy every actor into one buffer</heading>
     <p><code>host.snapshot()</code> returns one <code>Buffer</code> holding every actor of the host, with its variables, its queued events and its pending timers.</p>
     <p>The buffer also holds the hibernated actors' records, the compiled images, the system id and the host's time. <code>Host.restore</code> runs it again, in this process or another.</p>

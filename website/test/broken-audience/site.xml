@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- A page for an audience site.xml does not define: the schema sees one
+     document at a time, so the build refuses it. expect: the audience "operator", which site.xml does not define -->
+<site xmlns="https://www.tinyactors.dev/ns/site" origin="https://www.tinyactors.dev">
+  <name>t</name>
+  <tagline>A test site.</tagline>
+  <audiences><audience id="tech-lead"><name>Tech lead</name><description>A reader.</description><knows>Little.</knows><want id="license">The license</want><task id="decide">Decide yes or no</task></audience></audiences>
+  <nav><link to="home">Home</link></nav>
+  <pages><page src="pages/home.xml"/></pages>
+  <footer><links><link href="https://example.com">Example</link></links></footer>
+</site>

@@ -3,6 +3,61 @@
   <name>tinyactors</name>
   <tagline>Like SQLite, but for actors: statecharts that run in your process.</tagline>
 
+  <!-- Who reads the site (2026-11-23, from how rivet.dev, temporal.io and
+       sqlite.org write for their readers). Pages name them in their
+       purpose, sections the needs they answer. -->
+  <audiences>
+    <audience id="agent-platform">
+      <name>Agent-platform engineer</name>
+      <description>A senior backend engineer building a multi-tenant backend for AI agents, chats or realtime sessions, in Node.js or Bun, evaluating a runtime for one long-lived stateful unit per session or tenant.</description>
+      <knows>Actor systems and Cloudflare Durable Objects; Rivet; XState; containers and serverless limits. Little SCXML.</knows>
+      <want id="in-backend">Whether it runs inside the backend they already have</want>
+      <want id="memory">Memory per actor and how many fit in one process, with the benchmark behind the number</want>
+      <want id="idle-sessions">Hibernation and snapshots for idle sessions</want>
+      <want id="code-first">A code example before any concept</want>
+      <task id="evaluate">Evaluate it in minutes</task>
+      <task id="first-chart">npm install and run the first chart</task>
+      <task id="compare">Compare it with Rivet and Durable Objects</task>
+      <objection id="another-runtime">Another runtime or platform to operate?</objection>
+      <objection id="why-scxml">Why SCXML and not XState?</objection>
+      <objection id="production">Is anyone running this in production?</objection>
+      <objection id="agent-charts">Will an agent really write good charts?</objection>
+    </audience>
+    <audience id="workflow-tester">
+      <name>Workflow developer who tests</name>
+      <description>A backend developer, often in Python, whose long-running business logic (retries, timeouts, payments, multi-day waits) is hard to test and has been hand-rolled as state machines or considered for Temporal.</description>
+      <knows>Temporal or Celery and their replay or retry models; pytest; the pain of sleeping in tests and of flaky timing.</knows>
+      <want id="simulated-clock">A simulated clock that runs a week of timeouts in milliseconds</want>
+      <want id="written-flow">The whole flow written down as states and transitions</want>
+      <want id="no-mocks">Effects as events their code performs, so tests need no mocks of the world</want>
+      <want id="no-server">No server to run</want>
+      <task id="one-workflow">Write one workflow as a chart</task>
+      <task id="test-timeouts">Test its timeouts in CI</task>
+      <task id="show-speedup">Show the team the speedup</task>
+      <objection id="needs-cluster">Does it need Docker or a cluster like Temporal?</objection>
+      <objection id="crash">What survives a crash of the process?</objection>
+      <objection id="simulation-matches">Will the simulated run match production?</objection>
+    </audience>
+    <audience id="tech-lead">
+      <name>Tech lead who approves dependencies</name>
+      <description>An architect or tech lead deciding whether the team may depend on tinyactors across services, clients and devices (Node.js, Python, the browser, C), and accountable when it fails.</description>
+      <knows>Reasons like sqlite.org's "when to use" page: what it is for, what it is not for. Knows SQLite, embedded libraries, and the cost of a new server.</knows>
+      <want id="when-to-use">An honest "use it when, do not use it when"</want>
+      <want id="failure-semantics">The failure semantics of one process: what is lost, what a snapshot or migration keeps</want>
+      <want id="same-everywhere">One chart running the same everywhere</want>
+      <want id="license">The license</want>
+      <want id="release-history">The release history</want>
+      <want id="test-suite">The test suite that backs "passes all"</want>
+      <task id="decide">Decide yes or no</task>
+      <task id="write-case">Write the case for the team</task>
+      <task id="check-portability">Check the license and portability</task>
+      <objection id="single-point">One process is one point of failure.</objection>
+      <objection id="host-dies">What happens to state when the host dies?</objection>
+      <objection id="lock-in">Are we locked in to this runtime or its chart format?</objection>
+      <objection id="maintainer">Who maintains it?</objection>
+    </audience>
+  </audiences>
+
   <nav>
     <link to="chat">Tutorial</link>
     <link to="property-testing">Testing</link>

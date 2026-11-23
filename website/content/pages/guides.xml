@@ -2,6 +2,7 @@
 <page xmlns="https://www.tinyactors.dev/ns/site" id="guides" path="/guides/">
   <title>Guides · tinyactors</title>
   <description>Steps for each task with tinyactors, from writing a chart to running millions of actors, each with a program that runs.</description>
+  <purpose kind="reference" for="agent-platform workflow-tester tech-lead"/>
   <hero>
     <headline>Steps for each task, with programs that run</headline>
     <lede>Each program shown with its output runs in the site's tests against the published package, and must print what the page shows.</lede>

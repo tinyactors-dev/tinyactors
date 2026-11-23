@@ -2,12 +2,13 @@
 <page xmlns="https://www.tinyactors.dev/ns/site" id="guide-io-processors" path="/guides/io-processors/">
   <title>I/O processors</title>
   <description>Charts send events to I/O processors, objects of your own that do the I/O and send the answers back as events.</description>
+  <purpose kind="how-to" for="agent-platform workflow-tester"/>
   <hero>
     <headline>Do a chart's I/O in your own code</headline>
     <lede>A chart asks for a price or an email by sending an event. An object of yours does the work and answers with another event, at once or when its promise settles.</lede>
   </hero>
 
-  <section id="charts-send-events">
+  <section id="charts-send-events" answers="workflow-tester.no-mocks">
     <heading>Ask for outside work with a send</heading>
     <p>A chart that needs the network, a file or a database sends an event with <code>&lt;send type&gt;</code>. The type names an I/O processor, an object in your program.</p>
     <p>The processor does the work and sends any answer back as an event. The chart decides when to ask and what an answer changes.</p>

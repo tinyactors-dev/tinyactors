@@ -10,8 +10,10 @@
 #    three sentences, ...). The rule may go on with the start of the
 #    message, to name which of a type's assertions must refuse it (each
 #    assertion's test opens with a comment saying what it checks).
-# 2. test/broken-link/: a site whose link names a page it does not list;
-#    the build must stop, naming it (`expect: <message>`).
+# 2. test/broken-*/: sites the build must stop at, naming why (`expect:
+#    <message>`): a link to a page the site does not list, a purpose for an
+#    audience site.xml does not define, a section that answers a need no
+#    audience has.
 # 3. The build (validation first), then every link and asset a page names
 #    on this site resolves to a file, and every #anchor to an id there;
 #    and the site for agents: each page's Markdown, llms.txt (3b).
@@ -46,14 +48,17 @@ end
 puts "website: the schema refuses #{invalid.size - failures.size} of #{invalid.size} invalid documents, each by its rule"
 
 # 2. What the build refuses.
-Dir.mktmpdir('website-test') do |dir|
-  site = Website::ROOT.join('test/broken-link/site.xml')
+broken = Website::ROOT.glob('test/broken-*/site.xml').sort
+broken.each do |site|
+  name = site.dirname.basename
   message = expected.call(site)
-  out, ok = Website.capture('sxml', 'transform', "--result-directory=#{dir}", Website::STYLESHEET, site)
-  failures << "broken-link: built, but must stop at #{message.inspect}" if ok
-  failures << "broken-link: stopped, but without #{message.inspect}:\n#{out}" if !ok && !out.include?(message)
+  Dir.mktmpdir('website-test') do |dir|
+    out, ok = Website.capture('sxml', 'transform', "--result-directory=#{dir}", Website::STYLESHEET, site)
+    failures << "#{name}: built, but must stop at #{message.inspect}" if ok
+    failures << "#{name}: stopped, but without #{message.inspect}:\n#{out}" if !ok && !out.include?(message)
+  end
 end
-puts 'website: the build refuses a link to a page the site does not list'
+puts "website: the build refuses #{broken.size} sites, each with its message (#{broken.map { |site| site.dirname.basename }.join(', ')})"
 
 # 3. The build, and its internal links.
 Website.build!
@@ -135,6 +140,43 @@ Website.documents.each do |document|
 end
 puts "website: #{markdown.size} pages have their Markdown, each listed once in llms.txt; " \
      "#{agent_links} links for agents resolve; #{fences} code blocks fenced"
+
+# 3c. Audiences and page kinds (README.md, "Audiences and page kinds"):
+#     each page with a purpose has its <meta name="page-kind"> and one
+#     <link rel="audience"> per audience, in its order; each section that
+#     answers needs carries them as data-answers; every audience file the
+#     build wrote, and the index, validates against the published
+#     audiences/audience.xsd; and every file a page links to is one of them.
+PURPOSES_QUERY = <<~XQUERY
+  declare namespace s = "https://www.tinyactors.dev/ns/site";
+  array { for $page in /s:site/s:pages/s:page ! doc(resolve-uri(@src, base-uri(/s:site)))/s:page[s:purpose]
+          return map { 'path': string($page/@path), 'kind': string($page/s:purpose/@kind),
+                       'for': array { tokenize($page/s:purpose/@for) },
+                       'sections': array { $page/s:section[@answers] ! map { 'id': string(@id), 'answers': normalize-space(@answers) } } } }
+XQUERY
+out, ok = Website.capture('sxml', 'xquery', "--context-item=#{Website::CONTENT.join('site.xml')}", '--method=json', "--expression=#{PURPOSES_QUERY}")
+Website.fail!("reading the pages' purposes failed:\n#{out}") unless ok
+purposes = JSON.parse(out)
+audience_dir = Website::SITE.join('audiences')
+audience_files = audience_dir.glob('*.xml').sort
+out, ok = Website.capture('sxml', 'validate', "--schema=#{audience_dir.join('audience.xsd')}", *audience_files)
+failures << "audiences/: not valid against audiences/audience.xsd:\n#{out}" unless ok && audience_files.size > 1
+linked = 0
+purposes.each do |purpose|
+  file = Website::SITE.join("#{purpose['path'].delete_prefix('/')}#{'index' if purpose['path'].end_with?('/')}.html")
+  html = file.read
+  name = file.relative_path_from(Website::SITE)
+  failures << "#{name}: no <meta name=\"page-kind\" content=\"#{purpose['kind']}\">" unless html.include?(%(<meta name="page-kind" content="#{purpose['kind']}">))
+  hrefs = html.scan(/<link rel="audience" href="([^"]+)">/).flatten
+  want = purpose['for'].map { |id| "/audiences/#{id}.xml" }
+  failures << "#{name}: links the audiences #{hrefs.inspect}, not #{want.inspect}" unless hrefs == want
+  hrefs.each { |href| failures << "#{name}: #{href}: no such audience file" unless audience_dir.join(File.basename(href)).file? }
+  linked += hrefs.size
+  purpose['sections'].each do |section|
+    failures << "#{name}: section #{section['id']} lacks data-answers=\"#{section['answers']}\"" unless html.match?(/<section id="#{Regexp.escape(section['id'])}"[^>]* data-answers="#{Regexp.escape(section['answers'])}"/)
+  end
+end
+puts "website: #{purposes.size} pages name their kind and #{linked} audience links; #{audience_files.size} audience files valid against audience.xsd"
 
 # 4. The examples, run: every directory under examples/ that holds an
 #    output.txt is a program, its package.json's "main" or main.mjs.

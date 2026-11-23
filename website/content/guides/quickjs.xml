@@ -2,6 +2,7 @@
 <page xmlns="https://www.tinyactors.dev/ns/site" id="guide-quickjs" path="/guides/quickjs/">
   <title>The quickjs sandbox</title>
   <description>Run charts your users upload in QuickJS, an engine inside the package that stops a runaway loop or allocation with an error.</description>
+  <purpose kind="how-to" for="agent-platform tech-lead"/>
   <hero>
     <headline>Run charts you did not write</headline>
     <lede>An uploaded chart runs in QuickJS, a separate engine inside the package, where a runaway loop ends in an error.</lede>

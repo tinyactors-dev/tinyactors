@@ -2,12 +2,13 @@
 <page xmlns="https://www.tinyactors.dev/ns/site" id="guide-browser" path="/guides/browser/">
   <title>In the browser</title>
   <description>Run the charts you run on Node.js in a page or a Worker with @tinyactors/wasm, the same API on core compiled to WebAssembly.</description>
+  <purpose kind="how-to" for="agent-platform tech-lead"/>
   <hero>
     <headline>Run your actors in a browser</headline>
     <lede>Change one import, and the charts you run on Node.js run in a page or a Worker, on tinyactors compiled to WebAssembly. The same package runs Node.js and Bun where no native addon is built, such as Windows.</lede>
   </hero>
 
-  <section id="same-api">
+  <section id="same-api" answers="tech-lead.same-everywhere">
     <heading>Import the WebAssembly package instead</heading>
     <p>Import <code>@tinyactors/wasm</code> in place of <code>@tinyactors/node</code>, and every other guide holds unchanged. This program logs the same line in a page as in Node.js:</p>
     <example>
@@ -81,7 +82,7 @@ after init: closed false
     <p>The package targets ES2022 and serves the module as <code>@tinyactors/wasm/tinyactors.wasm</code>, so a bundler or a CDN can place it.</p>
   </section>
 
-  <section id="what-a-page-needs-the-floor-and-the-csp">
+  <section id="what-a-page-needs-the-floor-and-the-csp" kind="reference">
     <heading>Target Chrome 114, Firefox 119 and Safari 16.4</heading>
     <p>By the engines' release notes, Chrome and Edge 114, Firefox 119 and Safari 16.4 have every feature the package uses. Only Chromium 141 is tested.</p>
     <list>
@@ -308,7 +309,7 @@ count 2
     <p>A delayed <code>&lt;send&gt;</code> or a timeout then comes late, when the timer fires, and is never lost.</p>
   </section>
 
-  <section id="page-goes-away">
+  <section id="page-goes-away" answers="tech-lead.host-dies">
     <heading>Snapshot the host when the page hides</heading>
     <p>A tab can be closed or discarded without notice, and its actors go with it. Keep what must survive in your store.</p>
     <p>Hibernate actors as they go cold, or snapshot the host on <code>visibilitychange</code>, the last event a page is sure to get. Restore the snapshot when the page loads again.</p>
