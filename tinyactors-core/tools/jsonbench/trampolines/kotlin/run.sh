@@ -18,6 +18,6 @@ mkdir -p "$build"
     -I"$java_home/include" -I"$java_home/include/linux" -I"$core/include" \
     "$here/native/trampoline.c" "$lib/libtinyactors_base.a" \
     -o "$build/libjsonbench_kotlin.so"
-(cd "$here" && gradle -q --console=plain installDist >&2)
+(cd "$here" && gradle -q --console=plain installDist 2>&1 | { grep -v "^Picked up" >&2 || true; })
 JAVA_OPTS="-Djsonbench.lib=$build/libjsonbench_kotlin.so -Xss8m" \
     exec "$build/install/jsonbench-kotlin/bin/jsonbench-kotlin" "$@" 2> >(grep -v '^Picked up' >&2)

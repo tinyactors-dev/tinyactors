@@ -7,9 +7,18 @@
 // scans its map once, recording each key and its value's span; a value is
 // decoded from its span by a decoder of its own.
 // Encoding: streams into the writer; a container opens with
-// TA_CBOR_COUNT_LATER and is closed when the value that opened it returns
+// taCountLater and is closed when the value that opened it returns
 // (the writer's depth before and after).
 import CTinyactors
+#if canImport(Glibc)
+import Glibc
+#elseif canImport(Darwin)
+import Darwin
+#endif
+
+/// Macros and anonymous enums the importer leaves out or makes Int.
+let taCountLater: UInt32 = 0xFFFF_FFFF
+let taOK = ta_status(TA_OK)
 
 struct TACodecError: Error { let what: String }
 
@@ -131,7 +140,7 @@ struct TAUnkeyedDecoding: UnkeyedDecodingContainer {
         guard !isAtEnd else { throw TACodecError(what: "past the array's end") }
         let start = reader.at
         let end = bench_skip(&reader)
-        guard reader.status == TA_OK else { throw TACodecError(what: "malformed") }
+        guard reader.status == taOK else { throw TACodecError(what: "malformed") }
         currentIndex += 1
         return TADecoder(span: UnsafeRawBufferPointer(rebasing: base[start..<end]))
     }
@@ -181,7 +190,7 @@ struct TAKeyedDecoding<Key: CodingKey>: KeyedDecodingContainerProtocol {
             guard Int(k.kind) == TA_CBOR_TEXT else { throw TACodecError(what: "a key that is not text") }
             let start = r.at
             let end = bench_skip(&r)
-            guard r.status == TA_OK else { throw TACodecError(what: "malformed") }
+            guard r.status == taOK else { throw TACodecError(what: "malformed") }
             entries.append(Entry(key: UnsafeRawBufferPointer(start: k.bytes.pointer, count: Int(k.bytes.length)),
                                  value: UnsafeRawBufferPointer(rebasing: d.span[start..<end])))
         }
@@ -233,11 +242,11 @@ struct TAEncoder: Encoder {
     var userInfo: [CodingUserInfoKey: Any] { [:] }
 
     func container<Key: CodingKey>(keyedBy type: Key.Type) -> KeyedEncodingContainer<Key> {
-        ta_cbor_write_map(w, TA_CBOR_COUNT_LATER)
+        ta_cbor_write_map(w, taCountLater)
         return KeyedEncodingContainer(TAKeyedEncoding<Key>(w: w))
     }
     func unkeyedContainer() -> UnkeyedEncodingContainer {
-        ta_cbor_write_array(w, TA_CBOR_COUNT_LATER)
+        ta_cbor_write_array(w, taCountLater)
         return TAUnkeyedEncoding(w: w)
     }
     func singleValueContainer() -> SingleValueEncodingContainer { TASingleEncoding(w: w) }

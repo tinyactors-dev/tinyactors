@@ -30,7 +30,7 @@ let package = Package(
                 "CTinyactors",
                 .product(name: "SwiftCBOR", package: "SwiftCBOR"),
             ],
-            swiftSettings: [.unsafeFlags(["-Ounchecked", "-wmo"])]
+            swiftSettings: [.unsafeFlags(["-Xcc", "-I" + core + "/include", "-wmo"])]
         ),
     ],
     swiftLanguageModes: [.v5]
