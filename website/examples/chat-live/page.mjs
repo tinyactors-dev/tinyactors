@@ -773,6 +773,7 @@ export async function mount(root) {
   const cardViewNow = () => [you, room, query, railView, app.dataset.view].join('\n');
   function openCard(pill) {
     closeCard(false);
+    peopleNote.textContent = ''; // the card answers for the person now: one note at a time says why you cannot message
     cardPill = pill;
     cardView = cardViewNow();
     pill.setAttribute('aria-expanded', 'true');
