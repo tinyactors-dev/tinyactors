@@ -5,7 +5,8 @@ The chat tutorial's finished charts (`charts/`, a copy of
 byte) running in the reader's browser on `@tinyactors/wasm`, at the top of
 https://www.tinyactors.dev/chat/.
 
-- `chat.mjs` is what it does: the workspace, two rooms and six people on a
+- `chat.mjs` is what it does: the workspace (The Hill), two rooms and six people (an ant colony's
+  castes: queen, scout, forager, nurse, guard, drone) on a
   host with a simulated clock and a store that keeps at most four actors in
   memory. Each person's screen is built only from what the charts send to
   `chat:client` for that person.

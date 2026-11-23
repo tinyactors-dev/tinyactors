@@ -7,7 +7,7 @@
 // actor's chart, lit in the states its host reports
 // (components/live-chart.mjs); above the window, a simulated clock the
 // reader runs, speeds up or skips.
-import { createChat, PEOPLE } from './chat.mjs';
+import { createChat, PEOPLE, WORKSPACE } from './chat.mjs';
 import { liveChart, statePath } from '/assets/components/live-chart.mjs';
 
 const CHARTS = ['workspace.scxml', 'room.scxml', 'user.scxml'];
@@ -51,18 +51,18 @@ export async function mount(root) {
   const texts = Object.fromEntries(await Promise.all(CHARTS.map(async (name) => [name, await (await fetch(new URL(name, base))).text()])));
   const tinyactors = await import('@tinyactors/wasm');
 
-  let you = 'ada', room = 'general', speed = 1, playing = true, rendering = false, again = false;
+  let you = 'forager', room = 'general', speed = 1, playing = true, rendering = false, again = false;
   let ready = false; // the page draws once its parts are made
   let inspected = null; // the actor whose chart is shown
   let selfState = null; // your user actor's state value, or null while it is in the store
   let shownStored = null; // whether the inspected actor was in the store when last drawn
   const chat = await createChat(tinyactors, { charts: texts, onChange: () => render() });
-  // The people already talking: ada and bob in general, bob's hello.
-  await chat.connect('ada');
-  await chat.connect('bob');
-  await chat.join('ada', 'general');
-  await chat.join('bob', 'general');
-  await chat.post('bob', 'general', 'hi ada, anyone else around?');
+  // The people already talking: scout and forager in general, scout's find.
+  await chat.connect('scout');
+  await chat.connect('forager');
+  await chat.join('scout', 'general');
+  await chat.join('forager', 'general');
+  await chat.post('scout', 'general', 'Found sugar by the old oak. Who can carry?');
 
   // ---- the clock
   const play = el('button', { type: 'button', class: 'ta-btn ta-btn--secondary ta-btn--sm' });
@@ -110,7 +110,8 @@ export async function mount(root) {
     render();
   });
   const people = el('ul', { class: 'chatlive__people', 'aria-label': 'People' });
-  const sidebar = el('nav', { class: 'chatlive__sidebar', 'aria-label': 'Workspace' },
+  const sidebar = el('nav', { class: 'chatlive__sidebar', 'aria-label': WORKSPACE },
+    el('h3', { class: 'chatlive__workspace' }, WORKSPACE),
     el('div', { class: 'chatlive__head' }, el('label', { class: 'chatlive__label' }, 'You are', youSelect), connect),
     section('Rooms', roomList, createForm, createNote),
     section('People', people));

@@ -9,7 +9,10 @@
 // the rooms joined and the errors. The page draws it; nothing here decides
 // what a user sees.
 
-export const PEOPLE = ['ada', 'bob', 'cat', 'dan', 'eve', 'fay'];
+// The people of the workspace, The Hill: an ant colony's castes, each a
+// different initial for the page's avatars.
+export const WORKSPACE = 'The Hill';
+export const PEOPLE = ['queen', 'scout', 'forager', 'nurse', 'guard', 'drone'];
 export const ROOMS = ['general', 'random'];
 export const RESIDENT = 4; // actors the host keeps in memory at rest
 const KEEP = 200; // the newest messages a screen keeps

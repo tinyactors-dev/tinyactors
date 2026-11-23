@@ -1,14 +1,14 @@
 6 people, 2 rooms: 9 actors, 4 in memory, 5 in the store
-ada and bob connect, join general and talk: 9 actors, 4 in memory, 5 in the store
-ada sees: ada in general: hi bob
-ada's roster: ada active, bob active, cat offline, dan offline, eve offline, fay offline
-bob sees: ada in general: hi bob
-bob's roster: ada active, bob active, cat offline, dan offline, eve offline, fay offline
+scout and forager connect, join general and talk: 9 actors, 4 in memory, 5 in the store
+scout sees: scout in general: Found sugar by the old oak. Who can carry?
+scout's roster: queen offline, scout active, forager active, nurse offline, guard offline, drone offline
+forager sees: scout in general: Found sugar by the old oak. Who can carry?
+forager's roster: queen offline, scout active, forager active, nurse offline, guard offline, drone offline
 create general again: room.refused (exists)
-ada joins design: no such room
+forager joins tunnels: no such room
 300 seconds pass: 9 actors, 4 in memory, 5 in the store
-bob's roster: ada away, bob active, cat offline, dan offline, eve offline, fay offline
+forager's roster: queen offline, scout away, forager active, nurse offline, guard offline, drone offline
 workspace: "ready"
 room.general: "open"
-user.ada: {"online":"away"}
-user.cat: in the store
+user.scout: {"online":"away"}
+user.queen: in the store
