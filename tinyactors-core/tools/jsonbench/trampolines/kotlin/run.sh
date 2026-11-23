@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # Build and run the Kotlin (JVM, JNI) trampoline spike.
-#   run.sh [N] [warmup] [runs] [modes]   modes: array (default), buffer, or array,buffer
+#   run.sh [N] [warmup] [runs] [modes]
+#   modes: a comma-separated list of array, buffer, bytes, bytes-direct, bytes+check
+#   (default: all five). Output: language, function, mode, ns/call.
 # JSONBENCH_VERBOSE=1 also prints each call's arguments and result and the bytes
 # the JVM allocated per call.
 set -euo pipefail
