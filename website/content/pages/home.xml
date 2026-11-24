@@ -33,12 +33,12 @@
     <p>The chart sends an event for every effect, and your code performs it. A simulated clock runs its timeouts, so the agent tests each change in milliseconds.</p>
   </section>
 
-  <section id="process" answers="agent-platform.in-backend agent-platform.another-runtime agent-platform.memory workflow-tester.no-server workflow-tester.needs-cluster tech-lead.same-everywhere tech-lead.test-suite">
+  <section id="process" answers="agent-platform.in-backend agent-platform.another-runtime agent-platform.memory workflow-tester.no-server workflow-tester.needs-cluster tech-lead.same-everywhere">
     <heading>Run millions of actors in your process</heading>
     <list>
       <item><term>It runs inside your program</term><text>tinyactors is a library on your own event loop, so your actors deploy with your program.</text></item>
-      <item><term>One chart runs in JavaScript, Python and C</term><text>Each language's package wraps one C core, and that core passes all 191 automatic tests of the W3C's <link href="https://www.w3.org/TR/scxml/">SCXML</link> suite.</text></item>
-      <item><term>Small enough for every part of a system</term><text>An actor takes <link to="performance" section="actors">about 530 bytes</link> in Node.js, and one saved to a database while idle keeps about 120.</text></item>
+      <item><term>One chart runs in JavaScript, Python and C</term><text>tinyactors wraps one C core in every language package, so your actors run the same way everywhere.</text></item>
+      <item><term>Small enough for every part of a system</term><text>An actor takes <link to="performance" section="actors">about 530 bytes</link> in Node.js, and an idle one saved to a database keeps about 120. <link to="performance">See the performance page</link></text></item>
     </list>
   </section>
 
@@ -72,7 +72,7 @@
     <p>An actor in production stands for an entity, such as an account, and lives as long as it does. So you change and watch actors that are already running.</p>
     <list>
       <item><term><link to="guide-migration">Migration</link></term><text>When your rules change, the accounts already running still follow the old ones. Add the chart's new version, and a migration moves each running actor to it, keeping the state it reached.</text></item>
-      <item><term><link to="guide-snapshots">Snapshots</link></term><text>You cannot try an upgrade on production's actors without changing them. A snapshot copies every actor of a running process, so you try the upgrade on a copy. Two million actors make a 165 MB snapshot.</text></item>
+      <item><term><link to="guide-snapshots">Snapshots</link></term><text>A snapshot copies every actor of a running process so you can inspect each actor's state. Two million actors make a 165 MB snapshot.</text></item>
       <item><term><link to="guide-telemetry">Telemetry</link></term><text>tinyactors traces every step of every actor as OpenTelemetry. You turn it on with an option, not with code.</text></item>
     </list>
   </section>

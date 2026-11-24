@@ -5,7 +5,7 @@
   <purpose kind="how-to" for="agent-platform workflow-tester"/>
   <hero>
     <headline>Do a chart's I/O in your own code</headline>
-    <lede>A chart asks for a price or an email by sending an event. An object of yours does the work and answers with another event, at once or when its promise settles.</lede>
+    <lede>A chart asks for outside work by sending an event. An I/O processor in your code does the work and answers with another event, at once or later.</lede>
   </hero>
 
   <section id="charts-send-events" answers="workflow-tester.no-mocks">
@@ -17,7 +17,7 @@
   <section id="declaring-a-processor">
     <heading>Register a processor for each type</heading>
     <p>List your processors in the host's <code>ioProcessors</code> option, each under a type: any URI you choose. The host calls a processor's <code>receive(send)</code> for each send to its type.</p>
-    <p>This chart asks for the price of tea in euros, and the processor answers at once from a table:</p>
+    <p>To look up a price held in your program, this chart sends to a registered processor:</p>
     <example>
       <code language="javascript" file="quote.mjs"><![CDATA[
 import { compileCharts, Host } from '@tinyactors/node';
