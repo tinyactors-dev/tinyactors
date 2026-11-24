@@ -1,6 +1,6 @@
 (() => {
 const { Button, CodeBlock, Tag, Sheet } = window.TinyactorsDesignSystem_2f489e;
-const HERO_CODE = 'import { System } from "tinyactors";\n\nconst sys = new System();\nconst door = sys.spawn(doorChart);\n\ndoor.send("OPEN");\nassert(door.in("opened"));';
+const HERO_CODE = 'import { System } from "tinyactors";\n\nconst sys = new System();\nconst order = sys.spawn(orderChart);\n\norder.send("PAID");\nassert(order.in("paid"));';
 function Hero({ go }) {
   const events = { closed: ['OPEN', 'LOCK'], opened: ['CLOSE'], locked: ['UNLOCK'] };
   const next = { OPEN: 'opened', CLOSE: 'closed', LOCK: 'locked', UNLOCK: 'closed' };
@@ -19,7 +19,7 @@ function Hero({ go }) {
           <div style={{ marginTop: 28, font: '400 13px var(--font-mono)', color: 'var(--fg-3)' }}>$ npm install tinyactors</div>
         </div>
         <Sheet grid parallax bodyStyle={{ padding: 20, display: 'flex', flexDirection: 'column', gap: 16 }}>
-          <CodeBlock filename="door.test.js" highlight={[6, 7]} code={HERO_CODE} />
+          <CodeBlock filename="order.test.js" highlight={[6, 7]} code={HERO_CODE} />
           <div style={{ padding: '8px 4px 0', display: 'flex', flexDirection: 'column', gap: 16 }}>
             <div style={{ display: 'flex', alignItems: 'baseline', gap: 10 }}>
               <span style={{ font: '400 11px var(--font-mono)', color: 'var(--fg-4)' }}>state</span>

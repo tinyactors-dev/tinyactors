@@ -2,8 +2,8 @@
 const { CodeBlock, Input, Tabs, Badge, Button } = window.TinyactorsDesignSystem_2f489e;
 const DOC_NAV = [['Getting started', ['Install', 'First actor', 'Sending events']], ['Concepts', ['Statecharts', 'Mailboxes', 'Supervision', 'Timers']], ['Semantics', ['Event processing', 'Entry & exit sets', 'Conformance']], ['Bindings', ['C', 'JavaScript']]];
 const SNIPS = {
-  C: '#include <tinyactors.h>\n\nta_system *sys = ta_system_new(NULL);\nta_actor *door = ta_spawn(sys, &door_chart, NULL);\nta_send(door, "OPEN", NULL);\nassert(ta_in(door, "opened"));',
-  JavaScript: 'import { System } from "tinyactors";\n\nconst sys = new System();\nconst door = sys.spawn(doorChart);\ndoor.send("OPEN");\nassert(door.in("opened"));',
+  C: '#include <tinyactors.h>\n\nta_system *sys = ta_system_new(NULL);\nta_actor *order = ta_spawn(sys, &order_chart, NULL);\nta_send(order, "PAID", NULL);\nassert(ta_in(order, "paid"));',
+  JavaScript: 'import { System } from "tinyactors";\n\nconst sys = new System();\nconst order = sys.spawn(orderChart);\norder.send("PAID");\nassert(order.in("paid"));',
 };
 function DocsPage() {
   const [cur, setCur] = React.useState('First actor');
@@ -26,7 +26,7 @@ function DocsPage() {
         <h2 style={{ font: 'var(--type-h2)', marginTop: 40 }}>Spawn and send</h2>
         <p style={{ font: 'var(--type-prose)', color: 'var(--fg-1)', marginTop: 12 }}>The same four calls exist in C and JavaScript. <code style={{ font: '400 15px var(--font-mono)', color: 'var(--fg-1)', background: 'var(--surface-2)', padding: '2px 5px', borderRadius: 2 }}>send</code> enqueues; the scheduler delivers on the next step.</p>
         <div style={{ marginTop: 20 }}><Tabs variant="segmented" items={Object.keys(SNIPS)} value={lang} onChange={setLang} /></div>
-        <CodeBlock style={{ marginTop: 10 }} filename={'door.' + ({ C: 'c', JavaScript: 'js' })[lang]} code={SNIPS[lang]} highlight={[5]} />
+        <CodeBlock style={{ marginTop: 10 }} filename={'order.' + ({ C: 'c', JavaScript: 'js' })[lang]} code={SNIPS[lang]} highlight={[5]} />
         <div style={{ marginTop: 28, padding: '14px 16px', border: '1px solid var(--border-1)', borderRadius: 'var(--radius-2)', background: 'var(--surface-1)', display: 'flex', gap: 12, alignItems: 'baseline' }}>
           <Badge tone="waiting" dot={false}>note</Badge>
           <p style={{ font: 'var(--type-body-sm)', color: 'var(--fg-2)' }}>Events sent from inside a transition are queued as internal events and processed before the next external one, as SCXML specifies.</p>

@@ -455,21 +455,23 @@ you move it, so a test of a 30-second timeout takes no time:
 ```js
 import { compileCharts, Host, SimulatedClock } from '@tinyactors/node';
 
-const compiled = compileCharts([{ name: 'door.scxml', text: `
+const compiled = compileCharts([{ name: 'checkout.scxml', text: `
 <scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0"
-       datamodel="ecmascript" name="door" initial="open">
-  <state id="open">
-    <onentry><send event="close" delay="30s"/></onentry>
-    <transition event="close" target="closed"/>
+       datamodel="ecmascript" name="checkout" initial="awaitingPayment">
+  <state id="awaitingPayment">
+    <onentry><send event="expire" delay="30s"/></onentry>
+    <transition event="paid" target="paid"/>
+    <transition event="expire" target="expired"/>
   </state>
-  <final id="closed"><onentry><log expr="'closed'"/></onentry></final>
+  <final id="paid"/>
+  <final id="expired"><onentry><log expr="'expired'"/></onentry></final>
 </scxml>` }]);
 
 const clock = new SimulatedClock();
 const host = new Host(compiled, { system: 'demo', clock, log: (entry) => console.log(entry.text, 'at', clock.now) });
 compiled.close();
 
-host.spawn('door');
+host.spawn('checkout');
 await host.idle();
 console.log('next deadline in', host.nextDeadline, 'ms');
 clock.increment(29_999);
@@ -481,7 +483,7 @@ host.close();
 
 ```output
 next deadline in 30000 ms
-closed at 30000
+expired at 30000
 ```
 
 `host.now()` reads the host's clock in milliseconds (the simulated

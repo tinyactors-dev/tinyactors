@@ -4,6 +4,12 @@
 segment, version, migration, hibernation, snapshot, effect, ...).
 Use them as it does, and add a term there when you introduce one.
 
+**Examples are things people build.** A chart in an example, a test, a
+guide or a mock models an entity of a real system: an order, a payment,
+a subscription, a checkout, a chat session, a support ticket. Never a
+door, a light switch, a traffic light or a turnstile (the maintainer,
+2026-11-24: "Every time it's a door").
+
 **Layers.** Core decides what inputs mean and runs actors in one block of
 memory; the host layer runs many systems as one; a language binding
 owns values and their encoding; the application owns storage and policy. Before adding code, place it in the

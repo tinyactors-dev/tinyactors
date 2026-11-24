@@ -133,6 +133,9 @@ agents ahead of the in-process library):
 The wording of each point is the content's (`content/site.xml`,
 `content/pages/home.xml`); this brief names what each argues, not how.
 
+- **Examples are entities readers build** (an order, a payment, a
+  subscription, a chat session), never a door, a light switch or a traffic
+  light: the root `AGENTS.md`, "Examples are things people build".
 - **Show how to build, not who built.** The site teaches with systems a
   reader recognises (a team chat, step by step) and does not feature
   specific applications, ours or anyone's.
