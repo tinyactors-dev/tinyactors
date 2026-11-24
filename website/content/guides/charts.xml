@@ -8,6 +8,48 @@
     <lede>A chart's conditions, data and scripts are plain JavaScript that reads the actor's variables by name. Your charts compile into one image: bytes a host runs, in this process or another.</lede>
   </hero>
 
+  <section id="first-chart" answers="agent-platform.first-chart agent-platform.code-first agent-platform.evaluate">
+    <heading>Install the package and run a chart</heading>
+    <p>Install <code>@tinyactors/node</code>, which runs on Node.js and Bun:</p>
+    <install>
+      <command package="node" guide="https://github.com/tinyactors-dev/tinyactors-napi#readme">npm install @tinyactors/node</command>
+    </install>
+    <p>This program runs a door chart with two states. Each state logs a line when the door enters it:</p>
+    <example>
+      <code language="javascript" file="door.mjs"><![CDATA[
+import { compileCharts, Host } from '@tinyactors/node';
+
+const compiled = compileCharts([{ name: 'door.scxml', text: `
+<scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0"
+       datamodel="ecmascript" name="door" initial="closed">
+  <state id="closed">
+    <onentry><log expr="'closed'"/></onentry>
+    <transition event="open" target="opened"/>
+  </state>
+  <state id="opened">
+    <onentry><log expr="'opened'"/></onentry>
+    <transition event="close" target="closed"/>
+  </state>
+</scxml>` }]);
+
+const host = new Host(compiled, { system: 'home', log: (entry) => console.log(entry.text) });
+compiled.close();
+
+const door = host.spawn('door');
+host.send(door, 'open');
+host.send(door, 'close');
+await host.idle();
+host.close();
+]]></code>
+      <code language="text" role="output">
+closed
+opened
+closed
+</code>
+    </example>
+    <p><code>host.spawn</code> starts an actor of the chart, and each <code>host.send</code> gives it an event. The actor handles its events one at a time, in order.</p>
+  </section>
+
   <section id="variables-and-expressions">
     <heading>Declare variables and read the event</heading>
     <p>Declare an actor's variables with <code>&lt;data></code>. Each <code>expr</code> is evaluated once, when the actor starts, unless <code>spawn</code>'s <code>params</code> give <link href="https://github.com/tinyactors-dev/tinyactors-napi/blob/main/README.md#starting-an-actor-with-data">another value</link>.</p>

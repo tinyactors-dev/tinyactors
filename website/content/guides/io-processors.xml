@@ -91,7 +91,7 @@ tea costs 4 EUR (answer to ask-1)
 
   <section id="answer-or-fail">
     <heading>Answer the sender, or fail the request</heading>
-    <p>A handler calls one of the send's two methods, or neither. The processor above answers with <code>send.answer('price', …)</code>, and the chart reads the answer's <code>_event.sendid</code>.</p>
+    <p>Your <code>receive</code> answers a send, fails it or does neither. Above, <code>send.answer('price', …)</code> sends the event <code>price</code> back to the actor, whose transition on <code>price</code> reads <code>_event.data</code> and <code>_event.sendid</code>.</p>
     <list>
       <item><term><code>send.answer(event, data, options)</code></term><text>Sends <code>event</code> back to the sender, with this send's <code>sendid</code> as its <code>_event.sendid</code>. The options are <code>traceparent</code> (the answer continues the send's trace unless you give another, or <code>null</code> for a new one), <code>origin</code> (the answer's <code>_event.origin</code>) and <code>raw</code> (the message as you read it, for a chart that wants it).</text></item>
       <item><term><code>send.fail()</code></term><text>Gives the sender <code>error.communication</code> with this send's <code>sendid</code>, for a request that could not be done.</text></item>

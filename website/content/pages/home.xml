@@ -2,11 +2,11 @@
 <page xmlns="https://www.tinyactors.dev/ns/site" id="home" path="/">
   <title>tinyactors: like SQLite, but for actors</title>
   <description>tinyactors runs millions of statecharts inside your program, in Node.js, Python, a browser or C: composable state machines that describe a reactive system formally.</description>
-  <purpose kind="pitch" for="agent-platform tech-lead workflow-tester"/>
+  <purpose kind="pitch" for="agent-platform tech-lead workflow-tester" answers="agent-platform.in-backend"/>
 
   <hero>
     <headline>Like SQLite, but for <em>actors</em></headline>
-    <lede>tinyactors runs millions of statecharts inside your program, in Node.js, Python, a browser or C. A statechart is a composable state machine that describes a reactive system formally and is easy to verify.</lede>
+    <lede>tinyactors runs millions of actors as a library in your process, in Node.js, Python, a browser or C, with no separate server. Each actor runs a statechart: a composable state machine that describes a reactive system formally and is easy to verify.</lede>
     <install>
       <command package="node" guide="https://github.com/tinyactors-dev/tinyactors-napi#readme">npm install @tinyactors/node</command>
       <command package="python" guide="https://github.com/tinyactors-dev/tinyactors-cpython#readme">pip install tinyactors</command>
@@ -15,6 +15,7 @@
     </install>
     <actions>
       <action to="anthill">See the demo</action>
+      <action to="guide-charts" section="first-chart">Write your first chart</action>
       <action to="home" section="actors">Learn more</action>
     </actions>
   </hero>
