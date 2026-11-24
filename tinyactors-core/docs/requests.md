@@ -50,8 +50,8 @@ the effect records read through accessors and CBOR, never a third.
   hands it out, with or without a run; a post made while a batch is open
   is answered in the take after the ack; a take never widens the open
   batch. A batch holds, in order: the effects appended between
-  runs in call order (earlier replies, a deliver's `PEER_ERROR`,
-  `trace.end`'s `TRACES`), then a run's effects in drain order, then the
+  runs in call order (earlier replies, `trace.end`'s
+  `TRACES`), then a run's effects in drain order, then the
   run's notifications at its end. A reply and its bytes live until
   `ta_host_effects_ack` or `ta_host_free`. There is no synchronous
   request: a caller matches a reply to its message by `id`, in a later
@@ -139,7 +139,7 @@ Adds rules in front of the configured ones, newest first, until they end.
 | Param | Type | Default |
 |---|---|---|
 | `rules` | list of rules, at least one | required |
-| `seconds` | number ≥ 0 on the host's clock, or `null` for no end | `900` (15 minutes) |
+| `seconds` | number ≥ 0 and below 1e9 on the host's clock, or `null` for no end (`range` past it) | `900` (15 minutes) |
 
 Result: `{"id": uint}`. When the watch ends is a deadline of `ta_host_run`.
 Errors: as `trace.configure`; `missing` without rules.
@@ -465,7 +465,7 @@ binding gets the same answers.
 
 ### What does not
 
-- the hot path: inputs (spawn, send, deliver, ...) and effects;
+- the hot path: inputs (spawn, send, terminate, ...) and effects;
 - bytes the host writes or takes: traces, logs, metrics, hibernation,
   export and snapshot blobs. These are C calls that give a view of the
   host's memory (snapshots: the caller's `ta_buffer`);

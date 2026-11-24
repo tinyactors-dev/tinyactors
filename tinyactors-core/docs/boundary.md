@@ -46,11 +46,11 @@ A call's answer depends on where the caller is in the loop:
 |---|---|---|
 | **I**, idle | between runs, no batch open | everything |
 | **D**, dispatch | between runs, a batch open: after a `ta_host_effects` that returned effects or an output call that handed out a view, until `ta_host_effects_ack` | everything but `ta_host_run` and snapshots; a take returns the open batch (none while it holds outputs alone) |
-| **R**, run | inside `ta_host_run`, from a datamodel entry | the inputs on their in-run paths and the lookups; everything else refused (`host.h:151-170`) |
-| **G**, guard | inside a datamodel entry core calls outside a run (a post, hibernate, wake, the telemetry takes, `release` in the ack, `ta_host_free`) | as R (`host.h:172-179`; ADR 0010 decision 3; `host_guard`, `src/host/host_internal.h:242-247`) |
+| **R**, run | inside `ta_host_run`, from a datamodel entry | the inputs on their in-run paths and the lookups; everything else refused (`host.h`, "During a run") |
+| **G**, guard | inside a datamodel entry core calls outside a run (a post, hibernate, wake, the telemetry takes, `release` in the ack, `ta_host_free`) | as R (`host.h`; ADR 0010 decision 3; `host_guard` in `src/host/host_internal.h`) |
 
 R and G hold one rule: the guard sets the flag a run sets
-(`host_internal.h:242-246`), so the checks below read "R/G".
+(`host_guard`, `host_internal.h`), so the checks below read "R/G".
 
 ### Host calls
 
@@ -62,61 +62,61 @@ marks a behaviour no test checks.
 
 | Call (`host.h`) | When | Produces; owner; ends | Refused | Reentry | Test |
 |---|---|---|---|---|---|
-| `ta_host_create` (:105) | no host yet | the host, the caller's until `ta_host_free`; config read during the call | `TA_ERROR_INVALID` with the reply in `environment->error`, the caller's `ta_buffer`; `TA_ERROR_NO_MEMORY` (`host.c:454-461`) | none (no host) | `test_host_request.c` `test_create`, `test_config_effective`; `config.txt` |
-| `ta_host_free` (:109) | I, D | releases the open batch and its outputs, every block (`host.c:506-512`) | R/G: does nothing, the host stays (`host.h`: not from a datamodel's code) | calls back from its own `destroy`/`release` refused (`closing`) | `test_host_guard.c` `test_free`; R/G: `test_host_inputs.c` `test_lookups_answer_and_free_does_nothing` |
-| `ta_host_add_image` (:119) | I, D | a segment index; the host's copy of the bytes until the segment is freed | R/G `TA_ERROR_STATE` (`host.c:555`); `TA_ERROR_INVALID`; `TA_ERROR_NO_MEMORY`, nothing added | `chart_attach` runs in G (`host.c:588`) | `test_host.c` `test_image_copied` |
-| `ta_host_chart` (:126) | all | a struct in the caller's memory | `TA_ERROR_INVALID`: no such name | a lookup: answers in R/G | `test_host.c` |
-| `ta_host_segment_count` (:135) | all | a number | none | answers in R/G | `test_host.c` |
-| `ta_host_segment_info_get` (:136) | all (not checked, `host.c:632-650`) | the caller's struct; `.image` borrowed while the segment is live | `TA_ERROR_INVALID` | answers in R/G, a lookup in `host.h`'s list | `test_host.c` `test_image_copied`; R/G: `test_host_inputs.c` `test_lookups_answer_and_free_does_nothing` |
-| `ta_host_system` (:140) | all (not checked, `host.c:652-655`) | a `ta_system *`, borrowed until a call that can grow or free the segment | none | answers in R/G, a lookup in `host.h`'s list; a datamodel must not call `ta_system_*` on it (`datamodel.h:7-8`) | `test_host.c`; R: `test_host_inputs.c` `test_a_full_pool_is_no_memory` |
-| `ta_host_boot` (:145) | I, D | the image's boot actors | R/G `TA_ERROR_STATE` (`host.c:2392`); `TA_ERROR_INVALID`: no such segment (`host.c:2394`); `TA_ERROR_NO_MEMORY` from the pool's growth: none spawned; a spawn failing after it (instance or name space, a datamodel's `create`): the earlier boot actors stay, and boot again spawns them again (`host.h`) | `create` in G (`host.c:2405`) | `test_host.c` `test_boot_manifest`: invalid segment, growth, named actors, entry actions after run; `test_boot_refused` (the growth refused); R/G: `test_host_inputs.c` `test_other_calls_are_refused` |
-| `ta_host_actor_by_name` (:148) | all | a session id | 0: none | a lookup | `test_host_inputs.c` |
-| `ta_host_spawn` (:183) | all | a session id; `spawn`'s views read during the call; its payload moves on success | `TA_ERROR_INVALID`: no such segment (`host.c:876`), or a name longer than `TA_SYSTEM_MAX_STRING` (`system.h`; nothing allocated, no growth); R/G: no growth, a full pool `TA_ERROR_NO_MEMORY` with nothing changed; a datamodel's `create` refusing: `TA_ERROR_NO_MEMORY`, nothing grows; inside free `TA_ERROR_STATE` (`host.c:874`) | `create` in G (`host.c:880`); in R the in-run path of `<invoke>`: at the back of the run queue, and an `<invoke>` whose child's `create` refuses fails with `error.execution` | `test_host_inputs.c` `test_spawn`; a datamodel's refusal: `test_host.c` `test_a_datamodel_refusal_grows_nothing`; a full pool in R: `test_host_inputs.c` `test_spawn_into_a_full_pool_is_no_memory`; the name's limit: `test_host_strings.c` `test_spawn_refuses_a_name_past_the_limit` |
-| `ta_host_locate` (:189) | all | the caller's struct | `TA_ERROR_STALE` (`host.c:663-671`) | a lookup | `test_host.c` |
-| `ta_host_send` (:191) | all | nothing kept of the caller's: views copied, payload moved on success | as spawn: a name, sendid, origin, origintype or raw longer than `TA_SYSTEM_MAX_STRING` is `TA_ERROR_INVALID` (a traceparent has no limit); the payload stays the caller's on refusal | in R the in-run path of `<send>`: to itself at the end of its macrostep, to another actor at the back of the queue (`host.h:156-161`); outside a run `release` in G for an `error.communication` (`host.c:900`) | `test_host_inputs.c` `test_send_to_self_waits_for_the_macrostep`, `test_send_and_send_many_to_another_actor`; the limit: `test_host_strings.c` `test_send_refuses_a_string_past_the_limit` |
+| `ta_host_create` | no host yet | the host, the caller's until `ta_host_free`; config read during the call | `TA_ERROR_INVALID` with the reply in `environment->error`, the caller's `ta_buffer`; `TA_ERROR_NO_MEMORY` (`ta_host_create`, `host.c`) | none (no host) | `test_host_request.c` `test_create`, `test_config_effective`; `config.txt` |
+| `ta_host_free` | I, D | releases the open batch and its outputs, every block (`ta_host_free`, `host.c`) | R/G: does nothing, the host stays (`host.h`: not from a datamodel's code) | calls back from its own `destroy`/`release` refused (`closing`) | `test_host_guard.c` `test_free`; R/G: `test_host_inputs.c` `test_lookups_answer_and_free_does_nothing` |
+| `ta_host_add_image` | I, D | a segment index; the host's copy of the bytes until the segment is freed | R/G `TA_ERROR_STATE`; `TA_ERROR_INVALID`; `TA_ERROR_NO_MEMORY`, nothing added | `chart_attach` runs in G (`ta_host_add_image`) | `test_host.c` `test_image_copied` |
+| `ta_host_chart` | all | a struct in the caller's memory | `TA_ERROR_INVALID`: no such name | a lookup: answers in R/G | `test_host.c` |
+| `ta_host_segment_count` | all | a number | none | answers in R/G | `test_host.c` |
+| `ta_host_segment_info_get` | all (not checked) | the caller's struct; `.image` borrowed while the segment is live | `TA_ERROR_INVALID` | answers in R/G, a lookup in `host.h`'s list | `test_host.c` `test_image_copied`; R/G: `test_host_inputs.c` `test_lookups_answer_and_free_does_nothing` |
+| `ta_host_system` | all (not checked) | a `ta_system *`, borrowed until a call that can grow or free the segment | none | answers in R/G, a lookup in `host.h`'s list; a datamodel must not call `ta_system_*` on it (`datamodel.h`) | `test_host.c`; R: `test_host_inputs.c` `test_a_full_pool_is_no_memory` |
+| `ta_host_boot` | I, D | the image's boot actors | R/G `TA_ERROR_STATE`; `TA_ERROR_INVALID`: no such segment; `TA_ERROR_NO_MEMORY` from the pool's growth: none spawned; a spawn failing after it (instance or name space, a datamodel's `create`): the earlier boot actors stay, and boot again spawns them again (`host.h`) | `create` in G (`ta_host_boot`) | `test_host.c` `test_boot_manifest`: invalid segment, growth, named actors, entry actions after run; `test_boot_refused` (the growth refused); R/G: `test_host_inputs.c` `test_other_calls_are_refused` |
+| `ta_host_actor_by_name` | all | a session id | 0: none | a lookup | `test_host_inputs.c` |
+| `ta_host_spawn` | all | a session id; `spawn`'s views read during the call; its payload moves on success | `TA_ERROR_INVALID`: no such segment, or a name longer than `TA_SYSTEM_MAX_STRING` (`system.h`; nothing allocated, no growth); R/G: no growth, a full pool `TA_ERROR_NO_MEMORY` with nothing changed; a datamodel's `create` refusing: `TA_ERROR_NO_MEMORY`, nothing grows; inside free `TA_ERROR_STATE` | `create` in G (`ta_host_spawn`); in R the in-run path of `<invoke>`: at the back of the run queue, and an `<invoke>` whose child's `create` refuses fails with `error.execution` | `test_host_inputs.c` `test_spawn`; a datamodel's refusal: `test_host.c` `test_a_datamodel_refusal_grows_nothing`; a full pool in R: `test_host_inputs.c` `test_spawn_into_a_full_pool_is_no_memory`; the name's limit: `test_host_strings.c` `test_spawn_refuses_a_name_past_the_limit` |
+| `ta_host_locate` | all | the caller's struct | `TA_ERROR_STALE` | a lookup | `test_host.c` |
+| `ta_host_send` | all | nothing kept of the caller's: views copied, payload moved on success | as spawn: a name, sendid, origin, origintype or raw longer than `TA_SYSTEM_MAX_STRING` is `TA_ERROR_INVALID` (a traceparent has no limit); the payload stays the caller's on refusal | in R the in-run path of `<send>`: to itself at the end of its macrostep, to another actor at the back of the queue (`host.h`, "During a run"); outside a run `release` in G for an `error.communication` (`host_send_to`, `host.c`) | `test_host_inputs.c` `test_send_to_self_waits_for_the_macrostep`, `test_send_and_send_many_to_another_actor`; the limit: `test_host_strings.c` `test_send_refuses_a_string_past_the_limit` |
 | `ta_host_resolve` | all | the session a local address names, into the caller's `uint64_t` | `TA_ERROR_INVALID` (not an address, another system's), `TA_ERROR_STALE` (names nothing); answers in R/G, a lookup in `host.h`'s list | none | `test_remote.c` |
-| `ta_host_send_many` (:195) | all | the accepted prefix's length | stops at the first failure (a text past the limit too); that event's payload stays the caller's | as send (`release` in G at `host.c:935`) | as send |
-| `ta_host_terminate` (:196) | all | nothing | as spawn | exits at its next microstep boundary (`host.h:162-165`) | `test_host_inputs.c` `test_terminate_self_ends_after_the_microstep`, `test_terminate_another_actor` |
-| `ta_host_resume` (:198) | I, D | nothing | R/G `TA_ERROR_STATE` (`host.c:958`); `TA_ERROR_INVALID`: no such segment (`host.c:960`) | `release` in G (`host.c:962`) | `test_host_inputs.c` `test_other_calls_are_refused` (R) |
-| `ta_host_advance_time` (:214) | I, D | nothing | R/G: nothing done (`host.c:1671`) | none | `test_host_telemetry.c`; `test_host.c` |
-| `ta_host_run` (:229) | I | a `ta_run` by value; its effects pending, then its notifications | D: `TA_RUN_FAULT`, detail `TA_ERROR_STATE`, nothing runs or is released; `used` 0, `next_deadline` `UINT64_MAX`; R/G: the same (`host.c:1828-1833`) | the datamodel vtable, in R | R: `test_host_inputs.c` `test_other_calls_are_refused`; D: `test_host_effects.c` `test_run_refuses_open_batch` |
-| `ta_host_effects` (:288) | I, D | I: opens a batch of everything pending; D: the same pointer and count, never widened; an empty take opens no batch. Records, their strings, `WIRE` bytes and payloads are the host's until the ack | R/G: 0 (`host.c:1196-1199`) | none | `test_host_memory.c` `test_published_effects_stay_valid`, `test_pool_is_reclaimed_with_effects_pending`; `test_host_effects.c` `test_take_freezes_batch_across_growth` |
-| `ta_host_effects_ack` (:289) | I, D | closes the batch: its effects, their payloads (`release` in G, `host.c:1044-1048`) and the batch's outputs end | R/G: nothing (`host.c:1275`) | `release` may run language code: a binding defers the last drop (bindings.md section 8) | `test_host_guard.c` `test_send_and_ack`; `test_host_memory.c` |
-| `ta_host_effect_number`, `_text`, `_bytes` (:334-336) | D | a field of the open batch, valid until the ack; `TRACEPARENT`'s and `ORIGIN`'s text written on first ask into a slot per effect, valid until the ack (`effect_traceparent`, `effect_origin`, `host.c`) | an index past the batch, a field the kind does not set, or the wrong accessor: 0 or empty; not checked for R/G (`host.c:1218-1271`): publication closes before ack/free release callbacks, so they answer 0 or empty | none | `test_host_effects.c` `test_fields_match_the_struct` (number, text); `_bytes`: `test_host_request.c`; closed publication: `test_host_guard.c` `test_closed_batch_during_release`; two `TRACEPARENT`s read together: `test_host_effects.c` `test_traceparents_last_until_the_ack` |
-| `ta_host_traces`, `ta_host_logs` (:348-349) | I, D | an OTLP request, a view of host memory until the ack (`outputs`, `host_output`); length 0: none staged | R/G and without an encoder `TA_ERROR_STATE` (`telemetry.c:289`, `:301`); `TA_ERROR_NO_MEMORY`: the spans stay staged | `to_wire` for traced values in G (`telemetry.c:90`) | `test_host_telemetry.c` `test_drain_and_take`, `test_take_refused`; `test_host_guard.c` `test_traces`; the view after a later call: `test_host_guard.c` `test_outputs_last_until_the_ack` (metrics, through the same output path) |
-| `ta_host_migrate` (:587) | I, D | a migration id; `MIGRATED`, `MIGRATION_DONE` pending in later runs | R/G `TA_ERROR_STATE` (`host.c:1403`); `TA_ERROR_INVALID` for a chart name the host does not have, for a session that is an invoked child (it moves with its parent) or for a session not of the chart named; `TA_ERROR_STALE` for a session that ended; `TA_ERROR_NO_MEMORY` | none | `test_host.c` `test_versions_and_migration`, `test_migration_refuses_what_it_cannot_move` |
-| `ta_host_migration_failed` (:589) | all (not checked) | the caller's array: the sessions a migration could not move so far, in the order they failed, each with the status that refused it; a finished migration's list is readable until the next run, which comes after the ack | none | answers in R/G, a lookup in `host.h`'s list | `test_host.c` `test_migration_names_the_failed` |
-| `ta_host_migration_pending` (:589) | all (not checked) | the caller's array: the sessions a running migration waits for, in no order; a finished migration's list is readable until the next run, which comes after the ack | none | answers in R/G, a lookup in `host.h`'s list | `test_host.c` `test_migration_wake_and_timeout` |
-| `ta_host_sweep` (:595) | I, D | sessions in the caller's array | R/G: 0 (`host.c:1962`) | none | `test_host.c`, `test_host_memory.c` |
-| `ta_host_hibernate` (:600) | I, D | the blob, a view of host memory until the ack | R/G `TA_ERROR_STATE` (`host.c:2014`); `TA_ERROR_NO_MEMORY`: the actor stays | `serialize`, `destroy` in G (`host.c:2022`) | `test_host.c` `test_hibernate_and_wake`; `test_host_guard.c` `test_hibernate`; blob after a later call: through the same output path as `test_outputs_last_until_the_ack` |
-| `ta_host_wake` (:601) | I, D | the actor back, and back on the retry list of a migration that waits for it; the blob read during the call | R/G `TA_ERROR_STATE` (`host.c:2029`); `TA_ERROR_NO_MEMORY` (a migration's list could not grow, or the segment); `TA_ERROR_INVALID` for a malformed blob, another session's, or another host's (its identity, from the system id and `ta_host_environment.nonce`, differs; a restored host keeps its snapshot's); `TA_ERROR_STALE` for a blob of an earlier hibernation of it: the actor stays hibernated. A blob of a later hibernation than the system notes is accepted: after a restore the note is the snapshot's, and a store that keeps one blob per session may hold a newer one (macrosteps compared modulo 2^32) | `deserialize` in G (`host.c:2035`) | `test_host.c` `test_hibernate_and_wake`, `test_wake_refuses_an_older_blob`, `test_wake_after_a_restore_takes_a_newer_blob`, `test_blob_identity` |
-| `ta_host_snapshot` (:642) | I with nothing pending | into the caller's `ta_buffer` | effects published or pending (`host.c:2470`), or a migration active: `TA_ERROR_STATE`; a batch opened only by an output view too; R/G too (`host.c:2469`); `TA_ERROR_NO_MEMORY`: `length` is what it needs | none | `test_host.c` `test_snapshot_restore` |
-| `ta_host_snapshot_segments` (:646) | no host | hashes in the caller's array | 0: not a snapshot | none | `test_host.c` |
-| `ta_host_restore` (:700) | no host | a new host; images copied as by `add_image`; its first `ta_host_run` (after the datamodels' state is restored) announces each external invocation that was running again, before any actor runs: a `TA_EFFECT_INVOKE` with `TA_EFFECT_FLAG_RESTORED`, its token, type, src, invoke id and params | `TA_ERROR_INVALID`, `NO_MEMORY` | `chart_attach` in G (`host.c:2669`) | `test_host.c` `test_snapshot_restore`, `test_host_effects.c` `test_restore_announces_external_invocations`, `test_restore_after_images_freed` |
-| `ta_host_snapshot_pack` (:671) | I with nothing pending | into the caller's `ta_buffer` | as `ta_host_snapshot` (it calls it, `host.c:2764`) | none | `test_host.c` `test_snapshot_pack` |
-| `ta_host_snapshot_unpack`, `_image` (:684-686) | no host | views into the pack | `TA_ERROR_INVALID`; empty | none | `test_host.c` `test_snapshot_pack` |
-| `ta_host_post` (:711) | I, D | applies the method; its effects, then its `REPLY` (with an id), pending: in D they come after the ack | R/G `TA_ERROR_STATE` (`request.c:996`); `TA_ERROR_NO_MEMORY`: nothing applied, no `REPLY` | `actor.context`: `variable`, `to_wire`, `release` in G (`request.c:701`, `:738`, `:747`) | `test_host_request.c` `test_post`; `test_host_guard.c` `test_request`; `requests.txt` |
-| `ta_host_metrics` (:718) | I, D | an OTLP metrics request, a view until the ack; with no batch open it opens one of its own | R/G and without an encoder `TA_ERROR_STATE` (`telemetry.c:295`); `TA_ERROR_NO_MEMORY` | none | `test_host_request.c` `test_spans_and_metrics`; `test_host_guard.c` `test_outputs_last_until_the_ack` |
+| `ta_host_send_many` | all | the accepted prefix's length | stops at the first failure (a text past the limit too); that event's payload stays the caller's | as send (`release` in G, `ta_host_send_many`) | as send |
+| `ta_host_terminate` | all | nothing | as spawn | exits at its next microstep boundary (`host.h`, "During a run") | `test_host_inputs.c` `test_terminate_self_ends_after_the_microstep`, `test_terminate_another_actor` |
+| `ta_host_resume` | I, D | nothing | R/G `TA_ERROR_STATE`; `TA_ERROR_INVALID`: no such segment | `release` in G (`ta_host_resume`) | `test_host_inputs.c` `test_other_calls_are_refused` (R) |
+| `ta_host_advance_time` | I, D | nothing | R/G: nothing done | none | `test_host_telemetry.c`; `test_host.c` |
+| `ta_host_run` | I | a `ta_run` by value; its effects pending, then its notifications | D: `TA_RUN_FAULT`, detail `TA_ERROR_STATE`, nothing runs or is released; `used` 0, `next_deadline` `UINT64_MAX`; R/G: the same | the datamodel vtable, in R | R: `test_host_inputs.c` `test_other_calls_are_refused`; D: `test_host_effects.c` `test_run_refuses_open_batch` |
+| `ta_host_effects` | I, D | I: opens a batch of everything pending; D: the same pointer and count, never widened; an empty take opens no batch. Records, their strings, `WIRE` bytes and payloads are the host's until the ack | R/G: 0 | none | `test_host_memory.c` `test_published_effects_stay_valid`, `test_pool_is_reclaimed_with_effects_pending`; `test_host_effects.c` `test_take_freezes_batch_across_growth` |
+| `ta_host_effects_ack` | I, D | closes the batch: its effects, their payloads (`release` in G, `effects_release`, `host.c`) and the batch's outputs end | R/G: nothing | `release` may run language code: a binding defers the last drop (bindings.md section 8) | `test_host_guard.c` `test_send_and_ack`; `test_host_memory.c` |
+| `ta_host_effect_number`, `_text`, `_bytes` | D | a field of the open batch, valid until the ack; `TRACEPARENT`'s and `ORIGIN`'s text written on first ask into a slot per effect, valid until the ack (`effect_traceparent`, `effect_origin`, `host.c`) | an index past the batch, a field the kind does not set, or the wrong accessor: 0 or empty; not checked for R/G: publication closes before ack/free release callbacks, so they answer 0 or empty | none | `test_host_effects.c` `test_fields_match_the_struct` (number, text); `_bytes`: `test_host_request.c`; closed publication: `test_host_guard.c` `test_closed_batch_during_release`; two `TRACEPARENT`s read together: `test_host_effects.c` `test_traceparents_last_until_the_ack` |
+| `ta_host_traces`, `ta_host_logs` | I, D | an OTLP request, a view of host memory until the ack (`outputs`, `host_output`); length 0: none staged | R/G and without an encoder `TA_ERROR_STATE` (`ta_host_traces`, `ta_host_logs`, `telemetry.c`); `TA_ERROR_NO_MEMORY`: the spans stay staged | `to_wire` for traced values in G (`otlp_drain`, `telemetry.c`) | `test_host_telemetry.c` `test_drain_and_take`, `test_take_refused`; `test_host_guard.c` `test_traces`; the view after a later call: `test_host_guard.c` `test_outputs_last_until_the_ack` (metrics, through the same output path) |
+| `ta_host_migrate` | I, D | a migration id; `MIGRATED`, `MIGRATION_DONE` pending in later runs | R/G `TA_ERROR_STATE`; `TA_ERROR_INVALID` for a chart name the host does not have, for a session that is an invoked child (it moves with its parent) or for a session not of the chart named; `TA_ERROR_STALE` for a session that ended; `TA_ERROR_NO_MEMORY` | none | `test_host.c` `test_versions_and_migration`, `test_migration_refuses_what_it_cannot_move` |
+| `ta_host_migration_failed` | all (not checked) | the caller's array: the sessions a migration could not move so far, in the order they failed, each with the status that refused it; a finished migration's list is readable until the next run, which comes after the ack | none | answers in R/G, a lookup in `host.h`'s list | `test_host.c` `test_migration_names_the_failed` |
+| `ta_host_migration_pending` | all (not checked) | the caller's array: the sessions a running migration waits for, in no order; a finished migration's list is readable until the next run, which comes after the ack | none | answers in R/G, a lookup in `host.h`'s list | `test_host.c` `test_migration_wake_and_timeout` |
+| `ta_host_sweep` | I, D | sessions in the caller's array | R/G: 0 | none | `test_host.c`, `test_host_memory.c` |
+| `ta_host_hibernate` | I, D | the blob, a view of host memory until the ack | R/G `TA_ERROR_STATE`; `TA_ERROR_NO_MEMORY`: the actor stays | `serialize`, `destroy` in G (`ta_host_hibernate`) | `test_host.c` `test_hibernate_and_wake`; `test_host_guard.c` `test_hibernate`; blob after a later call: through the same output path as `test_outputs_last_until_the_ack` |
+| `ta_host_wake` | I, D | the actor back, and back on the retry list of a migration that waits for it; the blob read during the call | R/G `TA_ERROR_STATE`; `TA_ERROR_NO_MEMORY` (a migration's list could not grow, or the segment); `TA_ERROR_INVALID` for a malformed blob, another session's, or another host's (its identity, from the system id and `ta_host_environment.nonce`, differs; a restored host keeps its snapshot's); `TA_ERROR_STALE` for a blob of an earlier hibernation of it: the actor stays hibernated. A blob of a later hibernation than the system notes is accepted: after a restore the note is the snapshot's, and a store that keeps one blob per session may hold a newer one (macrosteps compared modulo 2^32) | `deserialize` in G (`ta_host_wake`) | `test_host.c` `test_hibernate_and_wake`, `test_wake_refuses_an_older_blob`, `test_wake_after_a_restore_takes_a_newer_blob`, `test_blob_identity` |
+| `ta_host_snapshot` | I with nothing pending | into the caller's `ta_buffer` | effects published or pending, or a migration active: `TA_ERROR_STATE`; a batch opened only by an output view too; R/G too; `TA_ERROR_NO_MEMORY`: `length` is what it needs | none | `test_host.c` `test_snapshot_restore` |
+| `ta_host_snapshot_segments` | no host | hashes in the caller's array | 0: not a snapshot | none | `test_host.c` |
+| `ta_host_restore` | no host | a new host; images copied as by `add_image`; its first `ta_host_run` (after the datamodels' state is restored) announces each external invocation that was running again, before any actor runs: a `TA_EFFECT_INVOKE` with `TA_EFFECT_FLAG_RESTORED`, its token, type, src, invoke id and params | `TA_ERROR_INVALID`, `NO_MEMORY` | `chart_attach` in G (`ta_host_restore`) | `test_host.c` `test_snapshot_restore`, `test_host_effects.c` `test_restore_announces_external_invocations`, `test_restore_after_images_freed` |
+| `ta_host_snapshot_pack` | I with nothing pending | into the caller's `ta_buffer` | as `ta_host_snapshot` (it calls it) | none | `test_host.c` `test_snapshot_pack` |
+| `ta_host_snapshot_unpack`, `_image` | no host | views into the pack | `TA_ERROR_INVALID`; empty | none | `test_host.c` `test_snapshot_pack` |
+| `ta_host_post` | I, D | applies the method; its effects, then its `REPLY` (with an id), pending: in D they come after the ack | R/G `TA_ERROR_STATE`; `TA_ERROR_NO_MEMORY`: nothing applied, no `REPLY` | `actor.context`: `variable`, `to_wire`, `release` in G (`request_run_actor_context`, `request.c`) | `test_host_request.c` `test_post`; `test_host_guard.c` `test_request`; `requests.txt` |
+| `ta_host_metrics` | I, D | an OTLP metrics request, a view until the ack; with no batch open it opens one of its own | R/G and without an encoder `TA_ERROR_STATE` (`ta_host_metrics`, `telemetry.c`); `TA_ERROR_NO_MEMORY` | none | `test_host_request.c` `test_spans_and_metrics`; `test_host_guard.c` `test_outputs_last_until_the_ack` |
 
 ### The vtable, as core calls it
 
 Every entry runs in R or G, so a datamodel's code that calls back into the
 host gets the R/G column above. Its outputs are views it owns until the
-next call on the same datamodel (`datamodel.h:9-13`); core copies what it
+next call on the same datamodel (`datamodel.h`); core copies what it
 keeps first (ADR 0010 decision 1).
 
 | Entries (`datamodel.h`) | Called in | From | Test |
 |---|---|---|---|
 | `init_data`, `bind_event`, `detach_event`, `eval_condition`, `eval_string`, `assign`, `assign_string`, `script`, `log`, `foreach_*`, `capture`, `custom` | R | the system's run | the W3C suite through `ta-conform` |
-| `create` | R; G | `<invoke>` in a run; `ta_host_spawn` (`host.c:880`), `ta_host_boot` (`:2405`) | `test_host_inputs.c` |
-| `chart_attach` | G | `ta_host_add_image` (`host.c:588`), `ta_host_restore` (`:2669`) | `test_host.c` `test_image_copied` |
-| `destroy`, `chart_detach` | R; G | an actor exits in a run; retirement (`host.c:1807`), hibernate, migration (`host.c:1508`), `ta_host_free` | `test_host_guard.c` `test_free`, `test_outputs_grow_between_runs` |
-| `retain`, `release` | R; G | effect copies (`host.c:1190`), the ack (`:1047`), the drain (`:1359`), resume (`:962`), sends that fail outside a run (`:900`, `:935`), sends between segments in a run's drain (`local_send`, `host.c`), post (`request.c:747`), free | `test_host_guard.c` `test_send_and_ack` |
-| `serialize`, `deserialize` | G | hibernate (`host.c:2022`), wake (`:2035`), migration (`:1470`, `:1508`, `:1529`) | `test_host_guard.c` `test_hibernate`, `test_each_output_once` |
+| `create` | R; G | `<invoke>` in a run; `ta_host_spawn`, `ta_host_boot` | `test_host_inputs.c` |
+| `chart_attach` | G | `ta_host_add_image`, `ta_host_restore` | `test_host.c` `test_image_copied` |
+| `destroy`, `chart_detach` | R; G | an actor exits in a run; retirement (`retire`, `host.c`), hibernate, migration (`migrate_one`), `ta_host_free` | `test_host_guard.c` `test_free`, `test_outputs_grow_between_runs` |
+| `retain`, `release` | R; G | effect copies (`effect_copy`, `host.c`), the ack (`effects_release`), the drain (`drain`), resume (`ta_host_resume`), sends that fail outside a run (`host_send_to`, `ta_host_send_many`), sends between segments in a run's drain (`local_send`, `host.c`), post (`request_run_actor_context`, `request.c`), free | `test_host_guard.c` `test_send_and_ack` |
+| `serialize`, `deserialize` | G | hibernate (`ta_host_hibernate`), wake (`ta_host_wake`), migration (`migrate_one`, `migrate_invoking`) | `test_host_guard.c` `test_hibernate`, `test_each_output_once` |
 | `payload_serialize`, `payload_deserialize`, `migrate` | G | migration (as above) | `test_durable.c`; `test_migrate.c` |
 | `from_wire` | G | `actor.send` at the target (`request_run_actor_send`, `request.c`) | `test_host_request.c` `test_actor_send` |
-| `to_wire` | G | `actor.context` (`request.c:701`), traced values when records are read (`telemetry.c:90`, at a run's start and at a take) | `test_host_guard.c` `test_each_output_once`, `test_traces` |
-| `variable` | G | `actor.context` (`request.c:738`) | `test_host_request.c` `test_actor_context` |
+| `to_wire` | G | `actor.context` (`request_run_actor_context`, `request.c`), traced values when records are read (`otlp_drain`, `telemetry.c`, at a run's start and at a take) | `test_host_guard.c` `test_each_output_once`, `test_traces` |
+| `variable` | G | `actor.context` (`request_run_actor_context`) | `test_host_request.c` `test_actor_context` |
 
 ### Which distinctions callers need
 
@@ -150,14 +150,14 @@ The findings of step 8.2, each settled by a decision and a test:
    `ta_host_migration_failed`, `ta_host_migration_pending` and the effect accessors as lookups (same
    test).
 3. **A test calls `ta_system_*` from datamodel code** — settled: the
-   rule stands (`datamodel.h:7-8`); `test_host_inputs.c`'s hooks show that
+   rule stands (`datamodel.h`); `test_host_inputs.c`'s hooks show that
    nothing grew by counting the host's allocator, not by reading
    `ta_system_stats`.
 4. **The width of ids in `types.h`** — settled: `types.h` names three
    kinds: indices (segment, chart, I/O processor, datamodel) are
    `uint32_t` from 0 with `TA_NIL` for none; handles (actor, token,
    migration, watch) are `uint32_t`, never 0, with 0 for none (an actor's and a
-   token's carry a generation, `ta_pool_handle`, `src/base/pool.h:70`);
+   token's carry a generation, `ta_pool_handle`, `src/base/pool.h`);
    sessions, payloads and `ta_table` handles are `uint64_t` with 0 for
    none.
 5. **`detach_event`** — settled: the datamodel keeps `_event` after it,
@@ -166,7 +166,7 @@ The findings of step 8.2, each settled by a decision and a test:
    processed (`docs/SCXML.md`, 5.10), and a cancel runs `exitInterpreter`
    without rebinding it (Appendix D): the `<onexit>` handlers of an actor
    terminated at rest (`PHASE_STABLE` with `INSTANCE_FLAG_CANCEL`,
-   `core.c:1876-1878`) read it, and `serialize` writes it
+   `ta_core_step` in `core.c`) read it, and `serialize` writes it
    (`datamodel.h`).
 
 ## 1. Inputs
@@ -245,8 +245,8 @@ or `ta_host_free`, `TRACEPARENT`'s text included.
 |---|---|---|---|---|
 | an effect record and its strings | the host's effect array and pool | appended by a run or a call | through the accessors, in D | the ack |
 | `TRACEPARENT`'s text | the batch's memory | first ask for that effect | in D | the ack |
-| an effect's payload | the datamodel's row, retained by core (`host.c:1187-1191`) | the effect's copy | `ta_host_effect_number(PAYLOAD)` | released by core at the ack (`host.c:1044-1048`) |
-| a replaced effect array or pool block | the host (held) | growth while a batch is open (`host.c:972-981`) | through the open batch's pointers | the ack |
+| an effect's payload | the datamodel's row, retained by core (`effect_copy`, `host.c`) | the effect's copy | `ta_host_effect_number(PAYLOAD)` | released by core at the ack (`effects_release`) |
+| a replaced effect array or pool block | the host (held) | growth while a batch is open (`effects_block_replaced`, `host.c`) | through the open batch's pointers | the ack |
 
 **Rejected.** Struct layouts read from Python or JavaScript (`memoryview`,
 typed arrays): "Only C touches host structs" (ADR 0009), the ABI coupling
@@ -583,20 +583,18 @@ messages into the result's arena. All access occurs on the compiling thread.
 
 **The resolver lives only at compile time.** A static `<invoke src>` is fetched through it
 while compiling, and the invoked chart is compiled into the same image
-(`scxml.c:893-896`, `resolve_chart` at `:855-870`). A host has no
+(`invoke` and `resolve_chart` in `src/compile/scxml.c`). A host has no
 resolver.
 
 **`TA_EFFECT_REQUEST` stays (2026-10-13; ADR 0012,
 decision 8).** It is how a chart fetches at run time: an `<invoke srcexpr>`
-(or a `src` the compiler did not match, one with a `typeexpr`,
-`scxml.c:895`) whose chart is not in the image. Core normalizes the
+(or a `src` the compiler did not match, one with a `typeexpr`) whose chart is not in the image. Core normalizes the
 name itself (`file://`, `file:`, `./`, an inline document) and looks it
-up in the requesting segment's image (`route.c:439-489`); it gives the
-REQUEST, the name in `AUXILIARY`, only when that lookup fails
-(`:491-497`). The fetching is built out later. Until then a binding
+up in the requesting segment's image (`invoke` in `src/system/route.c`); it gives the
+REQUEST, the name in `AUXILIARY`, only when that lookup fails. The fetching is built out later. Until then a binding
 answers every REQUEST with `ta_host_resume` and `TA_ERROR_INVALID`, and
-the parent gets `error.execution` (`route.c:544-550`): a resume names
-only a chart of the requesting segment's image (`:544-553`), and core
+the parent gets `error.execution` (`ta_system_resume`, `route.c`): a resume names
+only a chart of the requesting segment's image, and core
 has already looked there. What the build-out needs from core is in
 `ROADMAP.md`, "Decided later". A REQUEST is not the control plane:
 `ta_host_post`, `REPLY` and `NOTIFICATION` (section 6;
@@ -605,10 +603,10 @@ ADR 0011) are a different mechanism.
 **Rejected.** A fourth parameter for the error (the rule of three
 parameters; root `AGENTS.md`). A resolver keeping every text alive until
 the compilation ends by itself (`ta_runtime_files` owns its texts,
-`runtime.h:32-37`): the compiler already has an arena with exactly that
+`runtime.h`): the compiler already has an arena with exactly that
 lifetime. The compile call's resolver kept on the host to answer a
 REQUEST with a text (an earlier design, ADR 0012, "History"): a resume
-names only a chart of the segment's image (`route.c:544-553`), so the
+names only a chart of the segment's image (`ta_system_resume`), so the
 text had nowhere to go. How run-time fetching is answered (a runtime
 resolver configured on the host, among others) is decided later.
 

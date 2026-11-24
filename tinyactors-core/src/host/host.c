@@ -1114,7 +1114,7 @@ static void pool_compact(ta_host *host) {
 
 /* Release the effects the host has seen (ta_host_effects): those before
  * effects_ready. Effects made since — by calls between runs, such as
- * ta_host_deliver answering with an `err` — stay for the next batch. The
+ * a reply to ta_host_post — stay for the next batch. The
  * borrow ends here: the blocks it held are freed. */
 static void effects_release(ta_host *host) {
     uint32_t seen = host->effects_ready;
@@ -2399,8 +2399,10 @@ ta_status ta_host_wake(ta_host *host, uint64_t session, ta_bytes blob) {
     return status;
 }
 
-/* A new segment index: past the ids of sessions a migration moved elsewhere
- * from its range (a freed segment's index is used again). */
+/* A new segment's serials: past the ids of sessions a migration moved
+ * elsewhere from its range. Segment indices are never used again
+ * (ta_host_add_image takes segment_count), so this finds none for an index
+ * it has just added. */
 static void reserve_serials(ta_host *host, uint32_t index) {
     uint64_t key;
     for (uint32_t cursor = 0; session_map_next(&host->moved, &cursor, &key) != TA_NIL;)

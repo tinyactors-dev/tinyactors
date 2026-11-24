@@ -46,9 +46,10 @@ datamodel on quickjs-ng (`ta_datamodel_ecmascript`, linked like a tree-sitter
 language) and a BasicHTTP codec (`tinyactors/basic_http.h`). All 191 automatic W3C
 SCXML IRP tests pass, run by the conformance suite
 ([`tinyactors-test`](../tinyactors-test)) against `ta-conform`, core's
-reference implementation of its driver (`tools/conform`, `mise run conform`). There is no language binding until
-[ADR 0009](../docs/adr/0009-one-host-two-queues.md) regenerates them over
-`ta_host`. The
+reference implementation of its driver (`tools/conform`, `mise run conform`). The language bindings are projects of their own, over
+`ta_host`: [`tinyactors-cpython`](../tinyactors-cpython) (Python, the PyPI
+package `tinyactors`) and [`tinyactors-napi`](../tinyactors-napi) (Node.js and
+Bun, the npm package `@tinyactors/node`, and `@tinyactors/wasm` for browsers). The
 [torture chamber](tools/torture) (`mise run torture`, `mise run torture:test`) runs
 pathological scenarios — 100k actors, ~1M events/s, large datamodels, systems
 addressing each other's actors, a 50,000-email campaign with one actor per

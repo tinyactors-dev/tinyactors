@@ -147,72 +147,92 @@ that forces a system-level symbol space anyway.
 
 ### 3.2 Container
 
+The records are `src/image/records.h`.
+
 ```
-ta_image_header (64 B, 8-aligned)
-  magic "TAI\0", version, flags (endianness=LE always, index width)
-  total_size, content_hash (64-bit; snapshots record it)
-  section_count, section_table_offset
-section_table[n]: { kind:u32, off:u32, size:u32, count:u32 }
-sections...      (each 8-aligned, all references are u32 offsets/indices)
+ta_header_record (64 B)
+  magic "TAI1", version (TA_IMAGE_VERSION 1), total_size, section_count,
+  hash (FNV-1a 64 of the image with this field zeroed), flags, chart_count,
+  reserved[8]
+ta_section_record[section_count] (16 B each): { kind, offset, size, count }
+sections...      (each at an 8-aligned offset; references are u32 offsets or indices)
 ```
 
-All integers little-endian. `ta_image_open((ta_bytes){bytes, length}, &view)` bounds-checks
-every offset/index/range once (fuzzed), so untrusted images are safe and the
-hot path does no checks. The view is a stack/host struct of section base
-pointers; the blob itself is never written (ROM/flash/mmap/`PROGMEM`-able,
-and the *same* blob may be shared by many systems and threads).
+All integers little-endian. `ta_image_open((ta_bytes){bytes, length}, &image)`
+checks the bytes (8-aligned), the magic, the version, the length, the hash,
+each section's kind (at most once each), alignment and range, and every
+offset, index and range of every record once, so an untrusted image is safe
+and the hot path does no checks. `tests/unit/test_image.c` (`test_fuzz_mutations`)
+opens 20,000 seeded mutations of a compiled image, rehashed, and reads every
+one that opens; there is no fuzzer. The view (`ta_image_view`) holds a base pointer per section; the
+image itself is never written (ROM/flash/mmap/`PROGMEM`-able, and the *same*
+image may be shared by many systems and threads).
 
-### 3.3 System-level sections
+### 3.3 Sections
 
-| Section | Content |
-|---------|---------|
-| `STRINGS` | All strings, NUL-terminated, deduplicated. Referenced by `u32` offset. |
-| `EVENT_TRIE` | Global event-name trie (§5) in preorder: `end:u32`, `name_str:u32`, child lookup table. |
-| `CHARTS` | Chart table: `{sections of that chart, instance_size, workspace_size, datamodel_id, name}` |
-| `DATAMODELS` | Names of datamodels used (`"ecmascript"`, `"null"`, `"python"`, …) + optional AOT section per (datamodel, chart). |
-| `IOPROCS` | Known I/O processor types (`scxml` built in; host-provided ones by name/URI). |
-| `ACTORS` | Boot actor definitions: `{chart, name, params}` spawned by `ta_system_boot()`. |
-| `LINKS` | Static invoke graph: `(chart, invoke def) → child chart`. Inline `<content><scxml>` children are compiled as separate charts. |
+Every section holds the records of all charts; a chart's records are a
+contiguous range, which its chart record names (`first_state`, `state_count`,
+...), so per-chart records are referenced with chart-local indices, while
+code pcs, `U32` offsets, capture indices, string ids and event-name ids are
+global.
 
-### 3.4 Per-chart sections
+| Section | Record | Content |
+|---------|--------|---------|
+| `STRINGS` | — | Every string: a string id is the offset of `{u32 length; bytes; '\0'}`, 4-aligned. |
+| `CHARTS` | `ta_chart_record`, 96 B | Name, datamodel, binding, flags, the ranges of its states, transitions, expressions, sends, invokes, data and code, its top-level `<script>`, its eventless-state mask (a `U32` offset), max depth, max `<foreach>` nesting, history words, source name (for `<invoke src>` matching). |
+| `STATES` | `ta_state_record`, 64 B | Below (§3.4). |
+| `TRANSITIONS` | `ta_transition_record`, 32 B | Below (§3.4). |
+| `U32` | `u32` | A pool of words: event-name intervals, target lists, masks, namelists and params. |
+| `CODE` | `u32` | Executable-content bytecode (§8). |
+| `EXPRESSIONS` | `ta_expression_record`, 16 B | `{kind (TA_EXPRESSION_*), source string id, line, column}` (§9.2). |
+| `CAPTURES` | `ta_capture_record`, 20 B | A namelist, params and `<content>` for `<send>`, `<invoke>` and `<donedata>`. |
+| `SENDS` | `ta_send_record`, 56 B | Event, target (classified, §10), type, id, idlocation, delay (static in ns, or an expression), capture. |
+| `INVOKES` | `ta_invoke_record`, 48 B | Its state, type, a statically linked child chart, `src`/`srcexpr`, id, idlocation, capture, autoforward, finalize, `<content expr>`. |
+| `DATA` | `ta_data_record`, 12 B | `{id string id, expression, state}`. |
+| `EVENT_NODES` | `ta_event_node_record`, 16 B | The global event-name trie (§5) in preorder: `{end, parent, token, name}`. |
+| `ACTORS` | `ta_actor_record`, 8 B | Boot actors: `{name, chart}`, spawned by `ta_host_boot`. |
+
+An inline `<content><scxml>` child is compiled as a chart of its own, and an
+invoke names it with `source_chart`.
+
+### 3.4 States and transitions
 
 States are numbered in **document order** (preorder), so `descendants(s)` is
 the contiguous interval `(s, s.end)`. This single fact removes most runtime
-hierarchy traversal.
+hierarchy traversal. State 0 of every chart is its `<scxml>` root.
 
 ```c
-/* 24 bytes */
+/* 64 bytes */
 typedef struct ta_state_record {
-  uint32_t parent;        /* TA_NIL for <scxml> root */
-  uint32_t end;           /* one past last descendant (preorder interval) */
-  uint8_t  kind;          /* atomic, compound, parallel, final, history_shallow, history_deep */
-  uint8_t  depth;
-  uint16_t flags;         /* HAS_EVENT_T, HAS_EVENTLESS_T, HAS_INVOKE, HAS_DATA, HAS_HISTORY, ... */
-  uint32_t transitions;         /* first transition (document order); count via next state's */
-  uint32_t onentry_instruction;    /* bytecode block, TA_NIL if none; onexit follows the same pattern */
-  uint32_t aux;           /* index into STATE_AUXILIARY: initial/default entry list, history slot,
-                             invokes, data declarations, donedata, name string */
+    uint32_t parent; /* TA_NIL for the root */
+    uint32_t end;    /* one past the last descendant */
+    uint8_t kind, depth;  /* kind: TA_STATE_* */
+    uint16_t flags;       /* ROOT, HAS_EVENTLESS_TRANSITIONS, HAS_EVENT_TRANSITIONS */
+    uint32_t id; /* string id */
+    uint32_t first_transition, transition_count;
+    uint32_t initial; /* compound: initial transition; history: default transition; else NIL */
+    uint32_t onentry, onexit; /* code pcs or TA_NIL */
+    uint32_t first_invoke, invoke_count;
+    uint32_t first_data, data_count;
+    uint32_t donedata;       /* capture index (final states) or TA_NIL */
+    uint32_t done_event;     /* name id of done.state.<id> (compound/parallel) or TA_NIL */
+    uint32_t history_offset; /* history states: word offset in the instance history area */
 } ta_state_record;
 
-/* 24 bytes */
+/* 32 bytes */
 typedef struct ta_transition_record {
-  uint32_t source;
-  uint32_t domain;        /* precomputed transition domain; TA_NIL if targetless */
-  uint32_t event_lo, event_hi;  /* single descriptor as trie preorder interval; multi-
-                             descriptor transitions point into EVENT_RANGES (flag) */
-  uint32_t cond;          /* ta_expression or TA_NIL */
-  uint32_t entry;         /* offset of sparse sorted entry list (static part) */
-  /* flags (internal, eventless, multi_descriptor, history_targets) are packed into
-     the top bits of `entry`; action_instruction and target list live in TRANSITIONS_AUX */
+    uint32_t source;
+    uint32_t domain;        /* precomputed transition domain; TA_NIL if targetless or dynamic */
+    uint32_t condition;     /* expression or TA_NIL */
+    uint32_t events_offset; /* U32 pool: event_count pairs {lo, hi} of event-name intervals */
+    uint16_t event_count;   /* 0 = eventless */
+    uint16_t flags;         /* INTERNAL, HISTORY_TARGET, INITIAL */
+    uint32_t targets_offset; /* U32 pool: target_count states */
+    uint16_t target_count;
+    uint16_t pad;
+    uint32_t action; /* code instruction or TA_NIL */
 } ta_transition_record;
 ```
-
-Other per-chart sections: `TRANSITIONS_AUX` (targets, action instruction), `EVENT_RANGES`,
-`ENTRY_LISTS` (sparse sorted `u32` state lists), `HISTORY` (slot offsets,
-default transitions), `CODE` (bytecode, §8), `EXPRS` (expression table,
-§9.2), `SENDS`, `INVOKES`, `DATA`, `PARAMS`, `DONEDATA`, `STATE_NAMES`
-(sorted for `In('name')` resolution by datamodels at attach time), `DEBUG`
-(optional line/column map; strippable).
 
 ### 3.5 Precomputation done by the compiler
 
@@ -248,9 +268,10 @@ default transitions), `CODE` (bytecode, §8), `EXPRS` (expression table,
 
 ### 3.7 Memory cost (image)
 
-For a 100-state / 200-transition chart: states 2.4 KB, transitions 4.8 KB,
-entry lists ≈ 1–3 KB, bytecode typically 1–4 KB, plus strings. ≈ 10–15 KB,
-shared by any number of instances.
+For a 100-state / 200-transition chart: states 6.4 KB (64 B each),
+transitions 6.4 KB (32 B each), their event intervals and targets in the
+`U32` pool ≈ 2–3 KB, bytecode typically 1–4 KB, expressions 16 B each, plus
+strings: ≈ 16–20 KB, shared by any number of instances.
 
 ---
 
@@ -615,7 +636,7 @@ and mark it runnable; they never execute the target.
 └──────────────────┘                           └──────────────────┘
 ```
 
-### 11.2 Function set (≈25)
+### 11.2 Function set
 
 ```c
 /* image */

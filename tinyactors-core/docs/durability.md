@@ -125,12 +125,18 @@ blob out.
 
 ## Blob formats
 
-Unreleased (v0.1.0): blob formats change freely, and are for one build of the
-library (instance words are copied verbatim).
+Blobs and snapshots are for one build of the library: instance words and
+the region are copied verbatim. Each format carries a version, and a blob or
+snapshot whose version differs from the build's is refused
+(`TA_ERROR_INVALID`), never read: a blob wakes, and a snapshot restores, only
+in a build of the same format. The versions are `HIBERNATION_VERSION` and
+`EXPORT_VERSION` (`src/system/hibernate.c`), `TA_SYSTEM_VERSION` for a
+system's region (`src/system/system_internal.h`) and `SNAPSHOT_VERSION` for a
+host's snapshot (`src/host/host.c`); a change to a format changes its version.
 
-- **hibernation** (`HIBERNATION_VERSION 4`): header (its writer's identity
+- **hibernation**: header (its writer's identity
   among its fields) | instance words | invoke ids as text | datamodel bytes.
-- **export** (`EXPORT_VERSION 2`): header | per session, parents first: header |
+- **export**: header | per session, parents first: header |
   instance words | invoke ids | datamodel bytes | delayed sends (absolute due,
   rank in the tree's firing order, route, slot + 1 for `#_<invokeid>`,
   target/name/sendid text, payload bytes or handle) | `<data>` to initialize
@@ -178,10 +184,8 @@ What a session's trace needs is in rows 19 and 20. An instance's own context
 (the current macrostep's) is a region reference and is let go at every stable
 point, so no blob holds one. Records waiting in the journal are not session
 state: they are the host's to read, and a snapshot keeps them with the region;
-a hibernation or an export does not move them. The snapshot format (`ta_system`
-`version`) and the hibernation and export blobs (`HIBERNATION_VERSION`,
-`EXPORT_VERSION`) changed with the 64-byte instance header and the contexts of
-delayed sends: older ones are refused.
+a hibernation or an export does not move them. The contexts of delayed sends
+are in the export blob.
 
 ## Per-chart counts (ADR 0007)
 
@@ -189,10 +193,8 @@ The counts of each chart (`ta_chart_stats`) are system state, not session
 state: they live in the region, so relocation and a system snapshot keep
 them, and a hibernation or an export leaves them where they were made. A host
 keeps the totals of the segments it retired, by chart name, in its own
-snapshot. The snapshot formats (`ta_system` `version` 3, the host's
-`SNAPSHOT_VERSION` 2) changed with them: older ones are refused. An external
-invocation's request keeps its type and params since `ta_system` `version`
-4, which refuses the older ones too.
+snapshot. An external invocation's request keeps its type and params in the
+region, so a snapshot keeps them too.
 
 ## Trace policy (ADR 0007)
 

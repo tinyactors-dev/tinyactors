@@ -1,5 +1,5 @@
 /* tinyactors/cbor.h — CBOR (RFC 8949): the encoding of host requests and
- * replies, configs, envelopes and neutral values (ADR 0009, decision 3;
+ * replies, configs and neutral values (ADR 0009, decision 3;
  * ADR 0010, decision 4).
  *
  * Values stream: the writer writes bytes item by item into a room the

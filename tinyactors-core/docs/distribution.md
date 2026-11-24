@@ -1,18 +1,20 @@
 # Distribution: what is released, and what is planned
 
-One release is built today, by `mise run release` in `tinyactors-core`, as
+Core's release is built by `mise run release` in `tinyactors-core`, as
 [ADR 0001](../../docs/adr/0001-packaging-and-releases.md) lays out: **the C
 libraries** libtinyactors, libtinyactors_runtime and
 libtinyactors_datamodel_ecmascript, released together, tagged
 `tinyactors-core/v<version>` in the monorepo and published as `v<version>`
-on the GitHub releases page of `tinyactors-dev/tinyactors-core`. Version
-0.2.0 was released on 2026-10-06.
+on the GitHub releases page of `tinyactors-dev/tinyactors-core`. Each
+release and its date is a section of [CHANGELOG.md](../CHANGELOG.md).
 
-`@tinyactors/node`, the Node.js binding on npm (tags
-`tinyactors-napi/v<version>`, also 0.2.0), is not built:
-[ADR 0009](../../docs/adr/0009-one-host-two-queues.md) deleted the bindings,
-and the regenerated JavaScript binding is a project of its own that
-packages itself.
+The language bindings are projects of their own, and each packages and
+releases itself with its own `mise run release`: `tinyactors-cpython`
+publishes the wheels of `tinyactors` on PyPI (tags
+`tinyactors-cpython/v<version>`), and `tinyactors-napi` publishes
+`@tinyactors/node`, its platform packages and `@tinyactors/wasm` on npm
+(tags `tinyactors-napi/v<version>`). Their releases are in their own
+`CHANGELOG.md`.
 
 ## Release targets
 

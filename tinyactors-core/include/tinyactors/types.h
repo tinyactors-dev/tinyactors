@@ -9,7 +9,7 @@
  *       an I/O processor, a datamodel binding) are uint32_t from 0, and
  *       TA_NIL means none;
  *       handles (an actor in its system, an invoke or request token, a
- *       peer, a migration job, a trace watch) are uint32_t and never 0,
+ *       migration, a trace watch) are uint32_t and never 0,
  *       and 0 means none; an actor's and a token's carry a generation, so
  *       a stale one is refused;
  *       ids that outlive their segment or name values (a session, a

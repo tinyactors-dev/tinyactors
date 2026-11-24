@@ -75,8 +75,8 @@ drain(host):
 
 - **One batch at a time.** A take with no batch open opens one with
   everything pending. While it is open, a take returns the same batch:
-  effects your handlers cause (a reply to a message you post, a
-  deliver's `PEER_ERROR`) are pending and come with the next take, after
+  effects your handlers cause (a reply to a message you post) are
+  pending and come with the next take, after
   the ack. An empty take opens no batch.
 - **Ack before you run.** `ta_host_run` while a batch is open answers
   `TA_RUN_FAULT` with `TA_ERROR_STATE` and runs nothing, with `used` 0 and `next_deadline` `UINT64_MAX`.

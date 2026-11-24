@@ -48,9 +48,11 @@
  *              blobs and their storage stay with the host (ta_host_hibernate,
  *              TA_EFFECT_WAKE, ta_host_wake).
  *   growth     segments are relocated into bigger blocks when a run or a call
- *              needs it (TA_RUN_EXHAUSTED / TA_ERROR_NO_MEMORY), each capacity
- *              doubled up to its hard limit (TA_SYSTEM_MAX_*). A segment
- *              whose capacities are all at their limits does not grow: the
+ *              needs it (TA_RUN_EXHAUSTED / TA_ERROR_NO_MEMORY), with more of
+ *              the pool that ran out and the rest as it was: that capacity
+ *              doubles, and doubles again (to at most 16 times) until the
+ *              block is a quarter larger, clamped to its hard limit
+ *              (TA_SYSTEM_MAX_*; docs/host-config.md). A pool at its limit does not grow: the
  *              call returns the system's status, a run TA_RUN_FAULT. Nothing
  *              is grown for what no growth can hold (a text past
  *              TA_SYSTEM_MAX_STRING is TA_ERROR_INVALID at the input).
@@ -528,8 +530,8 @@ TA_API ta_bytes ta_host_snapshot_image(ta_bytes pack, uint32_t i);
  *
  * ta_host_effects publishes everything appended since the last ack, with or
  * without a run: a REPLY is read like every other effect (WIRE with
- * ta_host_effect_bytes) and lives until ta_host_effects_ack, the next
- * ta_host_run or ta_host_free. TA_OK: the message was read (a JSON-RPC error
+ * ta_host_effect_bytes) and lives until ta_host_effects_ack or
+ * ta_host_free (ta_host_run refuses while a batch is open). TA_OK: the message was read (a JSON-RPC error
  * travels inside the REPLY). TA_ERROR_NO_MEMORY: the allocator refused room
  * for the reply, or the published batch holds too many replaced blocks;
  * nothing was applied and no REPLY appended. TA_ERROR_STATE during a run,

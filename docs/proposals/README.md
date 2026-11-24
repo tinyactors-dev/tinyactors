@@ -41,14 +41,14 @@ Every proposal starts with a status line:
 | [An application datamodel](application-datamodel.md) | Dropped: replaced by the JSON datamodel | — |
 | [SQLite host](sqlite-host.md) | Sketch | tinyactors-core, a new tinyactors-sqlite |
 | [PostgreSQL host](postgres-host.md) | Sketch | tinyactors-core, a new tinyactors-postgres |
-| [Host kernel](host-kernel.md) | Adopted → [kernel ADRs](../../tinyactors-host/docs/adr/README.md), [roadmap](../../ROADMAP.md) | tinyactors-napi, tinyactors-test, a new tinyactors-host |
-| [Replay-based persistence](replay-persistence.md) | Adopted → core ADRs 0088 to 0094, napi ADRs 0032 to 0037, [kernel ADR 0002](../../tinyactors-host/docs/adr/0002-the-kernel-keeps-the-write-ahead-log.md) | tinyactors-core, tinyactors-host, tinyactors-napi |
-| [A thin JavaScript binding over a deep native one](thin-js-binding.md) | Adopted → implemented in `tinyactors-core/bindings` (2026-10-10) | tinyactors-core (`bindings/shared`, `bindings/node`, `bindings/web`, `src/host`, `src/trace`) |
+| [Host kernel](host-kernel.md) | Adopted → kernel ADRs (deleted with tinyactors-host), [roadmap](../../ROADMAP.md) | tinyactors-napi, tinyactors-test, a new tinyactors-host (deleted) |
+| [Replay-based persistence](replay-persistence.md) | Adopted → core ADRs 0088 to 0094 (deleted), napi ADRs 0032 to 0037 (deleted), kernel ADR 0002, "The kernel keeps the write-ahead log" (deleted) | tinyactors-core, tinyactors-host (deleted), tinyactors-napi |
+| [A thin JavaScript binding over a deep native one](thin-js-binding.md) | Adopted → implemented in `tinyactors-core/bindings` (2026-10-10; deleted) | tinyactors-core (`bindings/shared`, `bindings/node`, `bindings/web` (deleted), `src/host`, `src/trace`) |
 | [Trace context on inputs: a struct in, text only at the edges](trace-context-on-inputs.md) | Proposed | tinyactors-core (`system.h`, `host.h`, `src/system`, `src/host`, every caller) |
 | [Distributed actor systems](distributed-systems.md) | Sketch | tinyactors-core (conformance gaps), tinyactors-napi, the browser build |
-| [An idle actor carries no event](lean-actor-events.md) | Adopted → [core ADR 0069](../../tinyactors-core/docs/adr/0069-an-idle-actor-carries-no-event.md) | tinyactors-core, tinyactors-napi |
+| [An idle actor carries no event](lean-actor-events.md) | Adopted → core ADR 0069, "An idle actor carries no event" (deleted) | tinyactors-core, tinyactors-napi |
 | [Packaging and releases](packaging.md) | Adopted → [ADR 0001](../adr/0001-packaging-and-releases.md) | tinyxml, tinyactors-core, tinyactors-scxml, tinyactors-napi, root release tasks |
-| [An MCP server](mcp-server.md) | Proposed; the DAP adapters it replaces are removed | tinyactors-core, tinyactors-host, tinyactors-napi, tinyactors-test |
+| [An MCP server](mcp-server.md) | Proposed; the DAP adapters it replaces are removed | tinyactors-core, tinyactors-host (deleted), tinyactors-napi, tinyactors-test |
 | [Metrics, and trace policy as data](metrics-and-trace-policy.md) | Adopted → [ADR 0007](../adr/0007-metrics-and-trace-policy.md) | tinyactors-core (system, host, otlp, bindings) |
 | [SCXML in core: a small XML writer beside the compiler's parser](scxml-in-core.md) | Adopted → commits `bb603ff8`, `77f39f31` | tinyactors-core, tinyactors-scxml (deleted) |
 | [A debug adapter](debug-adapter.md) | Adopted, then removed (2026-09-30) for [the MCP server](mcp-server.md) | tinyactors-core (source spans, operator transitions), tinyactors-scxml, tinyactors-test, tinyactors-napi |

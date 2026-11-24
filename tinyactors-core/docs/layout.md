@@ -57,7 +57,7 @@ implementation of that layer). Layer dependency rules are in
 │   │
 │   ├── image/                 shared by compiler (writer) and runtime (reader)
 │   │   ├── records.h          ✅ on-disk records, bytecode opcodes, validated view
-│   │   ├── image.c            ✅ open + full verification (fuzzed), public accessors
+│   │   ├── image.c            ✅ open + full verification (mutation-tested: test_image.c), public accessors
 │   │   └── event_names.c      ✅ event trie lookup (dynamic names -> name id)
 │   │
 │   ├── trace/                 freestanding trace values and records (ADR 0006); no state
