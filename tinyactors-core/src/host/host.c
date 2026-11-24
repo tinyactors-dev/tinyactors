@@ -1517,6 +1517,20 @@ static ta_status local_send(ta_host *host, uint32_t si, const ta_effect *effect,
     if (datamodel) { /* the effect's reference is released at its ack: the event takes one of its own */
         event.data = effect->payload;
         host_retain(host, datamodel, event.data);
+        /* the target's segment reads the data as its chart's datamodel's: a
+         * payload of another datamodel is converted here, once */
+        ta_system *target = host->segments[ti].system;
+        uint32_t index = ta_system_resolve_actor(target, ta); /* ta is the actor's handle */
+        uint32_t want = target->core.chart_datamodel[ta_actor_chart(target, ta_actor_at(target, index))];
+        if (want != effect->datamodel) {
+            uint32_t was = host_guard(host); /* to_wire, from_wire, release */
+            ta_status converted = ta_core_payload_convert(
+                &target->core, (ta_core_payload_conversion){effect->datamodel, want, event.data}, &event.data);
+            host_unguard(host, was);
+            if (converted != TA_OK) return host_communication_error(host, si, effect->actor, effect->sendid);
+            datamodel = want < host->config.datamodel_count ? &host->datamodels[want]
+                                                            : (const ta_datamodel_binding *)0;
+        }
     }
     ta_status status = host_send_to(host, ti, ta, &event);
     if (status != TA_OK && datamodel) host_release(host, datamodel, event.data);

@@ -279,9 +279,10 @@ void ta_system_fire_timers(ta_system *system) {
  * error.execution: TA_POOL_NONE. */
 enum { SPAWN_OR_PARK = 1, SPAWN_OR_RETRY = 2 };
 
-static void release_invoke_payload(ta_system *system, uint32_t parent, ta_payload payload) {
-    const ta_datamodel_binding *binding =
-        ta_core_datamodel(&system->core, ta_actor_chart(system, actor_at(system, parent)));
+/* Release a payload of the datamodel the child's chart uses: an invoke's
+ * params are the child's from the start (spawn_child converts them). */
+static void release_invoke_payload(ta_system *system, uint32_t chart, ta_payload payload) {
+    const ta_datamodel_binding *binding = ta_core_datamodel(&system->core, chart);
     if (payload && binding->vtable->release) binding->vtable->release(binding->datamodel, payload);
 }
 
@@ -292,26 +293,33 @@ static uint32_t spawn_child(ta_system *system, uint32_t parent, uint32_t slot, u
                             uint32_t invokeid, ta_payload payload, int may_park) {
     ta_core *core = &system->core;
     ta_status status;
+    ta_instance *pin = ta_actor_instance(system, actor_at(system, parent));
+    /* params a chart of another datamodel captured become the child's datamodel's */
+    status = ta_core_payload_convert(
+        core,
+        (ta_core_payload_conversion){core->chart_datamodel[ta_actor_chart(system, actor_at(system, parent))],
+                                     core->chart_datamodel[chart], payload},
+        &payload);
+    if (status != TA_OK) {
+        ta_core_raise_platform(core, pin, "error.execution", TA_NIL);
+        return TA_POOL_NONE;
+    }
     uint32_t ph = ta_pool_handle(&system->actors, parent);
     uint32_t c = ta_system_spawn_actor(system, chart, ta_shared_string_get(core, invokeid), payload,
                                        ph, slot, (ta_string_view){(const char *)0, 0}, &status);
-    ta_instance *pin = ta_actor_instance(system, actor_at(system, parent));
+    pin = ta_actor_instance(system, actor_at(system, parent));
     if (c == TA_NIL) {
         uint32_t pool = status == TA_ERROR_NO_MEMORY && may_park ? ta_system_exhausted(system)
                                                                  : TA_POOL_NONE;
         if (pool != TA_POOL_NONE) {
             if (park_spawn(system, parent, slot, chart, invokeid, payload)) return pool;
             if (may_park == SPAWN_OR_RETRY) {
-                release_invoke_payload(system, parent, payload);
+                release_invoke_payload(system, chart, payload);
                 ta_core_invoke_retry(core, pin);
                 return TA_POOL_REQUESTS;
             }
         }
-        if (payload) {
-            const ta_datamodel_binding *binding =
-                ta_core_datamodel(core, ta_actor_chart(system, actor_at(system, parent)));
-            if (binding->vtable->release) binding->vtable->release(binding->datamodel, payload);
-        }
+        release_invoke_payload(system, chart, payload);
         ta_core_raise_platform(core, pin, "error.execution", TA_NIL);
         return TA_POOL_NONE;
     }
@@ -335,7 +343,7 @@ static int park_spawn(ta_system *system, uint32_t parent, uint32_t slot, uint32_
     ta_shared_string_retain(core, invokeid);
     request->source = chart;
     request->payload = payload;
-    request->pad = core->chart_datamodel[ta_actor_chart(system, actor_at(system, parent))];
+    request->pad = core->chart_datamodel[chart]; /* spawn_child made the params the child's */
     ta_index_queue_push(&system->pending_spawns, &system->requests, PENDING_SPAWN_LINK, ri);
     return 1;
 }
@@ -470,7 +478,7 @@ static uint32_t invoke(ta_system *system, uint32_t parent, const ta_core_out *ou
                                        ? (ta_effect_record *)0
                                        : ta_system_effect_push(system, TA_EFFECT_INVOKE, parent);
         if (!effect) {
-            release_invoke_payload(system, parent, out->payload);
+            release_invoke_payload(system, ta_actor_chart(system, pa), out->payload);
             if (ri == TA_NIL) { /* the requests grow, then the step starts it again */
                 ta_core_invoke_retry(core, pin);
                 return TA_POOL_REQUESTS;
@@ -568,7 +576,7 @@ static uint32_t invoke(ta_system *system, uint32_t parent, const ta_core_out *ou
                                    ? (ta_effect_record *)0
                                    : ta_system_effect_push(system, TA_EFFECT_REQUEST, parent);
     if (!effect) {
-        release_invoke_payload(system, parent, out->payload);
+        release_invoke_payload(system, ta_actor_chart(system, pa), out->payload);
         if (ri == TA_NIL) { /* the requests grow, then the step starts it again */
             ta_core_invoke_retry(core, pin);
             return TA_POOL_REQUESTS;

@@ -204,6 +204,7 @@ module Core
     unit('test_journal', 'base'),
     unit('test_cbor', 'base'),
     unit('test_host_inputs', 'host', 'runtime', 'compile', *ECMASCRIPT),
+    unit('test_host_datamodels', 'host', 'runtime', 'compile', *ECMASCRIPT),
     # Pools filled during a run by actors' own sends: grown between runs, never a crash.
     unit('test_host_growth', 'host', 'runtime', 'compile', *ECMASCRIPT),
     # Strings past TA_SYSTEM_MAX_STRING: refused at the input, error.execution in a chart.

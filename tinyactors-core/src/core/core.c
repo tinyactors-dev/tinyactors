@@ -516,12 +516,59 @@ static void init_data(kernel_context *kernel, uint32_t d) {
     if (status != TA_OK) error_exec(kernel);
 }
 
+/* ---- payloads between datamodels ------------------------------------------------ */
+
+#define VTABLE_HAS(vtable, entry)                                                                  \
+    ((vtable)->size >= offsetof(ta_datamodel_vtable, entry) + sizeof(vtable)->entry &&             \
+     (vtable)->entry)
+
+ta_status ta_core_payload_convert(ta_core *core, ta_core_payload_conversion conversion,
+                                  ta_payload *out) {
+    *out = conversion.payload;
+    if (!conversion.payload || conversion.from == conversion.to ||
+        conversion.from >= core->datamodel_count || conversion.to >= core->datamodel_count)
+        return TA_OK;
+    const ta_datamodel_binding *from = &core->datamodels[conversion.from];
+    const ta_datamodel_binding *to = &core->datamodels[conversion.to];
+    ta_status status = TA_ERROR_UNSUPPORTED;
+    *out = 0;
+    if (!VTABLE_HAS(to->vtable, from_wire)) /* it reads no values (null): it gets none */
+        status = TA_OK;
+    else if (VTABLE_HAS(from->vtable, to_wire)) {
+        ta_bytes value = {0, 0};
+        status = from->vtable->to_wire(from->datamodel, conversion.payload, &value);
+        /* the view lives until `from`'s next call: read it before the release */
+        if (status == TA_OK) status = to->vtable->from_wire(to->datamodel, value, out);
+        if (status != TA_OK) *out = 0;
+    }
+    if (from->vtable->release) from->vtable->release(from->datamodel, conversion.payload);
+    return status;
+}
+
 /* ---- _event ---------------------------------------------------------------------- */
+
+/* An event whose data another datamodel made (a send, a done.invoke or an
+ * input from a chart of another datamodel) is converted when the actor binds
+ * it: the payload becomes its datamodel's. One that cannot be converted is
+ * bound without data, and error.execution follows it on the internal queue. */
+static void adopt_payload(ta_core *core, ta_instance *instance, uint32_t event_index) {
+    ta_event *event = ta_event_at(core, event_index);
+    uint32_t want = core->chart_datamodel[instance->chart];
+    if (!event->payload || event->datamodel == want || event->datamodel >= core->datamodel_count)
+        return;
+    ta_payload converted;
+    ta_status status = ta_core_payload_convert(
+        core, (ta_core_payload_conversion){event->datamodel, want, event->payload}, &converted);
+    event->payload = converted;
+    event->datamodel = (uint8_t)want;
+    if (status != TA_OK) (void)ta_core_raise_platform(core, instance, "error.execution", TA_NIL);
+}
 
 static void bind_event(ta_core *core, ta_instance *instance, uint32_t event) {
     if (instance->current_event != TA_NIL) ta_event_release(core, instance->current_event);
     instance->current_event = event;
     instance->flags &= (uint8_t)~INSTANCE_FLAG_DETACHED;
+    adopt_payload(core, instance, event);
     const ta_datamodel_binding *binding = ta_core_datamodel(core, instance->chart);
     if (binding->vtable->bind_event) {
         ta_event_view view;

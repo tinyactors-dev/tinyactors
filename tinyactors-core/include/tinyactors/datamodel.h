@@ -231,7 +231,14 @@ typedef struct ta_datamodel_vtable {
      * from_wire: a new payload (one reference) from CBOR; TA_ERROR_INVALID if
      * it is not one well-formed neutral value. Core calls it for a value that
      * comes in: actor.send's data, read by the target session's datamodel.
-     * Within the process payloads never leave the datamodel. */
+     * Data that crosses between charts of two datamodels (a send, an invoke's
+     * params, a done.invoke's donedata) is converted with both: the sender's
+     * to_wire, then the receiver's from_wire, once, when the receiver binds
+     * the event or the child is created (across segments: when the host
+     * delivers it). A receiver without from_wire gets no data; a sender
+     * without to_wire, or a value its to_wire refuses, gives the receiver no
+     * data and error.execution (an invoke: error.execution to the invoker).
+     * Otherwise payloads never leave the datamodel. */
     ta_status (*to_wire)(void *datamodel, ta_payload p, ta_bytes *out);
     ta_status (*from_wire)(void *datamodel, ta_bytes cbor, ta_payload *out);
 

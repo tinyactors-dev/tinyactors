@@ -296,6 +296,19 @@ void ta_core_clear_invoke_child(ta_core *core, ta_instance *in, uint32_t slot);
 void ta_core_invoke_retry(ta_core *core, ta_instance *in);
 uint32_t ta_core_invoke_child(ta_core *core, ta_instance *in, uint32_t slot);
 uint32_t ta_core_invoke_id(ta_core *core, ta_instance *in, uint32_t slot);
+/* A payload of datamodel `from` as a payload of datamodel `to`
+ * (ta_core_payload_conversion): written by one's to_wire, read by the other's
+ * from_wire. The payload's reference is consumed on every path; `*out` holds
+ * the new one, 0 when the conversion failed (TA_ERROR_UNSUPPORTED when `from`
+ * has no to_wire, else the hook's status) or when `to` reads no values (no
+ * from_wire, as the null datamodel: TA_OK, the data dropped). Same datamodel, no payload or
+ * an index out of range: `*out` is the payload itself, nothing is called. */
+typedef struct ta_core_payload_conversion {
+    uint32_t from, to;
+    ta_payload payload;
+} ta_core_payload_conversion;
+ta_status ta_core_payload_convert(ta_core *core, ta_core_payload_conversion conversion,
+                                  ta_payload *out);
 /* Raise a platform event (e.g. error.communication) into the internal queue;
  * returns it (TA_NIL if there was no room). It gets the context of the
  * instance's current step. */
