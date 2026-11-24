@@ -1,118 +1,119 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <page xmlns="https://www.tinyactors.dev/ns/site" id="when-to-use" path="/when-to-use/">
   <title>When to use tinyactors</title>
-  <description>When tinyactors fits a program and when it does not, what a crash keeps, and how it compares with Temporal, Durable Objects, Rivet and XState.</description>
+  <description>Why tinyactors fits an embedded event loop, what a crash keeps and how it compares with Temporal, Durable Objects, Rivet and XState.</description>
   <purpose kind="explanation" for="tech-lead agent-platform workflow-tester" answers="tech-lead.decide tech-lead.write-case"/>
 
   <hero>
-    <headline>Use it when your program owns the process</headline>
-    <lede>tinyactors is a library on your own event loop: your program owns the process, the store and every effect. Each actor runs an SCXML chart, where an Erlang or Akka actor runs any code.</lede>
+    <headline>Run statechart actors inside your own process</headline>
+    <lede>tinyactors embeds SCXML actors on your event loop across <link to="home">Node.js, Python, browsers and C</link>. Your code owns the <link href="https://github.com/tinyactors-dev/tinyactors/blob/main/README.md#layers-and-responsibilities">process, store, effects and cross-host placement</link> while the core <link to="performance" section="correctness">passes 191 W3C tests</link>.</lede>
     <actions>
-      <action to="guide-charts" section="first-chart">Write your first chart</action>
-      <action to="when-to-use" section="crash">See what a crash keeps</action>
+      <action to="performance">Check capacity numbers</action>
+      <action to="guide-charts" section="first-chart">Write a first chart</action>
+      <action to="chat">Build a team chat</action>
     </actions>
   </hero>
 
-  <section id="use-it-when" answers="tech-lead.when-to-use">
-    <heading>Use it for many long-lived stateful entities</heading>
-    <p>tinyactors fits a program whose entities wait days for their next event, such as orders or chat sessions:</p>
+  <section id="use-it-when" answers="tech-lead.when-to-use tech-lead.same-everywhere agent-platform.memory agent-platform.idle-sessions workflow-tester.simulated-clock workflow-tester.written-flow workflow-tester.no-mocks workflow-tester.simulation-matches">
+    <heading>tinyactors fits millions of in-process statechart actors</heading>
+    <p>tinyactors fits when you need memory density, SCXML charts, event-based effects, simulated-clock tests and one core across runtimes.</p>
     <list>
-      <item><term>Most of them wait</term><text>An idle actor is saved to your store and loaded on its next event. <link to="guide-hibernation" section="at-scale">Two million actors ran</link> with at most 1000 in memory.</text></item>
-      <item><term>Their timeouts need tests</term><text>A test answers the chart's sends and moves its clock, so a payment that retries every 30 seconds <link to="guide-testing">runs in milliseconds</link>.</text></item>
-      <item><term>Several runtimes share the logic</term><text>One C core runs the same chart in Node.js, Python, a browser and C, and <link to="performance" section="correctness">every binding runs the same tests</link>.</text></item>
-      <item><term>Your code does the I/O</term><text>A chart sends an event for each effect, and an <link to="guide-io-processors">I/O processor</link> in your code performs it.</text></item>
+      <item><term>Small actors and hibernation</term><text>Actors take <link to="guide-capacity">about 530 bytes started and 120 hibernated</link>; operations <link to="performance">cost about the same</link> at four million as at two. Idle actors hibernate and wake on events; <link to="guide-hibernation" section="at-scale">two million actors ran</link> with at most 1000 in memory.</text></item>
+      <item><term>Explicit SCXML statecharts</term><text>Each actor runs an <link to="guide-charts">SCXML chart</link> of states, events and transitions with JavaScript or Python expressions. SCXML <code>invoke</code> runs <link to="guide-services">long operations per state</link>, and <link to="guide-quickjs">QuickJS sandboxes user-uploaded charts</link>.</text></item>
+      <item><term>Effects as events without mocks</term><text>A chart reaches the world only through sends to an <link to="guide-io-processors">I/O processor</link>, a handler you give the host. Because effects are events, tests avoid mocking external services: <link to="guide-testing" section="three-tools">test handlers</link> record sends and answer, return errors or never reply.</text></item>
+      <item><term>Timeouts tested with a simulated clock</term><text>A <code>SimulatedClock</code> <link to="guide-testing">moves only when the test moves it</link>: a timeout of an hour takes no time. A payment that retries every 30 seconds runs all three attempts in milliseconds, alongside <link to="property-testing">property tests</link>.</text></item>
+      <item><term>One C core across runtimes</term><text>One C core <link to="performance" section="correctness">runs the same tests</link> and the same chart in Node.js, Python, C and <link to="guide-browser">browsers</link>.</text></item>
     </list>
   </section>
 
-  <section id="do-not-use-it-when" answers="tech-lead.when-to-use">
-    <heading>Look elsewhere for free code or failover</heading>
-    <p>Some needs belong to another tool, or to work your program does itself:</p>
+  <section id="do-not-use-it-when" answers="tech-lead.when-to-use tech-lead.single-point tech-lead.release-history">
+    <heading>Limits: SCXML charts, single hosts and changing APIs</heading>
+    <p>tinyactors stops at SCXML charts inside single hosts under active development with frequent breaking changes.</p>
     <list>
-      <item><term>Actors that run any code</term><text>A tinyactors actor runs an SCXML chart: states, events and transitions, with expressions in JavaScript or Python. An Erlang or Akka actor runs whatever code you give it.</text></item>
-      <item><term>Failover across machines</term><text>Placement and failover are your program's work, as <link href="https://github.com/tinyactors-dev/tinyactors/blob/main/README.md#layers-and-responsibilities">deployment</link> is. It runs a host in each process and writes the transport that carries sends between them (<link to="guide-other-systems" section="systems">other systems</link>).</text></item>
-      <item><term>An API that holds still</term><text>The project is under active development, and <link href="https://github.com/tinyactors-dev/tinyactors/blob/main/README.md#status">its README</link> says breaking changes are made frequently.</text></item>
+      <item><term>Arbitrary actor code</term><text>Each actor runs an <link to="guide-charts">SCXML chart</link> with JavaScript or Python expressions. Erlang and Akka actors run any code you give them.</text></item>
+      <item><term>Managed clustering and failover</term><text>Actors stay in their spawning host, so your program runs a <link to="guide-other-systems" section="systems">named host per process</link>. <link href="https://github.com/tinyactors-dev/tinyactors/blob/main/README.md#layers-and-responsibilities">Placement, deployment, failover and transport</link> between hosts are your program's work.</text></item>
+      <item><term>A stable API</term><text>The README says tinyactors is under active development and makes <link href="https://github.com/tinyactors-dev/tinyactors/blob/main/README.md#status">frequent breaking changes</link>. Follow each package release and upgrade change in <link to="changelog">the tinyactors changelog</link>.</text></item>
     </list>
   </section>
 
-  <section id="crash" answers="tech-lead.host-dies tech-lead.single-point tech-lead.failure-semantics workflow-tester.crash">
-    <heading>A crash keeps what you saved</heading>
-    <p>Actors live in your process's memory, so a crash or a restart stops every one of them. What comes back is what your program saved:</p>
-    <claims>
-      <claim>
-        <statement>A snapshot brings every actor back</statement>
-        <p><code>Host.restore</code> runs a snapshot in this process or another, with each actor's variables, queued events and pending timers.</p>
-        <source to="guide-snapshots" section="what-it-holds">Snapshots, "Copy every actor into one buffer"</source>
-      </claim>
-      <claim>
-        <statement>A blob wakes only with its host</statement>
-        <p>A hibernated actor's blob carries its host's random identity. A new host refuses it, and a host restored from that host's snapshot accepts it.</p>
-        <source to="guide-hibernation" section="what-a-blob-holds">Hibernation, "Wake each blob where it was made"</source>
-      </claim>
-      <claim>
-        <statement>What came after the snapshot needs replaying</statement>
-        <p>A restored host starts at the snapshot's time and accepts blobs its actors hibernated since. Your program replays the other inputs from a journal it keeps.</p>
-        <source to="guide-snapshots" section="replaying-inputs">Snapshots, "Replay the inputs that came after"</source>
-      </claim>
-      <claim>
-        <statement>Durability is your database's job</statement>
-        <p>The core does no I/O. tinyactors saves blobs through the store you give it, and takes a snapshot when your program asks.</p>
-        <source href="https://github.com/tinyactors-dev/tinyactors/blob/main/README.md#layers-and-responsibilities">tinyactors, <code>README.md</code>, "Layers and responsibilities"</source>
-        <source to="guide-snapshots" section="restoring">Snapshots, "Keep your backups in your database"</source>
-      </claim>
-    </claims>
+  <section id="crash" answers="tech-lead.failure-semantics tech-lead.host-dies tech-lead.single-point workflow-tester.crash">
+    <heading>A crash stops memory and keeps saved state</heading>
+    <p>Actors live in process memory, so a crash stops every actor and keeps only what your program saved.</p>
+    <list>
+      <item><term>Host snapshots with <code>Host.restore</code></term><text><code>Host.restore</code> runs a snapshot in this process or another with <link to="guide-snapshots" section="what-it-holds">variables, queued events and pending timers</link>. <link to="guide-snapshots">One snapshot</link> holds two million actors in 165 MB.</text></item>
+      <item><term>Host-bound hibernation blobs</term><text>Each hibernated blob carries <link to="guide-hibernation" section="what-a-blob-holds">its host's random identity</link>, so a fresh host refuses blobs from another host. A host restored from the original host's snapshot accepts those blobs.</text></item>
+      <item><term>Input journal replay</term><text>A restored host starts at snapshot time and accepts blobs hibernated since. Your program <link to="guide-snapshots" section="replaying-inputs">replays all other inputs</link> after the snapshot from its own journal.</text></item>
+      <item><term>Application store ownership</term><text>tinyactors saves blobs through your store and takes snapshots when asked, <link to="guide-snapshots" section="restoring">restoring with matching options</link>. All storage I/O stays in <link href="https://github.com/tinyactors-dev/tinyactors/blob/main/README.md#layers-and-responsibilities">your application layer</link>.</text></item>
+      <item><term>Chart updates and missing actors</term><text><link to="guide-migration">Live migration</link> updates actors at rest to a new chart while keeping sessions, states and queues. A send to a hibernated actor wakes it, while a <link to="guide-missing-actors">send to an absent actor</link> fails immediately.</text></item>
+    </list>
   </section>
 
-  <section id="lock-in" answers="tech-lead.lock-in tech-lead.license tech-lead.check-portability">
-    <heading>Your charts are W3C SCXML documents</heading>
-    <p>A chart is a document in SCXML, a W3C standard. Your code meets tinyactors at events: inputs go in, and effects come out to your handlers.</p>
+  <section id="lock-in" answers="tech-lead.lock-in tech-lead.license tech-lead.test-suite tech-lead.same-everywhere tech-lead.check-portability agent-platform.why-scxml">
+    <heading>Portable charts and MIT license, build-bound snapshots</heading>
+    <p>Charts, event boundaries and the MIT license move across runtimes, whereas snapshots require matching memory layout.</p>
     <claims>
       <claim>
-        <statement>Charts follow the W3C standard</statement>
-        <p>The core passes all 191 automatic tests of the W3C's SCXML suite, and every binding runs the same suite.</p>
-        <source to="performance" section="correctness">Performance, "Correct by the standard"</source>
-        <source href="https://www.w3.org/TR/scxml/">W3C, State Chart XML (SCXML)</source>
+        <statement>W3C SCXML charts meet code at events</statement>
+        <p>Each chart is a W3C SCXML document rather than a proprietary format.</p>
+        <p>Your code meets tinyactors only at event boundaries: inputs go in, and effects come out to your handlers.</p>
+        <source href="https://www.w3.org/TR/scxml/">W3C, "State Chart XML (SCXML)"</source>
       </claim>
       <claim>
-        <statement>Every package is MIT licensed</statement>
-        <p>You may use, change and ship tinyactors, keeping its copyright and permission notice.</p>
+        <statement>Core passes all 191 W3C SCXML tests</statement>
+        <p>The C core passes all 191 automatic tests of the W3C SCXML conformance suite.</p>
+        <p>Every binding runs the same suite across Node.js, Python, C and <link to="guide-browser">browsers</link>.</p>
+        <source to="performance" section="correctness">Memory, capacity and performance, "Correct by the standard"</source>
+        <source href="https://www.w3.org/TR/scxml/">W3C, "State Chart XML (SCXML)"</source>
+      </claim>
+      <claim>
+        <statement>MIT license covers every tinyactors package</statement>
+        <p>Every package is MIT licensed, allowing you to use, change and ship tinyactors while keeping its copyright and permission notice.</p>
         <source href="https://github.com/tinyactors-dev/tinyactors/blob/main/LICENSE">tinyactors, <code>LICENSE</code></source>
       </claim>
       <claim>
-        <statement>Snapshots and blobs are tinyactors' own</statement>
-        <p>A snapshot restores only on a build with the same memory layout. Keep the data that must last in your database.</p>
-        <source to="guide-snapshots" section="restoring">Snapshots, "Restore with the same build"</source>
+        <statement>Snapshots require matching memory layout</statement>
+        <p>Snapshots and blobs use tinyactors' own format, and a snapshot restores only on a build with the same memory layout.</p>
+        <p>Keep data that must last in your own database.</p>
+        <source to="guide-snapshots" section="restoring">Snapshots, "Restore with the options the snapshot had"</source>
       </claim>
     </claims>
   </section>
 
   <section id="compare" answers="agent-platform.compare agent-platform.why-scxml workflow-tester.needs-cluster">
-    <heading>tinyactors runs where your program runs</heading>
-    <p>Each tool below keeps actor or workflow state somewhere. tinyactors keeps it in your process, and saves it to the store you give it.</p>
+    <heading>tinyactors runs SCXML directly inside your own hosts</heading>
+    <p>Temporal, Durable Objects and Rivet manage persistence or placement, whereas XState is inspired by SCXML.</p>
     <claims>
       <claim>
-        <statement>Temporal runs a service beside your program</statement>
-        <p>A Temporal Service is the Temporal Server with its persistence stores. Self-hosted, it runs on Docker, Kubernetes or by hand.</p>
-        <p>A tinyactors host is an object your program creates, so a test needs no Docker and no cluster.</p>
+        <statement>Temporal runs a server; tinyactors runs in-process</statement>
+        <p>Self-hosted Temporal runs Temporal Server and persistence stores on Docker, Kubernetes or by hand.</p>
+        <p>Your program creates a tinyactors host object directly for tests and runtime, handling journaling and <link to="guide-other-systems">cross-host transport</link>.</p>
         <source href="https://docs.temporal.io/temporal-service">Temporal, "Temporal Service"</source>
         <source href="https://docs.temporal.io/self-hosted-guide">Temporal, "Self-hosted Temporal Service guide"</source>
       </claim>
       <claim>
-        <statement>Durable Objects run on Cloudflare</statement>
+        <statement>Durable Objects place Workers; tinyactors uses your process</statement>
         <p>Cloudflare describes a Durable Object as a Worker that combines compute with storage, placed near its first request.</p>
-        <p>A tinyactors actor runs in any process that runs your program: a server or a browser tab.</p>
+        <p>A tinyactors actor runs inside any server or browser tab your program operates, with storage under your control.</p>
         <source href="https://developers.cloudflare.com/durable-objects/">Cloudflare, "Durable Objects"</source>
       </claim>
       <claim>
-        <statement>Rivet places its actors for you</statement>
-        <p>Rivet describes its actors as durable processes in your backend, placed by Rivet Cloud or your own control plane.</p>
-        <p>A tinyactors actor stays in the host that spawned it, and your program decides where each host runs.</p>
+        <statement>Rivet places durable processes; tinyactors pins to hosts</statement>
+        <p>Rivet describes its actors as durable processes in your backend, placed by Rivet Cloud or your control plane.</p>
+        <p>A tinyactors actor stays in the host that spawned it, and your program routes across hosts.</p>
         <source href="https://rivet.dev/docs/actors">Rivet, "Actors"</source>
       </claim>
       <claim>
-        <statement>XState is inspired by SCXML</statement>
-        <p>XState's README says it is inspired by the SCXML specification. tinyactors runs SCXML documents themselves, the same chart in every language.</p>
+        <statement>XState takes SCXML inspiration; tinyactors runs SCXML</statement>
+        <p>XState's README says it is inspired by the SCXML specification.</p>
+        <p>tinyactors runs SCXML documents themselves, the same chart in every language, and the C core passes 191 W3C tests.</p>
         <source href="https://github.com/statelyai/xstate">XState, <code>README.md</code></source>
+        <source to="performance" section="correctness">Memory, capacity and performance, "Correct by the standard"</source>
       </claim>
     </claims>
+    <actions>
+      <action to="guide-charts" section="first-chart">Write a first chart</action>
+      <action to="guide-testing">Test your charts</action>
+      <action to="performance">Check capacity numbers</action>
+    </actions>
   </section>
 </page>
