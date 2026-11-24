@@ -21,6 +21,7 @@
 /* ABI layout guards: fields crossing FFI must keep their offsets. */
 #define ABI_CHECK(c, m) typedef char abi_check_##m[(c) ? 1 : -1]
 ABI_CHECK(sizeof(ta_payload) == 8, payload_is_u64);
+ABI_CHECK(sizeof(ta_version) == 16 && offsetof(ta_version, abi) == 12, version_is_four_words);
 ABI_CHECK(sizeof(ta_image) == 256, image_view_fixed);
 ABI_CHECK(offsetof(ta_event_in, size) == 0, event_in_size_first);
 ABI_CHECK(offsetof(ta_event_in, session) == 16, event_in_session_offset);

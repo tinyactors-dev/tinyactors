@@ -942,6 +942,59 @@
     }
   ],
   "types": {
+    "ta_version": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "major",
+          "type": "uint32_t"
+        },
+        {
+          "name": "minor",
+          "type": "uint32_t"
+        },
+        {
+          "name": "patch",
+          "type": "uint32_t"
+        },
+        {
+          "name": "abi",
+          "type": "uint32_t"
+        }
+      ],
+      "layout": {
+        "x86_64": {
+          "size": 16,
+          "align": 4,
+          "offsets": {
+            "major": 0,
+            "minor": 4,
+            "patch": 8,
+            "abi": 12
+          }
+        },
+        "aarch64": {
+          "size": 16,
+          "align": 4,
+          "offsets": {
+            "major": 0,
+            "minor": 4,
+            "patch": 8,
+            "abi": 12
+          }
+        },
+        "wasm32": {
+          "size": 16,
+          "align": 4,
+          "offsets": {
+            "major": 0,
+            "minor": 4,
+            "patch": 8,
+            "abi": 12
+          }
+        }
+      }
+    },
     "ta_string_view": {
       "kind": "struct",
       "fields": [
@@ -10312,6 +10365,14 @@
           "type": "uint32_t"
         }
       ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "ta_library_version",
+      "returns": "ta_version",
+      "params": [],
       "public": true,
       "static_inline": false,
       "implemented": true

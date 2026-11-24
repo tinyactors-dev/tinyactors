@@ -25,8 +25,18 @@ static void test_unknown(void) {
     CHECK(ta_status_name(INT32_MAX) == NULL);
 }
 
+/* The library's version is the header's it was built with. */
+static void test_library_version(void) {
+    ta_version version = ta_library_version();
+    CHECK_EQUAL(version.major, TA_VERSION_MAJOR);
+    CHECK_EQUAL(version.minor, TA_VERSION_MINOR);
+    CHECK_EQUAL(version.patch, TA_VERSION_PATCH);
+    CHECK_EQUAL(version.abi, TA_ABI_VERSION);
+}
+
 int main(void) {
     RUN(test_names);
+    RUN(test_library_version);
     RUN(test_unknown);
     TEST_MAIN_END();
 }

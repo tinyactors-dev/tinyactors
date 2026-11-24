@@ -51,6 +51,14 @@ extern "C" {
 
 #define TA_ABI_VERSION 1u
 
+/* The version of the library a program runs with, which can differ from the
+ * header it was compiled against (TA_VERSION_*, TA_ABI_VERSION) when the
+ * library is a shared one: compare the two at startup. */
+typedef struct ta_version {
+    uint32_t major, minor, patch;
+    uint32_t abi;
+} ta_version;
+
 /* "no index" sentinel for u32 indices/offsets (not for handles, which use 0). */
 #define TA_NIL UINT32_C(0xFFFFFFFF)
 
@@ -126,6 +134,9 @@ enum {
  * NUL-terminated text for its lifetime; no allocation or formatting occurs.
  * This names statuses, not run statuses or application-defined errors. */
 TA_API const char *ta_status_name(ta_status status);
+
+/* The library's own TA_VERSION_* and TA_ABI_VERSION, as it was built. */
+TA_API ta_version ta_library_version(void);
 
 /* Host-defined monotonic time unit (config.ticks_per_second). */
 typedef uint64_t ta_time;

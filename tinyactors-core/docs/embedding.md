@@ -17,6 +17,10 @@ the headers (`include/tinyactors/host.h`, `datamodel.h`, `cbor.h`,
 - **A compiled image.** `ta_compile_charts` or `ta_compile_system`
   (`compile.h`) turn SCXML into `.tai` bytes (`ta_compile_image`); the
   `tac` command line tool does the same offline.
+- **The library's version.** A program linked against a shared
+  library can run with another build than the header it was compiled
+  against: compare `ta_library_version()` (`types.h`) with the header's
+  `TA_VERSION_*` and `TA_ABI_VERSION` at startup.
 - **A host** (`host.h`): many systems as one actor system, one per image
   version. `ta_host_create` takes a config as one CBOR map
   ([host-config.md](host-config.md)) and an environment struct: the
