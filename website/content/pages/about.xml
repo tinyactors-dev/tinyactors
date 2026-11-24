@@ -1,12 +1,62 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <page xmlns="https://www.tinyactors.dev/ns/site" id="about" path="/about/">
   <title>Why tinyactors exists</title>
-  <description>Why tinyactors exists, in its author's words.</description>
+  <description>Why tinyactors exists, who maintains it, its license, where its source is and how it is released.</description>
   <purpose kind="explanation" for="tech-lead agent-platform"/>
 
   <hero>
     <headline>Model <em>every</em> system as a statechart</headline>
-    <lede>To do</lede>
+    <lede>tinyactors runs SCXML charts as actors inside programs that already chose their I/O, threads and memory. It is MIT licensed and maintained by <link href="https://x.com/_dhamidi">_dhamidi</link> at <link href="https://ampcode.com">Amp</link>.</lede>
     <author src="../images/dhamidi.jpg" href="https://github.com/dhamidi">Dario Hamidi</author>
   </hero>
+
+  <section id="why">
+    <heading>Give stateful logic one home</heading>
+    <p>The state of a live websocket connection, with its retries, reconnects and timeouts, often has no clear home in a system. An actor models how one connection behaves, without the whole system in your head.</p>
+    <p>The core does no I/O, starts no threads and allocates no memory itself. So it embeds in a runtime that already decided all three.</p>
+    <claims>
+      <claim>
+        <statement>The core uses no C library</statement>
+        <p>Your program gives it an allocator, performs its effects and tells it the time.</p>
+        <source href="https://github.com/tinyactors-dev/tinyactors/blob/main/README.md">tinyactors, <code>README.md</code></source>
+      </claim>
+    </claims>
+  </section>
+
+  <section id="maintainer" answers="tech-lead.maintainer">
+    <heading>Maintained by _dhamidi at Amp</heading>
+    <p>tinyactors is maintained by <link href="https://x.com/_dhamidi">_dhamidi</link> at <link href="https://ampcode.com">Amp</link>. Its license names Dario Hamidi as the copyright holder.</p>
+  </section>
+
+  <section id="license" answers="tech-lead.license">
+    <heading>Use it under the MIT license</heading>
+    <p>You may use, change and ship tinyactors in any program, keeping its copyright and permission notice.</p>
+    <claims>
+      <claim>
+        <statement>Every package is MIT licensed</statement>
+        <p>The repository's license covers the C core, and the Node.js and Python packages declare MIT too.</p>
+        <source href="https://github.com/tinyactors-dev/tinyactors/blob/main/LICENSE">tinyactors, <code>LICENSE</code></source>
+        <source href="https://github.com/tinyactors-dev/tinyactors/blob/main/tinyactors-napi/package.json">tinyactors-napi, <code>package.json</code></source>
+        <source href="https://github.com/tinyactors-dev/tinyactors/blob/main/tinyactors-cpython/pyproject.toml">tinyactors-cpython, <code>pyproject.toml</code></source>
+      </claim>
+    </claims>
+  </section>
+
+  <section id="source" answers="tech-lead.test-suite">
+    <heading>Read the source and its tests</heading>
+    <p>One repository holds the C core, the Node.js and Python packages, the conformance suite and this site. Every binding runs the same suite.</p>
+    <actions>
+      <action href="https://github.com/tinyactors-dev/tinyactors">Read the source</action>
+      <action to="performance" section="correctness">See the test results</action>
+    </actions>
+  </section>
+
+  <section id="releases" answers="tech-lead.release-history">
+    <heading>Follow each release in the changelog</heading>
+    <p>Each package is released on its own. Its changelog says what changed in each release and how to upgrade.</p>
+    <p>The API is still changing: <link href="https://github.com/tinyactors-dev/tinyactors/blob/main/README.md#status">the README</link> says breaking changes are made frequently to land on a good API.</p>
+    <actions>
+      <action to="changelog">Read the changelog</action>
+    </actions>
+  </section>
 </page>

@@ -125,7 +125,7 @@
   </packages>
 
   <footer>
-    <note>tinyactors is MIT licensed, runs W3C <link href="https://www.w3.org/TR/scxml/">SCXML</link> charts and connects to your code through events.</note>
+    <note>tinyactors is MIT licensed and maintained by <link href="https://x.com/_dhamidi">_dhamidi</link> at <link href="https://ampcode.com">Amp</link>. It runs W3C <link href="https://www.w3.org/TR/scxml/">SCXML</link> charts and connects to your code through events.</note>
     <links>
       <link href="https://github.com/tinyactors-dev/tinyactors">Source</link>
       <link href="https://www.npmjs.com/package/@tinyactors/node">npm</link>
