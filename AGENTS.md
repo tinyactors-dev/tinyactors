@@ -202,12 +202,19 @@ order they run in, or on a fixed port or file path: listen on port 0,
 write to a temporary directory. A test that compares timings runs alone,
 in a task of its own, not in a parallel list.
 
-## The libraries are private: change APIs in place
+## Before 1.0: change APIs in place
 
-Every caller of every library in this repo is in this repo: the C layers
-of `tinyactors-core`, its tools, `tinyxml`, `tinyparse` and `staticjs`.
-Nothing is published, so no outside code depends on an API or ABI staying
-the same.
+The libraries are released, but at 0.x versions: core's C libraries on
+GitHub (`tinyactors-core/docs/distribution.md`), `@tinyactors/node` on npm
+and `tinyactors` on PyPI. Outside code may call them, and a 0.x release
+promises it nothing: under semver, any minor release may break it. The callers we
+know of are in this repo: the C layers of `tinyactors-core`, its tools,
+the bindings, `tinyxml`, `tinyparse` and `staticjs`. So until 1.0 a cleaner API wins over compatibility, and the
+changelog carries the cost for outside callers: a breaking change has
+`!` in its commit subject, and its body says what a caller does, which
+the release's "Upgrading" text is written from ("Releases and
+changelogs"). What 1.0 freezes, and how a frozen API then changes, is not
+decided yet; this section is replaced when it is.
 
 - **Change an API in place, and migrate every caller in the same change.**
   When a function needs a new parameter, a params struct or different

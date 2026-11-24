@@ -105,11 +105,11 @@ is in `mise/lib/`. There is one runtime (Ruby 4, pinned) and one task
 runner. **Why:** one language for every script means one way to
 structure and check them; static analysis only needs one grammar.
 
-## 9. The libraries are private
+## 9. The build libraries are private
 
 Every caller of every build library is in this repository. Change an API
 in place and move every caller in the same change; no `_v2`, no wrapper,
-no shim (`AGENTS.md`, "The libraries are private").
+no shim (`AGENTS.md`, "Before 1.0: change APIs in place").
 
 ## 10. Static checks are ast-grep rules with tests
 
