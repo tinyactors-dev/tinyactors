@@ -180,7 +180,7 @@ quickjs (`ta_datamodel_ecmascript_new`,
 
 | Field | Default | What it bounds |
 |---|---|---|
-| `max_ops` | 1,000,000 | the engine's interrupt checks one evaluation may make |
+| `max_ops` | `TA_DATAMODEL_ECMASCRIPT_MAX_OPS_DEFAULT`, 10,000 (the engine checks every 10,000 operations: about 10^8 operations, a second or two of a busy loop) | the engine's interrupt checks one evaluation may make |
 | `memory_limit` | `TA_DATAMODEL_ECMASCRIPT_MEMORY_LIMIT_DEFAULT`, 1 GiB; `SIZE_MAX`: none | bytes of the whole engine, every actor of the host together |
 | `stack_limit` | the engine's | bytes of native stack for JavaScript |
 

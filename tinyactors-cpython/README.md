@@ -634,7 +634,8 @@ Values that leave the process are encoded by your program (below,
   a chart inside SCXML's scope rules and nothing more. A chart in Python
   runs in your interpreter, cannot be preempted in the middle of an
   expression, and nothing limits its memory. quickjs, by contrast, has an
-  operation limit (1,000,000 interrupt checks an evaluation) and its own
+  operation limit (10,000 interrupt checks an evaluation, about 10^8
+  operations) and its own
   allocator, limited to 1 GiB for the host's engine, every actor
   together: an evaluation that allocates past it ends in
   `error.execution` with reason `"memory"`, and the process goes on.

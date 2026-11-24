@@ -121,13 +121,15 @@ us for `while (true) {}`, 250 us for `spin.scxml`'s `while
 (_event.data.value !== null) {}`, which reads a property in each round.
 So:
 
-| Loop | `maxOps: 200` (this platform) | the engine's default, 1,000,000 |
+| Loop | `maxOps: 200` (this platform) | `maxOps: 1,000,000` (the engine's default when measured) |
 |---|---|---|
 | `while (true) {}` | 5.4 ms (node), 5.3 ms (bun) | 26.6 s (node), 25.9 s (bun) |
 | `spin.scxml`'s loop | 49 ms (node), 48 ms (bun) | 256 s (node, once; 50, 529 and 5074 ms at 200, 2000 and 20,000) |
 
-The host runs on the thread every host of the process shares, so while a
-rule spins nothing else runs: another customer's alert, sent at the same
+The engine's default is now 10,000 checks, a hundredth of that: about
+0.27 s for `while (true) {}` and 2.6 s for `spin.scxml`'s loop by the
+same costs per check. The host runs on the thread every host of the
+process shares, so while a rule spins nothing else runs: another customer's alert, sent at the same
 moment, waited 54 to 73 ms. With the default it would wait minutes; that
 is the number to set `maxOps` against, and why the platform suspends a
 rule after 3 errors. A regular expression that backtracks exponentially,

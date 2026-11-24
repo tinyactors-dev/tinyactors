@@ -60,7 +60,7 @@ typedef struct ta_datamodel_ecmascript ta_datamodel_ecmascript;
 
 typedef struct ta_datamodel_ecmascript_config {
     uint32_t size;
-    uint32_t max_ops;    /* interrupt checks per evaluation before abort; 0 = 1,000,000 */
+    uint32_t max_ops;    /* interrupt checks per evaluation before abort; 0 = the default */
     size_t memory_limit; /* bytes for the whole JS runtime; 0 = the default,
                             TA_DATAMODEL_ECMASCRIPT_MEMORY_LIMIT_DEFAULT; SIZE_MAX: none */
     size_t stack_limit;  /* bytes of native stack for JS; 0 = engine default */
@@ -80,6 +80,12 @@ typedef struct ta_datamodel_ecmascript_config {
  * example and suite case of the repository fits in it with room: the
  * largest peak measured was 112 MB (40,000 resident actors). */
 #define TA_DATAMODEL_ECMASCRIPT_MEMORY_LIMIT_DEFAULT ((size_t)1 << 30)
+
+/* The default max_ops: interrupt checks one evaluation may make. quickjs
+ * checks every 10,000 operations, so this stops a busy loop after about
+ * 10^8 operations, a second or two, rather than holding the host for
+ * minutes; a chart whose evaluations do more raises it. */
+#define TA_DATAMODEL_ECMASCRIPT_MAX_OPS_DEFAULT 10000u
 
 #define TA_DATAMODEL_ECMASCRIPT_REALM_AUTO     0u
 #define TA_DATAMODEL_ECMASCRIPT_REALM_ISOLATED 1u

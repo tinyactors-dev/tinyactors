@@ -63,7 +63,7 @@ datamodel it is a `TypeError`):
 
 | Option | Default | What it bounds |
 |---|---|---|
-| `maxOps` | 1,000,000 | the engine's interrupt checks one evaluation may make before it is stopped |
+| `maxOps` | 10,000 | the engine's interrupt checks one evaluation may make before it is stopped |
 | `memoryLimit` | 1 GiB (`2 ** 30`) | bytes for the whole engine, every actor of the host together |
 | `stackLimit` | the engine's | bytes of native stack for JavaScript |
 | `realm` | `'auto'` | `'isolated'` gives every actor a context of its own (below) |
@@ -83,13 +83,14 @@ the host (and every host of the thread, since they share it), measured
 on x86_64 Linux, Intel Xeon @ 2.10GHz, node 22 and bun 1.4.1 alike
 (2026-10-18):
 
-| Loop | `maxOps: 200` | `1000` | `10_000` | the default, 1,000,000 |
+| Loop | `maxOps: 200` | `1000` | `10_000`, the default | 1,000,000 |
 |---|---|---|---|---|
 | `while (true) {}` | 6 ms | 27 to 39 ms | 260 ms | 26 s |
 | `while (_event.data.value !== null) {}` | 50 ms | 240 to 250 ms | 2.5 to 2.7 s | about 256 s |
 
 So a check costs 26 to 250 microseconds here, and the default lets one
-runaway evaluation stop the process's hosts for minutes. Choose `maxOps`
+runaway evaluation stop the process's hosts for a quarter of a second to
+a few seconds. Choose `maxOps`
 by the longest stall your other actors can take: a few hundred (5 to 50
 ms) for a service that answers requests, 1000 (about 25 to 250 ms) for
 background work, and measure your own charts' real work against it,

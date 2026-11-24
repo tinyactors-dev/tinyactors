@@ -9,6 +9,10 @@
   ],
   "constants": [
     {
+      "name": "TA_DATAMODEL_ECMASCRIPT_MAX_OPS_DEFAULT",
+      "value": 10000
+    },
+    {
       "name": "TA_DATAMODEL_ECMASCRIPT_MEMORY_LIMIT_DEFAULT",
       "value": 1073741824
     },

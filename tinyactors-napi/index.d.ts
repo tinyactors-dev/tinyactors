@@ -594,8 +594,8 @@ export type Handled = unknown;
 /** The quickjs sandbox's limits. Absent: the engine's default. */
 export interface QuickJSOptions {
   /** Interrupt checks one evaluation may make before it is stopped with
-   * `error.execution` (default 1,000,000, which lets a busy loop run for
-   * many seconds). */
+   * `error.execution` (default 10,000: the engine checks every 10,000
+   * operations, so a busy loop runs for a second or two). */
   maxOps?: number;
   /** Bytes for the whole engine, every actor together (default 1 GiB,
    * `2 ** 30`; `Number.MAX_SAFE_INTEGER` is as good as none). An

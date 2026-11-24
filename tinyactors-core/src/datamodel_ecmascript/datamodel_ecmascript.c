@@ -3468,7 +3468,7 @@ ta_datamodel_ecmascript *ta_datamodel_ecmascript_new(const ta_datamodel_ecmascri
         free(ecmascript);
         return NULL;
     }
-    ecmascript->max_ops = config && config->max_ops ? config->max_ops : 1000000;
+    ecmascript->max_ops = config && config->max_ops ? config->max_ops : TA_DATAMODEL_ECMASCRIPT_MAX_OPS_DEFAULT;
     ta_datamodel_ecmascript_set_memory_limit(ecmascript, config ? config->memory_limit : 0);
     ecmascript->stack_size =
         config && config->stack_limit ? config->stack_limit : JS_DEFAULT_STACK_SIZE;
