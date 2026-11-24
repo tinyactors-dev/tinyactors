@@ -14,6 +14,7 @@ const char *ta_status_name(ta_status status) {
     case TA_ERROR_UNSUPPORTED: return "TA_ERROR_UNSUPPORTED";
     case TA_ERROR_FATAL: return "TA_ERROR_FATAL";
     case TA_ERROR_ABORTED: return "TA_ERROR_ABORTED";
+    case TA_ERROR_LIMIT: return "TA_ERROR_LIMIT";
     default: return NULL;
     }
 }

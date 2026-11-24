@@ -598,6 +598,11 @@ ta_status ta_actor_write_export(ta_system *system, uint32_t actor, ta_output *ou
     }
     ta_output_patch(out, start, (ta_bytes){&h, sizeof h});
     if (!ta_output_fits(out)) return TA_ERROR_NO_MEMORY; /* nothing changed */
+    for (uint32_t m = root; m != TA_NIL; m = tree_next(system, root, m)) {
+        uint64_t serial = ta_actor_at(system, m)->serial;
+        if (serial > system->config.first_serial && serial <= system->config.last_serial)
+            system->serials_exported = 1; /* it lives on elsewhere: its id is not handed out again */
+    }
     for (uint32_t m = leftmost_leaf(system, root), nx; m != TA_NIL; m = nx) {
         nx = post_next(system, root, m); /* before m goes */
         leave(system, m);

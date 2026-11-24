@@ -25,6 +25,7 @@ void ta_system_config_normalize(const ta_image_view *view, const ta_system_confi
     if (in)
         ta_memcpy(config, in, in->size && in->size < sizeof *config ? in->size : sizeof *config);
     config->size = sizeof *config;
+    if (!config->last_serial) config->last_serial = UINT64_MAX;
     if (!config->max_actors) config->max_actors = 64;
     if (!config->max_events) config->max_events = 256;
     if (!config->max_timers) config->max_timers = 64;
@@ -318,6 +319,7 @@ ta_status ta_system_init(const ta_system_setup *setup, ta_system **out) {
     if (!memory || !view->base) return TA_ERROR_INVALID;
     ta_system_config normalized;
     ta_system_config_normalize(view, config, &normalized);
+    if (normalized.last_serial <= normalized.first_serial) return TA_ERROR_INVALID; /* no ids */
     ta_arena arena;
     carved o;
     ta_system *system = place(memory, length, view, &normalized, &o, &arena);
@@ -633,6 +635,35 @@ static void trace_spawn(ta_system *system, uint32_t index, ta_instance *instance
     ta_trace_record_commit(core->journal, record);
 }
 
+/* The next session id: after the last one handed out, in the range
+ * (first_serial, last_serial]; past its end they start again at its
+ * beginning, skipping the sessions the system holds (a hibernated one keeps
+ * its record, so it is skipped too). Once a session of the range was
+ * exported, it may live on in another system with its id, which this one
+ * cannot see: from then on only ids above any handed out before are given,
+ * and past the end TA_ERROR_LIMIT. TA_ERROR_LIMIT too for a range every id of
+ * which is held. Expected O(1) a call: the system holds far fewer sessions
+ * than its range has ids, so a run of held ids is short. */
+static ta_status serial_next(ta_system *system, uint64_t *out) {
+    uint64_t first = system->config.first_serial, last = system->config.last_serial;
+    uint64_t serial = system->next_serial;
+    if (system->serials_exported && serial < system->serial_high) serial = system->serial_high;
+    for (uint64_t looked = 0; looked < last - first; looked++) {
+        if (serial >= last) {
+            if (system->serials_exported) return TA_ERROR_LIMIT;
+            serial = first;
+        }
+        serial++;
+        if (ta_system_session_lookup(system, serial) == TA_NIL) {
+            system->next_serial = serial;
+            if (serial > system->serial_high) system->serial_high = serial;
+            *out = serial;
+            return TA_OK;
+        }
+    }
+    return TA_ERROR_LIMIT;
+}
+
 uint32_t ta_system_spawn_actor(ta_system *system, uint32_t chart, ta_string_view name,
                                ta_payload params, uint32_t parent, uint32_t parent_slot,
                                ta_string_view traceparent, ta_status *status) {
@@ -647,13 +678,19 @@ uint32_t ta_system_spawn_actor(ta_system *system, uint32_t chart, ta_string_view
         *status = TA_ERROR_NO_MEMORY;
         return TA_NIL;
     }
+    uint64_t serial = 0;
+    *status = serial_next(system, &serial); /* the new slot is not in the session index yet */
+    if (*status != TA_OK) {
+        ta_pool_free(&system->actors, index);
+        return TA_NIL;
+    }
     ta_actor *actor = ta_actor_at(system, index);
     ta_memset(actor, 0, sizeof *actor);
     actor->next = TA_NIL;
     actor->mailbox_head = actor->mailbox_tail = actor->timers = TA_NIL;
     actor->parent = parent;
     actor->parent_slot = parent_slot;
-    actor->serial = ++system->next_serial;
+    actor->serial = serial;
     actor->name = TA_NIL;
     actor->instance = ta_slab_alloc(&system->slab, ta_core_chart_instance_size(core, chart));
     ta_string_view cname =
@@ -687,6 +724,7 @@ uint32_t ta_system_spawn_actor(ta_system *system, uint32_t chart, ta_string_view
     ta_system_name_insert(system, index);
     core->chart_stats[chart].actors++;
     core->chart_stats[chart].spawned++;
+    system->stats_spawned++;
     trace_spawn(system, index, ta_actor_instance(system, actor), parent, traceparent);
     actor->state = TA_ACTOR_IDLE;
     actor->flags |= ACTOR_FLAG_TOUCHED;
@@ -795,8 +833,10 @@ ta_status ta_system_spawn(ta_system *system, const ta_spawn *spawn, uint32_t *ac
 
 ta_status ta_system_set_next_serial(ta_system *system, uint64_t serial) {
     GUARD(system);
-    if (serial < system->next_serial) return TA_ERROR_INVALID; /* ids are never reused */
+    if (serial < system->config.first_serial || serial > system->config.last_serial)
+        return TA_ERROR_INVALID;
     system->next_serial = serial;
+    if (serial > system->serial_high) system->serial_high = serial; /* ids up to it are spoken for */
     return TA_OK;
 }
 
@@ -837,7 +877,7 @@ void ta_system_stats_get(const ta_system *system, ta_system_stats *o) {
     z.fuel = system->stats_fuel;
     z.turns = system->stats_turns;
     z.timers_fired = system->stats_timers;
-    z.spawned = system->next_serial;
+    z.spawned = system->stats_spawned;
     z.now = system->now;
     z.hibernated = system->hibernated_count;
     z.wakes_pending = system->pending_wake_count;

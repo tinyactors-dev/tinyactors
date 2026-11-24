@@ -72,7 +72,7 @@ typedef struct ta_system_config {
     uint32_t flags; /* TA_SYSTEM_SHARED_BASE */
     uint64_t ticks_per_second;
     const ta_io_processor_entry *io_processors; /* borrowed for the system's life */
-    uint64_t first_serial; /* session ids start after this (default 0: 1, 2, ...) */
+    uint64_t first_serial; /* session ids start after this (default 0: 1, 2, ...); last_serial below */
     /* Tracing (docs/adr/0006 in the repository root): on by default, at full
      * detail. TA_TRACING_DISABLED carves nothing for it. */
     uint32_t tracing;        /* TA_TRACING_ENABLED (0) / TA_TRACING_DISABLED */
@@ -94,6 +94,14 @@ typedef struct ta_system_config {
      * TA_EFFECT_SEND for the SCXML processor (io_processor 0, the target the
      * full URI); without a base it is error.execution. */
     ta_string_view base;
+    /* The last session id of the system's range (first_serial, last_serial]
+     * (0: UINT64_MAX). Past it ids start again at first_serial + 1, skipping
+     * the sessions the system holds (hibernated ones too): an id names one
+     * live session, and may name a new one once the range has been used up.
+     * Once a session of the range was exported (a migration), it may live on
+     * elsewhere with its id: the system then hands out only ids above any it
+     * gave before, and past the end refuses spawns with TA_ERROR_LIMIT. */
+    uint64_t last_serial;
 } ta_system_config;
 /* TA_SYSTEM_SHARED_BASE: the base is shared by several systems (the
  * segments of a host, ta_system_adopt), each creating sessions from its own
@@ -508,11 +516,11 @@ typedef struct ta_blob_migration {
 TA_API ta_status ta_blob_migrate(const ta_blob_migration *migration, ta_buffer *out);
 TA_API ta_status ta_system_adopt(ta_system *system, ta_bytes blob, uint32_t *actor);
 
-/* Sessions created from now on (spawns, invocations) get ids after `serial`.
+/* Sessions created from now on (spawns, invocations) get ids after `serial`,
+ * skipping the sessions the system holds, as they do past the range's end.
  * For hosts that keep sessions outside the system and allocate their ids
- * themselves (the PostgreSQL binding draws invoked children's ids from a
- * sequence). IDs only grow: TA_ERROR_INVALID if `serial` is below the last id
- * handed out. */
+ * themselves. TA_ERROR_INVALID if `serial` is outside [first_serial,
+ * last_serial]. */
 TA_API ta_status ta_system_set_next_serial(ta_system *system, uint64_t serial);
 
 TA_API ta_status ta_system_snapshot(const ta_system *system, ta_buffer *out);

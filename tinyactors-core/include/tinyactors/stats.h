@@ -33,7 +33,7 @@ typedef struct ta_system_stats {
     uint64_t fuel;         /* work units consumed by ta_system_run */
     uint64_t turns;        /* actor scheduling turns */
     uint64_t timers_fired; /* delayed sends that came due */
-    uint64_t spawned;      /* sessions created (last session id) */
+    uint64_t spawned;      /* sessions created (spawns and invocations) */
     ta_time now;
     uint32_t hibernated; /* actors currently unloaded */
     uint32_t wakes_pending;

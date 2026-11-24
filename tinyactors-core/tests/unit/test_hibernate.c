@@ -769,7 +769,58 @@ static void test_wake_queue_unlinks(void) {
     tsys_free(&t);
 }
 
+/* Session ids wrap around their range, skipping the sessions the system
+ * holds, a hibernated one included; a system a session of its range was
+ * exported from does not start again. A range of three ids: 1, 2, 3. */
+static uint64_t serial_of(test_system *t, uint32_t actor) {
+    ta_actor_info info;
+    info.size = sizeof info;
+    CHECK_EQUAL(ta_actor_info_get(t->system, actor, &info), TA_OK);
+    return info.serial;
+}
+static uint32_t spawn_one(test_system *t, ta_status *status) {
+    uint32_t actor = 0;
+    ta_spawn spawn = {0, 0, {0, 0}, 0, {0, 0}};
+    *status = ta_system_spawn(t->system, &spawn, &actor);
+    return actor;
+}
+static void test_session_ids_wrap_around_their_range(void) {
+    test_system t;
+    ta_system_config config = test_system_config();
+    config.last_serial = 3;
+    CHECK(tsys_init(&t, NULLSC("initial='a'><state id='a'/>"), NULL, &config));
+    ta_status status;
+    uint32_t first = spawn_one(&t, &status), second = spawn_one(&t, &status), third = spawn_one(&t, &status);
+    CHECK_EQUAL(serial_of(&t, first), 1u);
+    CHECK_EQUAL(serial_of(&t, third), 3u);
+    run_all(&t);
+    CHECK_EQUAL(ta_system_terminate(t.system, second), TA_OK);
+    run_all(&t);
+    hibernate(&t, first, &status); /* hibernated: its id is still held */
+    CHECK_EQUAL(status, TA_OK);
+    uint32_t fourth = spawn_one(&t, &status);
+    CHECK_EQUAL(status, TA_OK);
+    CHECK_EQUAL(serial_of(&t, fourth), 2u); /* past 3: 1 is held, 2 is free */
+    spawn_one(&t, &status);
+    CHECK_EQUAL(status, TA_ERROR_LIMIT); /* 1, 2 and 3 are all held */
+    CHECK_EQUAL(stats(t.system).spawned, 4u);
+    /* an export: the exported session keeps id 3 elsewhere, so the system
+     * hands out no id it gave before, though 3 is free here */
+    run_all(&t);
+    ta_buffer out = {blob, sizeof blob, 0};
+    CHECK_EQUAL(ta_actor_export(t.system, third, &out), TA_OK);
+    spawn_one(&t, &status);
+    CHECK_EQUAL(status, TA_ERROR_LIMIT);
+    tsys_free(&t);
+    config.last_serial = config.first_serial = 5; /* an empty range */
+    memset(&t, 0, sizeof t);
+    CHECK(!tsys_init(&t, NULLSC("initial='a'><state id='a'/>"), NULL, &config));
+    t.system = NULL;
+    tsys_free(&t);
+}
+
 int main(void) {
+    RUN(test_session_ids_wrap_around_their_range);
     RUN(test_roundtrip_and_single_wake);
     RUN(test_watch_ends_with_hibernation);
     RUN(test_timer_wakes_actor);

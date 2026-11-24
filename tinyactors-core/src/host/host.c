@@ -653,6 +653,8 @@ ta_status ta_host_add_image(ta_host *host, ta_bytes bytes, uint32_t *segment) {
     segment_record->config.base = (ta_string_view){host->base, host->base_length};
     segment_record->config.flags = TA_SYSTEM_SHARED_BASE;
     segment_record->config.first_serial = (uint64_t)index << SERIALS_SHIFT;
+    /* its range: what host_locate reads from the id's high bits */
+    segment_record->config.last_serial = segment_record->config.first_serial + 0xFFFFFFFFu;
     /* segments draw different trace IDs from one seed */
     segment_record->config.trace_seed =
         host->config.system.trace_seed + (uint64_t)index * 0x9E3779B97F4A7C15ull;

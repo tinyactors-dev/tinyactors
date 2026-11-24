@@ -18,7 +18,7 @@
  * of parked spawns, 6 with the index of actor names, 7 with each actor's count
  * of requests, 8 with the wake queue linked both ways, 9 with each actor's
  * note of its last hibernation; a snapshot of another is refused. */
-#define TA_SYSTEM_VERSION      9u
+#define TA_SYSTEM_VERSION      10u
 #define TA_MAX_DATAMODELS      8u
 #define TA_EXTERNAL_INVOKE_BIT (1u << 23) /* in a child handle: external invoke token */
 /* slab byte budgets stay below 4 GiB so page arithmetic cannot overflow u32 */
@@ -148,7 +148,11 @@ struct ta_system {
      * done_event hook), for the ta_system_done of the same step: its index
      * + 1, 0 between steps */
     uint32_t done_event;
-    uint64_t now, sequence, next_serial;
+    /* 1 once a session of the range was exported: only ids above serial_high,
+     * the highest handed out, are handed out from then on (ta_system_config,
+     * last_serial) */
+    uint32_t serials_exported;
+    uint64_t now, sequence, next_serial, serial_high;
     uint64_t stats_delivered, stats_fuel, stats_turns, stats_timers, stats_spawned,
         stats_traces_started, stats_traces_sampled; /* ta_system_stats */
     /* tracing (docs/adr/0006): the journal and the context pool (carved only

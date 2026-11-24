@@ -126,7 +126,8 @@ enum {
     TA_ERROR_STATE = -6,     /* call not legal in current state (e.g. re-entrancy) */
     TA_ERROR_UNSUPPORTED = -7,
     TA_ERROR_FATAL = -8,
-    TA_ERROR_ABORTED = -9 /* the host's abort flag stopped the call (e.g. a compile) */
+    TA_ERROR_ABORTED = -9, /* the host's abort flag stopped the call (e.g. a compile) */
+    TA_ERROR_LIMIT = -10   /* a fixed limit is reached: no growth or retry gives room */
 };
 
 /* Use in diagnostics when reporting a ta_status: the exact constant name

@@ -267,7 +267,7 @@ frees the host, and drops every handler that was still waiting.
 ### Actors, sessions and addresses
 
 `spawn` returns an **`Actor`**: the host it lives in and its **session**,
-`actor.id`, a `bigint` unique in its host. The actor takes inputs itself
+`actor.id`, a `bigint` that names one live actor of its host. The actor takes inputs itself
 (`actor.send(event, data)`, `actor.terminate()`), answers the typed
 methods as promises (`await actor.state()`, `actor.context()`,
 `actor.get()`), and `actor.done` settles with its donedata when it ends.

@@ -11,8 +11,11 @@
  *
  * A ta_host owns *segments*: one ta_system per image. All segments share one
  * base URI and one set of datamodel bindings; segment k creates sessions
- * k * 2^32 + 1, ... so a session id names an actor host-wide, for its whole
- * life — also after it migrated to another segment.
+ * k * 2^32 + 1 to k * 2^32 + 2^32 - 1, so a session id names an actor
+ * host-wide, for its whole life — also after it migrated to another
+ * segment. Past the end of its range a segment starts again at its
+ * beginning, skipping the sessions it holds (ta_system_config.last_serial):
+ * an id kept after its session ended may name a new session then.
  *
  *   versions   ta_host_add_image() adds a segment running a copy of an image
  *              the host keeps; its charts become the current version of their
@@ -217,7 +220,10 @@ TA_API uint64_t ta_host_actor_by_name(const ta_host *h, ta_string_view name);
 
 /* Spawn in (spawn->segment, spawn->chart) — usually the current version
  * (ta_host_chart). A name longer than TA_SYSTEM_MAX_STRING (system.h) is
- * TA_ERROR_INVALID: nothing is allocated and no segment grows for it. */
+ * TA_ERROR_INVALID: nothing is allocated and no segment grows for it.
+ * TA_ERROR_LIMIT when the segment has no session id left: every id of its
+ * range is held, or a session migrated out of it and the range is used up
+ * (ta_system_config.last_serial). */
 TA_API ta_status ta_host_spawn(ta_host *h, const ta_spawn *spawn, uint64_t *session);
 /* Where a session lives now: its segment and its actor handle there. */
 typedef struct ta_host_location {

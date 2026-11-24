@@ -325,6 +325,10 @@
       "value": -3
     },
     {
+      "name": "TA_ERROR_LIMIT",
+      "value": -10
+    },
+    {
       "name": "TA_ERROR_NO_MEMORY",
       "value": -4
     },
@@ -5006,11 +5010,15 @@
         {
           "name": "base",
           "type": "ta_string_view"
+        },
+        {
+          "name": "last_serial",
+          "type": "uint64_t"
         }
       ],
       "layout": {
         "x86_64": {
-          "size": 128,
+          "size": 136,
           "align": 8,
           "offsets": {
             "size": 0,
@@ -5036,10 +5044,42 @@
             "trace_seed": 96,
             "identity": 104,
             "identity_pad": 108,
-            "base": 112
+            "base": 112,
+            "last_serial": 128
           }
         },
         "aarch64": {
+          "size": 136,
+          "align": 8,
+          "offsets": {
+            "size": 0,
+            "max_actors": 4,
+            "max_events": 8,
+            "max_timers": 12,
+            "workspaces": 16,
+            "max_requests": 20,
+            "outbox": 24,
+            "quantum": 28,
+            "instance_bytes": 32,
+            "string_bytes": 36,
+            "io_processor_count": 40,
+            "flags": 44,
+            "ticks_per_second": 48,
+            "io_processors": 56,
+            "first_serial": 64,
+            "tracing": 72,
+            "trace_bytes": 76,
+            "trace_contexts": 80,
+            "trace_rules": 84,
+            "trace_policy": 88,
+            "trace_seed": 96,
+            "identity": 104,
+            "identity_pad": 108,
+            "base": 112,
+            "last_serial": 128
+          }
+        },
+        "wasm32": {
           "size": 128,
           "align": 8,
           "offsets": {
@@ -5066,37 +5106,8 @@
             "trace_seed": 96,
             "identity": 104,
             "identity_pad": 108,
-            "base": 112
-          }
-        },
-        "wasm32": {
-          "size": 120,
-          "align": 8,
-          "offsets": {
-            "size": 0,
-            "max_actors": 4,
-            "max_events": 8,
-            "max_timers": 12,
-            "workspaces": 16,
-            "max_requests": 20,
-            "outbox": 24,
-            "quantum": 28,
-            "instance_bytes": 32,
-            "string_bytes": 36,
-            "io_processor_count": 40,
-            "flags": 44,
-            "ticks_per_second": 48,
-            "io_processors": 56,
-            "first_serial": 64,
-            "tracing": 72,
-            "trace_bytes": 76,
-            "trace_contexts": 80,
-            "trace_rules": 84,
-            "trace_policy": 88,
-            "trace_seed": 96,
-            "identity": 104,
-            "identity_pad": 108,
-            "base": 112
+            "base": 112,
+            "last_serial": 120
           }
         }
       }

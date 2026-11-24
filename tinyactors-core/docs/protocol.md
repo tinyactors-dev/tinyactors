@@ -30,8 +30,12 @@ either a session (`#_scxml_<id>`) or a name (`@<name>`).
 - **Session ids** are unsigned 64-bit integers, written in decimal, from 1 to
   2^64-1 (18446744073709551615). Every implementation keeps them lossless: in
   JavaScript as `BigInt` or as strings, never as `Number` (which is exact only
-  up to 2^53). Session ids are unique within a system for its lifetime and
-  never reused.
+  up to 2^53). A session id names one live session of its system. A
+  system numbers its sessions in a range (a host's segment k from
+  k·2^32+1 to k·2^32+2^32−1) and, past its end, starts again at its
+  beginning, skipping the sessions it holds: an address kept after its
+  session ended may name a new session once the range has been used up.
+  A system a session of its range migrated out of does not start again.
 - **Names** (`@<name>`) are resolved **by the system that owns them**, never
   by the sender. What a name means is the owner's business: a JS system's
   a boot actor of a system image, an actor spawned with a name. A name that resolves to nothing is an unknown target (*Errors*).

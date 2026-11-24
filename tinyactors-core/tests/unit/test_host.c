@@ -1557,6 +1557,33 @@ static uint32_t add_boot_system(host_world *e) {
 /* Boot is the public path from a compiled system manifest to live actors.
  * Start with room for only one actor: boot must grow before spawning the
  * three declared actors, and leave their entry actions for the host loop. */
+/* A segment's sessions wrap around its range of 2^32 - 1 ids, never into the
+ * next segment's: the last id of segment 0, then its first free one again,
+ * each found where it lives. */
+static void test_session_ids_wrap_within_their_segment(void) {
+    host_world e;
+    world_open(&e, 8, NULL, 0);
+    world_add(&e, "<scxml xmlns='http://www.w3.org/2005/07/scxml' datamodel='ecmascript' name='order'>"
+                  "<state id='open'/></scxml>");
+    world_add(&e, "<scxml xmlns='http://www.w3.org/2005/07/scxml' datamodel='ecmascript' name='payment'>"
+                  "<state id='due'/></scxml>");
+    uint64_t kept = spawn(&e, "order"); /* 1 */
+    CHECK_EQUAL(kept, 1u);
+    CHECK_EQUAL(ta_system_set_next_serial(ta_host_system(e.host, 0), 0xFFFFFFFEu), TA_OK);
+    uint64_t last = spawn(&e, "order"), wrapped = spawn(&e, "order"), other = spawn(&e, "payment");
+    CHECK_EQUAL(last, 0xFFFFFFFFu);
+    CHECK_EQUAL(wrapped, 2u);                  /* past the end, 1 held: 2 */
+    CHECK_EQUAL(other, ((uint64_t)1 << 32) + 1); /* segment 1's first: no collision */
+    ta_host_location where;
+    CHECK_EQUAL(ta_host_locate(e.host, last, &where), TA_OK);
+    CHECK_EQUAL(where.segment, 0u);
+    CHECK_EQUAL(ta_host_locate(e.host, wrapped, &where), TA_OK);
+    CHECK_EQUAL(where.segment, 0u);
+    CHECK_EQUAL(ta_host_locate(e.host, other, &where), TA_OK);
+    CHECK_EQUAL(where.segment, 1u);
+    world_close(&e);
+}
+
 static void test_boot_manifest(void) {
     host_world e;
     world_open(&e, 1, NULL, 0);
@@ -1867,6 +1894,7 @@ int main(void) {
     RUN(test_a_datamodel_refusal_grows_nothing);
     RUN(test_stats_pools_per_segment);
     RUN(test_boot_manifest);
+    RUN(test_session_ids_wrap_within_their_segment);
     RUN(test_boot_refused);
     RUN(test_image_copied);
     RUN(test_restore_after_images_freed);

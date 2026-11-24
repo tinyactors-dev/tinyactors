@@ -78,8 +78,10 @@ group, the words build on each other.
   migrations, hibernation, snapshots, the control plane and telemetry. A
   binding's API sits on the host.
 - **Segment.** One system inside a host, made from one image by
-  `ta_host_add_image`. Segment k numbers its sessions k·2³²+1 and up, so
-  a session id is unique across the host. A segment whose charts all
+  `ta_host_add_image`. Segment k numbers its sessions from k·2³²+1 to
+  k·2³²+2³²−1, so a session id names one live session across the host;
+  past the end of its range a segment starts again at its beginning,
+  skipping the sessions it holds. A segment whose charts all
   have newer versions and no actors left is freed (`SEGMENT_FREED`).
 - **Version.** The newest segment that has a chart of a given name holds
   that chart's current version: new spawns run it. Adding an image with
