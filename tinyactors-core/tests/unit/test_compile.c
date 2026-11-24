@@ -436,6 +436,70 @@ static void test_errors(void) {
         "<scxml><state id='a'><history id='h'/><state id='b'/></state></scxml>", "default"));
 }
 
+/* The document's structure: what SCXML does not allow is refused, never
+ * skipped or resolved by letting one side win. */
+static void test_structure_is_checked(void) {
+    static const struct {
+        const char *document, *message;
+    } cases[] = {
+        {"<scxml><state id='a'><transtion target='a'/></state></scxml>", "unknown element <transtion>"},
+        {"<scxml><state id='a'><raise event='e'/></state></scxml>", "<raise> is not allowed in <state>"},
+        {"<scxml><state id='a'><donedata/></state></scxml>", "<donedata> is not allowed in <state>"},
+        {"<scxml><final id='f'><donedata/><donedata/></final></scxml>", "at most one <donedata>"},
+        {"<scxml><state id='a'><onentry><send event='e' delay='1s' delayexpr='x'/></onentry></state></scxml>",
+         "<send> has both delay and delayexpr"},
+        {"<scxml><state id='a'><onentry><send event='e' type='a' typeexpr='x'/></onentry></state></scxml>",
+         "<send> has both type and typeexpr"},
+        {"<scxml><state id='a'><invoke src='x' srcexpr='y'/></state></scxml>", "<invoke> has both src and srcexpr"},
+        {"<scxml><state id='a'><invoke type='t' src='s' id='i' idlocation='l'/></state></scxml>",
+         "<invoke> has both id and idlocation"},
+        {"<scxml><state id='a'><onentry><cancel sendid='a' sendidexpr='b'/></onentry></state></scxml>",
+         "<cancel> has both sendid and sendidexpr"},
+        {"<scxml><state id='a'><onentry><send event='e'><param name='p' expr='1' location='x'/></send>"
+         "</onentry></state></scxml>",
+         "<param> has both expr and location"},
+        {"<scxml><datamodel><data id='d' expr='1'>2</data></datamodel><state id='a'/></scxml>",
+         "<data> has both an attribute and content"},
+        {"<scxml><state id='a'><onentry><assign location='x' expr='1'>2</assign></onentry></state></scxml>",
+         "<assign> has both an attribute and content"},
+        {"<scxml><script src='x.js'>var y;</script><state id='a'/></scxml>", "<script> has both an attribute"},
+        {"<scxml><datamodel><data id='d'/><data id='d'/></datamodel><state id='a'/></scxml>", "declared twice"},
+        {"<scxml><state id='a'><invoke id='i' type='t' src='s'/><invoke id='i' type='t' src='s'/></state></scxml>",
+         "<invoke id='i'> is used twice"},
+        {"<scxml><state id='a'><history id='h' type='Deep'><transition target='b'/></history>"
+         "<state id='b'/></state></scxml>",
+         "invalid history type 'Deep'"},
+        {"<scxml><state id='a'><history id='h'><transition target='b'/><transition target='b'/></history>"
+         "<state id='b'/></state></scxml>",
+         "at most one <transition>"},
+        {"<scxml><state id='a'><initial><transition event='e' target='b'/></initial><state id='b'/></state></scxml>",
+         "has no cond or event"},
+        {"<scxml><state id='a'><invoke type='t' src='s' autoforward='yes'/></state></scxml>", "invalid autoforward"},
+        {"<scxml><state id='a'><onentry><send event='a b'/></onentry></state></scxml>", "has no spaces"},
+        {"<scxml><state id='a' initial='b'/><state id='b'/></scxml>", "an atomic <state> has no initial"},
+        {"<scxml version='2.0'><state id='a'/></scxml>", "version '2.0'"},
+        {"<scxml xmlns='urn:other'><state id='a'/></scxml>", "not in the SCXML namespace"},
+    };
+    for (size_t i = 0; i < sizeof cases / sizeof cases[0]; i++) {
+        int found = compile_error_contains(cases[i].document, cases[i].message);
+        CHECK(found);
+        if (!found) fprintf(stderr, "  no \"%s\" for %s\n", cases[i].message, cases[i].document);
+    }
+    /* an attribute SCXML does not define is a warning: the chart compiles */
+    ta_compile_options options;
+    memset(&options, 0, sizeof options);
+    options.size = sizeof options;
+    static const char text[] = "<scxml><state id='a' colour='red' x:note='hers' xmlns:x='urn:x'/></scxml>";
+    ta_source source = {{"warn.scxml", 10}, {text, sizeof text - 1}};
+    ta_compile_result *result = NULL;
+    CHECK_EQUAL(ta_compile_charts(&options, (ta_source_list){&source, 1}, &result), TA_OK);
+    const ta_diagnostic *diagnostic;
+    CHECK_EQUAL(ta_compile_diagnostics(result, &diagnostic), 1u); /* colour; x:note is its namespace's */
+    CHECK(diagnostic[0].severity == TA_DIAGNOSTIC_WARNING &&
+          strstr(diagnostic[0].message.pointer, "<state> has no attribute 'colour'") != NULL);
+    ta_compile_free(result);
+}
+
 /* Where an error is reported: the start of the element it is about (these
  * cases come from the tests of the SCXML codec tinyactors-scxml held). */
 #define NS "xmlns=\"http://www.w3.org/2005/07/scxml\""
@@ -955,6 +1019,7 @@ int main(void) {
     RUN(test_xml_arena_refusal);
     RUN(test_structure);
     RUN(test_errors);
+    RUN(test_structure_is_checked);
     RUN(test_error_positions);
     RUN(test_durations);
     RUN(test_manifest);

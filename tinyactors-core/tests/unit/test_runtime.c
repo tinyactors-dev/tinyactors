@@ -163,6 +163,44 @@ static void test_sends_evaluate_their_names_once(void) {
     free(copy);
 }
 
+/* done.state.<id> for an id of 700 characters: the name the core raises is
+ * the one the transition names, whatever its length. */
+static void test_a_long_state_id_completes(void) {
+    static char document[4096], id[701];
+    memset(id, 's', 700);
+    id[700] = 0;
+    snprintf(document, sizeof document,
+             "<scxml xmlns='http://www.w3.org/2005/07/scxml' initial='%s'>"
+             "<state id='%s'><state id='inner'><transition target='last'/></state><final id='last'/>"
+             "<transition event='done.state.%s' target='end'/></state><final id='end'/></scxml>",
+             id, id, id);
+    CHECK(fixture_write("long.scxml", document));
+    ta_compile_result *result;
+    CHECK_EQUAL(ta_runtime_compile_file(fixture_path("long.scxml"), 0, &result), TA_OK);
+    ta_string_view bytes = ta_compile_image(result);
+    void *copy = aligned_alloc(8, (bytes.length + 7) & ~(size_t)7);
+    memcpy(copy, bytes.pointer, bytes.length);
+    ta_compile_free(result);
+    ta_image image;
+    CHECK_EQUAL(ta_image_open((ta_bytes){copy, bytes.length}, &image), TA_OK);
+    ta_system_config config;
+    memset(&config, 0, sizeof config);
+    config.size = sizeof config;
+    ta_system *system;
+    CHECK_EQUAL(ta_runtime_system_new(&(ta_system_setup){{0, 0}, &image, &config, NULL, 0, 0}, &system), TA_OK);
+    CHECK_EQUAL(ta_system_boot(system), TA_OK);
+    ta_run run = ta_runtime_run(&system, 1000000);
+    CHECK_EQUAL(run.status, TA_RUN_IDLE);
+    const ta_effect *effect;
+    uint32_t n = ta_system_effects(system, &effect), done = 0;
+    for (uint32_t i = 0; i < n; i++)
+        done += effect[i].kind == TA_EFFECT_DONE;
+    CHECK_EQUAL(done, 1u); /* it reached `end` */
+    ta_system_effects_ack(system, n);
+    ta_runtime_system_free(system);
+    free(copy);
+}
+
 /* Limits: counts clamp to the handle widths before byte budgets are derived
  * from them; the generic grow targets the pools that are filling up. */
 static void test_limits_and_targeted_grow(void) {
@@ -227,6 +265,7 @@ int main(void) {
     RUN(test_resolver_error_path);
     RUN(test_growable_system);
     RUN(test_sends_evaluate_their_names_once);
+    RUN(test_a_long_state_id_completes);
     RUN(test_limits_and_targeted_grow);
     TEST_MAIN_END();
 }

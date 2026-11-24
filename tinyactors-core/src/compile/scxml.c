@@ -26,6 +26,7 @@ typedef struct chart_builder {
     ta_vector nodes;              /* ta_xml_node* per local state */
     ta_string_map ids;            /* state id -> local index */
     ta_string_map invoke_ids;     /* static invoke id -> slot */
+    ta_string_map data_ids;       /* <data id>s seen: an id is declared once */
     ta_string_map expression_map; /* kind+source -> local expr */
     uint32_t foreach_depth, max_foreach, max_depth;
     uint32_t nesting; /* <if>/<foreach> nesting of the executable content being emitted */
@@ -148,6 +149,23 @@ static uint32_t event_name(chart_builder *builder, const ta_xml_node *at, const 
         length = 0;
     }
     return ta_compiler_event_name(builder->compiler, s, length);
+}
+
+/* done.state.<id> or done.invoke.<id>, whatever the id's length: the
+ * name the core gives the event and the one a <transition event> names
+ * must be the same text. */
+typedef struct completion_name {
+    const char *prefix;
+    ta_string_view id;
+} completion_name;
+static uint32_t completion_event(chart_builder *builder, const ta_xml_node *at, completion_name name) {
+    size_t prefix = strlen(name.prefix), length = prefix + name.id.length;
+    char *text = (char *)ta_compile_alloc(&builder->compiler->arena, length + 1, &builder->compiler->out_of_memory);
+    if (!text) return ta_compiler_event_name(builder->compiler, name.prefix, 0);
+    memcpy(text, name.prefix, prefix);
+    if (name.id.length) memcpy(text + prefix, name.id.pointer, name.id.length);
+    text[length] = 0;
+    return event_name(builder, at, text, (uint32_t)length);
 }
 
 static uint32_t attribute_expression(chart_builder *builder, const ta_xml_node *node,
@@ -278,6 +296,174 @@ int ta_parse_duration_ns(const char *s, uint64_t *out) {
 
 /* ---- state collection ----------------------------------------------------------- */
 
+/* ---- the document's structure ------------------------------------------------ */
+
+/* Every SCXML element with the attributes and the SCXML children it may have
+ * (SCXML 1.0, sections 3 to 6): a misspelled or misplaced element, which the
+ * compile would skip, is an error; an attribute SCXML does not define, which
+ * it would ignore, a warning. EXECUTABLE stands for executable content; a
+ * NULL children list for arbitrary content (a <data>'s, a <content>'s, an
+ * <assign>'s value), which is not looked into. Elements and attributes of
+ * other namespaces are the document's own and are not checked. */
+#define EXECUTABLE "raise if foreach log assign script send cancel"
+typedef struct element_rule {
+    const char *name, *attributes, *children;
+} element_rule;
+static const element_rule element_rules[] = {
+    {"scxml", "initial name version datamodel binding", "state parallel final datamodel script"},
+    {"state", "id initial", "onentry onexit transition initial state parallel final history datamodel invoke"},
+    {"parallel", "id", "onentry onexit transition state parallel history datamodel invoke"},
+    {"final", "id", "onentry onexit donedata"},
+    {"initial", "", "transition"},
+    {"history", "id type", "transition"},
+    {"transition", "event cond target type", EXECUTABLE},
+    {"onentry", "", EXECUTABLE},
+    {"onexit", "", EXECUTABLE},
+    {"finalize", "", EXECUTABLE},
+    {"if", "cond", EXECUTABLE " elseif else"},
+    {"elseif", "cond", ""},
+    {"else", "", ""},
+    {"foreach", "array item index", EXECUTABLE},
+    {"raise", "event", ""},
+    {"log", "label expr", ""},
+    {"assign", "location expr", NULL},
+    {"script", "src", ""},
+    {"send", "event eventexpr target targetexpr type typeexpr id idlocation delay delayexpr namelist",
+     "param content"},
+    {"cancel", "sendid sendidexpr", ""},
+    {"invoke", "type typeexpr src srcexpr id idlocation namelist autoforward", "param finalize content"},
+    {"donedata", "", "param content"},
+    {"content", "expr", NULL},
+    {"param", "name expr location", ""},
+    {"datamodel", "", "data"},
+    {"data", "id src expr", NULL},
+};
+
+static int word_in(const char *words, const char *word) {
+    size_t length = strlen(word);
+    for (const char *p = words; *p;) {
+        while (*p == ' ')
+            p++;
+        const char *end = p;
+        while (*end && *end != ' ')
+            end++;
+        if ((size_t)(end - p) == length && length && memcmp(p, word, length) == 0) return 1;
+        p = end;
+    }
+    return 0;
+}
+
+static const element_rule *rule_of(const ta_xml_node *node) {
+    for (size_t i = 0; i < sizeof element_rules / sizeof element_rules[0]; i++)
+        if (strcmp(element_rules[i].name, node->name) == 0) return &element_rules[i];
+    return NULL;
+}
+
+/* Pairs of attributes SCXML allows one of (its "MUST NOT occur with"). */
+static const char *const exclusive_attributes[][3] = {
+    {"send", "delay", "delayexpr"},  {"send", "type", "typeexpr"},     {"invoke", "src", "srcexpr"},
+    {"invoke", "type", "typeexpr"},  {"invoke", "id", "idlocation"},   {"cancel", "sendid", "sendidexpr"},
+    {"param", "expr", "location"},   {"data", "src", "expr"},
+};
+
+/* What SCXML says one element's content and attributes must not combine:
+ * a value given twice (an attribute and the element's content). */
+static void check_value_twice(chart_builder *builder, const ta_xml_node *node) {
+    const char *value = el(node, "data") ? "src expr" : el(node, "script") ? "src"
+                        : el(node, "assign") || el(node, "content") ? "expr" : NULL;
+    int content = has_element_child(node) ||
+                  (node->text && node->text_length && node->text[strspn(node->text, " \t\r\n")]);
+    if (!value || !content) return;
+    for (const ta_xml_attribute *a = node->attributes; a; a = a->next)
+        if (word_in(value, a->name)) {
+            compile_error(builder, node, (compile_message){"<%s> has both an attribute and content for its value",
+                                                           node->name});
+            return;
+        }
+}
+
+static void check_element(chart_builder *builder, const ta_xml_node *node, const element_rule *rule) {
+    for (const ta_xml_attribute *a = node->attributes; a; a = a->next) {
+        if (strchr(a->name, ':') || strcmp(a->name, "xmlns") == 0) continue; /* another namespace's */
+        if (!word_in(rule->attributes, a->name)) {
+            char message[160];
+            snprintf(message, sizeof message, "<%s> has no attribute '%.80s'", node->name, a->name);
+            compile_warning(builder, node, (compile_message){"%s", message});
+        }
+    }
+    for (size_t i = 0; i < sizeof exclusive_attributes / sizeof exclusive_attributes[0]; i++)
+        if (strcmp(exclusive_attributes[i][0], node->name) == 0 &&
+            ta_xml_find_attribute(node, exclusive_attributes[i][1]) &&
+            ta_xml_find_attribute(node, exclusive_attributes[i][2])) {
+            char message[160];
+            snprintf(message, sizeof message, "<%s> has both %s and %s", node->name,
+                     exclusive_attributes[i][1], exclusive_attributes[i][2]);
+            compile_error(builder, node, (compile_message){"%s", message});
+        }
+    check_value_twice(builder, node);
+    const char *version = el(node, "scxml") ? ta_xml_attribute_value(node, "version") : NULL;
+    if (version && strcmp(version, "1.0"))
+        compile_error(builder, node, (compile_message){"version '%s': SCXML 1.0 is version='1.0'", version});
+    const char *type = el(node, "history") ? ta_xml_attribute_value(node, "type") : NULL;
+    if (type && strcmp(type, "deep") && strcmp(type, "shallow"))
+        compile_error(builder, node, (compile_message){"invalid history type '%s' (deep or shallow)", type});
+    const char *autoforward = el(node, "invoke") ? ta_xml_attribute_value(node, "autoforward") : NULL;
+    if (autoforward && strcmp(autoforward, "true") && strcmp(autoforward, "false"))
+        compile_error(builder, node, (compile_message){"invalid autoforward '%s' (true or false)", autoforward});
+    const char *event = el(node, "send") || el(node, "raise") ? ta_xml_attribute_value(node, "event") : NULL;
+    if (event && event[strcspn(event, " \t\r\n")])
+        compile_error(builder, node, (compile_message){"<%s> sends one event: its name has no spaces", node->name});
+    uint32_t transitions = 0, donedata = 0;
+    for (const ta_xml_node *k = node->first; k; k = k->next) {
+        if (el(k, "transition")) transitions++;
+        if (el(k, "donedata")) donedata++;
+        if (el(k, "transition") && (el(node, "initial") || el(node, "history")) &&
+            (ta_xml_find_attribute(k, "cond") || ta_xml_find_attribute(k, "event")))
+            compile_error(builder, k, (compile_message){"the transition of <%s> has no cond or event", node->name});
+    }
+    if (el(node, "initial") && transitions != 1)
+        compile_error(builder, node, (compile_message){"<initial> has exactly one <transition>%s", NULL});
+    if (el(node, "history") && transitions > 1)
+        compile_error(builder, node, (compile_message){"<history> has at most one <transition>%s", NULL});
+    if (donedata > 1) compile_error(builder, node, (compile_message){"<final> has at most one <donedata>%s", NULL});
+}
+
+/* Walks the document once, without recursion (the tree's parent links). */
+static void check_structure(chart_builder *builder, const ta_xml_node *root) {
+    const ta_xml_node *node = root;
+    while (node && !ta_compiler_stop(builder->compiler)) {
+        const element_rule *rule = rule_of(node);
+        int descend = 0;
+        if (rule) {
+            check_element(builder, node, rule);
+            descend = rule->children != NULL;
+        }
+        /* executable content's own elements are checked as it is compiled (exec_el) */
+        if (descend && !word_in(rule->children, "raise"))
+            for (const ta_xml_node *k = node->first; k; k = k->next) {
+                if (!is_scxml(k)) continue; /* another namespace's: its own */
+                if (!word_in(rule->children, k->name)) {
+                    char message[200];
+                    snprintf(message, sizeof message, rule_of(k) ? "<%.40s> is not allowed in <%s>"
+                                                                 : "unknown element <%.40s> in <%s>",
+                             k->name, node->name);
+                    compile_error(builder, k, (compile_message){"%s", message});
+                }
+            }
+        /* next in preorder: the first SCXML child it may hold, else the next sibling up the tree */
+        const ta_xml_node *next = NULL;
+        if (descend)
+            for (const ta_xml_node *k = node->first; k && !next; k = k->next)
+                if (is_scxml(k) && rule_of(k) && word_in(rule->children, k->name)) next = k;
+        for (const ta_xml_node *up = node; !next && up && up != root; up = up->parent)
+            for (const ta_xml_node *k = up->next; k && !next; k = k->next)
+                if (is_scxml(k) && rule_of(k) && up->parent && rule_of(up->parent) &&
+                    rule_of(up->parent)->children && word_in(rule_of(up->parent)->children, k->name))
+                    next = k;
+        node = next;
+    }
+}
+
 static void state_defaults(ta_state_record *state) {
     memset(state, 0, sizeof *state);
     state->parent = state->id = state->initial = state->onentry = state->onexit = TA_NIL;
@@ -312,6 +498,8 @@ static void leave_state(chart_builder *builder, ta_xml_node *node, uint32_t inde
             compile_error(builder, node, (compile_message){"<scxml> must contain at least one state%s", NULL});
     } else if (el(node, "state")) {
         state->kind = has_children ? TA_STATE_COMPOUND : TA_STATE_ATOMIC;
+        if (!has_children && ta_xml_find_attribute(node, "initial"))
+            compile_error(builder, node, (compile_message){"an atomic <state> has no initial%s", NULL});
         if (has_children && !has_real_child)
             compile_error(builder, node, (compile_message){"compound state needs a non-history child state%s", NULL});
     } else if (el(node, "parallel")) {
@@ -945,16 +1133,12 @@ static void invoke(chart_builder *builder, const ta_xml_node *node, uint32_t sta
     if (invoke_record.id != TA_NIL) {
         ta_string_view id = ta_image_view_string(
             &(ta_image_view){.strings = builder->compiler->strings.data}, invoke_record.id);
-        char buffer[512];
-        snprintf(buffer, sizeof buffer, "done.invoke.%.*s", (int)id.length, id.pointer);
-        event_name(builder, node, buffer, (uint32_t)strlen(buffer));
+        completion_event(builder, node, (completion_name){"done.invoke.", id});
     } else {
         ta_string_view sid =
             ta_image_view_string(&(ta_image_view){.strings = builder->compiler->strings.data},
                                  state_at(builder, state)->id);
-        char buffer[512];
-        snprintf(buffer, sizeof buffer, "done.invoke.%.*s", (int)sid.length, sid.pointer);
-        event_name(builder, node, buffer, (uint32_t)strlen(buffer));
+        completion_event(builder, node, (completion_name){"done.invoke.", sid});
     }
     ta_invoke_record *dst = (ta_invoke_record *)ta_vector_push(&builder->compiler->invokes);
     if (dst) *dst = invoke_record;
@@ -971,6 +1155,11 @@ static void data_declarations(chart_builder *builder, const ta_xml_node *datamod
         data.state = state;
         data.id = attr_str(builder, d, "id");
         if (data.id == TA_NIL) compile_error(builder, d, (compile_message){"<data> requires 'id'%s", NULL});
+        const ta_xml_attribute *id = ta_xml_find_attribute(d, "id");
+        if (id && ta_string_map_get(&builder->data_ids, id->value, id->value_length) != TA_NIL)
+            compile_error(builder, d, (compile_message){"<data id='%s'> is declared twice", id->value});
+        else if (id)
+            ta_string_map_put(&builder->data_ids, id->value, id->value_length, 1);
         data.expression = attribute_expression(builder, d, "expr", TA_EXPRESSION_VALUE);
         const char *source = ta_xml_attribute_value(d, "src");
         if (source) {
@@ -1007,6 +1196,7 @@ void ta_compiler_compile_chart(ta_compiler *compiler, uint32_t index) {
     ta_vector_init(&c->nodes, compiler->allocator, sizeof(ta_xml_node *));
     ta_string_map_init(&c->ids, compiler->allocator);
     ta_string_map_init(&c->invoke_ids, compiler->allocator);
+    ta_string_map_init(&c->data_ids, compiler->allocator);
     ta_string_map_init(&c->expression_map, compiler->allocator);
 
     ta_chart_record chart;
@@ -1019,9 +1209,14 @@ void ta_compiler_compile_chart(ta_compiler *compiler, uint32_t index) {
     ta_xml_node *root = pending->root;
     if (!root) goto done;
     if (!el(root, "scxml")) {
-        compile_error(c, root, (compile_message){"root element must be <scxml>, got <%s>", root->name});
+        if (strcmp(root->name, "scxml") == 0)
+            compile_error(c, root, (compile_message){"<scxml> is not in the SCXML namespace: xmlns='%s'",
+                                                     TA_SCXML_NAMESPACE});
+        else
+            compile_error(c, root, (compile_message){"root element must be <scxml>, got <%s>", root->name});
         goto done;
     }
+    check_structure(c, root);
     const char *dmname = ta_xml_attribute_value(root, "datamodel");
     const char *binding = ta_xml_attribute_value(root, "binding");
     const char *nm = ta_xml_attribute_value(root, "name");
@@ -1069,7 +1264,9 @@ void ta_compiler_compile_chart(ta_compiler *compiler, uint32_t index) {
         for (const ta_xml_node *chn = node_at(c, i)->first; chn; chn = chn->next)
             if (el(chn, "invoke")) {
                 const ta_xml_attribute *id = ta_xml_find_attribute(chn, "id");
-                if (id)
+                if (id && ta_string_map_get(&c->invoke_ids, id->value, id->value_length) != TA_NIL)
+                    compile_error(c, chn, (compile_message){"<invoke id='%s'> is used twice", id->value});
+                else if (id)
                     ta_string_map_put(&c->invoke_ids, id->value, id->value_length,
                                       c->invoke_id_count);
                 c->invoke_id_count++;
@@ -1176,10 +1373,7 @@ void ta_compiler_compile_chart(ta_compiler *compiler, uint32_t index) {
         if (state->kind == TA_STATE_COMPOUND || state->kind == TA_STATE_PARALLEL) {
             ta_string_view id = ta_image_view_string(
                 &(ta_image_view){.strings = compiler->strings.data}, state->id);
-            char buffer[512];
-            snprintf(buffer, sizeof buffer, "done.state.%.*s", (int)id.length, id.pointer);
-            uint32_t en = event_name(c, node_at(c, i), buffer, (uint32_t)strlen(buffer));
-            state_at(c, i)->done_event = en;
+            state_at(c, i)->done_event = completion_event(c, node_at(c, i), (completion_name){"done.state.", id});
         } else if (state->kind >= TA_STATE_HISTORY_SHALLOW) {
             const ta_state_record *p = state_at(c, state->parent);
             state->history_offset = history;
@@ -1221,5 +1415,6 @@ done:
     ta_vector_free(&c->nodes);
     ta_string_map_free(&c->ids);
     ta_string_map_free(&c->invoke_ids);
+    ta_string_map_free(&c->data_ids);
     ta_string_map_free(&c->expression_map);
 }

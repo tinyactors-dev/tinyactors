@@ -84,6 +84,16 @@ typedef struct ta_compile_result ta_compile_result;
  * descriptors or targets per transition, 64 dot-separated parts per event
  * name. At most 200 diagnostics are kept.
  *
+ * A document SCXML does not allow is refused, never compiled by skipping
+ * or choosing: an element of the SCXML namespace SCXML does not define, or
+ * one where it may not be (a <raise> in a <state>, a <donedata> outside a
+ * <final>), two attributes SCXML allows one of (delay and delayexpr, src and
+ * srcexpr, ...), an attribute and content for one value, an id declared
+ * twice, an invalid history type or autoforward, a version other than 1.0.
+ * An attribute SCXML does not define on its element is a warning (an error
+ * with TA_COMPILE_WERROR); elements and attributes of other namespaces are
+ * the document's own and are not checked.
+ *
  * One or more charts -> image (first chart is the default boot chart). */
 typedef struct ta_source_list {
     const ta_source *pointer;
