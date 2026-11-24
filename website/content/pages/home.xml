@@ -41,6 +41,7 @@
       <item><term>One chart runs in JavaScript, Python and C</term><text>tinyactors wraps one C core in every language package, so your actors run the same way everywhere.</text></item>
       <item><term>Small enough for every part of a system</term><text>An actor takes <link to="performance" section="actors">about 530 bytes</link> in Node.js, and an idle one saved to a database keeps about 120. <link to="performance">See the performance page</link></text></item>
     </list>
+    <p>Your actors live in your program's memory, so a crash stops every one of them. <link to="when-to-use">When to use tinyactors</link> says what comes back, and how it compares with Temporal or Durable Objects.</p>
   </section>
 
   <section id="verify">
