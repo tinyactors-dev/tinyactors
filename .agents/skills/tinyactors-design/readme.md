@@ -111,16 +111,14 @@ Newsreader (variable, roman + italic), IBM Plex Sans and IBM Plex Mono (400/500/
 Private repository for internal use. The layout is described in the Index below.
 - **Consumers link one file:** `styles.css`. It imports the tokens, fonts and base styles. Component styles are in `components/components.css`.
 - **Components:** React function components (`components/**/<Name>.jsx`). Each has a `.d.ts` props contract and a `.prompt.md` usage note. They use React only and style through CSS custom properties.
-- **Generated files:** `_ds_bundle.js`, `_ds_manifest.json` and `_adherence.oxlintrc.json` are built from source. Don't edit them by hand.
-  - Inside Claude Design, all three regenerate automatically after every change.
-  - From a clone, build the bundle so the component cards and UI kits render:
+- **Generated file:** `_ds_bundle.js` is built from `components/` and committed. Don't edit it by hand; after changing a component, rebuild it and commit both:
     ```
     npm install
     npm run build        # writes _ds_bundle.js
     ```
     Then serve the folder over HTTP, e.g. `npx serve .`, and open any card or `ui_kits/*/index.html`. The cards fetch the logo and icons, which won't load from `file://`.
   - `scripts/build-bundle.cjs` exports every `components/**/<Name>.jsx` onto `window.TinyactorsDesignSystem_2f489e` and uses the page's global `React`. Add a new component file and it's picked up on the next build.
-  - `_ds_manifest.json` and `_adherence.oxlintrc.json` are Claude Design's index and lint rules. Nothing outside Claude Design needs them, so there's no local build for them. The repo ignores the bundle and manifest.
+  - The UI kits are not in the bundle: each `ui_kits/*/index.html` loads its own `.jsx` files through Babel, and takes the components from the bundle.
 - **Brand assets:** `assets/brand/` is the ready-to-use logo pack. `assets/logo.svg` and `assets/ant-resting.svg` are the rigged masters.
 - **Agent skill:** `SKILL.md` makes this folder usable as a Claude Code skill.
 - **Placeholder content (intentional):** these are illustrative and invented, not real Tinyactors specs:

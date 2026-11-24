@@ -2,9 +2,9 @@
 const { Button, CodeBlock, Tag, Sheet } = window.TinyactorsDesignSystem_2f489e;
 const HERO_CODE = 'import { System } from "tinyactors";\n\nconst sys = new System();\nconst order = sys.spawn(orderChart);\n\norder.send("PAID");\nassert(order.in("paid"));';
 function Hero({ go }) {
-  const events = { closed: ['OPEN', 'LOCK'], opened: ['CLOSE'], locked: ['UNLOCK'] };
-  const next = { OPEN: 'opened', CLOSE: 'closed', LOCK: 'locked', UNLOCK: 'closed' };
-  const [s, setS] = React.useState('closed');
+  const events = { pending: ['PAID', 'CANCEL'], paid: ['SHIP'], shipped: ['DELIVER'], delivered: ['REORDER'], cancelled: ['REORDER'] };
+  const next = { PAID: 'paid', CANCEL: 'cancelled', SHIP: 'shipped', DELIVER: 'delivered', REORDER: 'pending' };
+  const [s, setS] = React.useState('pending');
   return (
     <section style={{ borderBottom: '1px solid var(--border-1)' }}>
       <div style={{ maxWidth: 'var(--content-max)', margin: '0 auto', padding: '96px 24px 88px', display: 'grid', gridTemplateColumns: 'minmax(0,1.05fr) minmax(0,1fr)', gap: 56, alignItems: 'center' }}>
