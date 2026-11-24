@@ -487,7 +487,7 @@ ta-tabs { display: block; }
   .section { padding-top: var(--space-12); }
   .section__head h2 { font: var(--type-h2); font-size: 28px; }
   .items--terms li { grid-template-columns: 1fr; gap: var(--space-1); }
-  .claims { grid-template-columns: 1fr; }
+  .claims, .claims:has(> :nth-child(4)) { grid-template-columns: 1fr; }
   p code, li code { white-space: normal; }
 }
 
