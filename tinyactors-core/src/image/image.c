@@ -32,12 +32,22 @@ static int pc_ok(const ta_chart_record *chart, uint32_t pc) {
     return pc == TA_NIL || (pc >= chart->first_code && pc < chart->first_code + chart->code_count);
 }
 
+/* The length of the instruction at p, 0 when the word there is not an
+ * opcode. The fallbacks below decode words verify_code has not reached yet. */
+static uint32_t insn_length(const ta_image_view *view, uint32_t p) {
+    uint32_t opcode = view->code[p];
+    return opcode < TA_OPCODE_MAX_ ? ta_opcode_length[opcode] : 0;
+}
+
 /* Is an offset the start of an instruction in the chart's code range? O(code): the
  * fallback for what the linear checks below cannot settle. */
 static int insn_start(const ta_image_view *view, const ta_chart_record *chart, uint32_t pc) {
     uint32_t p = chart->first_code, e = chart->first_code + chart->code_count;
-    while (p < e && p < pc)
-        p += ta_opcode_length[view->code[p]];
+    while (p < e && p < pc) {
+        uint32_t length = insn_length(view, p);
+        if (!length) return 0;
+        p += length;
+    }
     return p == pc && pc < e;
 }
 
@@ -53,8 +63,11 @@ static int entry_ok(const ta_image_view *view, const ta_chart_record *chart, cur
     if (pc == TA_NIL) return 1;
     if (pc < cur->at) return insn_start(view, chart, pc);
     uint32_t p = cur->at, e = chart->first_code + chart->code_count;
-    while (p < e && p < pc)
-        p += ta_opcode_length[view->code[p]];
+    while (p < e && p < pc) {
+        uint32_t length = insn_length(view, p);
+        if (!length) return 0;
+        p += length;
+    }
     if (p != pc || pc >= e) return 0;
     cur->at = pc;
     return 1;

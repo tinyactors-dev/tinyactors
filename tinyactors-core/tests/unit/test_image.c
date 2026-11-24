@@ -271,6 +271,9 @@ static void test_deep_code(void) {
     c[3 + 2 * 140] -= 1;
     c[3 + 2 * 5] += 1; /* checked in the pass */
     CHECK_EQUAL(open_copy(w, length), TA_ERROR_INVALID);
+    c[3 + 2 * 5] -= 1;
+    c[302] = 0xFFFFFF00u; /* past the pass, decoded by the fallback: not an opcode */
+    CHECK_EQUAL(open_copy(w, length), TA_ERROR_INVALID);
     free(w);
     free(b);
 }
