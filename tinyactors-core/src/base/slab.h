@@ -47,6 +47,11 @@ TA_INLINE size_t ta_slab_metadata_bytes(uint32_t page_count) {
     return (size_t)page_count * sizeof(ta_slab_page);
 }
 
+/* Pages no size class holds: each takes one object of any size. */
+TA_INLINE uint32_t ta_slab_free_pages(const ta_slab *slab) {
+    return slab->page_count - slab->used_pages;
+}
+
 /* `pages` must be TA_ALIGN_MAX aligned. */
 void ta_slab_init(ta_slab *s, void *pages, ta_slab_page *meta, uint32_t page_count);
 uint32_t ta_slab_alloc(ta_slab *s, uint32_t size); /* offset (8-aligned) or TA_NIL */

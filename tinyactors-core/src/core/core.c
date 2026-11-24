@@ -1045,6 +1045,28 @@ static uint32_t generate_id(kernel_context *kernel, const char *prefix, ta_strin
 
 enum { SEND_OK = 0, SEND_ERROR_EXECUTION, SEND_ERROR_COMMUNICATION, SEND_NOMEM };
 
+/* Room in the slab for `strings` strings an instruction may make, before it
+ * evaluates anything: a string is at most TA_SYSTEM_MAX_STRING, one page with
+ * its header, so a free page each always holds them. Without the room the
+ * instruction is retried after the slab grew, and its expressions have not
+ * run: a retry evaluates nothing twice (SCXML evaluates executable content
+ * once). */
+static int strings_room(kernel_context *kernel, uint32_t strings) {
+    ta_slab *slab = kernel->core->slab;
+    if (ta_slab_free_pages(slab) >= strings) return 1;
+    slab->refused = 1; /* what ta_system_exhausted names */
+    return 0;
+}
+
+/* A string an expression gave, as a shared string: TA_NIL when it is longer
+ * than any string the system keeps (`*too_long` set: the expression's
+ * error.execution, never a retry) or, with strings_room checked, never for
+ * want of room. */
+static uint32_t evaluated_string(ta_core *core, ta_string_view s, int *too_long) {
+    *too_long = s.length > TA_SYSTEM_MAX_STRING;
+    return *too_long ? TA_NIL : ta_shared_string_new(core, s.pointer, s.length);
+}
+
 static void trace_sent(kernel_context *kernel, const ta_event *event, uint32_t target,
                        uint64_t delay) {
     ta_core *core = kernel->core;
@@ -1086,6 +1108,12 @@ static uint32_t opcode_send(kernel_context *kernel, uint32_t index) {
         core->timers->refused = 1; /* what ta_system_exhausted names */
         return TA_STEP_EXHAUSTED;
     }
+    /* nor room for the strings it may make: its id, its name, its target and
+     * that target made local */
+    if (!strings_room(kernel, (send->idlocation != TA_NIL) + (send->eventexpr != TA_NIL) +
+                                  2u * (send->target_kind == TA_SEND_TARGET_EXPRESSION ||
+                                        send->target_kind == TA_SEND_TARGET_STRING)))
+        return TA_STEP_EXHAUSTED;
 
     /* send id: first, so an error the send raises at its own step carries it
      * (SCXML 5.10.1), as one raised when it is routed does */
@@ -1121,12 +1149,11 @@ static uint32_t opcode_send(kernel_context *kernel, uint32_t index) {
             datamodel_failed = 1;
             goto fail;
         }
-        int exact = 0;
+        int exact = 0, too_long = 0;
         name_id = ta_event_name_lookup(&core->image_view, s.pointer, s.length, &exact);
-        name = exact ? core->image_view.event_nodes[name_id].name
-                     : ta_shared_string_new(core, s.pointer, s.length);
+        name = exact ? core->image_view.event_nodes[name_id].name : evaluated_string(core, s, &too_long);
         if (name == TA_NIL) {
-            status = SEND_NOMEM;
+            status = too_long ? SEND_ERROR_EXECUTION : SEND_NOMEM;
             goto fail;
         }
     } else {
@@ -1164,9 +1191,10 @@ static uint32_t opcode_send(kernel_context *kernel, uint32_t index) {
                 datamodel_failed = 1;
                 goto fail;
             }
-            target = ta_shared_string_new(core, s.pointer, s.length);
+            int too_long = 0;
+            target = evaluated_string(core, s, &too_long);
             if (target == TA_NIL) {
-                status = SEND_NOMEM;
+                status = too_long ? SEND_ERROR_EXECUTION : SEND_NOMEM;
                 goto fail;
             }
             tstr = ta_shared_string_get(core, target);
@@ -1394,13 +1422,20 @@ static uint32_t vm(kernel_context *kernel) {
             return TA_STEP_CANCEL;
         case TA_OPCODE_CANCEL_EXPRESSION: {
             ta_string_view s;
+            if (!strings_room(kernel, 1)) return TA_STEP_EXHAUSTED; /* before it evaluates */
             if (datamodel_string(kernel, w[0], &s) != TA_OK) {
                 error_exec(kernel);
                 abort_block(kernel);
                 break;
             }
-            uint32_t r = ta_shared_string_new(core, s.pointer, s.length);
-            if (r == TA_NIL) return TA_STEP_EXHAUSTED;
+            int too_long = 0;
+            uint32_t r = evaluated_string(core, s, &too_long);
+            if (r == TA_NIL && too_long) { /* no send has such an id */
+                error_exec(kernel);
+                abort_block(kernel);
+                break;
+            }
+            if (r == TA_NIL) return TA_STEP_EXHAUSTED; /* strings_room ruled it out */
             core->out.sendid = r;
             kernel->workspace->instruction = p + 2;
             trace_cancelled(kernel, r);
@@ -1577,19 +1612,25 @@ static uint32_t start_invoke(kernel_context *kernel, uint32_t slot) {
     uint32_t type = invoke->type, source_string = invoke->source, id = TA_NIL;
     ta_payload payload = 0;
     ta_string_view s;
+    int too_long = 0;
+    /* room for its type, its source and its id before it evaluates anything */
+    if (!strings_room(kernel, 3)) return TA_STEP_EXHAUSTED;
     if (invoke->typeexpr != TA_NIL) {
         if (datamodel_string(kernel, invoke->typeexpr, &s) != TA_OK) goto err;
-        type = is_scxml_type(s) ? TA_NIL : ta_shared_string_new(core, s.pointer, s.length);
-        if (!is_scxml_type(s) && type == TA_NIL) return TA_STEP_EXHAUSTED;
+        type = is_scxml_type(s) ? TA_NIL : evaluated_string(core, s, &too_long);
+        if (too_long) goto err;
+        if (!is_scxml_type(s) && type == TA_NIL) goto nomem;
     }
     if (invoke->srcexpr != TA_NIL) {
         if (datamodel_string(kernel, invoke->srcexpr, &s) != TA_OK) goto err;
-        source_string = ta_shared_string_new(core, s.pointer, s.length);
+        source_string = evaluated_string(core, s, &too_long);
+        if (too_long) goto err;
         if (source_string == TA_NIL) goto nomem;
     } else if (invoke->docexpr != TA_NIL && invoke->source_chart == TA_NIL) {
         /* the document text itself; the system resolves it */
         if (datamodel_string(kernel, invoke->docexpr, &s) != TA_OK) goto err;
-        source_string = ta_shared_string_new(core, s.pointer, s.length);
+        source_string = evaluated_string(core, s, &too_long);
+        if (too_long) goto err;
         if (source_string == TA_NIL) goto nomem;
     }
     if (invoke->id != TA_NIL) {
