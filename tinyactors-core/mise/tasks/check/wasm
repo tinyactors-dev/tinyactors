@@ -2,14 +2,16 @@
 #MISE description="Build the layers and test programs for wasm32-wasi with the pinned zig, and run the tests under wasmtime"
 # vim:ft=ruby
 
-# The C++ header check and the torture chamber's POSIX event loop have no
-# WebAssembly build. wasmtime preopens the host's root, as the tests write
+# The C++ header check, the torture chamber's POSIX event loop and the test
+# that runs ta-compile as a process have no WebAssembly build. wasmtime preopens the host's root, as the tests write
 # their files under the build tree.
 
 require_relative '../../core'
 require 'open3'
 
-programs = Core::PROGRAMS.reject { |program| program.cxx || program.name.start_with?('test_torture') }
+programs = Core::PROGRAMS.reject do |program|
+  program.cxx || program.name.start_with?('test_torture') || program.name == 'test_compile_tool'
+end
 Core.build_layers('wasi')
 Core.in_parallel(programs) { |program| Core.build_program('wasi', program) }
 failed = []

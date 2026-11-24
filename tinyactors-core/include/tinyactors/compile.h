@@ -1,7 +1,7 @@
 /* tinyactors/compile.h — SCXML parser, validator, static analysis, image linker,
  * and an XML writer for charts a binding builds.
  *
- * Usable offline (the `tac` CLI) or in-process (e.g. a Python binding that
+ * Usable offline (the `ta-compile` command, tools/compile) or in-process (e.g. a Python binding that
  * loads .scxml at runtime). Unlike the runtime layers it allocates, through
  * a caller-supplied ta_allocator (malloc by default via ta_runtime).
  */

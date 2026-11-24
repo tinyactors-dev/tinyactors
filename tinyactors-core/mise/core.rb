@@ -184,6 +184,9 @@ module Core
     Program.new(name: 'test_headers_cxx', sources: %w[tests/unit/test_headers.cpp], uses: %w[base], cxx: true),
     unit('test_image', 'compile'),
     unit('test_compile', 'compile'),
+    # Runs the ta-compile program the build made beside it.
+    unit('test_compile_tool', 'runtime', 'compile', defines: { 'TA_TEST_TEMPORARY_DIRECTORY' => :scratch,
+                                                    'TA_TEST_PROGRAMS' => :programs }),
     unit('test_compile_scale', 'compile', alone: true), # compile times at n and 8n
     unit('test_core', 'core', 'compile', 'test_datamodel', *ECMASCRIPT),
     unit('test_system', 'system', 'compile', 'test_datamodel'),
@@ -230,6 +233,9 @@ module Core
     Program.new(name: 'ta-conform', uses: %w[host runtime compile basic_http test_datamodel] + ECMASCRIPT,
                 sources: %w[conform.c datamodel.c vectors.c scenario.c w3c.c].map { |s| "tools/conform/#{s}" },
                 defines: {}),
+    # The compiler's command line: charts or a manifest to an image
+    # (tools/compile/compile.c).
+    Program.new(name: 'ta-compile', uses: %w[runtime compile], sources: %w[tools/compile/compile.c], defines: {}),
     # The torture chamber's host (tools/torture/README.md).
     Program.new(name: 'torture-bench', uses: %w[host runtime compile otlp] + ECMASCRIPT,
                 sources: %w[bench.c net.c loop.c].map { |s| "tools/torture/#{s}" },
@@ -335,7 +341,8 @@ module Core
   def build_program(variant_name, program)
     target = target(variant_name)
     scratch = directory(variant_name).join('scratch', program.name)
-    defines = (program.defines || {}).transform_values { |value| value == :scratch ? scratch : value }
+    places = { scratch: scratch, programs: directory(variant_name).join('bin') }
+    defines = (program.defines || {}).transform_values { |value| places.fetch(value, value) }
     command = compile_command(variant_name, cxx: program.cxx, defines: defines)
     objects = program.sources.map do |source|
       object = directory(variant_name).join('objects', program.name, "#{File.basename(source).sub(/\.c(pp)?\z/, '')}.o")

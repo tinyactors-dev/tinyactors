@@ -137,7 +137,8 @@ implementation of that layer). Layer dependency rules are in
 │   │   └── test/              ✅ JSONL validator + Node WebSocket/dashboard test (`mise run torture:test`)
 │   ├── vendor_quickjs.py      ✅ fetch + verify the pinned quickjs-ng release
 │   ├── amalgamate.py          ✅ dist/tinyactors.h + dist/tinyactors.c single-file distribution
-│   ├── tac/                   ◻ compiler CLI: scxml/manifest -> .tai, --emit-c, --dump
+│   ├── compile/               ✅ ta-compile: charts or a manifest -> .tai, --emit-c, --dump,
+│   │                             --warnings-as-errors (tests/unit/test_compile_tool.c)
 │   └── tarun/                 ◻ runner CLI: image + scripted events + simulated time -> trace
 │
 ├── tests/
@@ -228,4 +229,4 @@ these are the forms the library takes.
 3. **WebAssembly module** — the freestanding layers compiled for
    wasm32 export the same ABI; the effect array is read straight from linear
    memory.
-4. **Images** — `.tai` files or `tac --emit-c` C arrays for ROM/flash.
+4. **Images** — `.tai` files or `ta-compile --emit-c` C arrays for ROM/flash.
