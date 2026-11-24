@@ -14,37 +14,42 @@
     <install>
       <command package="node" guide="https://github.com/tinyactors-dev/tinyactors-napi#readme">npm install @tinyactors/node</command>
     </install>
-    <p>This program runs a door chart with two states. Each state logs a line when the door enters it:</p>
+    <p>This program runs an order: it waits for payment, then for shipping, and logs each state it enters:</p>
     <example>
-      <code language="javascript" file="door.mjs"><![CDATA[
+      <code language="javascript" file="order.mjs">
 import { compileCharts, Host } from '@tinyactors/node';
 
-const compiled = compileCharts([{ name: 'door.scxml', text: `
-<scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0"
-       datamodel="ecmascript" name="door" initial="closed">
-  <state id="closed">
-    <onentry><log expr="'closed'"/></onentry>
-    <transition event="open" target="opened"/>
-  </state>
-  <state id="opened">
-    <onentry><log expr="'opened'"/></onentry>
-    <transition event="close" target="closed"/>
-  </state>
-</scxml>` }]);
+const compiled = compileCharts([{ name: 'order.scxml', text: `
+&lt;scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0"
+       datamodel="ecmascript" name="order" initial="pending"&gt;
+  &lt;state id="pending"&gt;
+    &lt;onentry&gt;&lt;log expr="'pending'"/&gt;&lt;/onentry&gt;
+    &lt;transition event="paid" target="paid"/&gt;
+    &lt;transition event="cancel" target="cancelled"/&gt;
+  &lt;/state&gt;
+  &lt;state id="paid"&gt;
+    &lt;onentry&gt;&lt;log expr="'paid'"/&gt;&lt;/onentry&gt;
+    &lt;transition event="shipped" target="shipped"/&gt;
+  &lt;/state&gt;
+  &lt;final id="shipped"&gt;
+    &lt;onentry&gt;&lt;log expr="'shipped'"/&gt;&lt;/onentry&gt;
+  &lt;/final&gt;
+  &lt;final id="cancelled"/&gt;
+&lt;/scxml&gt;` }]);
 
-const host = new Host(compiled, { system: 'home', log: (entry) => console.log(entry.text) });
+const host = new Host(compiled, { system: 'shop', log: (entry) =&gt; console.log(entry.text) });
 compiled.close();
 
-const door = host.spawn('door');
-host.send(door, 'open');
-host.send(door, 'close');
+const order = host.spawn('order');
+host.send(order, 'paid');
+host.send(order, 'shipped');
 await host.idle();
 host.close();
-]]></code>
+</code>
       <code language="text" role="output">
-closed
-opened
-closed
+pending
+paid
+shipped
 </code>
     </example>
     <p><code>host.spawn</code> starts an actor of the chart, and each <code>host.send</code> gives it an event. The actor handles its events one at a time, in order.</p>
