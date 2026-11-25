@@ -1631,6 +1631,66 @@ a choice:
   order's log, the second's log, the first's done), the `fuel` numbers
   are the ones core gives, and the held turn's `nextDeadline` is `null`.
 
+**Step 7** (2026-11-25): `run.hibernate`, `run.wake`, `run.sweep`,
+`run.migrate`, and `effect.wake`, `effect.migrated`,
+`effect.migrationDone` and `effect.segmentFreed`. All four methods are
+allowed while a batch is held, as 4.4's table has them. Where the outline
+left a choice:
+
+- **`run.hibernate`** sets `open` after `ta_host_hibernate` (an output
+  taken with no batch open opened one; with one held it joined it), writes
+  the blob into the result (a copy) and drains: the drain's empty take
+  acks the output batch, and takes nothing while a batch is held. A
+  refused hibernation opens nothing (`ta_host_hibernate` lends its output
+  only on success). `TA_ERROR_STATE`, an actor parked after a waiting send
+  or hibernated already, says so in its message.
+- **`run.wake`** looks the session up first (`ta_host_locate`), so a
+  refusal points at `params.session` when it is not there and at
+  `params.blob` when the host refuses the blob: -32001 for an earlier blob
+  of the session, -32005 for another session's or another host's, each
+  with its own message; text that is not base64url is -32006, as `cbor`
+  is. `bytes_of` decodes base64url params for `cbor`, `image` and `blob`
+  alike.
+- **`run.sweep`** gives `ta_host_sweep` room for at most `limit`, the slots
+  it scans (`maxScan`) and the actors the live segments hold, whichever
+  is least, so a `limit` of 2^32-1 asks the arena for no more than the
+  host could answer. The CLOCK sweep marks on a revolution and answers on
+  the next, so the first sweep after a turn can answer none.
+- **`run.migrate`**'s `timeout` is a time param, ticks or a duration, as
+  `run.advanceTime`'s. A refusal points at `params.chart` when the host
+  has no chart of that name, else at `params.session` when one is named;
+  `TA_ERROR_INVALID` has a message saying which.
+- **`effect.migrationDone`** reads `ta_host_migration_failed` and
+  `ta_host_migration_pending` during dispatch into the request arena,
+  each sized by the effect's `failed` and `pending`, and writes each
+  failure's status by its name. `effect.wake` carries `migration` only
+  when a migration asked; `effect.migrated` carries the chart's index,
+  not its name (`EVENT`), as the schema has it.
+- **The schema** needed no change for these methods and notifications.
+  `run.turn`'s `nextDeadline` description was wrong, and so was step 6's
+  note above: a held turn's deadline is not always `null`. The run that
+  stops at waiting sends does not compute its own segment's deadline, but
+  `ta_host_run` still takes the others' (and the migrations' timeouts and
+  the watches'), so it answers `null` or what the segments had before.
+  The schema and `docs/cli.md` now say it is not to be relied on when the
+  status is `held`.
+- **Transcripts:** `tests/run/hibernation` (orders swept, hibernated with
+  no batch open and into a held batch, woken for an event and for a
+  delayed send's deadline, every refusal of `run.wake`) and
+  `tests/run/migration` (version 2 of the order chart added; a migration
+  of every order without `wake` and with a timeout, which leaves the
+  hibernated order pending; a second of that order alone with `wake`,
+  answered by the client; segment 0 retired; the moved orders running
+  version 2; a subscription's renewal that runs a service the client
+  stands in for, which a migration with no timeout lists in `failed` with
+  `TA_ERROR_STATE`). `test_run_memory` runs hibernation, the wakes and a
+  migration with the refusing allocator. `tests/run/values` gained one
+  line: its first `desk` segment retires once its actor ends after a
+  second version was added, which step 6 dropped and step 7 writes as
+  `effect.segmentFreed`.
+- **`run.sweep`'s room** is a `uint32_t` (at most `maxScan`), so its
+  bytes fit `size_t` on wasm32 too (`check:wasm` builds the command).
+
 ## 8. Decisions
 
 The maintainer settled every open question (2026-11-25); none is left.

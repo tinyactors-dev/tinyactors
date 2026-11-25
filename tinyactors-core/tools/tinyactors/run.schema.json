@@ -566,7 +566,7 @@
         "runs": {"$ref": "#/$defs/uint32"},
         "fuel": {"$ref": "#/$defs/uint64"},
         "time": {"$ref": "#/$defs/ticks"},
-        "nextDeadline": {"description": "null: none, or not known yet: a run that stops at waiting sends (status `held`) gives none, and the next `run.turn` answers it.", "type": ["integer", "null"], "minimum": 0, "maximum": 18446744073709551615}
+        "nextDeadline": {"description": "null: none. Not to be relied on when `status` is `held` (null, or the deadline the segments had before): the run that stops at waiting sends does not compute its segment's, and the next `run.turn` answers it.", "type": ["integer", "null"], "minimum": 0, "maximum": 18446744073709551615}
       },
       "required": ["status", "runs", "fuel", "time", "nextDeadline"],
       "additionalProperties": false

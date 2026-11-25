@@ -43,6 +43,7 @@
 < {"jsonrpc":"2.0","id":18,"result":{}}
 > {"jsonrpc":"2.0","id":19,"method":"run.turn"}
 < {"jsonrpc":"2.0","method":"effect.done","params":{"batch":9,"index":0,"session":1,"name":"desk-1","final":"closed","data":{"resolution":"answered"}}}
+< {"jsonrpc":"2.0","method":"effect.segmentFreed","params":{"batch":10,"index":0,"segment":0}}
 < {"jsonrpc":"2.0","id":19,"result":{"status":"idle","runs":2,"fuel":8,"time":1500000000,"nextDeadline":null}}
 > {"jsonrpc":"2.0","id":"config","method":"host.config"}
 < {"jsonrpc":"2.0","id":"config","result":{"systemID":"tinyactors-run","system":{"maxActors":64,"maxEvents":256,"maxTimers":64,"workspaces":4,"maxRequests":16,"outbox":64,"quantum":1000,"instanceBytes":0,"stringBytes":17408,"ticksPerSecond":1000000000,"traceBytes":131072,"traceContexts":256,"traceRules":16,"traceSeed":0,"tracing":true},"ioProcessors":[{"type":"crm","location":"https://crm.example/hooks"}],"migrateQuantum":256}}

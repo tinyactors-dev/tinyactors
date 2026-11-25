@@ -147,6 +147,19 @@ static void result_text(tool_call *call, const char *name, ta_string_view text) 
     ta_cbor_write_text(&call->result, text);
 }
 
+/* A base64url param's bytes, decoded into the request arena: TA_OK;
+ * TA_ERROR_INVALID: not base64url text; TA_ERROR_NO_MEMORY. */
+static ta_status bytes_of(tool_call *call, uint32_t at, ta_bytes *out) {
+    ta_string_view text = text_of(call, at);
+    size_t capacity = (size_t)text.length / 4 * 3 + 3;
+    void *room = ta_growable_arena_alloc(&call->server->request, capacity, SERVE_ALIGN);
+    if (!room) return TA_ERROR_NO_MEMORY;
+    ta_buffer buffer = {room, capacity, 0};
+    if (ta_json_base64url_read(text, &buffer) != TA_OK) return TA_ERROR_INVALID;
+    *out = (ta_bytes){buffer.pointer, buffer.length};
+    return TA_OK;
+}
+
 /* ---- values in ------------------------------------------------------------------------- */
 
 /* A value param ("data" or "cbor", "params" or "paramsCBOR") of an object,
@@ -188,20 +201,16 @@ static ta_status value_read(tool_call *call, const value_param *value, ta_payloa
             return TA_ERROR_NO_MEMORY;
         }
     } else {
-        ta_string_view text = text_of(call, cbor);
-        size_t capacity = (size_t)text.length / 4 * 3 + 3;
-        void *room = ta_growable_arena_alloc(&server->request, capacity, SERVE_ALIGN);
-        ta_buffer buffer = {room, capacity, 0};
-        if (!room) {
-            refused_at(call, TA_ERROR_NO_MEMORY, path);
-            return TA_ERROR_NO_MEMORY;
-        }
-        if (ta_json_base64url_read(text, &buffer) != TA_OK) {
+        ta_status read = bytes_of(call, cbor, &bytes);
+        if (read == TA_ERROR_INVALID) {
             tool_serve_refuse(call, (tool_serve_refusal){TA_RPC_MALFORMED, 0, "malformed", path,
                                                          ta_string("not base64url text")});
-            return TA_ERROR_INVALID;
+            return read;
         }
-        bytes = (ta_bytes){buffer.pointer, buffer.length};
+        if (read != TA_OK) {
+            refused_at(call, read, path);
+            return read;
+        }
     }
     const ta_datamodel_vtable *vtable = server->datamodel.vtable;
     ta_status status = vtable->from_wire(server->datamodel.datamodel, bytes, out);
@@ -273,18 +282,13 @@ static ta_status image_of_sources(tool_call *call, uint32_t list, uint32_t flags
 
 /* The image of `image`: a compiled image as base64url text. */
 static ta_status image_of_bytes(tool_call *call, uint32_t at, tool_image *out) {
-    tool_server *server = call->server;
-    ta_string_view text = text_of(call, at);
-    size_t capacity = (size_t)text.length / 4 * 3 + 3;
-    void *room = ta_growable_arena_alloc(&server->request, capacity, SERVE_ALIGN);
-    if (!room) return TA_ERROR_NO_MEMORY;
-    ta_buffer buffer = {room, capacity, 0};
-    if (ta_json_base64url_read(text, &buffer) != TA_OK) {
+    ta_status status = bytes_of(call, at, &out->bytes);
+    if (status == TA_ERROR_INVALID) {
         out->status = TA_ERROR_INVALID;
         out->complaint = ta_string("the image is not base64url text");
         return TA_OK;
     }
-    out->bytes = (ta_bytes){buffer.pointer, buffer.length};
+    if (status != TA_OK) return status;
     out->status = ta_image_open(out->bytes, &out->image);
     if (out->status != TA_OK) out->complaint = ta_string("the image does not verify: it is damaged, or of another format version");
     else out->opened = 1;
@@ -754,6 +758,130 @@ static void ack(tool_call *call) {
     tool_drain(server, 0);
 }
 
+/* ---- run.hibernate, run.wake, run.sweep ----------------------------------------------------- */
+
+/* The actor's blob, the client's to keep. The blob is the host's until the
+ * ack: with no batch open, taking it opened a batch of its own, which the
+ * drain acks once the blob is copied into the result; while a batch is
+ * held, it joins that batch, and the client's run.turn or run.ack ends
+ * both. */
+static void hibernate(tool_call *call) {
+    tool_server *server = call->server;
+    ta_bytes blob;
+    ta_status status = ta_host_hibernate(server->host, number_of(call, "session", 0), &blob);
+    if (status != TA_OK) {
+        refused_at(call, status, ta_string("params.session"));
+        if (status == TA_ERROR_STATE)
+            call->error.message = ta_string("the actor is not at rest, or hibernated already");
+        return;
+    }
+    server->open = 1;
+    ta_cbor_write_text(&call->result, ta_string("blob"));
+    ta_cbor_write_bytes(&call->result, blob); /* copied; JSON writes bytes as base64url */
+    tool_drain(server, 0); /* takes nothing while a batch is held */
+}
+
+/* A hibernated actor back from the blob run.hibernate gave: a session that
+ * is not there is refused at the session, a blob the host refuses (another
+ * session's or host's, an earlier one) at the blob. */
+static void wake(tool_call *call) {
+    tool_server *server = call->server;
+    uint64_t session = number_of(call, "session", 0);
+    ta_host_location location;
+    ta_status status = ta_host_locate(server->host, session, &location);
+    if (status != TA_OK) {
+        refused_at(call, status, ta_string("params.session"));
+        return;
+    }
+    ta_bytes blob;
+    status = bytes_of(call, param(call, "blob"), &blob);
+    if (status == TA_ERROR_INVALID) {
+        tool_serve_refuse(call, (tool_serve_refusal){TA_RPC_MALFORMED, 0, "malformed", ta_string("params.blob"),
+                                                     ta_string("not base64url text")});
+        return;
+    }
+    if (status == TA_OK) status = ta_host_wake(server->host, session, blob);
+    if (status == TA_OK) return;
+    refused_at(call, status, ta_string("params.blob"));
+    if (status == TA_ERROR_STALE) call->error.message = ta_string("not the session's latest blob");
+    if (status == TA_ERROR_INVALID) call->error.message = ta_string("not this session's blob, or not this host's");
+}
+
+/* The actors of the host, which bound what a sweep can answer. */
+static uint64_t actors_of(const tool_server *server) {
+    uint64_t actors = 0;
+    uint32_t count = ta_host_segment_count(server->host);
+    for (uint32_t segment = 0; segment < count; segment++) {
+        ta_host_segment_info info;
+        ta_memset(&info, 0, sizeof info);
+        info.size = sizeof info;
+        if (ta_host_segment_info_get(server->host, segment, &info) == TA_OK && info.live) actors += info.actors;
+    }
+    return actors;
+}
+
+/* The sessions the CLOCK sweep finds at rest, for the client to hibernate.
+ * Room for no more than it can answer: `limit`, the slots it scans and the
+ * actors there are. */
+static void sweep(tool_call *call) {
+    tool_server *server = call->server;
+    uint32_t scan = (uint32_t)number_of(call, "maxScan", 0);
+    uint64_t limit = number_of(call, "limit", 0), actors = actors_of(server);
+    if (limit > actors) limit = actors;
+    uint32_t room = limit < scan ? (uint32_t)limit : scan;
+    uint64_t *sessions = 0;
+    if (room) { /* at most the host's actors: their records already fit in memory */
+        sessions = (uint64_t *)ta_growable_arena_alloc(&server->request, sizeof *sessions * (size_t)room, SERVE_ALIGN);
+        if (!sessions) {
+            refused_at(call, TA_ERROR_NO_MEMORY, ta_string("params.limit"));
+            return;
+        }
+    }
+    uint32_t count = ta_host_sweep(server->host, scan, (ta_uint64_array){sessions, room});
+    ta_cbor_write_text(&call->result, ta_string("sessions"));
+    ta_cbor_write_array(&call->result, count);
+    for (uint32_t i = 0; i < count; i++)
+        ta_cbor_write_uint(&call->result, sessions[i]);
+}
+
+/* ---- run.migrate ---------------------------------------------------------------------------- */
+
+/* A migration to the current versions: every chart, a chart's, or one
+ * session's; its effects come in later runs. A refusal points at the chart
+ * when the host has none of that name, else at the session when one is
+ * named. */
+static void migrate(tool_call *call) {
+    tool_server *server = call->server;
+    ta_host_migration request;
+    ta_memset(&request, 0, sizeof request);
+    request.name = text_of(call, param(call, "chart"));
+    request.session = number_of(call, "session", 0);
+    request.flags = flag_of(call, "wake") ? (uint32_t)TA_HOST_MIGRATE_WAKE : 0u;
+    uint32_t timeout = param(call, "timeout");
+    if (timeout != TA_NIL) {
+        time_value ticks;
+        if (!time_of(call, timeout, &ticks)) {
+            invalid_param(call, "range", ta_string("params.timeout"), "not a duration");
+            return;
+        }
+        request.timeout = ticks.ticks;
+    }
+    uint32_t migration = 0;
+    ta_status status = ta_host_migrate(server->host, &request, &migration);
+    if (status != TA_OK) {
+        ta_host_chart_ref ref;
+        int named = request.name.length && ta_host_chart(server->host, request.name, &ref) == TA_OK;
+        int at_chart = request.name.length && (!named || !request.session);
+        refused_at(call, status,
+                   ta_string(at_chart ? "params.chart" : request.session ? "params.session" : "params"));
+        if (status == TA_ERROR_INVALID)
+            call->error.message = ta_string(at_chart ? "the host has no chart of that name"
+                                                     : "an invoked actor moves with its parent; or of another chart");
+        return;
+    }
+    result_number(call, "migration", migration);
+}
+
 /* ---- run.schema ----------------------------------------------------------------------------- */
 
 static void schema(tool_call *call) {
@@ -814,7 +942,8 @@ static void forward(tool_call *call) {
 /* ---- the methods ----------------------------------------------------------------------------- */
 
 /* The methods a held batch allows (docs/cli.md, "Held batches"): inputs,
- * lookups and the clock, which core takes while a batch is open, and the
+ * lookups, the clock, the sweep, a migration started and a blob taken
+ * (which joins the batch), which core takes while a batch is open, and the
  * two that end it. Refused: what would need the batch's ack (a forwarded
  * post, whose reply comes only after it) and what keeps the host
  * quiescent (an image added). */
@@ -832,6 +961,10 @@ static const tool_method methods[] = {
     {TA_CLI_TEXT("run.advanceTime"), advance_time, TOOL_METHOD_WHILE_HELD, 0},
     {TA_CLI_TEXT("run.turn"), turn, TOOL_METHOD_WHILE_HELD, 0},
     {TA_CLI_TEXT("run.ack"), ack, TOOL_METHOD_WHILE_HELD, 0},
+    {TA_CLI_TEXT("run.hibernate"), hibernate, TOOL_METHOD_WHILE_HELD, 0},
+    {TA_CLI_TEXT("run.wake"), wake, TOOL_METHOD_WHILE_HELD, 0},
+    {TA_CLI_TEXT("run.sweep"), sweep, TOOL_METHOD_WHILE_HELD, 0},
+    {TA_CLI_TEXT("run.migrate"), migrate, TOOL_METHOD_WHILE_HELD, 0},
     {TA_CLI_TEXT("run.schema"), schema, TOOL_METHOD_WHILE_HELD, 0},
 };
 

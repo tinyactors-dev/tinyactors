@@ -760,13 +760,17 @@ integer) or a local address (`ta_host_resolve`). Every result is an object.
 | `run.advanceTime` | `by` or `to`: ticks (an integer), or a duration as SCXML writes a delay (`"30s"`, `"150ms"`); `wallNs` | `time`, `wallNs` | `ta_host_advance_time` |
 | `run.turn` | `budget` (fuel per run, default 10,000), `runs` (at most, default 1,000), `hold` | `status`, `detail`, `runs`, `fuel`, `time`, `nextDeadline` (`null`: none, or not known: below) | the turn below |
 | `run.ack` | — | `{}` | `ta_host_effects_ack` of the held batch, then what it lets come is written |
+| `run.hibernate` | `session` | `blob`: the actor's hibernation blob, the client's to keep | `ta_host_hibernate`, the blob copied, then the ack of the batch it opened (below) |
+| `run.wake` | `session`, `blob` (its latest) | `{}` | `ta_host_wake` |
+| `run.sweep` | `maxScan`, `limit` | `sessions`: those at rest since the previous sweep, to hibernate | `ta_host_sweep` |
+| `run.migrate` | `chart` (a name; none: every chart), `session` (one actor), `wake`, `timeout` (ticks or a duration) | `migration`: its id | `ta_host_migrate` (`TA_HOST_MIGRATE_WAKE`); the actors move in later runs |
 | `run.schema` | — | `schema`: the protocol's JSON Schema | none |
 | any other | as core's | core's `result` or `error`, with the client's id | `ta_host_post` (`actor.state`, `host.stats`, `trace.*`, ...) |
 
 A `run.*` method the server does not have is -32601 of its own. The
-schema lists methods this release does not serve yet (hibernation,
-migration, snapshots, telemetry, `run.post`): their params are checked,
-then the server answers -32601.
+schema lists methods this release does not serve yet (snapshots,
+telemetry, `run.post`): their params are checked, then the server answers
+-32601.
 The only defaults the server owns are `budget` and `runs`, so that a chart
 that never idles cannot hang the client, and `--max-message`.
 
@@ -797,6 +801,30 @@ status's name). A run's outcome is not an error: the host goes on.
 Without `hold`, a send's waiting sender goes on at the ack, so an answer
 the client gives later arrives as an ordinary event.
 
+### Hibernation and migration
+
+The blobs are the client's: the server keeps none. `run.hibernate`
+answers an actor's blob (an actor at rest: one parked after a waiting send
+is not, -32002), copied into the response before the ack that ends the
+host's copy. With no batch open, taking it opens a batch of its own, which
+the server acks before it answers; while a batch is held, the blob joins
+that batch, and the client's `run.turn` or `run.ack` ends both. An event
+for a hibernated actor waits in the host, as do its delayed sends, and
+`effect.wake` asks for the actor; the client answers with `run.wake` and
+the latest blob it took of it (an earlier one is -32001, another
+session's or another host's -32005, both at `params.blob`). Forwarded
+methods about a hibernated actor are core's refusal (`actor.state`:
+-32002, "wake it first"). `run.sweep` finds the actors at rest since the
+previous sweep, `limit` at a time.
+
+`run.migrate` starts a migration to the current version of each chart,
+moved in later runs: each actor moved is an `effect.migrated`, a
+hibernated one waits for its blob (an `effect.wake` naming the migration,
+with `wake`) or the timeout, and `effect.migrationDone` reports how many
+moved, those that could not (with the status) and those left pending. A
+segment with no actors left and no current chart retires
+(`effect.segmentFreed`).
+
 ### Held batches
 
 With `hold`, `run.turn` leaves open a batch that has a send whose sender
@@ -807,9 +835,10 @@ until the client's next `run.turn` (with or without `hold`) or `run.ack`
 acks the batch, or the input ends. What the client sends meanwhile is in
 their queues when they go on: an answer (`run.send` with the send's
 `sendid`), or `run.fail`'s `error.communication`, which is how SCXML
-describes a `<send>` that failed. A held turn's `nextDeadline` is `null`:
-the run that stops at waiting sends gives none, and the next `run.turn`
-answers it.
+describes a `<send>` that failed. A held turn's `nextDeadline` is not to
+be relied on (`null`, or the deadline the segments had before): the run
+that stops at waiting sends does not compute its segment's, and the next
+`run.turn` answers it.
 
 `run.ack` acks the held batch and writes what the ack lets come, without
 holding it, so that its response leaves no batch open; nothing runs.
@@ -817,8 +846,10 @@ holding it, so that its response leaves no batch open; nothing runs.
 
 | While a batch is held | |
 |---|---|
-| `run.send`, `run.sendMany`, `run.fail`, `run.terminate`, `run.spawn`, `run.boot` | allowed: inputs apply now, their effects come after the ack |
+| `run.send`, `run.sendMany`, `run.fail`, `run.terminate`, `run.spawn`, `run.boot`, `run.wake` | allowed: inputs apply now, their effects come after the ack |
 | `run.chart`, `run.resolve`, `run.actorByName`, `run.schema` | allowed: lookups |
+| `run.hibernate` | allowed: the blob joins the held batch; it is copied into the response at once |
+| `run.sweep`, `run.migrate` | allowed: a migration's effects come in later runs |
 | `run.advanceTime` | allowed: the clock moves, nothing runs |
 | `run.turn`, `run.ack` | allowed: they ack the held batch |
 | forwarded methods | refused, -32002 `state`: core answers a post made while a batch is open only after its ack, so the response could not come before the next request; an actor's state cannot be read while its sends wait |
@@ -841,13 +872,17 @@ effect does not set is left out.
 | `TA_EFFECT_DONE` | `effect.done`: `session`, `name`, `final`, `data`/`cbor` (the donedata) | |
 | `TA_EFFECT_ERROR` | `effect.error`: `session`, `status` (the fault's name) | |
 | `TA_EFFECT_REQUEST` | `effect.request`: `session`, `src`; the server answers `ta_host_resume` with `TA_ERROR_INVALID` (the parent gets `error.execution`) | |
+| `TA_EFFECT_WAKE` | `effect.wake`: `session`, `migration` (when a migration asked for it) | `run.wake` with the actor's latest blob |
+| `TA_HOST_EFFECT_MIGRATED` | `effect.migrated`: `session`, `segment` and `chart` (where it runs now), `migration` | |
+| `TA_HOST_EFFECT_MIGRATION_DONE` | `effect.migrationDone`: `migration`, `migrated` (how many), `failed` (`[{session, status}]`), `pending` (sessions); the lists read during dispatch (`ta_host_migration_failed`, `ta_host_migration_pending`) | wake the pending and migrate them again |
+| `TA_HOST_EFFECT_SEGMENT_FREED` | `effect.segmentFreed`: `segment` | |
 | `TA_HOST_EFFECT_NOTIFICATION` | written as it is, its `method` and `params` (none is defined) | |
 
 The client runs every service a chart invokes (`<invoke>` of a type
 that is not a chart): an invocation is its segment and token, never its
-invoke id. The other effects (wakes, migrations, telemetry) come with later
-releases of the protocol. Every view an effect's notification reads is
-read and written before the ack, held batch or not.
+invoke id. Telemetry's effects come with a later release of the protocol.
+Every view an effect's notification reads is read and written before the
+ack, held batch or not.
 
 ### Values
 
@@ -886,11 +921,11 @@ The error object is core's: `{"code", "message", "data": {"reason",
 | not a request: not an object, `jsonrpc` not `"2.0"`, no `method`, `params` not an object, an `id` of another type, a member a request does not have, an empty batch, nested too deep, a line past `--max-message` | -32600 | `type`, `missing`, `unknown`, `limit` |
 | no such method | -32601 | `unknown` |
 | a param missing, of the wrong type, unknown, out of range; `data` for a chart that reads no values; the clock moved back | -32602 | `missing`, `type`, `unknown`, `range` |
-| `TA_ERROR_STALE` (no such session or name) | -32001 | `stale` |
+| `TA_ERROR_STALE` (no such session or name; a blob not the session's latest) | -32001 | `stale` |
 | `TA_ERROR_STATE`; a method refused while a batch is held; `run.ack` with none held | -32002 | `state` |
 | `TA_ERROR_LIMIT` | -32003 | `limit` |
 | `TA_ERROR_NO_MEMORY` | -32004 | `memory` |
-| `TA_ERROR_INVALID` (another system's address, a chart no image has, charts that do not compile: the message holds their diagnostics) | -32005 | `invalid` |
+| `TA_ERROR_INVALID` (another system's address, a chart no image has, charts that do not compile: the message holds their diagnostics; a blob of another session or host) | -32005 | `invalid` |
 | data the datamodel cannot read, `cbor` that is not base64url | -32006 | `malformed` |
 | `TA_ERROR_UNSUPPORTED` (a value outside the value table) | -32007 | `unsupported` |
 | a refusal no call documents | -32603 | `internal` |

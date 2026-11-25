@@ -7,8 +7,11 @@
  * (its arenas' chunks, the host's, the tables'), so every budget is tried.
  * The session is the worked example's, with a batch, a forwarded request,
  * an image added and refusals; batches held and acked, a send failed,
- * services invoked, done, failed and cancelled, the lookups, and the end of
- * input with a batch held, fed a few bytes at a time. The server's method
+ * services invoked, done, failed and cancelled, the lookups; orders swept,
+ * hibernated (with no batch open and into a held batch), woken for an
+ * event and for a migration to a second version (with its wakes, its end
+ * and the retired segment); and the end of input with a batch held, fed a
+ * few bytes at a time. The server's method
  * table is held to the schema's run.* methods too. */
 #include <stdlib.h>
 #include <string.h>
@@ -67,11 +70,45 @@ static const char session[] =
     "[{\"jsonrpc\":\"2.0\",\"id\":33,\"method\":\"run.terminate\",\"params\":{\"target\":\"tinyactors://tinya"
     "ctors-run/@renewal-3\"}},{\"jsonrpc\":\"2.0\",\"id\":34,\"method\":\"run.turn\"}]\n"
     "{\"jsonrpc\":\"2.0\",\"id\":24,\"method\":\"run.schema\"}\n"
-    "not json\n"
+    "not json\n";
+
+/* Then orders hibernated, woken, and migrated to a second version; the
+ * input ends with a batch held. */
+static const char session_hibernation[] =
+    "[{\"jsonrpc\":\"2.0\",\"id\":40,\"method\":\"run.spawn\",\"params\":{\"chart\":\"order\",\"name\":\"order"
+    "-20\",\"params\":{\"total\":500}}},{\"jsonrpc\":\"2.0\",\"id\":41,\"method\":\"run.spawn\",\"params\":{\"c"
+    "hart\":\"order\",\"name\":\"order-21\",\"params\":{\"total\":600}}},{\"jsonrpc\":\"2.0\",\"id\":42,\"meth"
+    "od\":\"run.turn\"}]\n"
+    "{\"jsonrpc\":\"2.0\",\"id\":43,\"method\":\"run.sweep\",\"params\":{\"maxScan\":1024,\"limit\":64}}\n"
+    "{\"jsonrpc\":\"2.0\",\"id\":44,\"method\":\"run.sweep\",\"params\":{\"maxScan\":1024,\"limit\":64}}\n"
+    "{\"jsonrpc\":\"2.0\",\"id\":45,\"method\":\"run.hibernate\",\"params\":{\"session\":3}}\n"
+    "{\"jsonrpc\":\"2.0\",\"id\":46,\"method\":\"run.send\",\"params\":{\"target\":3,\"event\":\"checkout\","
+    "\"data\":{\"card\":\"tok_visa\"}}}\n"
+    "{\"jsonrpc\":\"2.0\",\"id\":47,\"method\":\"run.turn\"}\n"
+    "{\"jsonrpc\":\"2.0\",\"id\":48,\"method\":\"run.wake\",\"params\":{\"session\":3,\"blob\":\"VEFIQgQAAAAAAAAA"
+    "SAAAAAQAAAA5KacD1X0pOI5i5ccDAAAAAAAAACcAAAAAAAAAAAAAAAYAAAABAAAAAAAAAP____________________8BAAAFAAAAAAA"
+    "AAAAAAAAAAQAAAAAAAAABAAAA_____wIAAAAAAAAAAAAAABy8Cc9jAgEKdG90YWwBDGNoYXJnZQkDBQQIAgIF6AcEAQgBAgXoBw\"}}\n"
+    "{\"jsonrpc\":\"2.0\",\"id\":49,\"method\":\"run.turn\",\"params\":{\"hold\":true}}\n"
+    "{\"jsonrpc\":\"2.0\",\"id\":50,\"method\":\"run.hibernate\",\"params\":{\"session\":4}}\n"
+    "{\"jsonrpc\":\"2.0\",\"id\":51,\"method\":\"run.ack\"}\n"
+    "{\"jsonrpc\":\"2.0\",\"id\":52,\"method\":\"run.addImage\",\"params\":{\"sources\":[{\"name\":\"order-v2."
+    "scxml\",\"text\":\"<scxml xmlns='http://www.w3.org/2005/07/scxml' name='order' datamodel='ecmascript'>"
+    "<datamodel><data id='total' expr='0'/><data id='currency' expr='\\\"EUR\\\"'/></datamodel><state id='op"
+    "en'><transition event='checkout' target='paying'/></state><state id='paying'><onentry><send type='paymen"
+    "ts' target='charges' event='charge' id='pay'><param name='amount' expr='total'/><param name='currency' e"
+    "xpr='currency'/></send></onentry><transition event='charge.ok' target='paid'/></state><final id='paid'/>"
+    "</scxml>\"}]}}\n"
+    "{\"jsonrpc\":\"2.0\",\"id\":53,\"method\":\"run.migrate\",\"params\":{\"chart\":\"order\",\"wake\":true,"
+    "\"timeout\":\"1s\"}}\n"
+    "{\"jsonrpc\":\"2.0\",\"id\":54,\"method\":\"run.turn\"}\n"
+    "{\"jsonrpc\":\"2.0\",\"id\":55,\"method\":\"run.wake\",\"params\":{\"session\":4,\"blob\":\"VEFIQgQAAAAAAAAA"
+    "SAAAAAQAAAA5KacD1X0pOI5i5ccEAAAAAAAAACcAAAAAAAAAAAAAAAYAAAABAAAAAAAAAP____________________8CAAABAAAAAAA"
+    "AAAAAAAAAAQAAAAAAAAABAAAA_____wIAAAAAAAAAAAAAABxMDa-rAgEKdG90YWwBDGNoYXJnZQkDBQQIAgIFsAkEAQgBAgWwCQ\"}}\n"
+    "{\"jsonrpc\":\"2.0\",\"id\":56,\"method\":\"run.turn\"}\n"
     "{\"jsonrpc\":\"2.0\",\"id\":25,\"method\":\"run.spawn\",\"params\":{\"chart\":\"order\",\"name\":\"order"
     "-19\",\"params\":{\"total\":150}}}\n"
-    "{\"jsonrpc\":\"2.0\",\"id\":26,\"method\":\"run.send\",\"params\":{\"target\":3,\"event\":\"checkout\","
-    "\"data\":{\"card\":\"tok_visa\"}}}\n"
+    "{\"jsonrpc\":\"2.0\",\"id\":26,\"method\":\"run.send\",\"params\":{\"target\":\"tinyactors://tinyactors-"
+    "run/@order-19\",\"event\":\"checkout\",\"data\":{\"card\":\"tok_visa\"}}}\n"
     "{\"jsonrpc\":\"2.0\",\"id\":27,\"method\":\"run.turn\",\"params\":{\"hold\":true}}\n";
 
 /* ---- a platform in memory ------------------------------------------------------------ */
@@ -79,7 +116,7 @@ static const char session[] =
 typedef struct memory_platform {
     long budget; /* allocations left; negative: no limit */
     long made, live;
-    size_t at;  /* of `session`: what receive gave so far */
+    size_t at;  /* of the session's parts: what receive gave so far */
     char *output;
     size_t output_length;
 } memory_platform;
@@ -130,12 +167,22 @@ static ta_status memory_write(void *context, const tool_write *request) {
     return TA_OK;
 }
 
+/* The session's parts, read one after the other. */
+static const struct {
+    const char *text;
+    size_t length;
+} session_parts[] = {{session, sizeof session - 1}, {session_hibernation, sizeof session_hibernation - 1}};
+
 /* A few bytes at a time, so lines arrive split. */
 static ta_status memory_receive(void *context, ta_buffer *room) {
     memory_platform *platform = (memory_platform *)context;
-    size_t left = sizeof session - 1 - platform->at, take = left < 97 ? left : 97;
+    size_t part = 0, at = platform->at;
+    while (part < sizeof session_parts / sizeof session_parts[0] && at >= session_parts[part].length)
+        at -= session_parts[part++].length;
+    size_t left = part < sizeof session_parts / sizeof session_parts[0] ? session_parts[part].length - at : 0;
+    size_t take = left < 97 ? left : 97;
     if (take > room->capacity) take = room->capacity;
-    memcpy(room->pointer, session + platform->at, take);
+    if (take) memcpy(room->pointer, session_parts[part].text + at, take);
     platform->at += take;
     room->length = take;
     return TA_OK;
@@ -175,6 +222,15 @@ static void test_every_refusal_is_a_status(void) {
     CHECK(whole.output && strstr(whole.output, "\"method\":\"effect.uninvoke\""));
     CHECK(whole.output && strstr(whole.output, "\"id\":24,\"result\":{\"schema\":{"));
     CHECK(whole.output && strstr(whole.output, "\"id\":27,\"result\":{\"status\":\"held\""));
+    CHECK(whole.output && strstr(whole.output, "\"id\":44,\"result\":{\"sessions\":[3,4]}"));
+    CHECK(whole.output && strstr(whole.output, "\"id\":45,\"result\":{\"blob\":\""));
+    CHECK(whole.output && strstr(whole.output, "\"id\":48,\"result\":{}"));
+    CHECK(whole.output && strstr(whole.output, "\"id\":50,\"result\":{\"blob\":\""));
+    CHECK(whole.output && strstr(whole.output, "\"method\":\"effect.wake\",\"params\":{\"batch\":11,\"index\":1,"
+                                               "\"session\":4,\"migration\":1}"));
+    CHECK(whole.output && strstr(whole.output, "\"id\":55,\"result\":{}"));
+    CHECK(whole.output && strstr(whole.output, "\"migration\":1,\"migrated\":2,\"failed\":[],\"pending\":[]"));
+    CHECK(whole.output && strstr(whole.output, "\"method\":\"effect.segmentFreed\""));
     long tried = 0, answered_memory = 0;
     for (long budget = 0; budget < whole.made; budget++) {
         outcome refused = serve(budget);
@@ -192,8 +248,7 @@ static void test_every_refusal_is_a_status(void) {
 
 /* The run.* methods of the schema that later steps of the protocol build:
  * the server answers them -32601 until then. */
-static const char *const unbuilt[] = {"run.hibernate", "run.wake",   "run.sweep",   "run.migrate", "run.snapshot",
-                                      "run.restore",   "run.traces", "run.metrics", "run.post"};
+static const char *const unbuilt[] = {"run.snapshot", "run.restore", "run.traces", "run.metrics", "run.post"};
 
 static int is_unbuilt(ta_string_view name) {
     for (size_t i = 0; i < sizeof unbuilt / sizeof unbuilt[0]; i++)

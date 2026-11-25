@@ -206,6 +206,70 @@ static void uninvoke_notice(notice *note) {
     notice_end(note);
 }
 
+/* A hibernated actor is wanted again (an event came for it, or a migration
+ * asked): the server keeps no blobs, so the client answers with run.wake. */
+static void wake_notice(notice *note) {
+    notice_begin(note, "effect.wake");
+    if (note->effect->migration) member_number(&note->writer, "migration", note->effect->migration);
+    notice_end(note);
+}
+
+static void migrated_notice(notice *note) {
+    const ta_host_effect *effect = note->effect;
+    notice_begin(note, "effect.migrated");
+    member_number(&note->writer, "segment", effect->segment);
+    member_number(&note->writer, "chart", effect->chart);
+    member_number(&note->writer, "migration", effect->migration);
+    notice_end(note);
+}
+
+/* A migration ended. Who failed and who is left pending are read now: they
+ * are the host's until its next run. */
+static void migration_done_notice(notice *note) {
+    tool_server *server = note->server;
+    const ta_host_effect *effect = note->effect;
+    ta_host_migration_failure *failures =
+        effect->failed ? (ta_host_migration_failure *)ta_growable_arena_alloc(
+                             &server->request, sizeof *failures * effect->failed, 8)
+                       : 0;
+    uint64_t *pending =
+        effect->pending ? (uint64_t *)ta_growable_arena_alloc(&server->request, sizeof *pending * effect->pending, 8)
+                        : 0;
+    if ((effect->failed && !failures) || (effect->pending && !pending)) {
+        tool_complain(server->invocation, ta_string("out of memory writing a notification: it is lost"));
+        return;
+    }
+    uint32_t failed = ta_host_migration_failed(server->host, effect->migration,
+                                               (ta_host_migration_failures){failures, effect->failed});
+    uint32_t left =
+        ta_host_migration_pending(server->host, effect->migration, (ta_uint64_array){pending, effect->pending});
+    if (failed > effect->failed) failed = effect->failed;
+    if (left > effect->pending) left = effect->pending;
+    ta_cbor_writer *writer = &note->writer;
+    notice_begin(note, "effect.migrationDone");
+    member_number(writer, "migration", effect->migration);
+    member_number(writer, "migrated", effect->migrated);
+    ta_cbor_write_text(writer, ta_string("failed"));
+    ta_cbor_write_array(writer, failed);
+    for (uint32_t i = 0; i < failed; i++) {
+        const char *name = ta_status_name((ta_status)failures[i].status);
+        ta_cbor_write_map(writer, 2);
+        member_number(writer, "session", failures[i].session);
+        member_text(writer, "status", ta_string(name ? name : "unknown"));
+    }
+    ta_cbor_write_text(writer, ta_string("pending"));
+    ta_cbor_write_array(writer, left);
+    for (uint32_t i = 0; i < left; i++)
+        ta_cbor_write_uint(writer, pending[i]);
+    notice_end(note);
+}
+
+static void segment_freed_notice(notice *note) {
+    notice_begin(note, "effect.segmentFreed");
+    member_number(&note->writer, "segment", note->effect->segment);
+    notice_end(note);
+}
+
 /* ---- replies ----------------------------------------------------------------------- */
 
 /* host.config's result: the clock's rate, the system id and the I/O
@@ -306,9 +370,13 @@ static void handle(tool_server *server, const ta_host_effect *effect, uint32_t i
     case TA_EFFECT_REQUEST: request_notice(&note); break;
     case TA_EFFECT_INVOKE: invoke_notice(&note); break;
     case TA_EFFECT_UNINVOKE: uninvoke_notice(&note); break;
+    case TA_EFFECT_WAKE: wake_notice(&note); break;
+    case TA_HOST_EFFECT_MIGRATED: migrated_notice(&note); break;
+    case TA_HOST_EFFECT_MIGRATION_DONE: migration_done_notice(&note); break;
+    case TA_HOST_EFFECT_SEGMENT_FREED: segment_freed_notice(&note); break;
     case TA_HOST_EFFECT_NOTIFICATION: host_notice(&note); break;
     case TA_HOST_EFFECT_REPLY: reply_given(server, effect); return;
-    default: break; /* the rest come with later steps of the protocol */
+    default: break; /* TRACES and LOGS come with telemetry, a later step of the protocol */
     }
     ta_growable_arena_release(&server->request, mark);
 }
