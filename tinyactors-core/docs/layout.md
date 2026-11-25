@@ -60,6 +60,7 @@ implementation of that layer). Layer dependency rules are in
 │   │   ├── report.[ch]        ✅ a command's answer as one tree, written as markdown, json or xml
 │   │   ├── decimal.[ch]       ✅ a number's text as the nearest double: Go's strconv.ParseFloat, ported
 │   │   ├── json.[ch]          ✅ JSON text to one CBOR item and back (RFC 8949, sections 6.1 and 6.2)
+│   │   ├── rpc.[ch]           ✅ JSON-RPC 2.0, one message per line: lines, envelopes, responses (tinyactors run)
 │   │
 │   ├── analysis/              for the tools: not in a released library (tests/unit/test_analysis.c)
 │   │   ├── analysis.h         ✅ lint's findings and the shortest path to a state, read from an image

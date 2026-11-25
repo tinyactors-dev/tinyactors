@@ -90,9 +90,10 @@ module Core
     # The command line, for the tools: the words read against a program's
     # commands and options, a report written as Markdown, JSON or XML, and
     # JSON text read into CBOR and written from it, its numbers read by a
-    # port of Go's strconv (src/cli). Freestanding; not in a released library.
+    # port of Go's strconv, and JSON-RPC 2.0 one message per line for the
+    # run server (src/cli). Freestanding; not in a released library.
     Layer.new(name: 'cli', uses: %w[base], freestanding: true,
-              sources: %w[arguments report decimal json].map { |s| "src/cli/#{s}.c" }),
+              sources: %w[arguments report decimal json rpc].map { |s| "src/cli/#{s}.c" }),
     # A statechart drawn: scxmljs's layout of nested boxes and orthogonal
     # routes, ported (src/diagram/diagram.h). Freestanding; not in a
     # released library.
@@ -256,6 +257,7 @@ module Core
                                                'TA_JSON_NUMBERS_CORPUS' => BUILD.join('parse-number-fxx-test-data') }),
     unit('test_cli_json', 'cli', defines: { 'TA_VALUES' => SUITE.join('suites/protocol/values.txt'),
                                             'TA_JSON_VALUES' => ROOT.join('tests/json/values.txt') }),
+    unit('test_cli_rpc', 'cli'),
     unit('test_diagram', 'svg'),
     unit('test_analysis', 'analysis', 'compile'),
     unit('test_table', 'base'),
