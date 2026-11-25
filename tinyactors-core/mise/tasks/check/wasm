@@ -3,14 +3,14 @@
 # vim:ft=ruby
 
 # The C++ header check, the torture chamber's POSIX event loop and the test
-# that runs ta-compile as a process have no WebAssembly build. wasmtime preopens the host's root, as the tests write
+# that runs the tinyactors program as a process have no WebAssembly build. wasmtime preopens the host's root, as the tests write
 # their files under the build tree.
 
 require_relative '../../core'
 require 'open3'
 
 programs = Core::PROGRAMS.reject do |program|
-  program.cxx || program.name.start_with?('test_torture') || program.name == 'test_compile_tool'
+  program.cxx || program.name.start_with?('test_torture') || program.name == 'test_tool'
 end
 Core.build_layers('wasi')
 Core.in_parallel(programs) { |program| Core.build_program('wasi', program) }

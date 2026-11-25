@@ -55,6 +55,10 @@ implementation of that layer). Layer dependency rules are in
 │   │   ├── cbor_output.h      ✅ CBOR heads written into an output (the host's replies)
 │   │   ├── output.[ch]        ✅ bytes into a room grown through a caller's allocator (ADR 0010)
 │   │
+│   ├── cli/                   freestanding, for the tools: not in a released library
+│   │   ├── arguments.[ch]     ✅ a command line read against a program's commands and options
+│   │   ├── report.[ch]        ✅ a command's answer as one tree, written as markdown, json or xml
+│   │
 │   ├── image/                 shared by compiler (writer) and runtime (reader)
 │   │   ├── records.h          ✅ on-disk records, bytecode opcodes, validated view
 │   │   ├── image.c            ✅ open + full verification (mutation-tested: test_image.c), public accessors
@@ -137,8 +141,9 @@ implementation of that layer). Layer dependency rules are in
 │   │   └── test/              ✅ JSONL validator + Node WebSocket/dashboard test (`mise run torture:test`)
 │   ├── vendor_quickjs.py      ✅ fetch + verify the pinned quickjs-ng release
 │   ├── amalgamate.py          ✅ dist/tinyactors.h + dist/tinyactors.c single-file distribution
-│   ├── compile/               ✅ ta-compile: charts or a manifest -> .tai, --emit-c, --dump,
-│   │                             --warnings-as-errors (tests/unit/test_compile_tool.c)
+│   ├── tinyactors/            ✅ the tinyactors command (docs/cli.md): git-style commands over
+│   │                             charts, manifests and images, answers in markdown, json or xml;
+│   │                             platform.c the only file with the C library (tests/unit/test_tool.c)
 │   └── tarun/                 ◻ runner CLI: image + scripted events + simulated time -> trace
 │
 ├── tests/
@@ -229,4 +234,4 @@ these are the forms the library takes.
 3. **WebAssembly module** — the freestanding layers compiled for
    wasm32 export the same ABI; the effect array is read straight from linear
    memory.
-4. **Images** — `.tai` files or `ta-compile --emit-c` C arrays for ROM/flash.
+4. **Images** — `.tai` files or `tinyactors compile --emit c` C arrays for ROM/flash.

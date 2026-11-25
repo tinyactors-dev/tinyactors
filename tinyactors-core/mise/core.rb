@@ -22,7 +22,10 @@ module Core
 
   # A layer is a static archive, libtinyactors_<name>.a. `uses` are the
   # layers it links against (docs/architecture.md section 1); `freestanding`
-  # layers compile without the host's C library headers (AGENTS.md).
+  # layers compile without the host's C library headers (AGENTS.md), and
+  # check:freestanding links them with nothing left undefined. A layer that
+  # is `freestanding: :headers` compiles without them too, but calls a layer
+  # that is not freestanding (the compiler), so it is left out of that link.
   Layer = Struct.new(:name, :sources, :uses, :freestanding, :flags, :libraries, keyword_init: true)
 
   # How QuickJS compiles. Without C11 atomics it leaves out `Atomics.wait`
@@ -53,6 +56,11 @@ module Core
     # commands and options, and a report written as Markdown, JSON or XML
     # (src/cli). Freestanding; not in a released library.
     Layer.new(name: 'cli', uses: %w[base], freestanding: true, sources: %w[src/cli/arguments.c src/cli/report.c]),
+    # The tinyactors command's commands (tools/tinyactors): the C library only
+    # in its platform file, which the program adds (TOOLS below).
+    Layer.new(name: 'tool', uses: %w[cli compile image], freestanding: :headers,
+              sources: %w[program input compile_command inspect disassemble graph diff]
+                .map { |s| "tools/tinyactors/#{s}.c" }),
     # The BasicHTTP Event I/O Processor's codec; the transport stays with the host.
     Layer.new(name: 'basic_http', uses: %w[base], freestanding: true, sources: %w[src/basic_http/basic_http.c]),
     # Trace records to OTLP protobuf and back: a codec, like basic_http (docs/adr/0006).
@@ -190,9 +198,9 @@ module Core
     Program.new(name: 'test_headers_cxx', sources: %w[tests/unit/test_headers.cpp], uses: %w[base], cxx: true),
     unit('test_image', 'compile'),
     unit('test_compile', 'compile'),
-    # Runs the ta-compile program the build made beside it.
-    unit('test_compile_tool', 'runtime', 'compile', defines: { 'TA_TEST_TEMPORARY_DIRECTORY' => :scratch,
-                                                    'TA_TEST_PROGRAMS' => :programs }),
+    # Runs the tinyactors program the build made beside it.
+    unit('test_tool', 'runtime', 'compile', defines: { 'TA_TEST_TEMPORARY_DIRECTORY' => :scratch,
+                                                       'TA_TEST_PROGRAMS' => :programs }),
     unit('test_compile_scale', 'compile', alone: true), # compile times at n and 8n
     unit('test_core', 'core', 'compile', 'test_datamodel', *ECMASCRIPT),
     unit('test_system', 'system', 'compile', 'test_datamodel'),
@@ -239,9 +247,9 @@ module Core
     Program.new(name: 'ta-conform', uses: %w[host runtime compile basic_http test_datamodel] + ECMASCRIPT,
                 sources: %w[conform.c datamodel.c vectors.c scenario.c w3c.c].map { |s| "tools/conform/#{s}" },
                 defines: {}),
-    # The compiler's command line: charts or a manifest to an image
-    # (tools/compile/compile.c).
-    Program.new(name: 'ta-compile', uses: %w[runtime compile], sources: %w[tools/compile/compile.c], defines: {}),
+    # The tinyactors command (docs/cli.md): the tool layer's commands over
+    # the platform file, the only one of it that uses the C library.
+    Program.new(name: 'tinyactors', uses: %w[tool], sources: %w[tools/tinyactors/platform.c], defines: {}),
     # The torture chamber's host (tools/torture/README.md).
     Program.new(name: 'torture-bench', uses: %w[host runtime compile otlp] + ECMASCRIPT,
                 sources: %w[bench.c net.c loop.c].map { |s| "tools/torture/#{s}" },

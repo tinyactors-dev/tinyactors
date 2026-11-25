@@ -8,7 +8,7 @@
 
 require_relative '../../core'
 
-LAYERS = Core::LAYERS.values.select(&:freestanding).freeze
+LAYERS = Core::LAYERS.values.select { |layer| layer.freestanding == true }.freeze
 # zig's target, its extra flags, and whether to link an image.
 TARGETS = [
   ['wasm32-freestanding', %w[-mbulk-memory], true],
