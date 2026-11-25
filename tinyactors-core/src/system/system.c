@@ -1,6 +1,8 @@
 /* system.c — system lifetime: one caller-owned region carved by a single
  * function in measure mode (ta_system_layout) and real mode (ta_system_init);
  * actor spawn/reclaim; relocation; snapshot/restore; inspection. */
+#include <stddef.h>
+
 #include "base/format.h"
 #include "base/memory.h"
 #include "system/system_internal.h"
@@ -376,6 +378,8 @@ ta_status ta_system_init(const ta_system_setup *setup, ta_system **out) {
     set_rels(system, &arena, &o);
     ta_journal_init(&system->journal, ta_arena_pointer(&arena, o.trace_storage),
                     normalized.trace_bytes);
+    /* acknowledged records stay as history, so a snapshot shows recent traces */
+    ta_journal_retain(&system->journal, (uint32_t)offsetof(ta_trace_record, size));
     ta_pool_init(&system->contexts, ta_arena_pointer(&arena, o.context_slots),
                  (unsigned char *)ta_arena_pointer(&arena, o.context_generations),
                  sizeof(ta_trace_entry), normalized.trace_contexts);
@@ -1291,7 +1295,7 @@ ta_status ta_system_snapshot(const ta_system *system, ta_buffer *out) {
      * empty between calls, and the datamodel contexts are re-attached by the
      * restore. Only the image hash survives: the restore validates it. */
     ta_system *t = (ta_system *)buffer;
-    ta_journal_clear_unused(&t->journal); /* acknowledged records are dead storage */
+    ta_journal_clear_unused(&t->journal); /* storage holding no record kept is zeroed */
     ta_core *core = &t->core;
     uint64_t hash = core->image_view.hash;
     uint32_t dropped = core->dropped_errors, overrun = core->overrun;

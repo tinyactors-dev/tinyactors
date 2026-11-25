@@ -160,9 +160,10 @@ group, the words build on each other.
   id, with the region's layout and its layout id.
 - **Layout id.** The FNV-1a 64 of the region's layout description
   (`ta_system_layout_description`: every region type's members, offsets
-  and sizes, as CBOR). A region holds it after its magic, a pack carries
-  the description and the id, and a restore refuses a snapshot of another
-  layout id.
+  and sizes, as CBOR; and how the image's records, an actor's instance
+  and the trace records read). A region holds it after its magic, a pack
+  carries the description and the id, and a restore refuses a snapshot of
+  another layout id.
 - **Export, adopt.** The steps a migration moves an actor with, inside
   core: export writes the actor (and its timers) to a blob and removes
   it from its old segment, adopt makes it run in the new one with the
@@ -184,6 +185,9 @@ group, the words build on each other.
 - **Trace, span, traceparent.** Core records what actors did as spans of
   traces; a W3C `traceparent` carries a trace across sends, the
   application's requests and other hosts.
+- **Trace history.** The trace records a system's journal keeps after the
+  host took them, until new records need their room: a snapshot carries
+  them, so a reader shows the spans of the moments before the capture.
 - **Telemetry, OTLP.** Traces, logs and metrics, encoded by core as OTLP
   and handed to the application's exporter.
 

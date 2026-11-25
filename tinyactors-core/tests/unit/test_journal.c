@@ -1,7 +1,8 @@
 /* ta_journal: the lossy ring of variable-size records (src/base/journal.h):
  * writing and reading, wrapping, a full ring refusing and counting, moving
- * by memcpy and copying into storage of another size, and a random workload
- * against a plain queue. */
+ * by memcpy and copying into storage of another size, a random workload
+ * against a plain queue, and a journal that keeps its released records as
+ * history until their room is needed. */
 #include "../harness/harness.h"
 #include "base/journal.h"
 
@@ -261,6 +262,124 @@ static void test_clear_unused(void) {
     CHECK(dead_zero);
 }
 
+/* The retained records, walked by their sizes from head to read: their
+ * counters in `out`, how many; every one checked. */
+static uint32_t read_retained(const ta_journal *journal, uint32_t *out, uint32_t capacity) {
+    const unsigned char *storage = (const unsigned char *)ta_pointer_add(journal, journal->storage_relative);
+    uint32_t at = journal->head, bytes = 0, n = 0;
+    while (bytes < journal->retained) {
+        if (journal->wrapped && at == journal->end) at = 0;
+        uint32_t size, counter;
+        memcpy(&size, storage + at, 4);
+        memcpy(&counter, storage + at + 4, 4);
+        CHECK(size >= 8 && size % 8 == 0 && bytes + size <= journal->retained);
+        if (size < 8 || bytes + size > journal->retained) break;
+        for (uint32_t i = 8; i < size; i++)
+            if (storage[at + i] != (unsigned char)(counter * 31u + i)) {
+                CHECK(0);
+                break;
+            }
+        if (n < capacity) out[n] = counter;
+        n++;
+        at += size;
+        bytes += size;
+    }
+    if (journal->wrapped && at == journal->end && journal->read == 0) at = 0;
+    CHECK_EQUAL(at, journal->read);
+    return n;
+}
+
+/* Released records stay as history until a reservation needs their room;
+ * the oldest go first, and only pending records make a reservation fail. */
+static void test_retention(void) {
+    ta_journal journal;
+    memset(storage_a, 0xEE, sizeof storage_a);
+    ta_journal_init(&journal, storage_a, 128);
+    ta_journal_retain(&journal, 0);
+    for (uint32_t i = 0; i < 4; i++)
+        CHECK(write_record(&journal, 24, i));
+    uint32_t got[16], read;
+    CHECK_EQUAL(read_piece(&journal, got, 2, &read), 4);
+    ta_journal_release(&journal, 48); /* records 0 and 1 are history */
+    CHECK_EQUAL(journal.retained, 48);
+    CHECK_EQUAL(read_retained(&journal, got, 16), 2);
+    CHECK_EQUAL(got[0], 0);
+    CHECK_EQUAL(got[1], 1);
+    CHECK(write_record(&journal, 32, 4)); /* fits before the end */
+    CHECK(write_record(&journal, 16, 5)); /* wraps over record 0, the oldest */
+    CHECK_EQUAL(journal.retained, 24);
+    CHECK_EQUAL(read_retained(&journal, got, 16), 1);
+    CHECK_EQUAL(got[0], 1);
+    ta_journal_clear_unused(&journal); /* history survives a snapshot's clearing */
+    CHECK_EQUAL(read_retained(&journal, got, 16), 1);
+    CHECK_EQUAL(read_piece(&journal, got, 16, &read), 3); /* 2, 3, 4 before the wrap */
+    ta_journal_release(&journal, read);
+    CHECK_EQUAL(read_piece(&journal, got, 16, &read), 1);
+    CHECK_EQUAL(got[0], 5);
+    ta_journal_release(&journal, read); /* all released: all history */
+    CHECK_EQUAL(journal.used, 0);
+    CHECK_EQUAL(read_retained(&journal, got, 16), 5);
+    CHECK_EQUAL(got[0], 1);
+    CHECK_EQUAL(got[4], 5);
+    /* a record as large as the ring drops every retained one; none is lost */
+    CHECK(write_record(&journal, 128, 6));
+    CHECK_EQUAL(journal.retained, 0);
+    CHECK_EQUAL(journal.lost_total, 0);
+    CHECK(!write_record(&journal, 8, 7)); /* pending records are never dropped */
+    CHECK_EQUAL(journal.lost_total, 1);
+    /* a copy keeps the history when it fits, else the pending records alone */
+    ta_journal_release(&journal, 128);
+    ta_journal copy;
+    CHECK(ta_journal_copy(&copy, storage_b, 256, &journal));
+    CHECK_EQUAL(copy.retained, 128);
+    CHECK_EQUAL(read_retained(&copy, got, 16), 1);
+    CHECK_EQUAL(got[0], 6);
+    CHECK(write_record(&copy, 24, 8)); /* the copy has room beside its history */
+    CHECK_EQUAL(copy.retained, 128);
+    CHECK(write_record(&journal, 24, 8)); /* the ring has none: record 6 goes */
+    CHECK_EQUAL(journal.retained, 0);
+    CHECK(ta_journal_copy(&copy, storage_b, 64, &journal));
+    CHECK_EQUAL(copy.retained, 0);
+    CHECK_EQUAL(read_piece(&copy, got, 16, &read), 1);
+    CHECK_EQUAL(got[0], 8);
+}
+
+/* The random workload with history kept: what is pending reads as before,
+ * and the history is always whole records, oldest first, ending at read. */
+static void test_random_retained(void) {
+    ta_journal journal;
+    ta_journal_init(&journal, storage_b, 1000);
+    ta_journal_retain(&journal, 0);
+    uint32_t queue[4096], queue_head = 0, queue_tail = 0, counter = 0;
+    srand(11);
+    for (int step = 0; step < 20000; step++) {
+        if (rand() % 3) {
+            uint32_t size = 8u * (1u + (uint32_t)(rand() % 20));
+            if (write_record(&journal, size, counter)) queue[queue_tail++ % 4096] = counter;
+            counter++;
+        } else {
+            uint32_t got[256], read;
+            uint32_t n = read_piece(&journal, got, 256, &read);
+            uint32_t take = n ? (uint32_t)rand() % (n + 1) : 0, bytes = 0;
+            const unsigned char *p;
+            ta_journal_peek(&journal, &p);
+            for (uint32_t i = 0; i < take; i++) {
+                CHECK_EQUAL(got[i], queue[queue_head % 4096]);
+                queue_head++;
+                uint32_t size;
+                memcpy(&size, p + bytes, 4);
+                bytes += size;
+            }
+            ta_journal_release(&journal, bytes);
+        }
+        uint32_t history[512];
+        uint32_t kept = read_retained(&journal, history, 512);
+        for (uint32_t i = 1; i < kept && i < 512; i++)
+            CHECK(history[i] > history[i - 1]);
+        CHECK(journal.used + journal.retained <= journal.capacity);
+    }
+}
+
 int main(void) {
     RUN(test_write_and_read);
     RUN(test_wrapping);
@@ -269,5 +388,7 @@ int main(void) {
     RUN(test_copy);
     RUN(test_clear_unused);
     RUN(test_random);
+    RUN(test_retention);
+    RUN(test_random_retained);
     TEST_MAIN_END();
 }

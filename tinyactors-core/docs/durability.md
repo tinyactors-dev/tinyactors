@@ -144,7 +144,8 @@ CBOR, the library's version, the byte order, the size of a pointer, `TA_NIL`,
 and every type a region holds (`ta_system`, what it embeds, and the records
 of its pools and arrays), each member with its name, offset, size, count,
 type and, for a link, an offset or a string, its kind (`relative`,
-`index:<pool>`, `handle:<pool>`, `pointer`, `string`, `event-name`), with a
+`index:<pool>`, `handle:<pool>`, `pointer`, `string`, `event-name`, `slab`,
+`global:<section>`), with a
 `when` (a member of the record and the values of it) where the kind holds
 only for some records (a request's `source`, `type` and `next`); then the
 pools and the arrays `ta_system` points to, with the member that holds each
@@ -172,6 +173,67 @@ two sections, `eventName` the type of an event name's record and `name` its
 member. So a reader resolves an actor's name, an event's name, sendid,
 origin, origin type, invoke id and raw message, a delayed send's target and
 an effect's strings from the snapshot alone.
+
+The description goes on past the region, so a reader decodes everything a
+snapshot holds without the build:
+
+- **`image`**: every record type of the image (`ta_chart_record`,
+  `ta_state_record`, `ta_transition_record`, `ta_expression_record`,
+  `ta_capture_record`, `ta_send_record`, `ta_invoke_record`,
+  `ta_data_record`, `ta_actor_record`, with the header, section and event
+  name records), described as the region's are, and how to find them:
+  `sections` names each section kind and its element type, `chart` is a
+  chart's record, and `ranges` says which members of it give the first and
+  the count of the chart's records in each section. An image record's
+  member kinds are `string`, `event-name`, `chart:<section>` (an index
+  local to the chart's records of that section), `global:<section>` (an
+  index of the whole section) and `u32-pool` (an offset, in u32s, into the
+  `u32` section, where its `list` lies: `count` entries, each of the kinds
+  in `elements`, as a transition's targets and its event descriptors, the
+  event names lo <= e < hi). `names` gives the names of a member's values
+  (a state's `kind`: atomic, compound, parallel, final, history-shallow,
+  history-deep), and `flags` its bits (a transition's internal, history
+  target and initial). So a chart decodes whole: its name, datamodel,
+  source, states with their parents, children and initial states,
+  transitions with their sources, targets, events and conditions, and
+  data. The image holds no SCXML text: a chart's `source` names the
+  document it was compiled from.
+- **`instance`**: where an actor's active configuration lies. A resident
+  actor's `instance` is a slab offset (its kind is `slab` while the actor's
+  state is resident, `global:charts` while it is hibernated: the chart, its
+  configuration being in its blob), where a `ta_instance` header lies, then
+  the `areas` of u32 words of `ta_instance_layout_of`, in order, each as
+  long as its `words` says (`stateWords`: one bit per state of the chart,
+  rounded up to whole words, or a member of the chart's record) and present
+  when its `when` holds for the chart's record. `config` is the active
+  configuration, one bit per state in document order, least significant
+  bit first; a history state's recorded states are bits of `history` from
+  its `historyOffset`, over its parent's descendants. The layout of an
+  instance depends only on the chart's record, so the description gives
+  the rule, not a table per image, and its id stays the build's.
+- **`trace`**: the trace records the region's journal keeps
+  (`<tinyactors/trace.h>`): the journal's member of `ta_system` and the
+  members that bound its records, the header type (`ta_trace_record`) and,
+  per kind, its name, its body's type and the u32 lists after the body
+  (a macrostep's configuration, a microstep's transitions, exited and
+  entered states), each with the body member that counts it. A record's
+  strings are string references, read as above.
+
+The journal keeps the records a host already took as history: an
+acknowledged record stays in the storage, between `head` and `read`, until a
+new record needs its room, which drops the oldest first, and only the
+records not yet taken (from `read` to `tail`) make a record be lost. So a
+snapshot carries the most recent `traceBytes` of records, and a reader turns
+them into the spans of the moments before the capture, as the OTLP encoder
+names them. What it cannot have: a dynamic string of an acknowledged record
+(a runtime actor's name, an event name the image does not hold) was released
+when the record was taken and may have been reused, so a reader reads those
+only for pending records, and the values a record names (with
+`TA_TRACE_VALUES`) were released too. The host's encoder state (spans it
+staged and has not handed out, open spans, its wall-clock marks) is host
+memory, not a region's, and is not in a snapshot; the records it read are,
+so nothing is missing but the wall times: a reader places records by the
+system's clock and fuel stamps.
 
 The FNV-1a 64 of those bytes is the **layout id**. `ta_system_init` writes it
 at offset 8 of the region, after the magic, and `ta_system_restore` refuses a

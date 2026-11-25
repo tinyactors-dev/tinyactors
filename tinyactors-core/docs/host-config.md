@@ -93,7 +93,7 @@ clamped to the limits in `tinyactors/system.h`):
 | `instanceBytes` | 0: derived from each segment's image and `maxActors` |
 | `stringBytes` | 16384 + 16 × `maxActors` |
 | `ticksPerSecond` | 1000000000 (the monotonic clock in nanoseconds; 1000 for milliseconds) |
-| `traceBytes` | 131072 (`TA_TRACE_BYTES_DEFAULT`), at least 65536 and at most 1 GiB (clamped to both), whatever `maxEvents`: the journal holds the trace records a run writes until the host takes them, and loses (and counts) what does not fit (0 when `tracing` is false) |
+| `traceBytes` | 131072 (`TA_TRACE_BYTES_DEFAULT`), at least 65536 and at most 1 GiB (clamped to both), whatever `maxEvents`: the journal holds the trace records a run writes until the host takes them, and loses (and counts) what does not fit; the records taken stay as history until new ones need their room, so a snapshot carries the most recent ones (0 when `tracing` is false) |
 | `traceContexts` | `maxEvents` (0 when `tracing` is false) |
 | `traceRules` | 16, at most 255 (0 when `tracing` is false) |
 | `traceSeed` | 0 |

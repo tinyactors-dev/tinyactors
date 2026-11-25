@@ -23,7 +23,7 @@
 > {"jsonrpc":"2.0","id":14,"method":"run.advanceTime","params":{"by":"10s"}}
 < {"jsonrpc":"2.0","id":14,"result":{"time":10000,"wallNs":1764054010000000000}}
 > {"jsonrpc":"2.0","id":15,"method":"run.snapshot","params":{"path":"orders.snapshot"}}
-< {"jsonrpc":"2.0","id":15,"result":{"bytes":313304}}
+< {"jsonrpc":"2.0","id":15,"result":{"bytes":327864}}
 > {"jsonrpc":"2.0","id":16,"method":"actor.context","params":{"session":2}}
 < {"jsonrpc":"2.0","id":16,"result":{"variables":{"total":990,"reference":"ord_843291","placed":"2025-11-25T07:00:00.000Z","charge":null}}}
 > [{"jsonrpc":"2.0","id":17,"method":"run.spawn","params":{"chart":"order","name":"order-4","params":{"total":2500}}},{"jsonrpc":"2.0","id":18,"method":"run.turn"},{"jsonrpc":"2.0","id":19,"method":"actor.context","params":{"session":4}}]
@@ -77,4 +77,4 @@
 < {"jsonrpc":"2.0","method":"effect.done","params":{"batch":16,"index":1,"session":5,"name":"invoice-1","final":"issued"}}
 < [{"jsonrpc":"2.0","id":48,"result":{}},{"jsonrpc":"2.0","id":49,"result":{"status":"idle","runs":1,"fuel":9,"time":30000,"nextDeadline":null}}]
 > {"jsonrpc":"2.0","id":50,"method":"run.snapshot","params":{"path":"orders.snapshot"}}
-< {"jsonrpc":"2.0","id":50,"result":{"bytes":313472}}
+< {"jsonrpc":"2.0","id":50,"result":{"bytes":328032}}
