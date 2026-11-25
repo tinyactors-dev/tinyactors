@@ -4,7 +4,10 @@
  *
  * The layout is the writer's: two spaces per element level, an element, a
  * comment or a processing instruction per line, attributes in the order
- * written. Only the whitespace between elements changes. What a chart means
+ * written. Only the whitespace between elements changes, and one empty line
+ * is kept where the source has one or more between two elements, comments
+ * or processing instructions (two or more line ends between them), except
+ * before an element's first child and after its last. What a chart means
  * is kept byte for byte: attribute values as written (their references
  * too), and the whole content of an element whose content is a value or a
  * program (<script>, <data>, <content>, <assign>), of an element of another
@@ -147,9 +150,28 @@ static void write_instruction(ta_xml_writer *writer, ta_string_view markup) {
                               (ta_string_view){inside.pointer + start, end - start});
 }
 
+/* Two or more line ends between `before` and `after` (pieces of the same
+ * source): an empty line between them. "\r\n" is one line end, as a
+ * lone '\r' is. */
+static int empty_line_between(const char *before, const char *after) {
+    uint32_t line_ends = 0;
+    for (const char *at = before; at < after; at++)
+        line_ends += *at == '\n' || (*at == '\r' && (at + 1 == after || at[1] != '\n'));
+    return line_ends >= 2;
+}
+
+/* The next piece on a line of its own, after the one that ended at *last
+ * (NULL: none yet at this level): an empty line before it when the source
+ * has one. */
+static void line_of(ta_xml_writer *writer, const ta_xml_content *piece, const char **last) {
+    if (*last && empty_line_between(*last, piece->markup.pointer)) ta_xml_writer_blank_line(writer);
+    *last = piece->markup.pointer + piece->markup.length;
+}
+
 /* An element open: its frame, where its content goes on. */
 typedef struct canonical_frame {
     const ta_xml_content *next;
+    const char *last; /* where the last piece on a line of its own ended; NULL: none yet */
     struct canonical_frame *outer;
 } canonical_frame;
 
@@ -178,6 +200,7 @@ static ta_status open_element(const canonical_writing *writing, const ta_xml_nod
         (canonical_frame *)ta_growable_arena_alloc(writing->t->arena, sizeof *frame, 8);
     if (!frame) return TA_ERROR_NO_MEMORY;
     frame->next = node->content;
+    frame->last = 0;
     frame->outer = *top;
     *top = frame;
     return TA_OK;
@@ -196,6 +219,7 @@ static ta_status write_tree(const canonical_writing *writing, const ta_xml_node 
             continue;
         }
         frame->next = piece->next;
+        if (piece->kind != TA_XML_CONTENT_TEXT) line_of(writing->writer, piece, &frame->last);
         if (piece->kind == TA_XML_CONTENT_ELEMENT) {
             if (open_element(writing, piece->element, &frame) != TA_OK) return TA_ERROR_NO_MEMORY;
         } else if (piece->kind == TA_XML_CONTENT_COMMENT) {
@@ -246,7 +270,9 @@ static void lay_out(canonical_run *run, canonical_file *file) {
     }
     canonical_writing writing = {t, writer, file->original};
     ta_status status = TA_OK;
+    const char *last = 0; /* where the document's last piece ended */
     for (const ta_xml_content *piece = document; piece && status == TA_OK; piece = piece->next) {
+        line_of(writer, piece, &last);
         if (piece->kind == TA_XML_CONTENT_ELEMENT) status = write_tree(&writing, piece->element);
         else if (piece->kind == TA_XML_CONTENT_COMMENT) write_comment(writer, piece->markup);
         else if (piece->kind == TA_XML_CONTENT_INSTRUCTION) write_instruction(writer, piece->markup);

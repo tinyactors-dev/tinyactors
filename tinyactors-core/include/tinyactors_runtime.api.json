@@ -741,6 +741,19 @@
       "implemented": true
     },
     {
+      "name": "ta_xml_writer_blank_line",
+      "returns": "ta_status",
+      "params": [
+        {
+          "name": "writer",
+          "type": "ta_xml_writer *"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
       "name": "ta_xml_writer_close",
       "returns": "ta_status",
       "params": [

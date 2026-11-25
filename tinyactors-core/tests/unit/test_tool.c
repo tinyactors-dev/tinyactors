@@ -635,6 +635,7 @@ static const char refund_canonical[] =
     "    <data id=\"amount\" expr=\"0\"/>\n"
     "    <data id=\"reasons\">[ \"damaged\",\n     \"late\" ]</data>\n"
     "  </datamodel>\n"
+    "\n"
     "  <state id=\"requested\">\n"
     "    <!-- waiting for a decision -->\n"
     "    <transition event=\"approve\" cond=\"_event.data.amount &gt; 0 &amp;&amp; amount == 0\" target=\"paying\">\n"
@@ -654,6 +655,67 @@ static const char refund_canonical[] =
     "  <final id=\"closed\"/>\n"
     "</scxml>\n"
     "<!-- end of the refund -->\n";
+
+/* A support ticket with blank lines: several in a row (kept as one),
+ * at the start and end of an element's children (dropped), with spaces on
+ * them, with "\r\n" line ends, around comments and the root, and inside a
+ * script (kept as written). */
+static const char ticket_spaced[] =
+    "<?xml version=\"1.0\"?>\n"
+    "\n"
+    "\n"
+    "<scxml xmlns=\"http://www.w3.org/2005/07/scxml\" name=\"ticket\" initial=\"open\">\n"
+    "\n"
+    "  <state id=\"open\">\n"
+    "    \n"
+    "    <transition event=\"assign\" target=\"assigned\"/>\n"
+    "\n"
+    "\n"
+    "\n"
+    "    <transition event=\"close\" target=\"closed\"/>\n"
+    "\n"
+    "  </state>\r\n"
+    "  \r\n"
+    "  <!-- someone works on it -->\n"
+    "  <state id=\"assigned\"><onentry><script>\n"
+    "var waiting = 0;\n"
+    "\n"
+    "\n"
+    "waiting = 1;\n"
+    "</script></onentry>\n"
+    "    <transition event=\"close\" target=\"closed\"/></state>\n"
+    "  <final id=\"closed\"/>\n"
+    "\n"
+    "</scxml>\n"
+    "\n"
+    "<!-- end of the ticket -->\n";
+
+static const char ticket_canonical[] =
+    "<?xml version=\"1.0\"?>\n"
+    "\n"
+    "<scxml xmlns=\"http://www.w3.org/2005/07/scxml\" name=\"ticket\" initial=\"open\">\n"
+    "  <state id=\"open\">\n"
+    "    <transition event=\"assign\" target=\"assigned\"/>\n"
+    "\n"
+    "    <transition event=\"close\" target=\"closed\"/>\n"
+    "  </state>\n"
+    "\n"
+    "  <!-- someone works on it -->\n"
+    "  <state id=\"assigned\">\n"
+    "    <onentry>\n"
+    "      <script>\n"
+    "var waiting = 0;\n"
+    "\n"
+    "\n"
+    "waiting = 1;\n"
+    "</script>\n"
+    "    </onentry>\n"
+    "    <transition event=\"close\" target=\"closed\"/>\n"
+    "  </state>\n"
+    "  <final id=\"closed\"/>\n"
+    "</scxml>\n"
+    "\n"
+    "<!-- end of the ticket -->\n";
 
 /* fmt: the canonical text of a messy chart, --check, -w, the image kept, refusals. */
 static void test_canonical(void) {
@@ -678,6 +740,17 @@ static void test_canonical(void) {
     CHECK(fixture_write("refund-messy.scxml", refund_messy));
     CHECK_EQUAL(run("expressions -f json refund.scxml"), 0);
     CHECK(has("output", "\"source\": \"_event.data.amount > 0 && amount == 0\""));
+
+    /* blank lines: one where the source has one or more between two elements, none at the
+       start or end of an element's children, a script's kept as written; idempotent */
+    CHECK(fixture_write("ticket.scxml", ticket_spaced));
+    CHECK_EQUAL(run("fmt ticket.scxml"), 0);
+    CHECK(strcmp(text_of("output"), ticket_canonical) == 0);
+    if (strcmp(text_of("output"), ticket_canonical) != 0) fprintf(stderr, "  got:\n%s\n", text_of("output"));
+    CHECK_EQUAL(run("fmt -w ticket.scxml"), 0);
+    CHECK(has("output", "| ticket.scxml | yes | no | same |"));
+    CHECK(strcmp(text_of("ticket.scxml"), ticket_canonical) == 0);
+    CHECK_EQUAL(run("fmt --check ticket.scxml"), 0);
 
     /* a manifest, and several files: --check names those not canonical, -w rewrites them */
     write_charts();

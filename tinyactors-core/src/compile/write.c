@@ -11,6 +11,7 @@ typedef struct open_element {
     uint32_t name, name_length; /* the name, in the output */
     uint8_t started;            /* '>' is written: the element has content */
     uint8_t last_was_element;
+    uint8_t blank_line;         /* ta_xml_writer_blank_line: before its next child's line */
 } open_element;
 
 struct ta_xml_writer {
@@ -19,6 +20,7 @@ struct ta_xml_writer {
     ta_vector stack;  /* open_element */
     ta_status status; /* sticky: the first error */
     int root_done;
+    int blank_line; /* ta_xml_writer_blank_line at the top level */
 };
 
 static ta_status fail(ta_xml_writer *writer, ta_status status) {
@@ -109,9 +111,13 @@ static void own_line(ta_xml_writer *writer) {
     open_element *parent = top(writer);
     if (parent) {
         start_content(writer, parent);
+        if (parent->blank_line) put(writer, "\n", 1);
+        parent->blank_line = 0;
         line(writer, writer->stack.length);
         parent->last_was_element = 1;
     } else if (writer->output.length) {
+        if (writer->blank_line) put(writer, "\n", 1);
+        writer->blank_line = 0;
         line(writer, 0);
     }
 }
@@ -251,6 +257,7 @@ ta_status ta_xml_writer_text(ta_xml_writer *writer, ta_string_view text) {
     start_content(writer, element);
     escaped(writer, text, 0);
     element->last_was_element = 0;
+    element->blank_line = 0;
     return writer->status;
 }
 
@@ -280,6 +287,7 @@ ta_status ta_xml_writer_markup(ta_xml_writer *writer, ta_string_view markup) {
     start_content(writer, element);
     put(writer, markup.pointer, markup.length);
     element->last_was_element = 0;
+    element->blank_line = 0;
     return writer->status;
 }
 
@@ -312,6 +320,19 @@ ta_status ta_xml_writer_instruction(ta_xml_writer *writer, ta_string_view target
     }
     put_c_string(writer, "?>");
     return writer->status;
+}
+
+ta_status ta_xml_writer_blank_line(ta_xml_writer *writer) {
+    if (writer->status) return writer->status;
+    open_element *element = top(writer);
+    if (!element) {
+        if (writer->output.length) writer->blank_line = 1; /* nothing written yet: none */
+        return TA_OK;
+    }
+    if (!element->started) return TA_OK; /* before its first child: none */
+    if (!element->last_was_element) return fail(writer, TA_ERROR_STATE); /* would be text */
+    element->blank_line = 1;
+    return TA_OK;
 }
 
 ta_status ta_xml_writer_close(ta_xml_writer *writer) {

@@ -163,6 +163,15 @@ TA_API ta_status ta_xml_writer_comment(ta_xml_writer *writer, ta_string_view tex
  * the target xml (in any case) anywhere but first in the document. */
 TA_API ta_status ta_xml_writer_instruction(ta_xml_writer *writer, ta_string_view target,
                                            ta_string_view content);
+/* An empty line before the next element, comment or processing instruction
+ * written on a line of its own at this level: in the open element, or at the
+ * top level, before or after the root. It writes nothing when nothing
+ * follows at this level (the element closes, the document finishes, or text
+ * or markup comes next), nothing before the open element's first child or
+ * the document's first line, and one for several in a row: the line has no
+ * spaces. TA_ERROR_STATE: after text or markup in the open element, where a
+ * line end would be its content. */
+TA_API ta_status ta_xml_writer_blank_line(ta_xml_writer *writer);
 /* TA_ERROR_STATE: no open element. */
 TA_API ta_status ta_xml_writer_close(ta_xml_writer *writer);
 /* The document, valid until ta_xml_writer_free.

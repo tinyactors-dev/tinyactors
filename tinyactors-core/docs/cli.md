@@ -517,8 +517,12 @@ its condition.
 where they change it, and a reviewer reads one layout:
 
 - two spaces per element level, one element, comment or processing
-  instruction per line, no blank lines, and the file ending with a line
-  end;
+  instruction per line, and the file ending with a line end;
+- one empty line where the source has one or more between two elements,
+  comments or processing instructions (two or more line ends between
+  them, spaces on the lines aside), inside an element or around the root;
+  none before an element's first child or after its last, and none where
+  the source has none;
 - attributes in the order written, one space apart, each value byte for
   byte as written between its quotes (`cond="total &gt; 100"` stays so),
   quoted with `"` unless the value holds one;

@@ -352,7 +352,8 @@ function decided here for the API review is marked so; its decision is in
   `ta_xml_writer_open`, `ta_xml_writer_attribute`,
   `ta_xml_writer_attribute_markup`, `ta_xml_writer_text`,
   `ta_xml_writer_markup`, `ta_xml_writer_comment`,
-  `ta_xml_writer_instruction`, `ta_xml_writer_close`,
+  `ta_xml_writer_instruction`, `ta_xml_writer_blank_line`,
+  `ta_xml_writer_close`,
   `ta_xml_writer_finish`, `ta_xml_writer_free`.
   The chart builder that would use it is the convenience layer's, after
   M1 and when the maintainer picks it; the direct layer gains an item

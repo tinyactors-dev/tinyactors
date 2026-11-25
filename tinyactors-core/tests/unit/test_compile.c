@@ -1154,6 +1154,85 @@ static void test_xml_writer_keeps_markup(void) {
     ta_xml_writer_free(writer);
 }
 
+/* An empty line between elements: written before the next line at its
+ * level only, one for several, none at the start or end of an element's
+ * children or of the document, refused after text. */
+static void test_xml_writer_blank_line(void) {
+    ta_xml_writer *writer;
+    CHECK_EQUAL(ta_xml_writer_new(NULL, &writer), TA_OK);
+    CHECK_EQUAL(ta_xml_writer_blank_line(writer), TA_OK); /* nothing written yet: none */
+    CHECK_EQUAL(ta_xml_writer_comment(writer, view_of(" a subscription ")), TA_OK);
+    CHECK_EQUAL(ta_xml_writer_blank_line(writer), TA_OK);
+    CHECK_EQUAL(ta_xml_writer_open(writer, view_of("scxml")), TA_OK);
+    CHECK_EQUAL(ta_xml_writer_blank_line(writer), TA_OK); /* in the start tag: none */
+    CHECK_EQUAL(ta_xml_writer_attribute(writer, view_of("name"), view_of("subscription")), TA_OK);
+    CHECK_EQUAL(ta_xml_writer_open(writer, view_of("state")), TA_OK);
+    CHECK_EQUAL(ta_xml_writer_attribute(writer, view_of("id"), view_of("trial")), TA_OK);
+    CHECK_EQUAL(ta_xml_writer_blank_line(writer), TA_OK); /* before its first child: none */
+    CHECK_EQUAL(ta_xml_writer_open(writer, view_of("transition")), TA_OK);
+    CHECK_EQUAL(ta_xml_writer_close(writer), TA_OK);
+    CHECK_EQUAL(ta_xml_writer_blank_line(writer), TA_OK); /* after its last child: none */
+    CHECK_EQUAL(ta_xml_writer_close(writer), TA_OK);
+    CHECK_EQUAL(ta_xml_writer_blank_line(writer), TA_OK);
+    CHECK_EQUAL(ta_xml_writer_blank_line(writer), TA_OK); /* two in a row: one */
+    CHECK_EQUAL(ta_xml_writer_open(writer, view_of("state")), TA_OK);
+    CHECK_EQUAL(ta_xml_writer_attribute(writer, view_of("id"), view_of("active")), TA_OK);
+    CHECK_EQUAL(ta_xml_writer_close(writer), TA_OK);
+    CHECK_EQUAL(ta_xml_writer_blank_line(writer), TA_OK);
+    CHECK_EQUAL(ta_xml_writer_comment(writer, view_of(" billed monthly ")), TA_OK);
+    CHECK_EQUAL(ta_xml_writer_blank_line(writer), TA_OK);
+    CHECK_EQUAL(ta_xml_writer_open(writer, view_of("data")), TA_OK);
+    CHECK_EQUAL(ta_xml_writer_attribute(writer, view_of("id"), view_of("price")), TA_OK);
+    CHECK_EQUAL(ta_xml_writer_text(writer, view_of("12")), TA_OK);
+    CHECK_EQUAL(ta_xml_writer_close(writer), TA_OK);
+    CHECK_EQUAL(ta_xml_writer_instruction(writer, view_of("audit"), view_of("")), TA_OK);
+    CHECK_EQUAL(ta_xml_writer_blank_line(writer), TA_OK); /* nothing follows at this level: none */
+    CHECK_EQUAL(ta_xml_writer_close(writer), TA_OK);
+    CHECK_EQUAL(ta_xml_writer_blank_line(writer), TA_OK);
+    CHECK_EQUAL(ta_xml_writer_comment(writer, view_of(" end ")), TA_OK);
+    CHECK_EQUAL(ta_xml_writer_blank_line(writer), TA_OK); /* the document finishes: none */
+    ta_string_view text;
+    CHECK_EQUAL(ta_xml_writer_finish(writer, &text), TA_OK);
+    CHECK(text_is(text, "<!-- a subscription -->\n"
+                        "\n"
+                        "<scxml name=\"subscription\">\n"
+                        "  <state id=\"trial\">\n"
+                        "    <transition/>\n"
+                        "  </state>\n"
+                        "\n"
+                        "  <state id=\"active\"/>\n"
+                        "\n"
+                        "  <!-- billed monthly -->\n"
+                        "\n"
+                        "  <data id=\"price\">12</data>\n"
+                        "  <?audit?>\n"
+                        "</scxml>\n"
+                        "\n"
+                        "<!-- end -->"));
+    ta_xml_writer_free(writer);
+
+    /* text comes next: none; after text, where a line end would be content: refused */
+    CHECK_EQUAL(ta_xml_writer_new(NULL, &writer), TA_OK);
+    CHECK_EQUAL(ta_xml_writer_open(writer, view_of("scxml")), TA_OK);
+    CHECK_EQUAL(ta_xml_writer_open(writer, view_of("final")), TA_OK);
+    CHECK_EQUAL(ta_xml_writer_close(writer), TA_OK);
+    CHECK_EQUAL(ta_xml_writer_blank_line(writer), TA_OK);
+    CHECK_EQUAL(ta_xml_writer_text(writer, view_of("cancelled")), TA_OK);
+    CHECK_EQUAL(ta_xml_writer_blank_line(writer), TA_ERROR_STATE);
+    CHECK_EQUAL(ta_xml_writer_close(writer), TA_ERROR_STATE); /* the first error, kept */
+    ta_xml_writer_free(writer);
+    CHECK_EQUAL(ta_xml_writer_new(NULL, &writer), TA_OK);
+    CHECK_EQUAL(ta_xml_writer_open(writer, view_of("scxml")), TA_OK);
+    CHECK_EQUAL(ta_xml_writer_open(writer, view_of("final")), TA_OK);
+    CHECK_EQUAL(ta_xml_writer_close(writer), TA_OK);
+    CHECK_EQUAL(ta_xml_writer_blank_line(writer), TA_OK);
+    CHECK_EQUAL(ta_xml_writer_markup(writer, view_of("cancelled")), TA_OK);
+    CHECK_EQUAL(ta_xml_writer_close(writer), TA_OK);
+    CHECK_EQUAL(ta_xml_writer_finish(writer, &text), TA_OK);
+    CHECK(text_is(text, "<scxml>\n  <final/>cancelled</scxml>"));
+    ta_xml_writer_free(writer);
+}
+
 /* The parser's content, when asked for: every piece in document order, as
  * written, the document's own pieces around the root. */
 static void test_xml_content(void) {
@@ -1264,6 +1343,7 @@ int main(void) {
     RUN(test_abort);
     RUN(test_xml_writer);
     RUN(test_xml_writer_keeps_markup);
+    RUN(test_xml_writer_blank_line);
     RUN(test_xml_content);
     RUN(test_strip_debug);
     TEST_MAIN_END();
