@@ -277,7 +277,7 @@ const link = (hash, text) => el('a', { href: `#${hash}` }, text);
 const list = (items) => el('ul', { class: 'atlas__list' }, ...items.map((item) => el('li', {}, item)));
 
 function injectStyle() {
-  if (document.getElementById('atlas-style')) return;
+  if (document.querySelector('#atlas-style')) return;
   const style = el('style', { id: 'atlas-style' });
   style.textContent = `
 .atlas { position: relative; display: grid; grid-template-columns: minmax(200px, 248px) minmax(0, 1fr); gap: var(--space-4, 16px);

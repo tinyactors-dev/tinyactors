@@ -316,7 +316,7 @@ function el(tag, attributes = {}, ...children) {
 }
 
 function injectStyle() {
-  if (document.getElementById('inspector-style')) return;
+  if (document.querySelector('#inspector-style')) return;
   const style = el('style', { id: 'inspector-style' });
   style.textContent = `
 .insp { position: relative; display: grid; gap: var(--space-3, 12px); background: var(--surface-1); border: 1px solid var(--border-1); border-radius: 2px;
