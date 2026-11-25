@@ -1,0 +1,134 @@
+#!/usr/bin/env ruby
+#MISE description="The data of the source explorer: the layers' types, functions, calls and costs from their debug information, as JSON"
+#USAGE flag "--out <path>" help="Where to write it (default: build/debuginfo/atlas.json)"
+# vim:ft=ruby
+
+# It reads the layers of the `debuginfo` build (mise/core.rb: the release
+# flags with -g), building them when an archive is missing, with the pinned
+# llvm-dwarfdump (mise/dwarf.rb), and writes one compact JSON document:
+#
+#   commit, date, build   where the numbers come from
+#   layers                the layers read, in order
+#   files                 the source files named below, relative to tinyactors-core
+#   types                 named structs and unions declared in src/ (and ta_* ones in
+#                         include/): size, layer, file, line, padding,
+#                         members as [name, offset, size, type] (a bit field adds its width)
+#   functions             each function defined in the layers: layer, file, line, size in
+#                         bytes (null when every call is inlined), external, and the
+#                         indexes of the functions it calls and inlines
+#   costs                 what one more actor, message and delayed send costs in a
+#                         segment's region, as `mise run layout` computes it
+#
+# A call names its callee in the debug information only when the compiler
+# knows it: a call through a pointer, or a tail call through a register,
+# has no edge.
+require 'json'
+require 'date'
+require 'open3'
+require_relative '../core'
+require_relative '../dwarf'
+
+LAYERS = %w[base trace core system host image compile].freeze
+
+option = lambda do |name|
+  value = ENV.fetch("usage_#{name}", nil)
+  index = ARGV.index("--#{name}")
+  value = ARGV[index + 1] if index
+  value.nil? || value.empty? ? nil : value
+end
+out = Pathname.new(option.('out') || Core.directory('debuginfo').join('atlas.json').to_s).expand_path
+
+archives = LAYERS.map { |layer| Core.archive_path('debuginfo', layer) }
+Core.build_layers('debuginfo', LAYERS) unless archives.all?(&:file?)
+
+# Another build may rewrite an archive while it is read: try again.
+dwarf = nil
+3.times do |attempt|
+  dwarf = Dwarf.read(archives)
+  break
+rescue StandardError => e
+  raise if attempt == 2
+
+  warn "atlas: reading the debug information failed (#{e.message.lines.first&.strip}), again"
+  sleep 2
+end
+
+source_root = "#{Core::ROOT}/"
+layer_of_archive = LAYERS.to_h { |layer| [Core.archive_path('debuginfo', layer).to_s, layer] }
+relative = ->(path) { path&.start_with?(source_root) ? path.delete_prefix(source_root) : nil }
+ours = ->(path) { path && (path.start_with?('src/') || path.start_with?('include/')) }
+layer_of = lambda do |path, archive|
+  directory = path[%r{\Asrc/([^/]+)/}, 1]
+  LAYERS.include?(directory) ? directory : layer_of_archive.fetch(archive) { layer_of_archive[Pathname.new(archive).expand_path.to_s] }
+end
+
+files = []
+file_index = Hash.new { |hash, path| files << path; hash[path] = files.size - 1 }
+
+# Functions, in layer order, then file, then line.
+functions = dwarf.functions.filter_map do |function|
+  path = relative.(function.file)
+  next unless ours.(path) && !function.name.start_with?('__')
+
+  [function, path, layer_of.(path, function.archive)]
+end
+functions.sort_by! { |function, path, layer| [LAYERS.index(layer) || LAYERS.size, path, function.line || 0, function.name] }
+function_index = functions.each_with_index.to_h { |(function, _, _), index| [function.key, index] }
+
+# Types: the struct's declaration, in src/ (any name) or include/ (ta_* only).
+types = dwarf.structs.filter_map do |type|
+  path, line = type.declared.split(':')
+  next unless path.start_with?('src/') || (path.start_with?('include/') && type.name.start_with?('ta_'))
+
+  [type, path, line.to_i, layer_of.(path, type.archive)]
+end
+types.sort_by! { |type, path, line, layer| [LAYERS.index(layer) || LAYERS.size, path, line, type.name] }
+
+# What one more actor, message and delayed send costs in a segment's region,
+# as mise/tasks/layout computes it from carve() in src/system/system.c.
+align = dwarf.macro('TA_ALIGN_MAX')
+size = ->(name) { dwarf.struct(name).size }
+slot = ->(name) { ([size.(name), 8].max + align - 1) / align * align }
+generation = 1
+message = [['event', slot.('ta_event')], ['trace context', slot.('ta_trace_entry')], ['generations', 2 * generation]]
+timer = [['timer', slot.('ta_timer')], ['heap entry', size.('ta_heap_node') + 4], ['generation', generation]]
+costs = {
+  'actor' => [['record', slot.('ta_actor')], ['links', size.('ta_actor_links')], ['session index', 8],
+              ['name index', 8], ['generation', generation]],
+  'message' => message,
+  'delayed send' => timer + [['its message', message.sum { |_, bytes| bytes }]]
+}
+
+commit, status = Open3.capture2('git', 'rev-parse', '--short', 'HEAD', chdir: Core::ROOT.to_s)
+abort 'atlas: git rev-parse failed' unless status.success?
+triple = Toolchain::Target.host.triple
+
+document = {
+  'commit' => commit.strip,
+  'date' => Date.today.iso8601,
+  'build' => "debuginfo: release flags with -g, #{triple}",
+  'layers' => LAYERS,
+  'files' => files,
+  'types' => types.map do |type, path, line, layer|
+    { 'name' => type.name, 'size' => type.size, 'layer' => layer, 'file' => file_index[path], 'line' => line,
+      'padding' => type.padding,
+      'members' => type.members.map do |member|
+        row = [member.name, member.offset, member.size, member.type]
+        member.bits ? row << member.bits : row
+      end }
+  end,
+  'functions' => functions.map do |function, path, layer|
+    { 'name' => function.name, 'layer' => layer, 'file' => file_index[path], 'line' => function.line,
+      'size' => function.size, 'external' => function.external,
+      'calls' => function.calls.filter_map { |key| function_index[key] }.sort,
+      'inlines' => function.inlines.filter_map { |key| function_index[key] }.sort }
+  end,
+  'costs' => costs
+}
+
+out.dirname.mkpath
+File.write(out, JSON.generate(document))
+edges = document['functions'].sum { |function| function['calls'].size }
+inlines = document['functions'].sum { |function| function['inlines'].size }
+puts "atlas: #{out} (#{File.size(out)} B): #{files.size} files, #{types.size} types, " \
+     "#{functions.size} functions, #{edges} calls, #{inlines} inlines"
