@@ -48,6 +48,7 @@ Every proposal starts with a status line:
 | [Distributed actor systems](distributed-systems.md) | Sketch | tinyactors-core (conformance gaps), tinyactors-napi, the browser build |
 | [An idle actor carries no event](lean-actor-events.md) | Adopted → core ADR 0069, "An idle actor carries no event" (deleted) | tinyactors-core, tinyactors-napi |
 | [Packaging and releases](packaging.md) | Adopted → [ADR 0001](../adr/0001-packaging-and-releases.md) | tinyxml, tinyactors-core, tinyactors-scxml, tinyactors-napi, root release tasks |
+| [`tinyactors run`: running charts from the command over JSON-RPC 2.0](cli-json-rpc.md) | Proposed | tinyactors-core (`src/cli`, `src/base/format`, `tools/tinyactors`, docs), tinyactors-test (an adapter) |
 | [An MCP server](mcp-server.md) | Proposed; the DAP adapters it replaces are removed | tinyactors-core, tinyactors-host (deleted), tinyactors-napi, tinyactors-test |
 | [Metrics, and trace policy as data](metrics-and-trace-policy.md) | Adopted → [ADR 0007](../adr/0007-metrics-and-trace-policy.md) | tinyactors-core (system, host, otlp, bindings) |
 | [SCXML in core: a small XML writer beside the compiler's parser](scxml-in-core.md) | Adopted → commits `bb603ff8`, `77f39f31` | tinyactors-core, tinyactors-scxml (deleted) |
