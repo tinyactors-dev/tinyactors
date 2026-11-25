@@ -1,11 +1,13 @@
 # `tinyactors run`: running charts from the command over JSON-RPC 2.0
 
 **Status:** Proposed (2026-11-25). A fresh agent refuted the first
-draft, and the maintainer then decided four points (2026-11-25): the
-config is optional, `ioProcessors` is a map in the protocol, the protocol
-has a JSON Schema, and the command, a separate distributable, may grow and
-keep its own JSON. Both are folded in; section 9 lists each finding and
-decision and what it changed.
+draft; the maintainer then decided four points (the config is optional,
+`ioProcessors` is a map, the protocol has a JSON Schema, the command may
+grow and keeps its own JSON) and answered every open question (section
+8). All of it is folded in; section 9 lists what changed. The protocol is
+**experimental**: it may change between releases without notice until a
+second client uses it. One part needs core: a seed and the host's clock
+for the ECMAScript datamodel (section 4.8, a request to core).
 **Touches:** tinyactors-core: `src/cli` (the command's own layer: a JSON
 reader and writer, NDJSON framing), `src/base/format` (the shortest-decimal
 writer and the quoted-string escaper, moved there from `cbor.c` unchanged),
@@ -99,7 +101,7 @@ writing JSON for its reports (`src/cli/report.c:189`), reads it too.
   thread is the rule (`tinyactors-core/docs/embedding.md:250`). Two
   systems are two servers, and the client is the transport between them
   (section 4.6).
-- **A real-time clock** in the first version (open question 3).
+- **A real-time clock** in the first version (decided: later, section 8).
 - **Datamodels other than quickjs.** `datamodel="python"` charts run in
   the Python binding; the native ECMAScript datamodel is Node's.
 - **A store.** Hibernation blobs go to the client (section 4.5): "the
@@ -172,7 +174,7 @@ shell's `read` handle.
 
 ```text
 tinyactors run [--config FILE] [--system ID] [--io-processor TYPE[=LOCATION]]...
-               [-W] [--boot] [--wall-start NS] [--max-ops N] [--memory-limit BYTES]
+               [-W] [--boot] [--wall-start NS] [--seed N] [--max-ops N] [--memory-limit BYTES]
                [--realm auto|isolated] [--max-message BYTES] [--schema] [INPUT...]
 ```
 
@@ -187,6 +189,7 @@ server runs with every default, and `tinyactors run order.scxml` works.
 | `INPUT...` | an image, a manifest or charts, read as every command reads them (`docs/cli.md`, "Inputs"), added as segment 0 before the first message; with `-W`, a warning refuses it | none: a client adds images with `run.addImage` |
 | `--boot` | `ta_host_boot` of segment 0 (a manifest's boot actors) | off |
 | `--wall-start NS` | the wall clock's start, nanoseconds since the Unix epoch (section 4.3) | 0 |
+| `--seed N` | `Math.random`'s seed (section 4.8) | 1 |
 | `--max-ops`, `--memory-limit`, `--realm` | `ta_datamodel_ecmascript_config` (`include/tinyactors/datamodel_ecmascript.h:61-71`) | quickjs's, 0 in each field |
 | `--max-message BYTES` | the longest line taken (3.1) | 64 MiB |
 | `--schema` | write the protocol's JSON Schema (section 4.7) to standard output and exit 0 | — |
@@ -349,11 +352,8 @@ bounds a line. No other default: everything else is core's.
   then `run.turn`, or both in one JSON-RPC batch. The W3C environment's
   "move to the next deadline when idle" is `{"to": nextDeadline}` from
   the last turn's result.
-- **What does not repeat.** quickjs seeds `Math.random` and its hash from
-  `gettimeofday` (`third_party/quickjs-ng/quickjs.c:2879-2883`), and
-  `Date` reads the real clock, not the simulated one. A chart that reads
-  either gives other bytes on each run; the transcripts the repository
-  keeps use neither (open question 4).
+- **`Date` and `Math.random`** follow the host's clocks and the seed, once
+  core takes the change of section 4.8; until then they read the machine.
 
 ### 4.4 The turn, and when the server acks
 
@@ -534,7 +534,223 @@ in **JSON Schema 2020-12** (<https://json-schema.org/draft/2020-12>):
   server-to-client messages). A 2020-12 schema describes both directions
   and validates whole lines. An OpenRPC document of the `run.*` and
   forwarded methods could be generated from the schema later for tools
-  that read OpenRPC (open question 9).
+  that read OpenRPC; not now (decided, section 8).
+- **It drives the server.** A generator (section 7.8) turns the schema
+  into the tables the server checks params with, so the schema is the one
+  source of the protocol's shapes for the document, the clients and the
+  server.
+
+### 4.8 Charts that read the time or random numbers
+
+A transcript repeats byte for byte only if a chart sees the same values
+on every run. Two of quickjs's builtins read the machine:
+
+| Builtin | Where it reads | Evidence |
+|---|---|---|
+| `Math.random` | a xorshift64* state per context, seeded from the time of day when the context is made | `third_party/quickjs-ng/quickjs.c:2879-2883` (`ctx->random_state = js__gettimeofday_us()`), the draw at `:49035` |
+| `new Date()`, `Date()`, `Date.now()` | `date_now`, the time of day | `quickjs.c:57664-57665`, used at `:57682` and `:58222-58226`; `js__gettimeofday_us` is `gettimeofday` (`third_party/quickjs-ng/cutils.h:1626-1633`) |
+| `performance.now()` | `js__hrtime_ns`, added to every context by `JS_NewContext` | `quickjs.c:62991-63007`, `:2910` |
+| local-time methods of `Date` (`getHours`, `getTimezoneOffset`, ...) | `localtime_r`, the process's time zone | `quickjs.c:49130-49170` |
+| the hash seed | drawn from the same state (`quickjs.c:2883`), used in Map and Set hashing (`:53420`) | not observable: Map and Set iterate in insertion order |
+
+**What quickjs-ng 0.17.0 offers** (`third_party/quickjs-ng/VERSION`): no
+API to seed `Math.random` or to give a clock. `quickjs.h` has no seed and
+no time hook (searched for `seed`, `random`, `time`); `JS_NewRuntime2`
+takes only memory functions (`quickjs.h:469-475`, `:522`); the clock
+functions are `static inline` in `cutils.h` with no macro to replace them
+(`cutils.h:1626-1633`), and the random state lives in `JSContext`, whose
+layout is private to `quickjs.c` (`:604`). What it does offer is building
+a context piece by piece: `JS_NewContextRaw` and the `JS_AddIntrinsic*`
+calls (`quickjs.h:546-559`), and any global may be replaced after.
+
+**Options:**
+
+| Option | What it takes | Verdict |
+|---|---|---|
+| (a) patch the vendored engine: a seed and a clock in `JSRuntime` | edits under `third_party/`, which `tinyactors-core/AGENTS.md` forbids ("never edit or format it"); the vendor task copies the release's files unchanged (`mise/tasks/vendor-quickjs`, `FILES`), so every upgrade would carry the patch again | rejected |
+| (b) a build flag | none exists in 0.17.0 (above) | not available |
+| (c) quickjs compiled to WebAssembly (quickjs-wasm, quickjs-emscripten), where the host supplies the clock and random bytes (WASI's `clock_time_get` and `random_get` imports) | a WebAssembly runtime inside the command, to run a native program's datamodel; what quickjs-emscripten offers for determinism was not checked (unverified) | rejected: the cost is a second engine in the command, and it helps no binding |
+| (d) the ECMAScript datamodel replaces the builtins in every context it makes, with values core gives it | a change to core's datamodel and two fields in its config; nothing under `third_party/` | **chosen** |
+
+**(d), in detail.** `src/datamodel_ecmascript/datamodel_ecmascript.c`
+already installs a global in every context it makes (`In`, at `:1194` for
+the shared realm and `:1364` for a session's own) and evaluates a prelude
+in the shared realm before freezing it (`:1197-1200`); the replacements go
+in the same places, and in the scratch contexts (`:968`), before
+`Object.freeze(globalThis)`:
+
+- **`Math.random`**: a C function drawing from a xorshift64* state (quickjs's
+  own generator, `quickjs.c:49018-49037`) that the datamodel keeps, seeded
+  from the config's seed. One state per datamodel: a run's draws come in
+  the order the host runs evaluations, which is the same on every run of
+  the same inputs. The state is written by
+  `ta_datamodel_ecmascript_snapshot` and read by `_restore`, so a restored
+  host goes on drawing the same numbers.
+- **`Date`**: a constructor with the intrinsic `Date.prototype` (so
+  `instanceof Date` and every method hold), whose call with no argument,
+  call as a function and `Date.now()` read the host's wall clock; with
+  arguments it is the intrinsic. **`performance.now()`**: the host's
+  monotonic clock in milliseconds.
+- **The time comes from core**, through the datamodel environment: during
+  an evaluation the datamodel asks the system for its clocks. The system
+  knows only the monotonic one today (`ta_system_advance_time(system,
+  ta_time now)`, `include/tinyactors/system.h:246`); the host knows both
+  (`ta_host_time`, `host.h:259-262`). So `ta_system_advance_time` takes
+  both clocks, and the host passes them on.
+
+Taking the time from core, not from a pointer the embedder writes (as
+`abort_flag` is, `datamodel_ecmascript.h:74`), means every embedder's
+clock drives `Date` with no work in the embedder: the command's simulated
+clock, a binding's `SimulatedClock`, a real clock in production; and
+`Date` within one run reads one time, the run's.
+
+**What `tinyactors run` does with it:** it sets the seed to `--seed N`
+(default 1, the command's own default, as nonce 0 is: repeatable runs are
+its purpose) and the clock to the host's. Then a transcript repeats with
+`Date` and `Math.random`, and the first draft's restriction ("transcripts
+avoid `Date` and `Math.random`") goes. What still depends on the machine:
+`Date`'s local-time methods follow the process's time zone (`TZ`); the
+transcript tests run with `TZ=UTC`, and a client that wants repeatable
+local times sets `TZ`.
+
+#### Request to core: a seed and the host's clock for the ECMAScript datamodel
+
+- **Whom it serves:** the application developer who tests a chart that
+  stamps an order with the time or draws a random id, in the command and
+  in every binding's simulated clock. Nothing answers it today: the
+  builtins read the machine (table above).
+- **The change:**
+  1. `ta_datamodel_ecmascript_config` gains, after `abort_flag` (fields
+     "checked against size", `datamodel_ecmascript.h:68`):
+     `uint64_t random_seed` (0: the engine's own seeding, as today) and
+     `uint32_t clock` (`TA_DATAMODEL_ECMASCRIPT_CLOCK_ENGINE` = 0, the
+     engine's clock, as today; `TA_DATAMODEL_ECMASCRIPT_CLOCK_HOST` = 1,
+     the system's clocks), as a `typedef enum`; their defaults are 0 and
+     applied in one place, `ta_datamodel_ecmascript_new`.
+  2. `ta_system_advance_time(ta_system *system, ta_system_time now)`
+     with `ta_system_time { ta_time monotonic; uint64_t wall_ns; }`,
+     changed in place, every caller migrated (the host, the tests,
+     `tools/conform`, the torture chamber).
+  3. `ta_status ta_datamodel_environment_time(const ta_datamodel_environment
+     *environment, ta_datamodel_time *out)`: the system's monotonic ticks,
+     `ticks_per_second` and `wall_ns` during an evaluation
+     (`datamodel.h:28-33` lists the environment's calls today);
+     `TA_ERROR_STATE` outside one.
+  4. With either field set, the datamodel replaces the builtins as above;
+     with both 0 it makes contexts exactly as today.
+- **Who pays:** nothing for an embedder that leaves both fields 0. With
+  them set: one C function per context for `Math.random` and a `Date`
+  constructor and `performance` object per context (per session for a
+  chart of its own realm, `datamodel_ecmascript.c:1350`; once for the
+  shared realm), unmeasured; 8 bytes of random state in the datamodel and
+  its snapshot; one call into core per `Date` read.
+- **Shown by:** a unit test in `tests/unit/test_datamodel_ecmascript.c`
+  that runs a chart reading `Date.now()` and `Math.random()` on two hosts
+  with the same seed and clocks and compares, and the command's
+  transcripts.
+- It goes to core's "Requests to core" (`ROADMAP.md`) when this proposal
+  is adopted; until it lands, the command's transcripts avoid `Date` and
+  `Math.random`.
+
+### 4.9 Answering sends: `hold`, or requests from the server
+
+The maintainer asked for this choice to be made with both protocols
+written out, and judged against a future client: **a debugger lab** on
+this protocol (stepping, inspecting state between macrosteps, answering
+or failing sends interactively, breakpoints on events and states, time
+travel through snapshots).
+
+**The scenario:** the order chart of section 6, two orders checked out in
+one turn; the client answers the first payment and fails the second;
+the second order goes back to `open`, and a third order's payment
+deadline (a delayed send, 30 s) fires. Sessions 1, 2 and 3 are orders
+spawned as in section 6 (`order-1` to `order-3`), with the config of
+section 6.
+
+**A. `hold`** (this proposal's protocol):
+
+```text
+> {"jsonrpc":"2.0","id":1,"method":"run.sendMany","params":{"events":[{"target":1,"event":"checkout","data":{"card":"tok_visa"}},{"target":2,"event":"checkout","data":{"card":"tok_expired"}},{"target":3,"event":"checkout","data":{"card":"tok_slow"}}]}}
+< {"jsonrpc":"2.0","id":1,"result":{"accepted":3}}
+> {"jsonrpc":"2.0","id":2,"method":"run.turn","params":{"hold":true}}
+< {"jsonrpc":"2.0","method":"effect.send","params":{"batch":1,"index":0,"session":1,"type":"payments","target":"charges","event":"charge","sendid":"pay","data":{"amount":4200,"card":"tok_visa"},"waiting":true}}
+< {"jsonrpc":"2.0","method":"effect.send","params":{"batch":1,"index":1,"session":2,"type":"payments","target":"charges","event":"charge","sendid":"pay","data":{"amount":990,"card":"tok_expired"},"waiting":true}}
+< {"jsonrpc":"2.0","method":"effect.send","params":{"batch":1,"index":2,"session":3,"type":"payments","target":"charges","event":"charge","sendid":"pay","data":{"amount":150,"card":"tok_slow"},"waiting":true}}
+< {"jsonrpc":"2.0","id":2,"result":{"status":"held","runs":1,"fuel":120,"time":0,"nextDeadline":30000}}
+> {"jsonrpc":"2.0","id":3,"method":"run.send","params":{"target":1,"event":"charge.ok","sendid":"pay","origintype":"payments","data":{"charge":"ch_81"}}}
+< {"jsonrpc":"2.0","id":3,"result":{}}
+> {"jsonrpc":"2.0","id":4,"method":"run.fail","params":{"target":2,"sendid":"pay"}}
+< {"jsonrpc":"2.0","id":4,"result":{}}
+> {"jsonrpc":"2.0","id":5,"method":"run.turn"}
+< {"jsonrpc":"2.0","method":"effect.log","params":{"batch":2,"index":0,"session":1,"label":"order","text":"paid ch_81"}}
+< {"jsonrpc":"2.0","method":"effect.done","params":{"batch":2,"index":1,"session":1,"name":"order-1","final":"paid","data":{"charge":"ch_81"}}}
+< {"jsonrpc":"2.0","method":"effect.log","params":{"batch":2,"index":2,"session":2,"label":"order","text":"payment failed: error.communication"}}
+< {"jsonrpc":"2.0","id":5,"result":{"status":"idle","runs":1,"fuel":61,"time":0,"nextDeadline":30000}}
+> {"jsonrpc":"2.0","id":6,"method":"run.advanceTime","params":{"by":"30s"}}
+< {"jsonrpc":"2.0","id":6,"result":{"time":30000,"wallNs":30000000000}}
+> {"jsonrpc":"2.0","id":7,"method":"run.turn"}
+< {"jsonrpc":"2.0","method":"effect.log","params":{"batch":3,"index":0,"session":3,"label":"order","text":"payment failed: payment.timeout"}}
+< {"jsonrpc":"2.0","id":7,"result":{"status":"idle","runs":1,"fuel":23,"time":30000,"nextDeadline":null}}
+```
+
+**B. Requests from the server.** `effect.send` of a waiting send becomes
+a request with an id of the server's (`"s1"`); the server writes it while
+it dispatches the batch and reads the client's response before the ack.
+The response says what to do: `{"answer": {"event", "data"}}`,
+`{"fail": true}`, or `{}` (taken, no answer).
+
+```text
+> {"jsonrpc":"2.0","id":1,"method":"run.sendMany","params":{"events":[ …the same three… ]}}
+< {"jsonrpc":"2.0","id":1,"result":{"accepted":3}}
+> {"jsonrpc":"2.0","id":2,"method":"run.turn"}
+< {"jsonrpc":"2.0","id":"s1","method":"effect.send","params":{"batch":1,"index":0,"session":1,"type":"payments","target":"charges","event":"charge","sendid":"pay","data":{"amount":4200,"card":"tok_visa"}}}
+> {"jsonrpc":"2.0","id":"s1","result":{"answer":{"event":"charge.ok","data":{"charge":"ch_81"}}}}
+< {"jsonrpc":"2.0","id":"s2","method":"effect.send","params":{"batch":1,"index":1,"session":2,"type":"payments","target":"charges","event":"charge","sendid":"pay","data":{"amount":990,"card":"tok_expired"}}}
+> {"jsonrpc":"2.0","id":"s2","result":{"fail":true}}
+< {"jsonrpc":"2.0","id":"s3","method":"effect.send","params":{"batch":1,"index":2,"session":3,"type":"payments","target":"charges","event":"charge","sendid":"pay","data":{"amount":150,"card":"tok_slow"}}}
+> {"jsonrpc":"2.0","id":"s3","result":{}}
+< {"jsonrpc":"2.0","method":"effect.log","params":{"batch":2,"index":0,"session":1,"label":"order","text":"paid ch_81"}}
+< {"jsonrpc":"2.0","method":"effect.done","params":{"batch":2,"index":1,"session":1,"name":"order-1","final":"paid","data":{"charge":"ch_81"}}}
+< {"jsonrpc":"2.0","method":"effect.log","params":{"batch":2,"index":2,"session":2,"label":"order","text":"payment failed: error.communication"}}
+< {"jsonrpc":"2.0","id":2,"result":{"status":"idle","runs":2,"fuel":181,"time":0,"nextDeadline":30000}}
+> {"jsonrpc":"2.0","id":3,"method":"run.advanceTime","params":{"by":"30s"}}
+< {"jsonrpc":"2.0","id":3,"result":{"time":30000,"wallNs":30000000000}}
+> {"jsonrpc":"2.0","id":4,"method":"run.turn"}
+< {"jsonrpc":"2.0","method":"effect.log","params":{"batch":3,"index":0,"session":3,"label":"order","text":"payment failed: payment.timeout"}}
+< {"jsonrpc":"2.0","id":4,"result":{"status":"idle","runs":1,"fuel":23,"time":30000,"nextDeadline":null}}
+```
+
+Both give the charts the same events in the same order: the answer and
+the failure are in the senders' queues before the ack (ADR 0017,
+decision 2). B takes three fewer client messages here and cannot be left
+with a batch open by a client that forgets to ack. The first draft's
+claim that agents' clients "answer requests poorly" was wrong: MCP's
+clients answer server requests already (its sampling and elicitation
+are requests from the server; MCP specification, client features).
+
+**Against the debugger lab:**
+
+| Debugger need | A, `hold` | B, requests |
+|---|---|---|
+| answer or fail sends interactively | every waiting send of the batch is on screen at once; the person answers them in any order, inspects inputs, spawns a stand-in, then continues | one modal question per send, in batch order; the next cannot be seen until this one is answered |
+| inspect an actor's state while sends wait | not possible: a post made with a batch open is answered after the ack (`requests.md:50`) | the same limit, from the same rule of core; the server would also have to read and run the client's other requests while it waits for a response, a second loop inside its drain |
+| step, breakpoints on events or states | the same shape as `hold`: `run.turn` returns with a status (`"held"` now; a `"paused"` with `budget`, `runs: 1` or a breakpoint later), the client inspects and calls `run.turn` again | a pause would be a request from inside the turn, so the server's turn stays open across the person's thinking; a breakpoint that wants to inspect state hits the row above |
+| time travel through snapshots | a snapshot needs no batch open (`host.h:460`): `run.ack` (or answering) first, then `run.snapshot` | the same: no batch may be open, so not while a request waits |
+| a client that walks away | the batch stays held until the next `run.turn`, `run.ack` or the end of input (acked, section 3.3) | the server waits for a response forever, or needs a timeout of its own |
+
+**Decision: `hold`.** What decides it is the debugger: its interaction is
+"the run stops, the person looks and acts, the run continues", and in A
+every stop (a held batch today, a step or a breakpoint later) is a
+`run.turn` that returns, with every message the client's initiative and
+one loop in the server. B is better for a scripted client that answers
+every send at once by rule (fewer messages, nothing to forget), and that
+client loses little with A: one `run.turn` after its answers. What B would
+give the debugger is the guarantee that no batch stays open by accident;
+what it would cost is a server that reads client requests in the middle
+of a drain, and a modal flow that shows one send at a time. Both share
+the limit that matters most to a debugger, state that cannot be read
+while sends wait; lifting it is a question for core's publication rule
+(`requests.md:50`), for the debugger's own proposal, not this one.
 
 ## 5. Values and errors
 
@@ -725,7 +941,9 @@ with the client's id.
 | the command: options, startup, the message loop | `tools/tinyactors/run.c` | the commands' layer, compiled without the C library's headers |
 | the methods, the pending posts and the drain | `tools/tinyactors/serve.c`, `tools/tinyactors/effects.c` | the same |
 | the schema | `tools/tinyactors/run.schema.json`, embedded by the build | section 4.7 |
-| reading standard input as it comes; `SIGPIPE` ignored; `strtod` if open question 2 takes it | `tools/tinyactors/platform.c` | the only file that uses the C library |
+| a decimal's text as the nearest double | `src/cli/decimal.{h,c}`, a port of Go's `strconv` | section 7.2 |
+| the schema's checks: tables generated from the schema, and their checker | `build/<variant>/generated/tools/tinyactors/`, `tools/tinyactors/schema_check.c` | section 7.8 |
+| reading standard input as it comes; `SIGPIPE` ignored | `tools/tinyactors/platform.c` | the only file that uses the C library |
 
 **One CBOR walker or two.** The command's CBOR-to-JSON writer walks a CBOR
 item as `ta_cbor_diagnostic` does (`include/tinyactors/cbor.h:80-89`:
@@ -774,18 +992,10 @@ typedef struct ta_json_failure {
     ta_string_view reason;
 } ta_json_failure;
 
-/* A decimal that is not an integer, as the nearest double (ties to even):
- * the reader's own, or the platform's (open question 2). */
-typedef struct ta_json_decimal {
-    void *context;
-    ta_status (*read)(void *context, ta_string_view text, double *out);
-} ta_json_decimal;
-
 typedef struct ta_json_reading {
     ta_string_view text;          /* one JSON text, UTF-8 */
     ta_cbor_writer *writer;       /* receives one item; containers TA_CBOR_COUNT_LATER */
     ta_growable_arena *arena;     /* the keys of the objects open, to refuse a repeated one */
-    const ta_json_decimal *decimal;
     ta_json_failure failure;      /* set on TA_ERROR_INVALID and TA_ERROR_LIMIT */
 } ta_json_reading;
 /* TA_OK; TA_ERROR_INVALID: not JSON, not UTF-8, a lone surrogate, a key
@@ -820,16 +1030,75 @@ void ta_format_double(ta_output *out, double value);
 void ta_format_quoted(ta_output *out, ta_string_view text);
 ```
 
-**The decimal reader** stays open (question 2). Correct rounding needs
-more than `cbor.c`'s Dragon4 arithmetic: its 44-word big integer is sized
-for its own output, 2^1076 × 10 (`src/base/cbor.c:470-473`), and an exact
-comparison of an 800-digit mantissa scaled by 10^-1100 needs more than
-3,600 bits. Either the platform's `strtod` (the command has the C library
-in `platform.c`, which gives `ta_json_decimal`), or a port of the
-algorithm Go's `strconv` uses (an Eisel–Lemire fast path, then the
-"simple decimal conversion" over at most 800 significant digits with a
-truncated flag acting as a sticky digit; `atof.go`, `eisel_lemire.go`,
-`decimal.go` in Go's `src/strconv`, unverified until ported).
+**The decimal reader** (the maintainer, 2026-11-25: a port, not
+`strtod`). Correct rounding needs more than `cbor.c`'s Dragon4 arithmetic:
+its 44-word big integer is sized for its own output, 2^1076 × 10
+(`src/base/cbor.c:470-473`), and an exact comparison of an 800-digit
+mantissa scaled by 10^-1100 needs more than 3,600 bits. The command's JSON
+layer ports Go's `strconv` (its `ParseFloat` for 64 bits; Go's sources,
+`src/strconv/atof.go`, `eisel_lemire.go`, `decimal.go`, BSD-3-Clause,
+whose notice the file carries), keeping Go's step comments so the two read
+side by side (writing-c, section 6):
+
+1. **Read the number** as JSON's grammar has it: sign, up to 19
+   significant digits into a `uint64_t` mantissa, a flag when more
+   followed (truncated), a decimal exponent (`atof.go`, `readFloat`).
+2. **Exact fast path** (Clinger): a mantissa below 2^53 and a power of
+   ten up to 10^22 multiply or divide exactly in a double (`atof.go`,
+   `atof64exact`).
+3. **Eisel–Lemire**: the mantissa times a 128-bit approximation of
+   10^exponent from a table of powers of ten (`eisel_lemire.go`,
+   `detailedPowersOfTen`, 696 pairs of `uint64_t`, a `static const` table
+   of about 11 KB), the 64×64→128 product written with 32-bit halves (no
+   `__int128`: it is not available on every target the command builds
+   for, unverified for zig's targets); when the result is ambiguous, or
+   the mantissa was truncated and the truncation could change it, it
+   reports failure and the next step decides.
+4. **Simple decimal conversion** (`decimal.go`): at most 800 decimal
+   digits in a fixed array, a `truncated` flag for the digits past them
+   (a sticky digit: the rounding stays correct), shifted by powers of two
+   until the value is in [1/2, 1), then rounded to 53 bits, ties to even
+   (`atof.go`, `floatBits`). The array is the algorithm's, not a buffer
+   that cuts: no digit past the 800th changes more than the flag.
+5. **Overflow** to infinity and **underflow** past the subnormals are
+   answered as Go answers them (±Inf with a range error, ±0): the reader
+   refuses a JSON number whose value is not finite (`TA_ERROR_INVALID`,
+   reason "number out of range"), since a neutral value's NaN and
+   infinities have no JSON form to come from.
+
+`src/cli/decimal.h`:
+
+```c
+/* cli/decimal.h — a decimal number's text as the nearest double, ties to
+ * even: Go's strconv.ParseFloat(s, 64), ported (Eisel–Lemire, then the
+ * simple decimal conversion). Freestanding, no allocation: the decimal's
+ * 800 digits are on the stack. */
+typedef struct ta_decimal_reading {
+    ta_string_view text;  /* JSON's number grammar */
+    double value;         /* set on TA_OK */
+} ta_decimal_reading;
+/* TA_OK; TA_ERROR_INVALID: not a number, or not finite as a double. */
+ta_status ta_decimal_read(ta_decimal_reading *reading);
+```
+
+**Its fixtures** (`tests/json/numbers/`, each with a README naming its
+source and licence):
+
+- Go's own vectors: the `atoftests` table of `atof_test.go` (inputs, the
+  expected value written as Go formats it, and the errors), converted once
+  into `go-atof.txt`, text and the expected double's bits in hexadecimal.
+- The parse-number test corpus Go's and other ports test against
+  (Nigel Tao's `parse-number-fxx-test-data`: lines of the expected bits
+  and the text; its licence to be checked before it is committed,
+  unverified), whole in the `--full` pass, a seeded sample of a few
+  thousand lines in the fast pass (root `AGENTS.md`, "Where a new test
+  goes").
+- The numbers of `tinyactors-test/suites/protocol/values.txt` written as
+  JSON text, and the hard cases by hand: halfway cases, the largest and
+  smallest normal and subnormal doubles, 800 digits and more, exponents
+  past ±400.
+- Round trips: every double of a seeded sample written with
+  `ta_format_double` reads back as itself.
 
 `src/cli/rpc.h`:
 
@@ -1023,13 +1292,9 @@ clock: the clock is simulated.
   the arena's allocators refusing at every size until they succeed
   (writing-c, section 5). `test_cbor`'s diagnostic cases stay as they are
   and pass through the moved `ta_format_double` and `ta_format_quoted`.
-- **Numbers**: a corpus of decimal texts and the bits of the double each
-  reads as, generated once with the C library's `strtod` (the provenance
-  written in the corpus's README) and committed under `tests/json/`, with
-  the hard cases (800 digits and more, halfway cases, subnormals, the
-  largest and smallest), so the test reads fixtures the repository owns
-  (writing-c, section 6); plus every double of a seeded sample written
-  with `ta_format_double` reading back as itself.
+- **`tests/unit/test_cli_decimal.c`**: the number fixtures of 7.2, the
+  fast pass a sample and `--full` all of them.
+- **The schema generator**: its cases and `test_schema_generator` (7.8).
 - **`tests/unit/test_cli_rpc.c`**: lines split across feeds, `\r\n`,
   blank lines, an unended last line, a line past the limit skipped to its
   newline and the block given back; envelopes refused with the right code,
@@ -1037,9 +1302,11 @@ clock: the clock is simulated.
   replaced and `jsonrpc` gone.
 - **Transcripts**, `tests/run/<case>/`: the charts, `config.json`,
   `transcript.jsonl` (`>` and `<` lines, as in section 6) and a README
-  saying what it shows. `test_tool` runs `tinyactors run` on each, feeds
-  the `>` lines and requires the `<` lines byte for byte; no chart of the
-  corpus reads `Date` or `Math.random` (section 4.3). Cases: the order of
+  saying what it shows. `test_tool` runs `tinyactors run` on each, with
+  `TZ=UTC`, feeds the `>` lines and requires the `<` lines byte for byte.
+  Once core's change of section 4.8 is in, cases read `Date` and
+  `Math.random` (an order stamped with the time, a random order number)
+  and repeat; until then the corpus avoids them. Cases: the order of
   section 6; a held send failed; a service invoked, answered, done and
   cancelled; a send to another system and its `message`; `run.hibernate`
   with no batch open and while held, then the next `run.turn` (the output
@@ -1056,22 +1323,31 @@ clock: the clock is simulated.
   is unverified); the server's method table against the schema's, both
   ways; `requests.md`'s methods against the schema's forwarded ones, both
   ways; `tinyactors run --schema` byte for byte the file.
-- **The scenarios**: how the conformance suite reaches the server is open
-  question 1 (an adapter driven by `tinyactors-test`'s runner,
-  recommended).
+- **The scenarios** (decided): a conformance adapter in Ruby that speaks
+  the driver protocol to `tinyactors-test`'s runner and `run.*` to the
+  server, as `tinyactors-napi/conform.mjs` does over Node's API, run as a
+  `binding` kind (it offers no `value.encode`), linted as the adapters are,
+  in core's `test` beside `conform`. The runner judges every scenario,
+  canaries included.
 
 ### 7.6 Documentation
 
 - `tinyactors-core/docs/cli.md`: `run` in the commands' table, and a
   section "Run" with sections 3, 4 and 5 of this proposal as the
-  protocol's reference (evergreen: no ADR numbers in it).
+  protocol's reference (evergreen: no ADR numbers in it), opening with:
+  "**Experimental.** `tinyactors run` and its protocol may change in any
+  release, without a deprecation period, until a second client uses them.
+  The schema (`tinyactors run --schema`) describes the release you have."
 - `tinyactors-core/docs/requests.md`: -32007 `unsupported` in its code
   table as the command's, the area `run` the command's in "Adding a
   method", and in its introduction that the command is a JSON-RPC
   transport of the host.
 - `tinyactors-core/docs/embedding.md` section 1: the command runs charts.
-- `tinyactors-core/docs/layout.md`: `src/cli/json`, `src/cli/rpc`,
-  `tools/tinyactors/run.schema.json`.
+- `tinyactors-core/docs/layout.md`: `src/cli/json`, `src/cli/decimal`,
+  `src/cli/rpc`, `tools/tinyactors/run.schema.json`, `tools/tinyactors/schema/`.
+- `tinyactors-core/docs/host-config.md`, "The datamodels' limits", and
+  `datamodel_ecmascript.h`: the seed and the clock (section 4.8), with
+  core's change.
 - `tinyactors-core/docs/distribution.md`: "about 200 KB" replaced with the
   command's measured size, and that it runs charts with quickjs inside;
   the schema in the archive.
@@ -1085,8 +1361,8 @@ clock: the clock is simulated.
 1. `refactor(core)`: `ta_format_double` and `ta_format_quoted` out of
    `cbor.c` into `base/format`; `report.c`'s strings through
    `ta_format_quoted`; their unit tests.
-2. `feat(core)`: `src/cli/json` with its tests and number fixtures, the
-   decimal reader as open question 2 decides.
+2. `feat(core)`: `src/cli/decimal`, the port of Go's `strconv`, with its
+   fixtures; then `src/cli/json` over it, with its tests.
 3. `feat(core)`: `src/cli/rpc` with its tests.
 4. `refactor(core)`: `tool_image_make` split out of `tool_load`, taking
    its arena.
@@ -1094,8 +1370,9 @@ clock: the clock is simulated.
    startup, the pending posts and forwarding, `run.addImage`, `run.spawn`,
    `run.send`, `run.advanceTime`, `run.turn` without `hold`, the
    notifications of `SEND`, `LOG`, `DONE`, `ERROR`, `REQUEST`; the first
-   transcripts; the schema of these methods, `--schema`, `run.schema` and
-   `run:schema`; `docs/cli.md`, `requests.md`, `distribution.md`.
+   transcripts; the schema of these methods, its generator and checker
+   (7.8), `--schema`, `run.schema` and `run:schema`; `docs/cli.md`,
+   `requests.md`, `distribution.md`.
 6. `feat(core)`: `hold`, `run.ack`, `run.fail`, services (`invocation`,
    `done`), `run.sendMany`, `run.terminate`, the lookups, the end of input
    with a batch held.
@@ -1104,7 +1381,10 @@ clock: the clock is simulated.
 8. `feat(core)`: snapshots and restore.
 9. `feat(core)`: telemetry (`effect.traces`, `effect.logs`, `run.traces`,
    `run.metrics`), `run.post`, `trace.end` at the end of input.
-10. The scenarios through the server, as open question 1 decides.
+10. `test(core)`: the conformance adapter, run by core's `test`.
+11. Core's change of section 4.8 (a request to core, taken on its own
+    schedule): the seed, the clock and `ta_system_advance_time`, then the
+    command's `--seed` and transcripts that read `Date` and `Math.random`.
 
 Steps 6 to 9 each extend the schema with their methods and
 notifications, so `run:schema` holds at every commit.
@@ -1114,70 +1394,130 @@ root's table names for a change to core (napi and cpython build core's
 amalgamation; step 1 changes `cbor.c`, which is in it, so their tests
 matter there; nothing else here enters it).
 
-## 8. Open questions
+### 7.8 The schema generator
 
-Settled by the maintainer (2026-11-25), and no longer open: JSON in the
-command's own layer (section 2), the command's size accepted (section 2),
-an optional config with a default system id and `ioProcessors` as a map
-(section 3.2), a JSON Schema of the protocol (section 4.7).
+The schema (section 4.7) is the one source of the protocol's shapes: the
+document, the clients generated from it, and the server's validation of
+what it reads. A Ruby program generates the C that checks params against
+it, so a param the schema adds or bounds is checked without a hand-written
+line, and the server and the schema cannot disagree on what is accepted.
 
-1. **The scenarios through the server** (the refutation's finding 6). The
-   first draft had a task in core parse `steps.txt` and require `pass`,
-   which reimplements the suite's runner (its parsing, its conversion of
-   `.txml`) and gets the canaries wrong (`suites/scenarios/outcome-compile`,
-   `outcome-fail`, `outcome-timeout` expect other outcomes).
-   *Recommendation:* an adapter that speaks the driver protocol to
-   `tinyactors-test`'s runner and `run.*` to the server, as
-   `tinyactors-napi/conform.mjs` does over Node's API, run as a `binding`
-   kind (it cannot offer `value.encode`), in Ruby with the root's tasks,
-   linted as the adapters are. The driver protocol stays the runner's wire,
-   and the server's stays JSON.
-2. **The decimal reader** (finding 7). The platform's `strtod`, given to
-   the reader as `ta_json_decimal` by `platform.c`, or a port of Go's
-   `strconv` algorithm in `src/cli` (7.2). *Recommendation:* `strtod` from
-   the platform: the command is a separate distributable with the C
-   library in its platform file, the reader then stays a few lines, and
-   the number fixtures (7.5) check the result on each release target,
-   where the C library differs (musl on Linux, libSystem on macOS,
-   `distribution.md:24-26`); that musl's and Apple's `strtod` round
-   correctly is unverified until the fixtures pass on both. The port
-   remains the answer if one of them fails.
-3. **A real clock.** `--clock real` would need the server to wake at
-   `nextDeadline` with no request in flight (a `poll` on standard input
-   with a timeout in `platform.c`) and to write notifications nobody asked
-   for. *Recommendation:* not in the first version; the workbench is for
-   runs that repeat.
-4. **Determinism** (finding 8). quickjs seeds `Math.random` and its hash
-   from `gettimeofday` (`quickjs.c:2879-2883`) and `Date` reads the real
-   clock, so transcripts repeat only for charts that use neither. Options:
-   (a) say so, and keep the repository's transcripts free of them; (b) a
-   request to core: a seed and a clock for quickjs in
-   `ta_datamodel_ecmascript_config`, so `Date` reads the host's wall clock
-   and `Math.random` repeats. *Recommendation:* (a) now; (b) when a
-   transcript needs `Date` (an order stamped with the time is likely), as a
-   request to core with that scenario, since it changes a public config
-   struct (and whether quickjs offers the hooks is unverified).
-5. **A blob store in the server.** *Recommendation:* no; blobs are the
-   client's (section 4.5).
-6. **`hold` or server-to-client requests.** JSON-RPC lets the server send
-   requests (an `effect.send` the client must answer, as LSP does).
-   *Recommendation:* `hold`: the clients named (agents, shell scripts)
-   answer requests poorly, and `hold` keeps every message the client's
-   initiative.
-7. **`ta-conform` over the same server layer.** *Recommendation:* not now.
-   With the adapter of question 1 in place, decide whether `ta-conform`
-   becomes that adapter's C twin, leaving one C driver of the loop in
-   tools.
-8. **Effects in results instead of notifications.** *Recommendation:*
-   notifications only: a forwarded post's result must be core's, so
-   effects drained with it would need a second place.
-9. **The schema's format.** A JSON Schema 2020-12 document, or an OpenRPC
-   document (section 4.7). *Recommendation:* 2020-12, because OpenRPC's
-   draft-07 schemas cannot describe the server's notifications; generate
-   an OpenRPC document of the client-to-server methods from it only when a
-   tool asks for one.
-10. **Experimental.** *Recommendation:* mark the protocol experimental in
-    `docs/cli.md` until a second client uses it; it is 0.x either way.
+- **The program:** `tools/tinyactors/schema/generate.rb`, beside the
+  schema, run by the build (below), Ruby 4 as the repository's tasks are.
+  It reads `run.schema.json`, resolves its local `$ref`s, and writes two
+  generated files: the schema's checks as data, and the schema's bytes
+  (for `--schema` and `run.schema`).
+- **What it generates is data, not code.** The checks are `static const`
+  tables of nodes (one per schema object: its type set, its properties,
+  required members, bounds, the index of its items' node), read by a
+  hand-written checker, `tools/tinyactors/schema_check.c`, with an explicit
+  stack (writing-c, sections 1 and 5: constants as `static const`
+  tables of structs, never `#define`; no recursion). A change to the
+  schema changes data; a change to what the checker can check changes the
+  generator and the checker together.
+- **What it supports**, each mapped to a check of a CBOR token (params are
+  checked after the JSON reader made them CBOR):
+
+  | Keyword | Check |
+  |---|---|
+  | `type` (one or a list of `object`, `array`, `string`, `integer`, `number`, `boolean`, `null`) | the token's kind; `integer` an unsigned or negative integer, `number` those or a float |
+  | `properties`, `required`, `additionalProperties: false` | members by name; a missing one `missing`, an unknown one `unknown` |
+  | `enum`, `const` of strings, integers, booleans | the value among them (`range`) |
+  | `minimum`, `maximum` (integers within 64 bits), `minLength`, `maxLength`, `minItems`, `maxItems` | `range` |
+  | `items` (one schema) | each item |
+  | `pattern`, only those in the generator's table: `^[A-Za-z0-9_-]*$` (base64url), the duration pattern of `run.advanceTime` | a C function per pattern; any other pattern is refused, since the command carries no regular-expression engine |
+  | `oneOf` whose branches each have a `const` member with a different value (a discriminator: `method`), or exactly the forms `type: [integer, string]` | the branch the discriminator names |
+  | `not: {required: [a, b]}` | `a` and `b` not both present (`data` and `cbor`) |
+  | `$ref` to `#/$defs/...`, without a cycle; the schema `true` (any value: `value`) | the named node; anything |
+  | `$schema`, `$id`, `$defs`, `title`, `description`, `$comment`, `examples`, `default` | nothing (documentation) |
+
+  **Refused with an error** that names the keyword and its JSON pointer
+  (`run.schema.json#/$defs/run.spawn.params/properties/name: pattern not
+  supported`), so the build fails before a check silently goes missing:
+  every other keyword, among them `anyOf`, `allOf`, `if`/`then`/`else`,
+  `patternProperties`, `unevaluatedProperties`, `dependentSchemas`,
+  `format`, a `$ref` outside the document, a cycle of `$ref`s, a number
+  bound that is not an integer, and a `oneOf` without a discriminator.
+- **The generated C's interface** (the prefix `tool_` is the command's):
+
+  ```c
+  /* The schema's methods, in the schema's order: generated. */
+  typedef enum tool_schema_method {
+      TOOL_SCHEMA_RUN_ADD_IMAGE = 0,
+      /* ... one per run.* method and forwarded method ... */
+      TOOL_SCHEMA_METHOD_COUNT
+  } tool_schema_method;
+
+  /* A method's number by name: TOOL_SCHEMA_METHOD_COUNT when the schema
+   * has none (a forwarded method core added since: not checked here). */
+  uint32_t tool_schema_method_find(ta_string_view name);
+
+  typedef struct tool_schema_input {
+      const ta_cbor_document *document;
+      uint32_t at;              /* the params' token; TA_NIL: no params */
+      ta_growable_arena *arena; /* the path of a refusal: "params.events[2].data" */
+  } tool_schema_input;
+  /* TA_OK; TA_ERROR_INVALID with `error` set: code -32602, reason missing,
+   * type, unknown or range, path from "params"; TA_ERROR_NO_MEMORY: the
+   * arena refused the path. */
+  ta_status tool_schema_check_params(uint32_t method, const tool_schema_input *input,
+                                     ta_rpc_error *error);
+  /* The same for a result or a notification's params (the dev build checks
+   * every message it writes; a release does not). */
+  ta_status tool_schema_check_message(uint32_t node, const tool_schema_input *input,
+                                      ta_rpc_error *error);
+  /* The schema's bytes, for --schema and run.schema. */
+  ta_bytes tool_schema_text(void);
+  ```
+
+  A forwarded method is checked too when the schema has it, so a client
+  gets the same refusal from the server as from core, at the same path;
+  core still checks what it reads, and the protocol vectors
+  (`tinyactors-test/suites/protocol/requests.txt`) and the tests of
+  section 7.5 keep the two agreeing.
+- **Where the generated files go:** `build/<variant>/generated/tools/tinyactors/`
+  (`schema_tables.c`, `schema_text.c`, `schema.h`), never committed. The
+  schema is the source and the generator is deterministic, so a committed
+  copy would only add a check that it is current; the release build runs
+  the generator like any other build.
+- **How the build runs it:** `mise/core.rb` gains a generation step for
+  the `tool` layer: before compiling the layer, run the generator when
+  `run.schema.json` or `generate.rb` is newer than its output, with the
+  Ruby the repository pins; the layer's sources include the generated
+  `.c` files and its include path the generated directory. `mise run
+  build` and the release build both go through it; `#MISE sources` of
+  core's `test` lists the schema and the generator.
+- **Its tests:** `tools/tinyactors/schema/tests/<case>/`, each a small
+  `schema.json`, `accept/*.json` and `refuse/*.json` (each refused
+  document with the error it must give: code, reason, path). A test
+  program, `test_schema_generator` in core's list, is built from the
+  generated tables of each case and the checker, and runs every document;
+  the same documents are validated by the Ruby 2020-12 validator of
+  `run:schema` (section 7.5), so the checker and a reference validator
+  agree on every case. Unsupported keywords have cases of their own that
+  require the generator to fail with the expected pointer. Ruby unit tests
+  of the generator (`$ref` resolution, the discriminator, the tables'
+  order) run in the same task.
+
+## 8. Decisions
+
+The maintainer settled every open question (2026-11-25); none is left.
+
+| Question | Decision | Where |
+|---|---|---|
+| JSON in core's tree | the command's own JSON, in its own layer; core's libraries and the bindings stay JSON-free | section 2 |
+| the command's size | accepted, `distribution.md` updated | sections 2, 7.6 |
+| the config | optional; system id `tinyactors-run`; `ioProcessors` a map | section 3.2 |
+| the scenarios through the server | a Ruby conformance adapter driven by `tinyactors-test`'s runner | section 7.5 |
+| the decimal reader | a port of Go's `strconv`, not `strtod` | section 7.2 |
+| a real-time clock | later, not in the first version | section 2 |
+| determinism | the ECMAScript datamodel takes a seed and the host's clocks: a request to core | section 4.8 |
+| a blob store in the server | none: blobs are the client's | section 4.5 |
+| `hold` or requests from the server | `hold`, decided with both protocols written out and judged for a debugger lab | section 4.9 |
+| `ta-conform` over the server's layer | not now | — |
+| effects as notifications | yes: effects are asynchronous by nature | section 4.4 |
+| the schema | JSON Schema 2020-12 (not OpenRPC), and a generator of the server's checks from it | sections 4.7, 7.8 |
+| experimental | yes, in this proposal and in `docs/cli.md` | status, section 7.6 |
 
 ## 9. The refutation, and what it changed
 
@@ -1192,9 +1532,11 @@ and decisions, and what became of each:
 | 3 | ADR 0009, decision 5 cited as support while JSON came back into core | the maintainer: JSON is the command's own, in `src/cli`, which no released library holds; why that keeps decision 5 (section 2) |
 | 4 | the command's size against `distribution.md:26` | the maintainer: accepted; in "who pays", and `distribution.md` updated (7.6) |
 | 5 | repeated keys: quickjs keeps the last, core finds the first | refused everywhere (3.1) |
-| 6 | the scenarios task reimplemented the runner and misread the canaries | open question 1: an adapter driven by the runner |
-| 7 | the 44-word big integer cannot round 800-digit decimals | open question 2: the platform's `strtod` recommended, Go's `strconv` algorithm the alternative (7.2) |
-| 8 | quickjs's `Math.random`, hash seed and `Date` do not repeat | stated (4.3); transcripts avoid them; open question 4 |
+| 6 | the scenarios task reimplemented the runner and misread the canaries | the maintainer: an adapter driven by the runner (7.5) |
+| 7 | the 44-word big integer cannot round 800-digit decimals | the maintainer: a port of Go's `strconv`, outlined with its fixtures (7.2) |
+| 8 | quickjs's `Math.random`, hash seed and `Date` do not repeat | the vendored engine checked: no hook; the datamodel replaces the builtins with a seed and the host's clocks, a request to core (4.8) |
+| — | the maintainer: is `hold` really better than requests from the server? | both protocols written out on one scenario, judged for a debugger lab; `hold` kept, and the first draft's claim about agents' clients withdrawn (4.9) |
+| — | the maintainer: the schema drives the server | a generator of the server's checks from the schema (7.8) |
 | 9 | end of input with a held batch, an unended last line, `[]`, an ack with none held, `SIGPIPE`, exit 3 for memory | each specified (3.1, 3.3, 4.2, 5.2) |
 | 10 | the held table lacked rows | a row per method (4.4) |
 | 11 | `unsupported` reused -32005; four statuses unmapped | -32007 of its own; -32603 for the four (5.2) |
@@ -1221,9 +1563,11 @@ most three parameters, enums, names, explicit stacks); flushing; nonce 0
 and `traceSeed` 0.
 
 **Still unverified:** the line counts and the size of the command (settled
-by building it); that the platforms' `strtod` rounds correctly (settled by
-the number fixtures on each target); a Ruby validator for 2020-12; that converting a payload with the datamodel's
+by building it); the port's details (`__int128` on the command's targets,
+the parse-number corpus's licence; settled when ported); a Ruby validator
+for 2020-12; what quickjs-emscripten offers for determinism (not needed by
+the choice of 4.8); that converting a payload with the datamodel's
 `to_wire` during dispatch is safe (`ta-conform` does it,
 `tools/conform/datamodel.c:77-78`; settled by the transcripts under the
-sanitizer build); whether quickjs can take a seed and a clock (open
-question 4).
+sanitizer build); the cost per context of the replaced builtins (4.8, measured
+with core's change).
