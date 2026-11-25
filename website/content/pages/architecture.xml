@@ -1,0 +1,146 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<page xmlns="https://www.tinyactors.dev/ns/site" id="architecture" path="/architecture/">
+  <title>Architecture</title>
+  <description>How tinyactors runs actors: a host, one segment per image, a system and its region of memory, the effects loop and snapshots.</description>
+  <purpose kind="explanation" for="tech-lead agent-platform"/>
+
+  <hero>
+    <headline>One host runs a segment per image</headline>
+    <lede>A host runs each image you add as a segment, and each segment keeps its actors in one block of memory. An actor's record there takes <link to="architecture" section="costs">81 bytes</link>.</lede>
+    <actions>
+      <action to="guide-inspection">Inspect a running host</action>
+      <action to="guide-snapshots">Take a snapshot</action>
+    </actions>
+  </hero>
+
+  <section id="host">
+    <heading>A host runs one segment per image</heading>
+    <p>Adding an image to a host adds a segment, and its charts become the current version. Older segments run until their actors end or migrate.</p>
+    <figure src="../images/host-segments.svg">
+      <description>A process holds the application and one host. The host holds three segments, each a system with its own region of memory and its own range of session ids. An actor migrates from segment 0 to segment 1 and keeps its session id. A send to another system leaves through the application's transport.</description>
+    </figure>
+    <table>
+      <head><cell>Word</cell><cell>What it is</cell><cell>In C</cell></head>
+      <row><cell>Image</cell><cell>Compiled charts, a <code>.tai</code> file</cell><cell><code>ta_compile_charts</code></cell></row>
+      <row><cell>Segment</cell><cell>One image running inside a host; segment k numbers its sessions from k·2³²+1</cell><cell><code>ta_host_add_image</code></cell></row>
+      <row><cell>System</cell><cell>A segment's engine: its actors, mailboxes and timers in one region</cell><cell><code>ta_system</code></cell></row>
+      <row><cell>Host</cell><cell>Every segment as one actor system, with one clock and routing</cell><cell><code>ta_host</code></cell></row>
+      <row><cell>System id</cell><cell>The host's name in addresses, seen from other systems</cell><cell><code>systemID</code></cell></row>
+    </table>
+  </section>
+
+  <section id="two-systems">
+    <heading>System names two different things</heading>
+    <p>In C, a system is one segment's engine. In addresses, a system is a whole host, named by its system id.</p>
+    <claims>
+      <claim>
+        <statement>A host owns one system per image</statement>
+        <p>The host header says a host owns segments, one <code>ta_system</code> per image.</p>
+        <p>Segment k creates sessions k·2³²+1 to k·2³²+2³²−1, so a session id names one actor in the host.</p>
+        <source href="https://github.com/tinyactors-dev/tinyactors/blob/main/tinyactors-core/include/tinyactors/host.h">tinyactors, <code>include/tinyactors/host.h</code></source>
+      </claim>
+      <claim>
+        <statement>Another system is another host</statement>
+        <p>A send to an address whose system id is not this host's leaves as an effect for your transport.</p>
+        <p>Sends between segments of one host stay inside the host.</p>
+        <source to="guide-other-systems">Other systems</source>
+        <source href="https://github.com/tinyactors-dev/tinyactors/blob/main/GLOSSARY.md">tinyactors, <code>GLOSSARY.md</code></source>
+      </claim>
+    </claims>
+  </section>
+
+  <section id="layers">
+    <heading>Each C layer calls only the layers below</heading>
+    <p>The C libraries link in layers, and core through the host never call the C library.</p>
+    <table>
+      <head><cell>Layer</cell><cell>What it does</cell><cell>Where</cell></head>
+      <row><cell>Core</cell><cell>Runs statecharts over a compiled image, in one region sized at creation</cell><cell><code>src/base</code>, <code>image</code>, <code>trace</code>, <code>core</code>, <code>system</code></cell></row>
+      <row><cell>Host</cell><cell>Runs many systems as one, allocating only through the allocator it is given</cell><cell><code>src/host</code></cell></row>
+      <row><cell>Compiler</cell><cell>Turns SCXML documents into an image</cell><cell><code>src/compile</code></cell></row>
+      <row><cell>Datamodels</cell><cell>Evaluate expressions: ECMAScript on quickjs, or a binding's own language</cell><cell><code>src/datamodel_ecmascript</code></cell></row>
+      <row><cell>Binding</cell><cell>Turns values into its language's objects and runs the loop</cell><cell><code>tinyactors-napi</code>, <code>tinyactors-cpython</code></cell></row>
+      <row><cell>Application</cell><cell>Stores blobs and snapshots, and decides policy</cell><cell>your code</cell></row>
+    </table>
+    <claims>
+      <claim>
+        <statement>Core never does I/O</statement>
+        <p>Core hands effects to the host and calls back only into the datamodel and the allocator.</p>
+        <source href="https://github.com/tinyactors-dev/tinyactors/blob/main/README.md#layers-and-responsibilities">tinyactors, <code>README.md</code>, "Layers and responsibilities"</source>
+      </claim>
+    </claims>
+  </section>
+
+  <section id="region">
+    <heading>A system keeps its actors in one region</heading>
+    <p>A system carves its region once into pools of actors, events and timers. The region holds offsets instead of pointers, so its bytes can move.</p>
+    <claims>
+      <claim>
+        <statement>The region is carved once at creation</statement>
+        <p>The system carves its header, actor slots, event slots, timers, slab pages, the outbox and the trace journal from one block.</p>
+        <source href="https://github.com/tinyactors-dev/tinyactors/blob/main/tinyactors-core/src/system/system.c">tinyactors, <code>src/system/system.c</code>, <code>carve()</code></source>
+      </claim>
+      <claim>
+        <statement>A full pool grows by relocation</statement>
+        <p>When a pool runs out, the host copies the segment into a bigger block with more of that pool.</p>
+        <p>The capacity doubles until the block is a quarter larger, up to sixteen times the pool.</p>
+        <source href="https://github.com/tinyactors-dev/tinyactors/blob/main/tinyactors-core/include/tinyactors/host.h">tinyactors, <code>include/tinyactors/host.h</code>, "growth"</source>
+      </claim>
+    </claims>
+  </section>
+
+  <section id="costs">
+    <heading>An actor's record takes 81 bytes</heading>
+    <p>These are the region's costs for one more of each, read from the types' debug information. The actor's chart state and datamodel variables come on top.</p>
+    <table>
+      <caption>From <code>mise run layout</code> in tinyactors-core on 2026-11-25, at commit 2dc827ac, checked against <code>ta_system_layout</code>.</caption>
+      <head><cell>One more</cell><cell>Bytes, tracing on</cell><cell>Bytes, tracing off</cell><cell>Parts</cell></head>
+      <row><cell>Actor</cell><cell>81</cell><cell>81</cell><cell>record 48, links 16, session index 8, name index 8, generation 1</cell></row>
+      <row><cell>Message</cell><cell>106</cell><cell>57</cell><cell>event 56, trace context 48, generations 2</cell></row>
+      <row><cell>Delayed send</cell><cell>151</cell><cell>102</cell><cell>timer 24, heap entry 20, generation 1, its message</cell></row>
+    </table>
+    <claims>
+      <claim>
+        <statement>Costs come from the struct definitions</statement>
+        <p>The layout task reads the region's structs from the debug information and checks each cost against <code>ta_system_layout</code>.</p>
+        <p>The whole actor, with its chart's state and variables, is measured in the capacity guide.</p>
+        <source href="https://github.com/tinyactors-dev/tinyactors/blob/main/tinyactors-core/mise/tasks/layout">tinyactors, <code>tinyactors-core/mise/tasks/layout</code></source>
+        <source to="guide-capacity">Capacity and memory</source>
+      </claim>
+    </claims>
+  </section>
+
+  <section id="loop">
+    <heading>Effects leave in batches between runs</heading>
+    <p>Your code takes a batch of effects, handles it and acknowledges it, then runs the host again. Everything in a batch stays valid until the acknowledgement.</p>
+    <claims>
+      <claim>
+        <statement>One loop drives every binding</statement>
+        <p>The loop is take, handle, acknowledge and run, and a run refuses while a batch is open.</p>
+        <p>Each binding runs this loop in C on its own event loop.</p>
+        <source href="https://github.com/tinyactors-dev/tinyactors/blob/main/tinyactors-core/docs/embedding.md">tinyactors, <code>tinyactors-core/docs/embedding.md</code></source>
+      </claim>
+    </claims>
+  </section>
+
+  <section id="snapshots">
+    <heading>A snapshot is the regions as bytes</heading>
+    <p>A snapshot holds every segment's region, the images, the system id and the host's time. It restores only on the same build of the library.</p>
+    <claims>
+      <claim>
+        <statement>Snapshots are raw region memory</statement>
+        <p>Snapshots are region bytes plus the datamodel's own state, valid for the same build of the library only.</p>
+        <p>Hibernation blobs stay with your store and are not part of a snapshot.</p>
+        <source href="https://github.com/tinyactors-dev/tinyactors/blob/main/tinyactors-core/docs/durability.md">tinyactors, <code>tinyactors-core/docs/durability.md</code></source>
+      </claim>
+      <claim>
+        <statement>The command reads a snapshot's actors</statement>
+        <p><code>tinyactors actors</code> lists every actor in a snapshot with its state, mailbox and pending delayed sends, running nothing.</p>
+        <source href="https://github.com/tinyactors-dev/tinyactors/blob/main/tinyactors-core/docs/cli.md#snapshots-and-blobs">tinyactors, <code>tinyactors-core/docs/cli.md</code>, "Snapshots and blobs"</source>
+      </claim>
+    </claims>
+    <actions>
+      <action to="guide-snapshots">Take a snapshot</action>
+      <action to="guide-inspection">Inspect a running host</action>
+    </actions>
+  </section>
+</page>

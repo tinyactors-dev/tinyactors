@@ -1,0 +1,68 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1060 470" width="1060" height="470">
+  <defs>
+    <marker id="host-segments-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path class="figure__head" d="M0,0 L10,5 L0,10 z"/></marker>
+  </defs>
+  <rect class="figure__line figure__dashed" x="10" y="10" width="760" height="450"/>
+  <text class="figure__muted" x="24" y="32">your process: Node.js, Python, a browser or C</text>
+  <rect class="figure__fill" x="30" y="46" width="720" height="58"/>
+  <text class="figure__text" x="46" y="70" font-weight="600">application</text>
+  <text class="figure__muted" x="46" y="90">storage and policy, I/O processors, services, the store for blobs</text>
+  <rect class="figure__frame" x="30" y="122" width="720" height="324"/>
+  <text class="figure__text" x="46" y="146" font-weight="600">host (ta_host)</text>
+  <text class="figure__muted" x="200" y="146">system id "shop", one clock, routing, versions, migration, the effects queue</text>
+  <path class="figure__line" d="M200 104 L200 120" marker-end="url(#host-segments-arrow)"/>
+  <text class="figure__muted" x="208" y="117">inputs: spawn, send, run</text>
+  <path class="figure__line" d="M560 122 L560 106" marker-end="url(#host-segments-arrow)"/>
+  <text class="figure__muted" x="568" y="117">effects: take, handle, ack</text>
+
+  <rect class="figure__line" x="50" y="166" width="215" height="260"/>
+  <text class="figure__text" x="62" y="186" font-weight="600">segment 0</text>
+  <text class="figure__muted" x="62" y="202">image A: order v1, payment</text>
+  <text class="figure__muted" x="62" y="216">retiring: an older version</text>
+  <rect class="figure__fill" x="62" y="226" width="191" height="188"/>
+  <text class="figure__muted" x="72" y="244">ta_system and its region</text>
+  <circle class="figure__accent" cx="82" cy="268" r="7"/>
+  <circle class="figure__hollow" cx="104" cy="268" r="7"/>
+  <text class="figure__muted" x="72" y="300">sessions 1 to 2³²−1</text>
+
+  <rect class="figure__line" x="282" y="166" width="215" height="260"/>
+  <text class="figure__text" x="294" y="186" font-weight="600">segment 1</text>
+  <text class="figure__muted" x="294" y="202">image B: order v2, payment</text>
+  <text class="figure__note" x="294" y="216">current version of order</text>
+  <rect class="figure__fill" x="294" y="226" width="191" height="188"/>
+  <text class="figure__muted" x="304" y="244">ta_system and its region</text>
+  <circle class="figure__accent" cx="314" cy="268" r="7"/>
+  <circle class="figure__accent" cx="336" cy="268" r="7"/>
+  <circle class="figure__waiting" cx="358" cy="268" r="7"/>
+  <circle class="figure__accent" cx="380" cy="268" r="7"/>
+  <circle class="figure__hollow" cx="402" cy="268" r="7"/>
+  <text class="figure__muted" x="304" y="300">sessions from 2³²+1</text>
+
+  <rect class="figure__line" x="514" y="166" width="215" height="260"/>
+  <text class="figure__text" x="526" y="186" font-weight="600">segment 2</text>
+  <text class="figure__muted" x="526" y="202">image C: chat-room</text>
+  <rect class="figure__fill" x="526" y="226" width="191" height="188"/>
+  <text class="figure__muted" x="536" y="244">ta_system and its region</text>
+  <circle class="figure__accent" cx="546" cy="268" r="7"/>
+  <circle class="figure__accent" cx="568" cy="268" r="7"/>
+  <circle class="figure__accent" cx="590" cy="268" r="7"/>
+  <text class="figure__muted" x="536" y="300">sessions from 2·2³²+1</text>
+
+  <path class="figure__arrow" d="M104 330 C 180 352, 260 352, 336 330" marker-end="url(#host-segments-arrow)"/>
+  <text class="figure__note" x="72" y="376">migration: same session id</text>
+  <path class="figure__line" d="M402 330 C 460 352, 500 352, 568 330" marker-end="url(#host-segments-arrow)"/>
+  <text class="figure__muted" x="304" y="394">a send inside the host</text>
+
+  <rect class="figure__frame figure__dashed" x="810" y="122" width="236" height="200"/>
+  <text class="figure__text" x="826" y="146" font-weight="600">another system</text>
+  <text class="figure__muted" x="826" y="164">another host, system id "billing"</text>
+  <text class="figure__muted" x="826" y="180">often another process or machine</text>
+  <circle class="figure__accent" cx="840" cy="210" r="7"/>
+  <circle class="figure__accent" cx="862" cy="210" r="7"/>
+  <path class="figure__line figure__dashed" d="M760 75 C 800 75, 830 90, 900 120" marker-end="url(#host-segments-arrow)"/>
+  <text class="figure__muted" x="792" y="66">your transport: HTTP, a socket</text>
+
+  <circle class="figure__accent" cx="826" cy="360" r="6"/><text class="figure__muted" x="840" y="364">actor in memory</text>
+  <circle class="figure__waiting" cx="826" cy="382" r="6"/><text class="figure__muted" x="840" y="386">actor waiting on a send</text>
+  <circle class="figure__hollow" cx="826" cy="404" r="6"/><text class="figure__muted" x="840" y="408">hibernated: its record stays,</text><text class="figure__muted" x="840" y="422">its state is a blob</text>
+</svg>

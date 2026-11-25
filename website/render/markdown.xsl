@@ -235,6 +235,11 @@
                           || tokenize(@src, '/')[last()] || '](' || $origin || f:url(@src) || ')'"/>
   </xsl:template>
 
+  <!-- A figure: what it shows, in words. -->
+  <xsl:template match="s:figure" mode="md" as="xs:string">
+    <xsl:sequence select="f:md-inline(s:description)"/>
+  </xsl:template>
+
   <!-- A playground: what it shows, and the page where it runs. -->
   <xsl:template match="s:playground" mode="md" as="xs:string">
     <xsl:sequence select="f:md-inline(s:description) || $blank || '&lt;' || f:html-at(.) || '&gt;'"/>

@@ -471,10 +471,30 @@
       <xs:element ref="actions"/>
       <xs:element ref="live"/>
       <xs:element ref="table"/>
+      <xs:element ref="figure"/>
       <xs:element ref="playground"/>
       <xs:element ref="changelog"/>
     </xs:choice>
   </xs:group>
+
+  <xs:element name="figure">
+    <xs:annotation><xs:documentation>
+      A drawing of how parts fit together (a host and its segments): an SVG
+      file under content/images/ (`src`), written into the page itself so
+      it takes the design system's colors in both themes. Its shapes carry
+      the classes `figure__line`, `figure__fill`, `figure__accent`,
+      `figure__text` and `figure__muted`, never a color of their own.
+      `description` says what the drawing shows, for a reader who cannot
+      see it and for the page's Markdown; it is shown under the drawing.
+    </xs:documentation></xs:annotation>
+    <xs:complexType>
+      <xs:sequence>
+        <xs:element name="description" type="inline"/>
+      </xs:sequence>
+      <xs:attribute name="src" type="path" use="required"/>
+      <xs:assert test="(: a drawing from content/images :) matches(@src, '^\.\./images/[a-z0-9-]+\.svg$')"/>
+    </xs:complexType>
+  </xs:element>
 
   <xs:element name="playground">
     <xs:annotation><xs:documentation>

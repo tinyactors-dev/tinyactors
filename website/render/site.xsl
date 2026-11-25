@@ -539,6 +539,26 @@
     </ta-playground>
   </xsl:template>
 
+  <!-- A figure: its SVG written into the page, so its classes take the
+       design system's colors; the description is its caption and its
+       accessible name. -->
+  <xsl:template match="s:figure">
+    <xsl:variable name="id" select="'figure-' || generate-id()"/>
+    <figure class="figure">
+      <div class="figure__scroll" tabindex="0">
+        <xsl:for-each select="document(resolve-uri(@src, base-uri(.)))/*">
+          <xsl:copy>
+            <xsl:copy-of select="@* except (@width, @height)"/>
+            <xsl:attribute name="role">img</xsl:attribute>
+            <xsl:attribute name="aria-labelledby" select="$id"/>
+            <xsl:copy-of select="node()"/>
+          </xsl:copy>
+        </xsl:for-each>
+      </div>
+      <figcaption class="figure__caption" id="{$id}"><xsl:apply-templates select="s:description/node()"/></figcaption>
+    </figure>
+  </xsl:template>
+
   <xsl:template match="s:example">
     <div class="example">
       <xsl:apply-templates select="s:code"/>

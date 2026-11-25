@@ -329,6 +329,23 @@ ta-tabs { display: block; }
 .hljs-subst { color: inherit; }
 
 /* tables transcluded from the guides: numbers read across a row */
+.figure { margin: 0; display: grid; gap: var(--space-2); }
+.figure__scroll { overflow-x: auto; border: 1px solid var(--border-1); border-radius: var(--radius-2); background: var(--surface-1); padding: var(--space-4); }
+.figure__scroll > svg { display: block; width: 100%; min-width: 720px; height: auto; font-family: var(--font-mono); }
+.figure__caption { font: var(--type-body-sm); color: var(--fg-2); max-width: var(--prose-max); }
+.figure__line { fill: none; stroke: var(--fg-3); }
+.figure__frame { fill: var(--surface-1); stroke: var(--rule); stroke-width: 1.5; }
+.figure__fill { fill: var(--surface-2); stroke: var(--border-2); }
+.figure__accent { fill: var(--accent); stroke: var(--accent); }
+.figure__arrow { fill: none; stroke: var(--accent); stroke-width: 1.5; }
+.figure__hollow { fill: none; stroke: var(--fg-3); stroke-dasharray: 2 2; }
+.figure__waiting { fill: var(--state-waiting); }
+.figure__text { fill: var(--fg-1); font-size: 12px; }
+.figure__muted { fill: var(--fg-2); font-size: 10px; }
+.figure__note { fill: var(--accent-fg); font-size: 10px; }
+.figure__dashed { stroke-dasharray: 6 4; }
+.figure__head { fill: var(--fg-3); }
+
 .table { margin: 0; display: grid; gap: var(--space-2); }
 .table__scroll { overflow-x: auto; border: 1px solid var(--border-1); border-radius: var(--radius-2); background: var(--surface-1); }
 .table table { border-collapse: collapse; width: 100%; font: var(--type-body-sm); font-variant-numeric: tabular-nums; }
