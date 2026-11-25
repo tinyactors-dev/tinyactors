@@ -44,15 +44,15 @@
 | draft | inFlight | submit |  | forward | 478,74 478,136 |
 | draft | withdrawn | withdraw |  | forward | 550,74 550,126 693,126 693,1246 477,1246 477,1256 |
 | inFlight | withdrawn | withdraw |  | forward | 418,1174 418,1256 |
-| active | escalated | sla.expired |  | forward | 300,934 300,1006 |
+| active | escalated | sla.expired |  | forward | 241,934 241,1006 |
 | review | signoff | done.state.review |  | forward | 342,834 342,886 |
-| legalQueued | legalReviewing | legal.claim |  | forward | 168,586 168,638 |
+| legalQueued | legalReviewing | legal.claim |  | forward | 168,586 168,628 117,628 117,638 |
 | legalReviewing | legalApproved | legal.approve |  | forward | 168,696 168,748 |
-| legalReviewing | revising | legal.changes |  | back | 201,638 201,632 273,632 273,348 205,348 205,276 |
+| legalReviewing | revising | legal.changes |  | back | 173,638 173,632 273,632 273,348 205,348 205,276 |
 | legalWasAt | legalQueued |  |  | forward | 168,508 168,552 |
-| financeQueued | financeReviewing | finance.claim |  | forward | 463,586 463,638 |
+| financeQueued | financeReviewing | finance.claim |  | forward | 463,586 463,628 521,628 521,638 |
 | financeReviewing | financeApproved | finance.approve | !legalFirst(amount, legalFirstAt) \|\| In('legalApproved') | forward | 463,720 463,772 |
-| financeReviewing | revising | finance.changes |  | back | 413,638 413,632 305,632 305,328 411,328 411,276 |
+| financeReviewing | revising | finance.changes |  | back | 458,638 458,632 305,632 305,328 411,328 411,276 |
 | financeWasAt | financeQueued |  |  | forward | 463,508 463,552 |
 | revising | review | resubmit | _event.data && _event.data.material | forward | 342,276 342,378 |
 | revising | legalWasAt | resubmit |  | forward | 273,276 273,358 168,358 168,482 |
@@ -60,9 +60,9 @@
 | signoff | archiving | signoff.approve | approvals.legal && approvals.finance | forward | 355,920 355,976 490,976 490,1006 |
 | signoff | rejected | signoff.reject |  | forward | 329,920 329,940 21,940 21,1226 341,1226 341,1256 |
 | resumePoint | review |  |  | forward | 585,267 585,378 |
-| escalated | resumePoint | resume |  | back | 310,1006 310,996 649,996 649,274 575,274 575,267 |
+| escalated | resumePoint | resume |  | back | 273,1006 273,996 649,996 649,274 575,274 575,267 |
 | archiving | approved | archived |  | forward | 450,1040 450,1050 663,1050 663,1236 238,1236 238,1256 |
-| archiving | archiveRetry | error.communication |  | forward | 490,1040 490,1126 |
+| archiving | archiveRetry | error.communication |  | forward | 490,1040 490,1116 453,1116 453,1126 |
 | archiveRetry | archiving | archive.retry |  | back | 530,1126 530,1040 |
 
 #### Inside
@@ -79,7 +79,5 @@
 
 | Kind | Subject | Touches |
 | --- | --- | --- |
-| labelOnEdge | revising → review on resubmit | financeReviewing → revising on finance.changes |
-| labelOnEdge | revising → review on resubmit | revising → legalWasAt on resubmit |
-| labelOnEdge | signoff → archiving on signoff.approve | active → escalated on sla.expired |
-| labelOnEdge | signoff → archiving on signoff.approve | signoff → rejected on signoff.reject |
+| labelOnEdge | revising → review on resubmit | revising → financeWasAt on resubmit |
+| labelOnEdge | revising → review on resubmit | resumePoint → review |

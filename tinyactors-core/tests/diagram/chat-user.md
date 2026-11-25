@@ -5,15 +5,15 @@
 ### Chart 1: user
 
 - **Name**: user
-- **Width**: 360
+- **Width**: 355
 - **Height**: 610
 
 #### Boxes
 
 | State | Kind | Parent | Drawn as | X | Y | Width | Height |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| /scxml | compound |  | root | 0 | 0 | 360 | 610 |
-| offline | atomic | /scxml | atomic | 130 | 154 | 78 | 34 |
+| /scxml | compound |  | root | 0 | 0 | 355 | 610 |
+| offline | atomic | /scxml | atomic | 55 | 154 | 78 | 34 |
 | online | compound | /scxml | compound | 14 | 270 | 310 | 326 |
 | active | atomic | online | atomic | 28 | 428 | 99 | 58 |
 | away | atomic | online | atomic | 46 | 548 | 64 | 34 |
@@ -24,15 +24,15 @@
 
 | Source | Target | Events | Condition | Drawn as | Route |
 | --- | --- | --- | --- | --- | --- |
-| offline | online | connect |  | forward | 156,188 156,270 |
-| online | offline | disconnect |  | back | 182,270 182,188 |
-| online | reconnecting | connection.lost |  | back | 236,270 236,124 126,124 126,72 |
-| active | away | idle |  | forward | 73,486 73,548 |
-| away | active | activity |  | back | 100,548 100,486 |
+| offline | online | connect |  | forward | 65,188 65,270 |
+| online | offline | disconnect |  | back | 111,270 111,188 |
+| online | reconnecting | connection.lost |  | back | 236,270 236,260 231,260 231,144 290,144 290,72 |
+| active | away | idle |  | forward | 67,486 67,548 |
+| away | active | activity |  | back | 88,548 88,538 93,538 93,486 |
 | resume | active |  |  | forward | 78,384 78,428 |
-| reconnecting | resume | connect |  | forward | 90,72 90,134 236,134 236,260 78,260 78,358 |
-| reconnecting | offline | disconnect |  | forward | 172,72 172,154 |
-| reconnecting | offline | grace.over |  | forward | 264,72 264,144 198,144 198,154 |
+| reconnecting | resume | connect |  | forward | 70,72 70,114 236,114 236,240 78,240 78,358 |
+| reconnecting | offline | disconnect |  | forward | 152,72 152,124 97,124 97,154 |
+| reconnecting | offline | grace.over |  | forward | 244,72 244,134 123,134 123,154 |
 
 #### Inside
 
@@ -60,7 +60,4 @@
 
 #### Problems
 
-| Kind | Subject | Touches |
-| --- | --- | --- |
-| edgesOverlap | online → reconnecting on connection.lost | reconnecting → resume on connect |
-| labelAstray | online → offline on disconnect |  |
+_none_

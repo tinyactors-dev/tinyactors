@@ -33,16 +33,16 @@
 | Source | Target | Events | Condition | Drawn as | Route |
 | --- | --- | --- | --- | --- | --- |
 | queued | collecting | start |  | forward | 68,180 68,222 92,222 92,232 |
-| queued | voided | cancel |  | back | 107,180 107,193 150,193 150,406 294,406 294,180 |
+| queued | voided | cancel |  | back | 107,180 107,193 160,193 160,406 294,406 294,180 |
 | collecting | collected | done |  | forward | 92,266 92,318 |
-| collecting | awaiting | missing |  | back | 128,266 128,283 147,283 147,426 388,426 388,197 408,197 408,180 |
+| collecting | awaiting | missing |  | back | 128,266 128,283 167,283 167,426 373,426 373,197 408,197 408,180 |
 | collected | labelled | ship |  | back | 92,352 92,436 389,436 389,284 416,284 416,266 |
 | draft | sent | issue |  | forward | 220,180 220,232 |
 | sent | settled | paid |  | forward | 227,266 227,318 |
-| sent | collecting | recount |  | back | 194,266 194,276 177,276 177,386 153,386 153,276 118,276 118,266 |
-| voided | queued | reopen |  | back | 311,180 311,416 148,416 148,195 97,195 97,180 |
+| sent | collecting | recount |  | back | 194,266 194,276 177,276 177,386 173,386 173,276 118,276 118,266 |
+| voided | queued | reopen |  | back | 311,180 311,416 153,416 153,195 97,195 97,180 |
 | awaiting | labelled | label |  | forward | 449,180 449,232 |
-| awaiting | draft | bill |  | back | 418,180 418,191 383,191 383,396 356,396 356,191 249,191 249,180 |
+| awaiting | draft | bill |  | back | 418,180 418,191 363,191 363,396 356,396 356,191 249,191 249,180 |
 | labelled | dispatched | dispatch |  | forward | 466,266 466,308 442,308 442,318 |
 | labelled | voided | refund |  | back | 426,266 426,274 380,274 380,376 329,376 329,180 |
 | dispatched | queued | lost |  | back | 442,352 442,446 144,446 144,200 117,200 117,180 |
@@ -56,6 +56,4 @@ _none_
 | Kind | Subject | Touches |
 | --- | --- | --- |
 | edgesOverlap | queued → voided on cancel | voided → queued on reopen |
-| edgesOverlap | collecting → awaiting on missing | collected → labelled on ship |
-| edgesOverlap | collecting → awaiting on missing | voided → queued on reopen |
-| labelAstray | labelled → voided on refund |  |
+| labelOnEdge | labelled → voided on refund | dispatched → queued on lost |

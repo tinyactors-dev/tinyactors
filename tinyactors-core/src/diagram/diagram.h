@@ -23,9 +23,14 @@
  *   label in the gap after the source's layer, bend in a channel of their
  *   own and enter the target box on its near side; back edges leave
  *   backwards and come back through the same channels; edges between the
- *   regions of a parallel state run along lanes below them. Labels sit on
- *   their own route, the segment nearest the source first. Everything is
- *   computed with layers along +x and transposed for TA_DIAGRAM_DOWN.
+ *   regions of a parallel state run along lanes below them. Edges through
+ *   one corridor of dummies each keep a lane of their own, and an inner
+ *   segment that would run along another transition's line moves aside.
+ *   Labels sit on their own route, the segment nearest the source first,
+ *   or beside it, no further from it than their own height while any such
+ *   place is clear (down, over one other line at most before stepping
+ *   further). Everything is computed with layers along +x and transposed
+ *   for TA_DIAGRAM_DOWN.
  *
  * Transitions that cross three or more container borders, and a
  * container's transitions into its own descendants, are not routed: they

@@ -41,12 +41,12 @@
 | compensating | retrying |  | `Object.values(lines).every(function (line) { return line.status === 'released'; }) && retry && attempt < maxAttempts` | forward | 326,752 326,794 428,794 428,834 |
 | compensating | failed |  | Object.values(lines).every(function (line) { return line.status === 'released'; }) | forward | 402,752 402,992 577,992 577,1012 |
 | releaseBackoff | compensating | release.again |  | back | 250,834 250,752 |
-| retrying | reserving | retry |  | back | 493,834 493,824 597,824 597,660 948,660 948,418 974,418 974,284 |
+| retrying | reserving | retry |  | back | 493,834 493,824 592,824 592,660 958,660 958,418 974,418 974,284 |
 | retrying | cancelled | cancel |  | forward | 460,868 460,982 686,982 686,1012 |
-| reserving | compensating | reserve.refused | lines[_event.data.sku] !== undefined && lines[_event.data.sku].reservation === _event.data.reservation | forward | 700,284 700,378 918,378 918,620 407,620 407,670 |
-| reserving | compensating | error.communication |  | forward | 769,284 769,388 918,388 918,630 453,630 453,670 |
+| reserving | compensating | reserve.refused | lines[_event.data.sku] !== undefined && lines[_event.data.sku].reservation === _event.data.reservation | forward | 700,284 700,378 938,378 938,620 407,620 407,670 |
+| reserving | compensating | error.communication |  | forward | 769,284 769,388 928,388 928,630 453,630 453,670 |
 | reserving | compensating | reserving.timeout |  | forward | 837,284 837,398 918,398 918,640 498,640 498,670 |
-| reserving | compensating | cancel |  | forward | 906,284 906,408 918,408 918,650 544,650 544,670 |
+| reserving | compensating | cancel |  | forward | 906,284 906,408 908,408 908,650 544,650 544,670 |
 | reserving | checkingOut |  | Object.values(lines).every(function (line) { return line.status === 'held'; }) | forward | 1043,284 1043,428 875,428 875,438 |
 
 #### Inside
@@ -79,15 +79,9 @@
 
 | Kind | Subject | Touches |
 | --- | --- | --- |
-| edgesOverlap | checkingOut → placed | retrying → reserving on retry |
-| edgesOverlap | reserving → compensating on reserve.refused | reserving → compensating on error.communication |
-| edgesOverlap | reserving → compensating on reserve.refused | reserving → compensating on reserving.timeout |
-| edgesOverlap | reserving → compensating on reserve.refused | reserving → compensating on cancel |
-| edgesOverlap | reserving → compensating on error.communication | reserving → compensating on reserving.timeout |
-| edgesOverlap | reserving → compensating on error.communication | reserving → compensating on cancel |
-| edgesOverlap | reserving → compensating on reserving.timeout | reserving → compensating on cancel |
-| labelAstray | checkingOut → compensating on confirm.refused |  |
-| labelAstray | checkingOut → compensating on error.communication |  |
+| labelOnEdge | checkingOut → compensating on confirm.refused | shopping → compensating on cancel |
+| labelOnEdge | checkingOut → compensating on error.communication | checkingOut → compensating on confirm.refused |
 | labelAstray | checkingOut → compensating on checkout.timeout |  |
 | labelAstray | compensating → releaseBackoff on error.communication release.timeout |  |
-| labelAstray | compensating → retrying |  |
+| labelOnEdge | compensating → retrying | compensating → failed |
+| labelAstray | reserving → checkingOut |  |

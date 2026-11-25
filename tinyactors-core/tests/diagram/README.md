@@ -18,8 +18,11 @@ the same sizes. It has changed since, here only: a node is aligned on its
 neighbours' ports rather than their boxes' middles (a container's ports are
 below its header), a route ends on the outline drawn, a final's pill or
 a history state's circle, a leaf that three or more edges arrive at grows
-so their arrows keep 12 px apart, and down a box grows to 480 px (from
-320) to put its outgoing labels side by side. Folding (scxmljs's
+so their arrows keep 12 px apart, down a box grows to 480 px (from
+320) to put its outgoing labels side by side, edges through one corridor
+keep lanes of their own and an inner segment on another transition's line
+moves aside, and a label keeps within its own height of its route where it
+can. Folding (scxmljs's
 `collapsed` set) is a chart made before the layout (`src/diagram/fold.c`).
 Nothing here depends on scxmljs any more: the
 layout is ours, and so is its suite.

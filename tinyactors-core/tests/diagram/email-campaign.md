@@ -31,16 +31,16 @@
 
 | Source | Target | Events | Condition | Drawn as | Route |
 | --- | --- | --- | --- | --- | --- |
-| starting | running |  | !resume | forward | 349,74 349,116 474,116 474,262 |
-| starting | running |  | `Date.now() - resume.at < keyTTLMs * 0.8` | forward | 486,74 486,136 474,136 474,252 484,252 484,262 |
+| starting | running |  | !resume | forward | 349,74 349,116 479,116 479,232 474,232 474,262 |
+| starting | running |  | `Date.now() - resume.at < keyTTLMs * 0.8` | forward | 486,74 486,136 469,136 469,252 484,252 484,262 |
 | starting | stale |  |  | forward | 303,74 303,146 |
 | stale | running | campaign.force |  | forward | 363,180 363,262 |
 | stale | aborted | campaign.abort |  | forward | 243,180 243,242 168,242 168,620 |
 | running | finished | done.state.dispatch |  | forward | 330,548 330,620 |
 | running | aborted | campaign.abort |  | forward | 193,548 193,620 |
 | saving | saving | checkpoint.due |  | self | 219,426 219,442 339,442 339,426 |
-| active | held | campaign.pause |  | forward | 435,402 435,464 |
-| held | active | campaign.resume |  | back | 477,464 477,402 |
+| active | held | campaign.pause |  | forward | 445,402 445,464 |
+| held | active | campaign.resume |  | back | 466,464 466,454 505,454 505,402 |
 | spawning | drained |  | finished() | forward | 653,402 653,486 |
 | spawning | spawning | done.spawn |  | self | 714,402 714,418 800,418 800,402 |
 | spawning | spawning | error.communication | spawnFailed(_event.sendid) | self | 810,402 810,418 896,418 896,402 |
@@ -56,7 +56,5 @@
 
 | Kind | Subject | Touches |
 | --- | --- | --- |
-| edgesOverlap | starting → running | starting → running |
-| labelOnEdge | active → held on campaign.pause | held → active on campaign.resume |
 | labelOnEdge | held → active on campaign.resume | active → held on campaign.pause |
 | labelAstray | spawning → spawning on poll wake |  |

@@ -119,6 +119,7 @@ typedef struct pending {
     uint32_t start, end; /* attachments or TA_NIL */
     uint32_t lane, exit_lane, enter_lane; /* between regions: below the grid, in the gaps */
     uint32_t first_channel, channel_count;
+    double chain_offset; /* across the dummies of its corridor: its own lane among the chain's edges */
 } pending;
 
 typedef struct points {
@@ -752,7 +753,7 @@ static size arrange_layers(layout *l, uint32_t c, const size *sizes) {
             lnode *dummy = node_of(info, d);
             dummy->state = TA_NIL;
             dummy->w = 0;
-            dummy->h = sp->edge * ta_diagram_min(3, e.weight);
+            dummy->h = sp->edge * ta_diagram_max(1, e.weight); /* a lane for each of its edges */
             dummy->layer = layer;
             made->count++;
             s.list[s.count++] = (ledge){previous, d, e.weight};
@@ -1405,12 +1406,12 @@ static void ports(router *r) {
             p->start = attach(r, p->from, SIDE_FAR, center_y(l, p->to), down ? label_canon(l, p->transition).h + sp->label : 0);
             p->end = attach(r, p->to, SIDE_NEAR, center_y(l, p->from), 0);
             break;
-        case ROUTE_REVERSED:
-            p->start = attach(r, p->from, SIDE_NEAR, center_y(l, p->to), 0);
+        case ROUTE_REVERSED: /* down, its label sits across it just past its port too */
+            p->start = attach(r, p->from, SIDE_NEAR, center_y(l, p->to), down ? label_canon(l, p->transition).h + sp->label : 0);
             p->end = attach(r, p->to, SIDE_FAR, center_y(l, p->from), 0);
             break;
         case ROUTE_SAME:
-            p->start = attach(r, p->from, SIDE_FAR, center_y(l, p->to), 0);
+            p->start = attach(r, p->from, SIDE_FAR, center_y(l, p->to), down ? label_canon(l, p->transition).h + sp->label : 0);
             p->end = attach(r, p->to, SIDE_FAR, center_y(l, p->from), 0);
             break;
         case ROUTE_REGIONS: {
@@ -1672,6 +1673,48 @@ static double channel_order(const router *r, const pending *p, const pending *q)
     return a.s0 - b.s0 != 0 ? a.s0 - b.s0 : a.s1 - b.s1;
 }
 
+static uint32_t channel_index(const router *r, const pending *p, uint32_t c, uint32_t gap);
+
+/* Edges through one corridor of dummies each run in a lane of their own, a spacing apart, so
+ * none runs along another: ordered by their channel in the gap they enter the corridor from,
+ * the nearer channel on the side the edge comes from, so the lanes do not cross the bends. */
+static void chain_lanes(router *r, pending **list) {
+    layout *l = r->l;
+    for (uint32_t c = 0; c < l->n; c++) {
+        container *info = &l->containers[c];
+        for (uint32_t k = 0; k < info->chain_count; k++) {
+            const chain *found = &info->chains[k];
+            if (!found->count) continue;
+            uint32_t count = 0, gap = info->nodes[l->slot[found->from]].layer;
+            double sum = 0;
+            for (uint32_t i = 0; i < r->pending_count; i++) {
+                pending *p = &r->pendings[i];
+                if (p->container != c || (p->route != ROUTE_FORWARD && p->route != ROUTE_REVERSED)) continue;
+                uint32_t a = child_of(l, c, p->route == ROUTE_REVERSED ? p->to : p->from);
+                uint32_t b = child_of(l, c, p->route == ROUTE_REVERSED ? p->from : p->to);
+                if (a != found->from || b != found->to) continue;
+                list[count++] = p;
+                sum += ends_of(r, p).s0;
+            }
+            if (count < 2) continue;
+            const lnode *first = &info->nodes[found->first];
+            double middle = content_origin(l, c).y + first->y + first->h / 2;
+            int downwards = sum / count <= middle; /* the edges come to the corridor from above it */
+            for (uint32_t i = 1; i < count; i++) { /* by channel, nearest first, stably */
+                pending *moving = list[i];
+                uint32_t j = i, at = channel_index(r, moving, c, gap);
+                for (; j > 0 && channel_index(r, list[j - 1], c, gap) > at; j--)
+                    list[j] = list[j - 1];
+                list[j] = moving;
+            }
+            for (uint32_t i = 0; i < count; i++) {
+                double lane = (double)i - (double)(count - 1) / 2;
+                list[i]->chain_offset = (downwards ? -lane : lane) * l->sp.edge;
+            }
+        }
+    }
+}
+
 static void channels(router *r) {
     layout *l = r->l;
     /* each pending's channels: one per gap it crosses */
@@ -1736,6 +1779,7 @@ static void channels(router *r) {
         for (uint32_t i = 0; i < count; i++)
             entry[i]->index = i;
     }
+    chain_lanes(r, list);
 }
 
 static uint32_t channel_index(const router *r, const pending *p, uint32_t c, uint32_t gap) {
@@ -1851,7 +1895,7 @@ static void corridor(router *r, const pending *p, run c, points *out) {
         double x = channel_x(r, p, c.container, g);
         points_push(l, out, (point){x, y});
         const lnode *next = g + 1 < c.hi && found && g - c.lo < found->count ? &info->nodes[found->first + (g - c.lo)] : 0;
-        y = next ? content_origin(l, c.container).y + next->y + next->h / 2 : c.to_y;
+        y = next ? content_origin(l, c.container).y + next->y + next->h / 2 + p->chain_offset : c.to_y;
         points_push(l, out, (point){x, y});
         if (next)
             points_push(l, out, (point){content_origin(l, c.container).x + info->layer_x[g + 1] + info->layer_w[g + 1], y});
@@ -2061,6 +2105,101 @@ static uint32_t edge_kind(uint32_t route) {
     }
 }
 
+/* ── 4b. no two edges on one line: an inner segment of a route (neither end's, which stay on
+ * their ports) that runs along another transition's segment moves aside, the nearest free
+ * distance first, its neighbours stretching to meet it, so long as they keep their way and it
+ * enters no leaf ── */
+
+static const double apart = 5;    /* how far apart two parallel lines keep, at least */
+static const double alongside = 10; /* how far they may run side by side closer than that */
+
+typedef struct span_line {
+    point a, b;
+} span_line;
+
+/* 1 when the two segments lie on one line, closer than `apart`, side by side for more than `alongside` */
+static int along_one_line(span_line one, span_line two) {
+    int one_horizontal = ta_diagram_abs(one.a.y - one.b.y) < 0.01, two_horizontal = ta_diagram_abs(two.a.y - two.b.y) < 0.01;
+    int one_vertical = ta_diagram_abs(one.a.x - one.b.x) < 0.01, two_vertical = ta_diagram_abs(two.a.x - two.b.x) < 0.01;
+    if (one_horizontal && two_horizontal && !one_vertical && !two_vertical) {
+        if (ta_diagram_abs(one.a.y - two.a.y) >= apart) return 0;
+        return ta_diagram_min(ta_diagram_max(one.a.x, one.b.x), ta_diagram_max(two.a.x, two.b.x)) -
+                   ta_diagram_max(ta_diagram_min(one.a.x, one.b.x), ta_diagram_min(two.a.x, two.b.x)) >
+               alongside;
+    }
+    if (one_vertical && two_vertical && !one_horizontal && !two_horizontal) {
+        if (ta_diagram_abs(one.a.x - two.a.x) >= apart) return 0;
+        return ta_diagram_min(ta_diagram_max(one.a.y, one.b.y), ta_diagram_max(two.a.y, two.b.y)) -
+                   ta_diagram_max(ta_diagram_min(one.a.y, one.b.y), ta_diagram_min(two.a.y, two.b.y)) >
+               alongside;
+    }
+    return 0;
+}
+
+typedef struct separator {
+    point *points;
+    const ta_diagram_edge *edges;
+    uint32_t edge_count;
+    const rect *leaves;
+    uint32_t leaf_count;
+} separator;
+
+/* 1 when the segment of edge `index` from `a` to `b` runs along another transition's line */
+static int crowded(const separator *s, uint32_t index, span_line line) {
+    for (uint32_t i = 0; i < s->edge_count; i++) {
+        const ta_diagram_edge *other = &s->edges[i];
+        if (i == index || other->transition == s->edges[index].transition) continue;
+        const point *p = &s->points[other->first_point];
+        for (uint32_t k = 1; k < other->point_count; k++)
+            if (along_one_line(line, (span_line){p[k - 1], p[k]})) return 1;
+    }
+    return 0;
+}
+
+/* 1 when the segment enters a leaf */
+static int into_leaf(const separator *s, span_line line) {
+    for (uint32_t i = 0; i < s->leaf_count; i++) {
+        rect r = s->leaves[i];
+        double x0 = ta_diagram_min(line.a.x, line.b.x), x1 = ta_diagram_max(line.a.x, line.b.x);
+        double y0 = ta_diagram_min(line.a.y, line.b.y), y1 = ta_diagram_max(line.a.y, line.b.y);
+        if (x0 < r.x + r.w + 1 && r.x - 1 < x1 && y0 < r.y + r.h + 1 && r.y - 1 < y1) return 1;
+    }
+    return 0;
+}
+
+static void separate(const separator *s) {
+    static const double shifts[] = {1, -1, 2, -2, 3, -3, 4, -4, 5, -5, 6, -6};
+    for (uint32_t index = 0; index < s->edge_count; index++) {
+        const ta_diagram_edge *edge = &s->edges[index];
+        point *p = &s->points[edge->first_point];
+        /* inner segments only: k-1..k, with k-1 >= 1 and k <= count-2 */
+        for (uint32_t k = 2; k + 1 < edge->point_count; k++) {
+            if (!crowded(s, index, (span_line){p[k - 1], p[k]})) continue;
+            int horizontal = ta_diagram_abs(p[k - 1].y - p[k].y) < 0.01;
+            point before = p[k - 2], after = p[k + 1], a = p[k - 1], b = p[k];
+            /* a neighbour already on another line may stay so; one that was not must not become so */
+            int first_crowded = crowded(s, index, (span_line){before, a}), last_crowded = crowded(s, index, (span_line){b, after});
+            /* the neighbours run across it: how far each runs, signed, so neither turns back */
+            double in = horizontal ? a.y - before.y : a.x - before.x, out = horizontal ? after.y - b.y : after.x - b.x;
+            for (uint32_t i = 0; i < sizeof shifts / sizeof shifts[0]; i++) {
+                double move = shifts[i] * apart;
+                double new_in = in + move, new_out = out - move;
+                if ((in > 0 ? new_in < 1 : new_in > -1) || (out > 0 ? new_out < 1 : new_out > -1)) continue;
+                point moved_a = horizontal ? (point){a.x, a.y + move} : (point){a.x + move, a.y};
+                point moved_b = horizontal ? (point){b.x, b.y + move} : (point){b.x + move, b.y};
+                span_line middle = {moved_a, moved_b}, first = {before, moved_a}, last = {moved_b, after};
+                if (crowded(s, index, middle) || (!first_crowded && crowded(s, index, first)) ||
+                    (!last_crowded && crowded(s, index, last)))
+                    continue;
+                if (into_leaf(s, middle) || into_leaf(s, first) || into_leaf(s, last)) continue;
+                p[k - 1] = moved_a;
+                p[k] = moved_b;
+                break;
+            }
+        }
+    }
+}
+
 /* ── 5. labels ── */
 
 static int overlaps(rect a, rect b) {
@@ -2078,9 +2217,19 @@ static int segment_through(rect r, point a, point b) {
 
 static const double clearance = 2; /* between a label and what it must not touch */
 
-/* How strictly a place must be free: of other edges' lines too, and inside the container its
- * edge runs in, or only of labels and boxes. */
-typedef enum label_tier { TIER_CLEAR = 0, TIER_LINES_ALLOWED = 1, TIERS = 2 } label_tier;
+/* How strictly a place must be free, tried in this order: of other edges' lines and inside the
+ * container its edge runs in, near its own route (no further from it than its own height); down
+ * only, over one other line at most, near its own route (a wide label across vertical lines
+ * steps far before it clears them all, and then reads as nobody's); clear of lines anywhere it
+ * can step to; over the fewest lines, near its own route if it can be. Labels and boxes it never
+ * covers. */
+typedef enum label_tier {
+    TIER_CLEAR = 0,
+    TIER_ONE_LINE = 1,
+    TIER_ASTRAY = 2,
+    TIER_LINES_ALLOWED = 3,
+    TIERS = 4
+} label_tier;
 
 typedef struct labeller {
     const ta_diagram_spacing *sp;
@@ -2094,9 +2243,10 @@ typedef struct labeller {
     const ta_diagram_edge *edges; /* every route, its points among `points` */
     uint32_t edge_count;
     uint32_t transition; /* the label's own: its routes may run under it */
-    int bounded;         /* 1: at TIER_CLEAR the label stays inside `bound` */
+    int bounded;         /* 1: but at TIER_LINES_ALLOWED, the label stays inside `bound` */
     rect bound;          /* the innermost container but the root holding both ends of its edge */
     uint32_t tier;       /* a label_tier */
+    int down;            /* the drawing is transposed: a label's height as drawn is its canonical width */
     uint32_t *order;     /* scratch: the segments of the route, in the order they are tried */
 } labeller;
 
@@ -2107,9 +2257,15 @@ typedef struct label_route {
     size size;
 } label_route;
 
-/* 1 when a label at `r` keeps clear of the placed labels, the leaves and the header bands, and
- * at TIER_CLEAR of other edges' lines and inside its bound, by a margin of `clearance` (none
- * from a band) */
+/* 1 when a label at `r` is inside the container its edge runs in (or has none to keep to) */
+static int inside_bound(const labeller *b, rect r) {
+    return !b->bounded || (r.x >= b->bound.x && r.y >= b->bound.y && r.x + r.w <= b->bound.x + b->bound.w &&
+                           r.y + r.h <= b->bound.y + b->bound.h);
+}
+
+/* 1 when a label at `r` keeps clear of the placed labels, the leaves and the header bands, but
+ * at TIER_LINES_ALLOWED inside its bound, and at TIER_CLEAR and TIER_ASTRAY of other edges'
+ * lines, by a margin of `clearance` (none from a band) */
 static int is_free(const labeller *b, rect r) {
     rect wide = inflate(r, clearance);
     for (uint32_t i = 0; i < b->placed_count; i++)
@@ -2119,9 +2275,8 @@ static int is_free(const labeller *b, rect r) {
     for (uint32_t i = 0; i < b->band_count; i++)
         if (overlaps(b->bands[i], r)) return 0;
     if (b->tier == TIER_LINES_ALLOWED) return 1;
-    if (b->bounded && (r.x < b->bound.x || r.y < b->bound.y || r.x + r.w > b->bound.x + b->bound.w ||
-                       r.y + r.h > b->bound.y + b->bound.h))
-        return 0;
+    if (!inside_bound(b, r)) return 0;
+    if (b->tier == TIER_ONE_LINE) return 1;
     for (uint32_t i = 0; i < b->edge_count; i++) {
         const ta_diagram_edge *edge = &b->edges[i];
         if (edge->transition == b->transition) continue;
@@ -2172,14 +2327,88 @@ static double slide_fraction(uint32_t i) {
     return i % 2 ? 0.5 + away : 0.5 - away;
 }
 
+/* The square of the gap between a rectangle and an axis-parallel segment: 0 where they meet. */
+static double gap_to_segment(rect r, point a, point b) {
+    double dx = ta_diagram_max(0, ta_diagram_max(r.x - ta_diagram_max(a.x, b.x), ta_diagram_min(a.x, b.x) - (r.x + r.w)));
+    double dy = ta_diagram_max(0, ta_diagram_max(r.y - ta_diagram_max(a.y, b.y), ta_diagram_min(a.y, b.y) - (r.y + r.h)));
+    return dx * dx + dy * dy;
+}
+
+/* 1 when a label at `r` is near a route of its own transition: no further from it than the
+ * label is high as drawn, so it reads as that line's */
+static int near_own(const labeller *b, rect r) {
+    double most = b->down ? r.w : r.h;
+    for (uint32_t i = 0; i < b->edge_count; i++) {
+        const ta_diagram_edge *edge = &b->edges[i];
+        if (edge->transition != b->transition) continue;
+        const point *p = &b->points[edge->first_point];
+        for (uint32_t k = 1; k < edge->point_count; k++)
+            if (gap_to_segment(r, p[k - 1], p[k]) < most * most) return 1;
+    }
+    return 0;
+}
+
+/* How many other transitions' edges run through a label at `r`. */
+static uint32_t lines_under(const labeller *b, rect r) {
+    rect wide = inflate(r, clearance);
+    uint32_t count = 0;
+    for (uint32_t i = 0; i < b->edge_count; i++) {
+        const ta_diagram_edge *edge = &b->edges[i];
+        if (edge->transition == b->transition) continue;
+        const point *p = &b->points[edge->first_point];
+        for (uint32_t k = 1; k < edge->point_count; k++)
+            if (segment_through(wide, p[k - 1], p[k])) {
+                count++;
+                break;
+            }
+    }
+    return count;
+}
+
+/* The best place offered so far: clear of lines, the first; else, near its own route before any
+ * that is not, the one over the fewest other lines, inside its bound among equals, else the
+ * first. */
+typedef struct choice {
+    rect best;
+    uint32_t lines;
+    int found, near, inside;
+} choice;
+
+
+/* 1 when the search may stop: a place at `r`, free at the labeller's tier, was taken */
+static int offer(const labeller *b, rect r, choice *c) {
+    if (!is_free(b, r)) return 0;
+    int near = near_own(b, r);
+    if (b->tier == TIER_CLEAR || b->tier == TIER_ASTRAY) {
+        if (b->tier == TIER_CLEAR && !near) return 0;
+        c->best = r;
+        c->found = 1;
+        return 1;
+    }
+    if (b->tier == TIER_ONE_LINE && !near) return 0;
+    uint32_t lines = lines_under(b, r);
+    if (b->tier == TIER_ONE_LINE && lines > 1) return 0;
+    int inside = inside_bound(b, r);
+    if (!c->found || (near && !c->near) ||
+        (near == c->near && (lines < c->lines || (lines == c->lines && inside && !c->inside)))) {
+        c->best = r;
+        c->lines = lines;
+        c->near = near;
+        c->inside = inside;
+        c->found = 1;
+    }
+    return inside && near && lines == 0;
+}
+
 /* Where a label goes, at the labeller's tier: on its own route — the preferred segment first,
- * then the others, sliding along each; then beside a segment; only then stepping aside. 0 when
- * no place is free. */
+ * then the others, sliding along each; then beside a segment; only then stepping aside, never
+ * further than its own height from its route. 0 when no place is free. */
 static int place_at_tier(const labeller *b, const label_route *route, rect *chosen) {
     const point *pts = route->points;
     size s = route->size;
     uint32_t n = segment_order(b, route);
     const uint32_t *order = b->order;
+    choice c = {{0, 0, 0, 0}, 0, 0, 0, 0};
     for (uint32_t k = 0; k < n; k++) {
         point a = pts[order[k]], z = pts[order[k] + 1];
         int horizontal = ta_diagram_abs(a.y - z.y) < 0.01;
@@ -2195,10 +2424,7 @@ static int place_at_tier(const labeller *b, const label_route *route, rect *chos
             if (horizontal ? r.x < ta_diagram_min(a.x, z.x) || r.x + r.w > ta_diagram_max(a.x, z.x)
                            : r.y < ta_diagram_min(a.y, z.y) || r.y + r.h > ta_diagram_max(a.y, z.y))
                 continue;
-            if (is_free(b, r)) {
-                *chosen = r;
-                return 1;
-            }
+            if (offer(b, r, &c)) goto done;
         }
     }
     /* beside a segment, just clear of the line: either side, preferred segment first */
@@ -2212,10 +2438,7 @@ static int place_at_tier(const labeller *b, const label_route *route, rect *chos
             double mx = a.x + (z.x - a.x) * slide_fraction(i), my = a.y + (z.y - a.y) * slide_fraction(i);
             for (int side = 1; side >= -1; side -= 2) {
                 rect r = horizontal ? rect_at(s, mx, my + side * offset) : rect_at(s, mx + side * offset, my);
-                if (is_free(b, r)) {
-                    *chosen = r;
-                    return 1;
-                }
+                if (offer(b, r, &c)) goto done;
             }
         }
     }
@@ -2237,23 +2460,21 @@ static int place_at_tier(const labeller *b, const label_route *route, rect *chos
                 double t = j <= slides ? slide_fraction(j) : j == slides + 1 ? 1 + beyond : -beyond;
                 double mx = a.x + (z.x - a.x) * t, my = a.y + (z.y - a.y) * t;
                 rect r = horizontal ? rect_at(s, mx, my + across) : rect_at(s, mx + across, my);
-                if (is_free(b, r)) {
-                    *chosen = r;
-                    return 1;
-                }
+                if (offer(b, r, &c)) goto done;
             }
         }
     }
-    return 0;
+done:
+    if (c.found) *chosen = c.best;
+    return c.found;
 }
 
-/* Where a label goes: clear of other edges' lines, and inside the container its edge runs in,
- * when any place is; else clear of labels and boxes only; else at its preferred segment's
- * middle. */
+/* Where a label goes: at the first tier that has a place (label_tier); else at its preferred
+ * segment's middle. */
 static rect place_label(labeller *b, const label_route *route) {
     rect chosen;
     for (b->tier = TIER_CLEAR; b->tier < TIERS; b->tier++)
-        if (place_at_tier(b, route, &chosen)) return chosen;
+        if ((b->down || b->tier != TIER_ONE_LINE) && place_at_tier(b, route, &chosen)) return chosen;
     point a = route->points[route->prefer], z = route->points[route->prefer + 1];
     return rect_at(route->size, (a.x + z.x) / 2, (a.y + z.y) / 2);
 }
@@ -2431,10 +2652,21 @@ static void route(layout *l, ta_diagram_layout *out, ta_diagram_box *boxes) {
                                      all_routed[i].count, 0, {0, 0, 0, 0}};
     }
 
+    /* ── 4b. apart (canonical) ── */
+    rect *leaves = take(l, sizeof(rect), l->n + 1);
+    if (l->failed) return;
+    uint32_t leaf_count = 0;
+    for (uint32_t i = 0; i < l->n; i++) {
+        uint32_t s = l->walk[i];
+        if (s != 0 && l->containers[s].kind == CONTAINER_NONE) leaves[leaf_count++] = canonical(l, s);
+    }
+    separate(&(separator){canonical_points.data, edges, r.pending_count, leaves, leaf_count});
+
     /* ── 5. labels (canonical) ── */
     labeller b;
     ta_memset(&b, 0, sizeof b);
     b.sp = sp;
+    b.down = down;
     b.obstacles = take(l, sizeof(rect), l->n + 1);
     b.bands = take(l, sizeof(rect), l->n + 1);
     b.placed = take(l, sizeof(rect), r.pending_count + 1);

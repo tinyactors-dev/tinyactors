@@ -44,8 +44,8 @@
 | failing | runEnded |  | kind === 'recurring' | forward | 478,666 478,728 241,728 241,748 |
 | failing | ended |  |  | forward | 695,666 695,932 452,932 452,942 |
 | backingOff | ended | drain |  | forward | 378,782 378,862 392,862 392,942 |
-| backingOff | attempting | retry |  | back | 385,748 385,708 391,708 391,612 324,612 324,476 |
-| succeeded | ended |  | draining | forward | 244,666 244,672 35,672 35,882 368,882 368,942 |
+| backingOff | attempting | retry |  | back | 378,748 378,708 391,708 391,612 324,612 324,476 |
+| succeeded | ended |  | draining | forward | 244,666 244,672 40,672 40,882 368,882 368,942 |
 | succeeded | runEnded |  | kind === 'recurring' | forward | 199,666 199,748 |
 | succeeded | ended |  |  | forward | 289,666 289,872 380,872 380,942 |
 | runEnded | ended |  | limit !== 0 && runs + skipped >= limit | forward | 209,782 209,902 356,902 356,942 |
@@ -65,10 +65,8 @@
 
 | Kind | Subject | Touches |
 | --- | --- | --- |
-| edgesOverlap | succeeded → ended | runEnded → waiting |
 | labelOnEdge | attempting → succeeded on result.ok | backingOff → attempting on retry |
 | labelOnEdge | attempting → failing on result.failed | attempting → failing on error.communication |
 | labelOnEdge | attempting → failing on result.failed | backingOff → attempting on retry |
-| labelOnEdge | attempting → failing on error.communication | attempting → failing on result.failed |
 | labelOnEdge | attempting → failing on error.communication | attempting → failing on attempt.timeout |
-| labelAstray | failing → runEnded |  |
+| labelOnEdge | failing → runEnded | failing → backingOff |

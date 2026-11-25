@@ -34,11 +34,11 @@
 
 | Source | Target | Events | Condition | Drawn as | Route |
 | --- | --- | --- | --- | --- | --- |
-| open | authorising | pay |  | back | 78,240 78,310 165,310 165,193 188,193 188,180 |
+| open | authorising | pay |  | back | 78,240 78,310 175,310 175,193 188,193 188,180 |
 | locked | open | unlock |  | forward | 61,154 61,196 78,196 78,206 |
 | authorising | captured | ok |  | forward | 227,180 227,232 |
-| authorising | locked | hold |  | back | 198,180 198,195 167,195 167,320 133,320 133,169 93,169 93,154 |
-| captured | emailing | notify |  | back | 227,266 227,300 131,300 131,485 84,485 84,502 |
+| authorising | locked | hold |  | back | 198,180 198,195 167,195 167,320 138,320 138,169 93,169 93,154 |
+| captured | emailing | notify |  | back | 227,266 227,300 121,300 121,485 84,485 84,502 |
 | scoring | reviewing | flag |  | forward | 373,180 373,232 |
 | reviewing | locked | block |  | back | 373,266 373,340 129,340 129,174 103,174 103,154 |
 | idle | emailing | send |  | forward | 74,450 74,502 |
@@ -55,5 +55,3 @@ _none_
 | Kind | Subject | Touches |
 | --- | --- | --- |
 | edgesOverlap | open → authorising on pay | authorising → locked on hold |
-| edgesOverlap | authorising → locked on hold | captured → emailing on notify |
-| edgesOverlap | captured → emailing on notify | reviewing → locked on block |
