@@ -24,7 +24,8 @@ per delayed send pending         357 B      55 B          151 B
 ## What the columns mean
 
 - **memory** is what the process holds more for each thing, the host
-  included. Plan with this number.
+  included: its own pages, not the code of mapped files. Plan with this
+  number.
 - **heap** is the datamodel's part of it: the JavaScript engine's heap on
   the native datamodel, quickjs's own heap on quickjs. An actor's
   variables and a message's data are here.
@@ -69,6 +70,14 @@ count up front, so no pool grows during the measurement. It takes the
 memory after a collection, makes the things, and takes it again. Memory
 counts from before the host is made; the heap from after.
 
+On Linux, memory is the process's anonymous pages, in memory or swapped
+out (`RssAnon` and `VmSwap` in `/proc/self/status`): what the host, the
+engine and quickjs allocate. It leaves out the pages of mapped files,
+the code of the runtime and the addon, which the kernel drops when the
+machine runs short of memory and reads back when they run again: they
+are no cost per thing, and dropped between the two samples they made a
+row negative. Elsewhere it is the resident set (`process.memoryUsage().rss`).
+
 The host and the engine have fixed costs, which a small count shows
 more. The numbers vary by a few bytes between runs.
 
@@ -92,6 +101,11 @@ Each line is one row at one count: `runtime`, `datamodel`, `tracing`,
 `count`, `row`, `memory`, `heap`, `core_reserves`, `blob` (bytes),
 `failed` (what stopped a row that failed), `machine` and `date`. Plot
 `memory` against `count` for each `row` to see the fixed costs spread.
+
+That run took memory as the whole resident set, which also counts the
+code of the runtime paged in during a measurement, about 5 MB on node:
+some 550 B a thing at 10,000 and 55 B at 100,000, and under 12 B from
+1,000,000 up, where the table above comes from.
 
 A new run goes into a new file under `results/`, named by its date; the
 earlier files stay. The root `AGENTS.md` ("Published numbers") says when

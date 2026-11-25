@@ -133,8 +133,9 @@ actors sending to each other.
 ## What an actor costs
 
 The [memory program](https://github.com/tinyactors-dev/tinyactors/tree/main/tinyactors-napi/examples/memory) measures what one more actor, message and
-delayed send costs in a process: its resident memory, the host
-included. Run it for your runtime, datamodel, chart and data:
+delayed send costs in a process: the memory it holds of its own, in
+memory or swapped out, the host included (not the code of the runtime,
+which the kernel can drop and read back). Run it for your runtime, datamodel, chart and data:
 
 ```sh
 node examples/memory/main.mjs --counts 1000000 --datamodel native
@@ -162,6 +163,11 @@ so an actor costs less in a larger one. Node on the native datamodel:
 | per actor, hibernated | 1147 B | 326 B | 124 B | 103 B | 92 B |
 | per message waiting | 1146 B | 444 B | 315 B | 296 B | 286 B |
 | per delayed send pending | 1296 B | 544 B | 357 B | 341 B | 332 B |
+
+That run counted the whole resident set, which also holds the runtime's
+code paged in while it measured, about 5 MB on node: in the 10,000 and
+100,000 columns some 550 B and 55 B of each figure, under 12 B from a
+million up.
 
 Each row's data, at every population and on every runtime, is in
 [the run's CSV](https://github.com/tinyactors-dev/tinyactors/blob/main/tinyactors-napi/examples/memory/results/2026-11-20.csv), for a chart of your own.

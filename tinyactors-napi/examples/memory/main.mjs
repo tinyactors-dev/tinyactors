@@ -8,8 +8,9 @@
 // for the count up front, takes the memory, makes N of the thing, and takes
 // the memory again. It prints the difference per thing, in whole bytes:
 //
-// - memory: what the process holds more (its resident set), the host
-//   included: plan with this number;
+// - memory: what the process holds more (its own pages, in memory or
+//   swapped out, not the code of mapped files), the host included: plan
+//   with this number;
 // - heap: of it, the datamodel's heap (variables, data): the JavaScript
 //   engine's on the native datamodel, quickjs's own on quickjs;
 // - core reserves: the core's records for each thing (from host.hostStats),
@@ -49,6 +50,27 @@ const CHART = `<scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0"
 const RESIDENT = 1000;
 
 // ---- in the child process: one measurement ----------------------------------
+
+/**
+ * The process's own memory in bytes: on Linux its anonymous pages, in memory
+ * or swapped out (RssAnon + VmSwap); else the resident set.
+ *
+ * Not the whole resident set: that also counts the pages of mapped files (the
+ * runtime's and the addon's code), which the kernel drops under memory
+ * pressure and reads back when they run again. Dropped between the two
+ * samples, they made a row negative.
+ */
+export function memory() {
+  let status;
+  try {
+    status = readFileSync('/proc/self/status', 'utf8');
+  } catch (error) {
+    if (error.code !== 'ENOENT') throw error;
+    return process.memoryUsage().rss;
+  }
+  const kB = (name) => Number(status.match(new RegExp(`^${name}:\\s+(\\d+) kB$`, 'm'))[1]);
+  return (kB('RssAnon') + kB('VmSwap')) * 1024;
+}
 
 async function engine() {
   if (globalThis.Bun) {
@@ -125,15 +147,15 @@ async function measure({ what, count, datamodel, tracing, chart, data, quickjsMe
   const ids = new BigInt64Array(what === 'actor' ? count : 0); // the program's own list of actors
   const store = new CountingStore();
   collect();
-  const rss = process.memoryUsage().rss;
+  const own = memory();
   const host = new Host([image], {
     ...options, config: { system: system(count) }, ...(what === 'hibernated' ? { store, resident: RESIDENT } : {}),
   });
   // native: the engine's heap; quickjs: its own heap, which the engine's does not hold
   const heapNow = () => (datamodel === 'quickjs' ? host.quickjsHeapBytes : heap());
   collect();
-  const before = { resident: rss, heap: heapNow() };
-  const sample = () => { collect(); return { resident: process.memoryUsage().rss, heap: heapNow() }; };
+  const before = { resident: own, heap: heapNow() };
+  const sample = () => { collect(); return { resident: memory(), heap: heapNow() }; };
   // inputs in batches, so the queue never holds many at once and the peak stays low
   const batches = async (send) => {
     for (let first = 0; first < count; first += 1000) {

@@ -35,7 +35,7 @@ export const APPLICATIONS = {
   'http-gateway': 'it is a node:http server',
   'inventory-sync': 'its two systems are two processes (node:child_process) over a node:net socket',
   'iot-rules': 'it measures its rules in processes (node:child_process)',
-  'memory': 'it measures each row in a process of its own (node:child_process) and reads the resident set (process.memoryUsage)',
+  'memory': 'it measures each row in a process of its own (node:child_process) and reads its own memory from /proc (node:fs)',
   'remote-python': 'its other system is a Python process over a socket',
   'turn-game': 'its server is a process it kills and restores (node:child_process), its journal a file (node:fs)',
 };

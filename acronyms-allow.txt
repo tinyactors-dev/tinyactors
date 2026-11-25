@@ -91,5 +91,6 @@ tabId          copywriter/**/*                                           # chrom
 windowId       copywriter/**/*                                           # chrome.tabs API field
 
 # Linux's /proc/<pid>/status names the anonymous resident pages `RssAnon`;
-# the Python memory example reads that field.
+# the memory examples read that field.
 RssAnon        tinyactors-cpython/examples/memory/*                        # /proc/self/status field
+RssAnon        tinyactors-napi/examples/memory/*                           # /proc/self/status field
