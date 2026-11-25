@@ -411,13 +411,37 @@ static int is_upper(char byte) {
     return byte >= 'A' && byte <= 'Z';
 }
 
+/* camelCase writes an acronym that starts a name in lowercase ("abi",
+ * "idPage"), where its letters cannot tell it from a word: these are known
+ * (the repository's acronyms.txt, those a report names). */
+static const char *const report_acronyms[] = {"abi", "api", "cbor", "http", "id", "io", "json",
+                                              "otlp", "scxml", "sdk", "uri", "url", "xml"};
+
+/* The length of the first word of `name` when it is a known acronym. */
+static uint32_t leading_acronym(ta_string_view name) {
+    uint32_t length = 0;
+    while (length < name.length && !is_upper(name.pointer[length]))
+        length++;
+    for (uint32_t i = 0; i < sizeof report_acronyms / sizeof report_acronyms[0]; i++) {
+        const char *acronym = report_acronyms[i];
+        uint32_t j = 0;
+        while (j < length && acronym[j] == name.pointer[j])
+            j++;
+        if (j == length && !acronym[j]) return length;
+    }
+    return 0;
+}
+
 static void markdown_words(ta_output *out, ta_string_view name) {
-    for (uint32_t i = 0; i < name.length; i++) {
+    uint32_t leading = leading_acronym(name);
+    for (uint32_t i = 0; i < leading; i++)
+        put_byte(out, (char)(name.pointer[i] - 'a' + 'A'));
+    for (uint32_t i = leading; i < name.length; i++) {
         char byte = name.pointer[i];
         int upper = is_upper(byte), previous_upper = i && is_upper(name.pointer[i - 1]);
         int next_upper = i + 1 < name.length && is_upper(name.pointer[i + 1]);
         int next_lower = i + 1 < name.length && name.pointer[i + 1] >= 'a' && name.pointer[i + 1] <= 'z';
-        if (i == 0) {
+        if (i == 0) { /* the first word starts with a capital */
             put_byte(out, byte >= 'a' && byte <= 'z' ? (char)(byte - 'a' + 'A') : byte);
             continue;
         }
@@ -440,25 +464,73 @@ static void markdown_heading(markdown *document, uint32_t level, ta_string_view 
     markdown_words(document->out, name);
 }
 
-/* A value in Markdown: '<' outside a code span as "&lt;", so a renderer
- * shows "<scxml>" instead of taking it for an HTML tag (inside backticks it
- * is shown as written, and an entity would be too). In a table's cell also
- * a pipe escaped and a line break a space. */
-static void markdown_text(ta_output *out, ta_string_view text, int cell) {
-    report_span span = {text, 0, 0};
-    int code = 0;
+/* Where a '<' outside a code span leaves a value: a renderer would take
+ * "<state>" for an HTML tag, and an entity ("&lt;") reads badly in a
+ * terminal. So such a value is written as code, as written: whole, when it
+ * has no backtick ("`attempts < 3`"), else each word holding the '<'. */
+static int markdown_bare_angle(ta_string_view text, int *backticks) {
+    int code = 0, angle = 0;
+    *backticks = 0;
     for (uint32_t i = 0; i < text.length; i++) {
-        char byte = text.pointer[i];
-        if (byte == '`') code = !code;
-        int escaped = (byte == '<' && !code) || (cell && (byte == '|' || byte == '\n' || byte == '\r'));
-        if (!escaped) continue;
-        span.end = i;
-        put_span(out, span);
-        span.start = i + 1;
-        put_literal(out, byte == '<' ? "&lt;" : byte == '|' ? "\\|" : " ");
+        if (text.pointer[i] == '`') code = !code, *backticks = 1;
+        if (text.pointer[i] == '<' && !code) angle = 1;
     }
-    span.end = text.length;
-    put_span(out, span);
+    return angle;
+}
+
+/* The bytes of a value, in a table's cell with a pipe escaped (GitHub
+ * reads "\|" so in a code span too) and a line break a space. */
+static void markdown_bytes(ta_output *out, report_span span, int cell) {
+    uint32_t start = span.start;
+    for (uint32_t i = span.start; i < span.end; i++) {
+        char byte = span.text.pointer[i];
+        if (!cell || (byte != '|' && byte != '\n' && byte != '\r')) continue;
+        put_span(out, (report_span){span.text, start, i});
+        put_literal(out, byte == '|' ? "\\|" : " ");
+        start = i + 1;
+    }
+    put_span(out, (report_span){span.text, start, span.end});
+}
+
+static int is_space(char byte) {
+    return byte == ' ' || byte == '\n' || byte == '\r' || byte == '\t';
+}
+
+static void markdown_text(ta_output *out, ta_string_view text, int cell) {
+    int backticks;
+    if (!markdown_bare_angle(text, &backticks)) {
+        markdown_bytes(out, (report_span){text, 0, text.length}, cell);
+        return;
+    }
+    if (!backticks) {
+        put_byte(out, '`');
+        markdown_bytes(out, (report_span){text, 0, text.length}, cell);
+        put_byte(out, '`');
+        return;
+    }
+    /* Words: a word with a '<' outside a code span, and no backtick of its
+     * own, is written as code. */
+    int code = 0;
+    for (uint32_t i = 0; i < text.length;) {
+        uint32_t end = i;
+        int angle = 0, tick = 0;
+        while (end < text.length && !is_space(text.pointer[end])) {
+            if (text.pointer[end] == '`') tick = 1;
+            if (text.pointer[end] == '<' && !code && !tick) angle = 1;
+            end++;
+        }
+        for (uint32_t j = i; j < end; j++)
+            if (text.pointer[j] == '`') code = !code;
+        int quoted = angle && !tick;
+        if (quoted) put_byte(out, '`');
+        markdown_bytes(out, (report_span){text, i, end}, cell);
+        if (quoted) put_byte(out, '`');
+        uint32_t next = end;
+        while (next < text.length && is_space(text.pointer[next]))
+            next++;
+        markdown_bytes(out, (report_span){text, end, next}, cell);
+        i = next;
+    }
 }
 
 static void markdown_value(ta_output *out, const ta_report_node *node, int cell) {

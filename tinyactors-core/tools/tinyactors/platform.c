@@ -109,6 +109,11 @@ int main(int count, char **words) {
     platform.allocator = (ta_allocator){NULL, platform_alloc, platform_free};
     platform.read = platform_read;
     platform.write = platform_write;
+#ifdef TA_TOOL_VERSION
+    platform.version = ta_string(TA_TOOL_VERSION);
+#else
+    platform.version = ta_string("");
+#endif
     tool_command_line line = {count > 0 ? (uint32_t)(count - 1) : 0,
                               count > 0 ? (const char *const *)(words + 1) : NULL};
     return tool_main(&platform, line);

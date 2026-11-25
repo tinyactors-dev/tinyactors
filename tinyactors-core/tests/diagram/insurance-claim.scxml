@@ -1,0 +1,23 @@
+<!-- Deep nesting: a transition that crosses three borders is listed in its box, one from a
+     container into its own descendant, and one out to an ancestor's sibling. -->
+<scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0" name="insurance-claim" initial="filed">
+  <state id="filed"><transition event="assess" target="assessing"/></state>
+  <state id="assessing" initial="documents">
+    <transition event="fraud" target="interview"/>
+    <state id="documents" initial="collecting">
+      <state id="collecting"><transition event="complete" target="checking"/></state>
+      <state id="checking">
+        <transition event="missing" target="collecting"/>
+        <transition event="settle" target="paid"/>
+        <transition event="appeal" target="appeal"/>
+      </state>
+    </state>
+    <state id="investigation" initial="interview">
+      <state id="interview"><transition event="cleared" target="documents"/></state>
+    </state>
+    <transition event="withdraw" target="closed"/>
+  </state>
+  <state id="appeal"><transition event="upheld" target="assessing"/></state>
+  <final id="paid"/>
+  <final id="closed"/>
+</scxml>

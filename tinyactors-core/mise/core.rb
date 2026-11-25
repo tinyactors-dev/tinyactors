@@ -56,9 +56,17 @@ module Core
     # commands and options, and a report written as Markdown, JSON or XML
     # (src/cli). Freestanding; not in a released library.
     Layer.new(name: 'cli', uses: %w[base], freestanding: true, sources: %w[src/cli/arguments.c src/cli/report.c]),
+    # A statechart drawn: scxmljs's layout of nested boxes and orthogonal
+    # routes, ported (src/diagram/diagram.h). Freestanding; not in a
+    # released library.
+    Layer.new(name: 'diagram', uses: %w[base], freestanding: true, sources: %w[src/diagram/layout.c]),
+    # The layout as SVG (src/diagram/svg.h), written through the compiler's
+    # ta_xml_writer, so compiled without the C library's headers but not
+    # linked as freestanding.
+    Layer.new(name: 'svg', uses: %w[diagram compile], freestanding: :headers, sources: %w[src/diagram/svg.c]),
     # The tinyactors command's commands (tools/tinyactors): the C library only
     # in its platform file, which the program adds (TOOLS below).
-    Layer.new(name: 'tool', uses: %w[cli compile image], freestanding: :headers,
+    Layer.new(name: 'tool', uses: %w[cli svg compile image], freestanding: :headers,
               sources: %w[program input compile_command inspect disassemble graph diff]
                 .map { |s| "tools/tinyactors/#{s}.c" }),
     # The BasicHTTP Event I/O Processor's codec; the transport stays with the host.
@@ -191,6 +199,7 @@ module Core
     unit('test_status', 'base'),
     unit('test_cli_arguments', 'cli'),
     unit('test_cli_report', 'cli'),
+    unit('test_diagram', 'svg'),
     unit('test_table', 'base'),
     unit('test_session_map', 'host'),
     unit('test_growable_arena', 'base'),
@@ -200,7 +209,8 @@ module Core
     unit('test_compile', 'compile'),
     # Runs the tinyactors program the build made beside it.
     unit('test_tool', 'runtime', 'compile', defines: { 'TA_TEST_TEMPORARY_DIRECTORY' => :scratch,
-                                                       'TA_TEST_PROGRAMS' => :programs }),
+                                                       'TA_TEST_PROGRAMS' => :programs,
+                                                       'TA_TEST_DIAGRAMS' => :diagrams }),
     unit('test_compile_scale', 'compile', alone: true), # compile times at n and 8n
     unit('test_core', 'core', 'compile', 'test_datamodel', *ECMASCRIPT),
     unit('test_system', 'system', 'compile', 'test_datamodel'),
@@ -250,7 +260,9 @@ module Core
                 defines: {}),
     # The tinyactors command (docs/cli.md): the tool layer's commands over
     # the platform file, the only one of it that uses the C library.
-    Program.new(name: 'tinyactors', uses: %w[tool], sources: %w[tools/tinyactors/platform.c], defines: {}),
+    # A development build says which commit it is (a release's says the library's version).
+    Program.new(name: 'tinyactors', uses: %w[tool], sources: %w[tools/tinyactors/platform.c],
+                defines: { 'TA_TOOL_VERSION' => :version }),
     # The torture chamber's host (tools/torture/README.md).
     Program.new(name: 'torture-bench', uses: %w[host runtime compile otlp] + ECMASCRIPT,
                 sources: %w[bench.c net.c loop.c].map { |s| "tools/torture/#{s}" },
@@ -352,12 +364,20 @@ module Core
     end
   end
 
+  # HEAD's development version (Release.dev_version), as `mise run release
+  # --dev` would publish it.
+  def development_version
+    require 'release'
+    Release.dev_version('tinyactors-core/')
+  end
+
   # Builds `program` against the build's archives.
   def build_program(variant_name, program)
     target = target(variant_name)
     scratch = directory(variant_name).join('scratch', program.name)
-    places = { scratch: scratch, programs: directory(variant_name).join('bin') }
-    defines = (program.defines || {}).transform_values { |value| places.fetch(value, value) }
+    places = { scratch: -> { scratch }, programs: -> { directory(variant_name).join('bin') },
+               version: -> { development_version }, diagrams: -> { ROOT.join('tests', 'diagram') } }
+    defines = (program.defines || {}).transform_values { |value| places.key?(value) ? places[value].call : value }
     command = compile_command(variant_name, cxx: program.cxx, defines: defines)
     objects = program.sources.map do |source|
       object = directory(variant_name).join('objects', program.name, "#{File.basename(source).sub(/\.c(pp)?\z/, '')}.o")

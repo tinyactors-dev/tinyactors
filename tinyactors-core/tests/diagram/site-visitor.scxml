@@ -1,0 +1,111 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- A visitor's ant: one per open tab of the website. It decides only when
+     something happens to it; the world (urn:world) picks each trip, says
+     when it arrives (found, when the trip ends at food), and says when it
+     bumped into another ant or came in reach of the one it walks to. The tab
+     sends greet (a tap on another ant), hide and show (the tab's
+     visibility) and leave (the switch, or the connection gone). A greeting
+     is a message from this actor to the other: <send> to its address. -->
+<scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0"
+       datamodel="ecmascript" name="visitor" initial="here">
+  <datamodel>
+    <data id="country" expr="''"/>
+    <data id="target" expr="0"/>
+    <data id="peer" expr="''"/>
+    <data id="meal" expr="0"/>
+  </datamodel>
+
+  <state id="here" initial="awake">
+    <transition event="leave" target="gone"/>
+
+    <state id="awake" initial="roaming">
+      <transition event="hide" target="asleep"/>
+
+      <!-- Wandering, following its country's trail or going for food: the
+           world chooses by what the ant smells where it stands. -->
+      <state id="roaming">
+        <onentry><send type="urn:world" event="roam"/></onentry>
+        <transition event="arrive" target="roaming"/>
+        <transition event="found" target="eating">
+          <assign location="meal" expr="_event.data.food"/>
+        </transition>
+        <transition event="greet" target="approaching">
+          <assign location="target" expr="_event.data.target"/>
+        </transition>
+        <!-- Two roaming ants met: the world picked this one to greet. -->
+        <transition event="bump" target="greeting">
+          <assign location="peer" expr="_event.data.peer"/>
+        </transition>
+        <transition event="greeting" target="greeted"/>
+      </state>
+
+      <!-- At a pile of food: a bite (the world takes it from the pile, or
+           says empty when another ant finished it first). -->
+      <state id="eating">
+        <onentry>
+          <send type="urn:world" event="eat"><param name="food" expr="meal"/></send>
+          <send id="chewed" event="chewed" delay="2500ms"/>
+        </onentry>
+        <onexit><cancel sendid="chewed"/></onexit>
+        <transition event="chewed empty" target="roaming"/>
+        <transition event="greet" target="approaching">
+          <assign location="target" expr="_event.data.target"/>
+        </transition>
+        <transition event="greeting" target="greeted"/>
+      </state>
+
+      <!-- Walking to another ant; the world plans each leg toward where it
+           is now, and says near once in reach, or lost. -->
+      <state id="approaching">
+        <onentry>
+          <send type="urn:world" event="approach"><param name="target" expr="target"/></send>
+          <send id="give-up" event="give-up" delay="45s"/>
+        </onentry>
+        <onexit><cancel sendid="give-up"/></onexit>
+        <transition event="arrive" target="approaching"/>
+        <transition event="near" target="greeting">
+          <assign location="peer" expr="_event.data.peer"/>
+        </transition>
+        <transition event="lost give-up" target="roaming"/>
+        <transition event="greeting" target="greeted"/>
+      </state>
+
+      <!-- Antennation: tell the peer, and the world (both ants stop and
+           face each other). -->
+      <state id="greeting">
+        <onentry>
+          <send targetexpr="peer" event="greeting"><param name="country" expr="country"/></send>
+          <send type="urn:world" event="greet"><param name="peer" expr="peer"/></send>
+          <send event="done" delay="3s"/>
+        </onentry>
+        <transition event="done" target="roaming"/>
+        <transition event="greeting"/> <!-- already in a greeting -->
+      </state>
+
+      <!-- Greeted by another ant: the world tells this ant's tab who. -->
+      <state id="greeted">
+        <onentry>
+          <send type="urn:world" event="greeted"><param name="country" expr="_event.data.country"/></send>
+          <send event="done" delay="3s"/>
+        </onentry>
+        <transition event="done" target="roaming"/>
+        <transition event="greeting"/>
+        <transition event="greet"/>
+      </state>
+    </state>
+
+    <!-- The tab is hidden: the ant curls up where it is, and the server
+         hibernates it. -->
+    <state id="asleep">
+      <onentry><send type="urn:world" event="sleep"/></onentry>
+      <transition event="show" target="awake"/>
+      <transition event="greeting"/>
+      <transition event="greet"/>
+      <transition event="arrive"/>
+    </state>
+  </state>
+
+  <final id="gone">
+    <onentry><send type="urn:world" event="gone"/></onentry>
+  </final>
+</scxml>

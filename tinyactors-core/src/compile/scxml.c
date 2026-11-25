@@ -116,11 +116,17 @@ static uint32_t intern_expression(chart_builder *builder, const expression_input
     uint32_t kind = input->kind, length = input->source.length;
     const char *source = input->source.pointer;
     const ta_xml_node *at = input->at;
-    char *key = (char *)ta_compile_alloc(&builder->compiler->arena, length + 2, &builder->compiler->out_of_memory);
+    /* The key is the kind, the position and the text: an expression written
+     * twice is two records, each with its own line, so a diagnostic, a
+     * listing or an error.execution names the one that ran. */
+    uint32_t position[2] = {at ? at->line : 0, at ? at->column : 0};
+    uint32_t key_length = 1 + (uint32_t)sizeof position + length;
+    char *key = (char *)ta_compile_alloc(&builder->compiler->arena, key_length + 1, &builder->compiler->out_of_memory);
     if (!key) return 0;
     key[0] = (char)('0' + kind);
-    memcpy(key + 1, source, length);
-    uint32_t hit = ta_string_map_get(&builder->expression_map, key, length + 1);
+    memcpy(key + 1, position, sizeof position);
+    memcpy(key + 1 + sizeof position, source, length);
+    uint32_t hit = ta_string_map_get(&builder->expression_map, key, key_length);
     if (hit != TA_NIL) return hit;
     ta_expression_record *expression =
         (ta_expression_record *)ta_vector_push(&builder->compiler->expressions);
@@ -130,7 +136,7 @@ static uint32_t intern_expression(chart_builder *builder, const expression_input
     expression->line = at ? at->line : 0;
     expression->column = at ? at->column : 0;
     uint32_t id = builder->compiler->expressions.length - 1 - builder->first_expression;
-    ta_string_map_put(&builder->expression_map, key, length + 1, id);
+    ta_string_map_put(&builder->expression_map, key, key_length, id);
     return id;
 }
 

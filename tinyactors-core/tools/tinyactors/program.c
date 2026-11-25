@@ -9,10 +9,10 @@
 
 /* ---- the description ------------------------------------------------------------- */
 
-static const ta_string_view formats[] = {T("markdown"), T("json"), T("xml")};
+static const ta_string_view formats[] = {T("markdown"), T("json"), T("xml"), T("svg")};
 
 static const ta_cli_option program_options[TOOL_PROGRAM_OPTION_COUNT] = {
-    [TOOL_OPTION_FORMAT] = {T("format"), 'f', TA_CLI_OPTION_CHOICE, 0, 3, formats, T("FORMAT"),
+    [TOOL_OPTION_FORMAT] = {T("format"), 'f', TA_CLI_OPTION_CHOICE, 0, 4, formats, T("FORMAT"),
                             T("write the answer as markdown (the default), json or xml")},
     [TOOL_OPTION_HELP] = {T("help"), 'h', TA_CLI_OPTION_FLAG, TA_CLI_OPTION_ANSWERS, 0, 0, T(""),
                           T("describe the command, or the program")},
@@ -82,7 +82,8 @@ static const ta_string_view data_examples[] = {T("data order.scxml")};
 static const ta_string_view expressions_examples[] = {
     T("expressions --kind condition order.scxml"), T("expressions -f xml order.tai")};
 static const ta_string_view disassemble_examples[] = {T("disassemble --chart order order.tai")};
-static const ta_string_view graph_examples[] = {T("graph order.scxml > order.md"),
+static const ta_string_view graph_examples[] = {T("graph -f svg order.scxml > order.svg"),
+                                                T("graph -f svg --chart payment shop.tai > payment.svg"),
                                                 T("graph -f json order.tai")};
 static const ta_string_view diff_examples[] = {
     T("diff order-v1.tai order-v2.scxml"), T("diff --breaking --exit-code deployed.tai order.scxml"),
@@ -150,7 +151,7 @@ static const ta_cli_command commands[TOOL_COMMAND_COUNT] = {
                                   INPUTS, T("INPUT..."), 1, TA_CLI_UNBOUNDED, OPTIONS(image_options),
                                   EXAMPLES(disassemble_examples)},
     [TOOL_COMMAND_GRAPH] = {T("graph"),
-                            T("each chart as states and transitions (a Mermaid diagram in markdown)"),
+                            T("each chart as a diagram: -f svg draws it; the others list its boxes and edges"),
                             INPUTS, T("INPUT..."), 1, TA_CLI_UNBOUNDED, OPTIONS(image_options),
                             EXAMPLES(graph_examples)},
     [TOOL_COMMAND_DIFF] =
@@ -212,6 +213,19 @@ void tool_text_append(tool_text *text, ta_string_view piece) {
 void tool_text_number(tool_text *text, uint64_t value) {
     char digits[TA_FORMAT_U64_MAX];
     ta_output_write(&text->output, digits, ta_format_u64(digits, value));
+}
+
+/* A delay as SCXML writes one: in the largest of s, ms, us and ns that
+ * holds it whole ("30s", "1500ms"). */
+void tool_text_duration(tool_text *text, uint64_t nanoseconds) {
+    static const struct {
+        uint64_t size;
+        const char *unit;
+    } units[] = {{1000000000u, "s"}, {1000000u, "ms"}, {1000u, "us"}, {1u, "ns"}};
+    uint32_t i = 0;
+    while (nanoseconds % units[i].size) i++;
+    tool_text_number(text, nanoseconds / units[i].size);
+    tool_text_append(text, ta_string(units[i].unit));
 }
 
 ta_string_view tool_text_view(const tool_text *text) {
@@ -413,8 +427,11 @@ static void tool_version(tool *t) {
     tool_text_number(&text, version.minor);
     tool_text_append(&text, ta_string("."));
     tool_text_number(&text, version.patch);
+    ta_string_view library = tool_text_view(&text);
+    ta_string_view build = t->platform->version;
     ta_report_text(&t->report, ta_string("program"), program.name);
-    ta_report_text(&t->report, ta_string("version"), tool_text_view(&text));
+    ta_report_text(&t->report, ta_string("version"), build.length ? build : library);
+    ta_report_text(&t->report, ta_string("library"), library);
     ta_report_number(&t->report, ta_string("abi"), version.abi);
     ta_report_number(&t->report, ta_string("imageFormat"), TA_IMAGE_VERSION);
 }
@@ -513,6 +530,7 @@ static void complain_usage(tool *t) {
 /* ---- an invocation ---------------------------------------------------------------------- */
 
 static int tool_finish(tool *t) {
+    if (t->answered) return t->exit; /* the command wrote its answer itself (graph -f svg) */
     tool_text out;
     tool_text_init(t, &out);
     ta_status status = ta_report_render(&t->report, t->format, &out.output);
@@ -569,8 +587,14 @@ int tool_main(const tool_platform *platform, tool_command_line line) {
             if (version && !help) command = TOOL_COMMAND_VERSION;
             else if (help || command == TA_NIL) command = TOOL_COMMAND_HELP;
             ta_report_init(&t.report, &arena, commands[command].name);
-            runs[command](&t);
-            result = t.exit == TOOL_EXIT_USAGE || t.exit == TOOL_EXIT_FAILURE ? t.exit : tool_finish(&t);
+            if (t.format == TOOL_FORMAT_SVG && command != TOOL_COMMAND_GRAPH) {
+                /* a picture is graph's answer only */
+                tool_complain(&t, ta_string("--format svg is for graph; this command answers in markdown, json or xml"));
+                result = TOOL_EXIT_USAGE;
+            } else {
+                runs[command](&t);
+                result = t.exit == TOOL_EXIT_USAGE || t.exit == TOOL_EXIT_FAILURE ? t.exit : tool_finish(&t);
+            }
         }
     }
     ta_growable_arena_free(&arena);

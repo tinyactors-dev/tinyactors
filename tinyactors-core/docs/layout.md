@@ -59,6 +59,11 @@ implementation of that layer). Layer dependency rules are in
 │   │   ├── arguments.[ch]     ✅ a command line read against a program's commands and options
 │   │   ├── report.[ch]        ✅ a command's answer as one tree, written as markdown, json or xml
 │   │
+│   ├── diagram/               for the tools: not in a released library (tests/unit/test_diagram.c)
+│   │   ├── diagram.h, layout.c ✅ a chart as nested boxes and orthogonal routes (scxmljs's layout,
+│   │   │                         ported); freestanding, no recursion, arrays in a caller's arena
+│   │   ├── svg.[ch]           ✅ the layout drawn as SVG through ta_xml_writer, its stylesheet as data
+│   │
 │   ├── image/                 shared by compiler (writer) and runtime (reader)
 │   │   ├── records.h          ✅ on-disk records, bytecode opcodes, validated view
 │   │   ├── image.c            ✅ open + full verification (mutation-tested: test_image.c), public accessors
@@ -151,7 +156,7 @@ implementation of that layer). Layer dependency rules are in
 │   ├── support/               ✅ datamodel_test (ECMAScript-subset test datamodel) and the W3C tests it
 │   │                             does not pass (datamodel_test_w3c_skip.txt), compile/system/file
 │   │                             helpers, payloads as text
-│   ├── unit/                  ✅ test_{base,image,compile,compile_scale,core,system,scenarios,runtime,e2e,
+│   ├── unit/                  ✅ test_{base,image,compile,compile_scale,core,system,scenarios,runtime,e2e,diagram,tool,
 │   │                             datamodel_ecmascript,hibernate,migrate,host,remote,address,cbor,headers,
 │   │                             trace,journal,tracing,otlp};
 │   │                             test_torture_loop; test_durable:

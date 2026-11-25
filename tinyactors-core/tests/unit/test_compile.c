@@ -500,6 +500,54 @@ static void test_structure_is_checked(void) {
     ta_compile_free(result);
 }
 
+/* Diagnostics come by file, then line and column, whatever order the
+ * compiler found them in (it checks structure after attributes). */
+static void test_diagnostics_sorted(void) {
+    ta_compile_options options;
+    memset(&options, 0, sizeof options);
+    options.size = sizeof options;
+    static const char text[] = "<scxml>\n"
+                               "  <state id='a'>\n"
+                               "    <transtion/>\n"
+                               "  </state>\n"
+                               "  <history id='h'/>\n"
+                               "  <state id='b' colour='red'/>\n"
+                               "</scxml>";
+    ta_source source = {{"order.scxml", 11}, {text, sizeof text - 1}};
+    ta_compile_result *result = NULL;
+    CHECK_EQUAL(ta_compile_charts(&options, (ta_source_list){&source, 1}, &result), TA_ERROR_INVALID);
+    const ta_diagnostic *diagnostic;
+    uint32_t count = ta_compile_diagnostics(result, &diagnostic);
+    CHECK(count >= 3);
+    for (uint32_t i = 1; i < count; i++)
+        CHECK(diagnostic[i - 1].line < diagnostic[i].line ||
+              (diagnostic[i - 1].line == diagnostic[i].line && diagnostic[i - 1].column <= diagnostic[i].column));
+    ta_compile_free(result);
+}
+
+/* An expression written twice keeps each place: <data> listings and
+ * error.execution name the line of the one that ran. */
+static void test_expression_positions(void) {
+    static const char text[] = "<scxml datamodel='ecmascript'><datamodel>\n"
+                               "  <data id='total' expr='0'/>\n"
+                               "  <data id='attempts' expr='0'/>\n"
+                               "</datamodel><state id='open'/></scxml>";
+    size_t length;
+    void *bytes = compile_chart("order.scxml", text, NULL, &length, 0);
+    CHECK(bytes != NULL);
+    if (!bytes) return;
+    ta_image image;
+    CHECK_EQUAL(ta_image_open((ta_bytes){bytes, length}, &image), TA_OK);
+    const ta_image_view *view = ta_image_view_of(&image);
+    const ta_chart_record *chart = &view->charts[0];
+    CHECK_EQUAL(chart->data_count, 2);
+    uint32_t first = view->data[chart->first_data].expression, second = view->data[chart->first_data + 1].expression;
+    CHECK(first != second);
+    CHECK_EQUAL(view->expressions[chart->first_expression + first].line, 2);
+    CHECK_EQUAL(view->expressions[chart->first_expression + second].line, 3);
+    free(bytes);
+}
+
 /* Where an error is reported: the start of the element it is about (these
  * cases come from the tests of the SCXML codec tinyactors-scxml held). */
 #define NS "xmlns=\"http://www.w3.org/2005/07/scxml\""
@@ -1016,6 +1064,8 @@ int main(void) {
     RUN(test_resolver_errors);
     RUN(test_arena_storage);
     RUN(test_diagnostics_outlive_scratch);
+    RUN(test_diagnostics_sorted);
+    RUN(test_expression_positions);
     RUN(test_xml_arena_refusal);
     RUN(test_structure);
     RUN(test_errors);

@@ -261,7 +261,7 @@ static void test_escaping(void) {
     CHECK(document_is(&document, TA_REPORT_MARKDOWN,
                       EXPECT("# Payment\n"
                              "\n"
-                             "- **Note**: a\"b\\c&lt;d>&e\n\t\r\x01\x1f\0z \xc3\xa9\n"
+                             "- **Note**: `a\"b\\c<d>&e\n\t\r\x01\x1f\0z \xc3\xa9`\n"
                              "\n"
                              "## Lines\n"
                              "\n"
@@ -271,7 +271,7 @@ static void test_escaping(void) {
                              "\n"
                              "## Notes\n"
                              "\n"
-                             "- a\"b\\c&lt;d>&e\n\t\r\x01\x1f\0z \xc3\xa9\n")));
+                             "- `a\"b\\c<d>&e\n\t\r\x01\x1f\0z \xc3\xa9`\n")));
     document_end(&document);
 }
 
@@ -473,27 +473,34 @@ static void test_no_memory(void) {
     document_end(&document);
 }
 
-/* Names as words in Markdown: an acronym stays in capitals. */
-/* In Markdown, '<' outside a code span is an entity; inside, as written. */
+/* In Markdown, a value with '<' outside a code span is written as code:
+ * whole, or each such word when the value has code spans of its own. */
 static void test_angle_brackets(void) {
     test_document document;
     document_begin(&document, "order", 0);
     ta_report_text(&document.report, S("state"), S("<scxml>"));
     ta_report_text(&document.report, S("condition"), S("cond `total < 10` in <scxml>"));
+    ta_report_text(&document.report, S("guard"), S("attempts < 3"));
+    ta_report_text(&document.report, S("plain"), S("total > 0"));
     CHECK(document_is(&document, TA_REPORT_MARKDOWN,
-                      EXPECT("# Order\n\n- **State**: &lt;scxml>\n- **Condition**: cond `total < 10` in &lt;scxml>\n")));
+                      EXPECT("# Order\n\n- **State**: `<scxml>`\n- **Condition**: cond `total < 10` in `<scxml>`\n"
+                             "- **Guard**: `attempts < 3`\n- **Plain**: total > 0\n")));
     document_end(&document);
 }
 
+/* Names as words in Markdown: an acronym stays in capitals. */
 static void test_acronyms_in_names(void) {
     test_document document;
     document_begin(&document, "orderSummary", 0);
     ta_report_number(&document.report, S("sessionID"), 1);
     ta_report_number(&document.report, S("bootActors"), 2);
     ta_report_number(&document.report, S("paymentURLPath"), 3);
+    ta_report_number(&document.report, S("abi"), 4);
+    ta_report_number(&document.report, S("idPage"), 5);
+    ta_report_number(&document.report, S("identity"), 6);
     CHECK(document_is(&document, TA_REPORT_MARKDOWN,
                       EXPECT("# Order summary\n\n- **Session ID**: 1\n- **Boot actors**: 2\n"
-                             "- **Payment URL path**: 3\n")));
+                             "- **Payment URL path**: 3\n- **ABI**: 4\n- **ID page**: 5\n- **Identity**: 6\n")));
     document_end(&document);
 }
 

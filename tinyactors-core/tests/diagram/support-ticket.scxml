@@ -1,0 +1,21 @@
+<scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0" name="ticket" initial="open">
+  <datamodel><data id="n" expr="0"/></datamodel>
+  <state id="open" initial="triage"><onentry><log expr="1"/></onentry><transition event="ping"/>
+    <state id="triage">
+      <transition event="assign" target="working"/>
+      <transition event="note" cond="n &lt; 3"><assign location="n" expr="n + 1"/></transition>
+    </state>
+    <state id="working"><transition event="escalate" target="waiting"/></state>
+    <history id="hist" type="deep"><transition target="triage"/></history>
+    <transition event="close" target="closed"/>
+  </state>
+  <parallel id="escalated">
+    <state id="review" initial="waiting">
+      <state id="waiting"><transition event="reviewed" target="approved"/></state>
+      <final id="approved"/>
+    </state>
+    <state id="sla"><state id="ticking"><transition event="tick" target="ticking"/></state></state>
+    <transition event="back" target="hist"/>
+  </parallel>
+  <final id="closed"/>
+</scxml>

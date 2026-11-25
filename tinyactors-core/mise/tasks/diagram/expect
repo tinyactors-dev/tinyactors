@@ -1,0 +1,23 @@
+#!/usr/bin/env ruby
+#MISE description="Write the layout corpus's expected answers (tests/diagram/*.md) from this build's tinyactors graph, after a deliberate change to the layout"
+#MISE depends=["build"]
+# vim:ft=ruby
+
+# tests/diagram holds charts and, for each, what `tinyactors graph` answers
+# for it: every box and every route of its layout. test_tool checks each
+# answer against its file. When the layout changes on purpose, this task
+# writes the answers again; review the diff of the .md files as the change's
+# effect on every chart (tests/diagram/README.md).
+require_relative '../../core'
+
+directory = Core::ROOT.join('tests', 'diagram')
+program = Core.directory('dev').join('bin', 'tinyactors')
+charts = directory.glob('*.scxml').sort
+abort 'diagram:expect: no charts in tests/diagram' if charts.empty?
+
+charts.each do |chart|
+  answer = IO.popen([program.to_s, 'graph', chart.basename.to_s], chdir: directory.to_s, &:read)
+  abort "diagram:expect: tinyactors graph #{chart.basename} failed" unless $?.success?
+  chart.sub_ext('.md').write(answer)
+end
+puts "diagram:expect: #{charts.size} answers written to tests/diagram"

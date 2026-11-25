@@ -1,0 +1,207 @@
+<!-- campaign: sends one email to each of `total` recipients through the
+     idempotent mail processor. Every delivery attempt is its own actor, spawned
+     with <send type="system" event="spawn">; at most `concurrency` are in flight.
+     (The system I/O processor is provided by the test runtime: SCXML's own
+     processor only reaches existing sessions.)
+
+     Progress is a cursor plus the small in-flight/retry sets, checkpointed to
+     the store every second. Sending pauses when checkpoints stop being
+     confirmed, so the unrecorded window (emails a restart would send again)
+     stays far inside the processor's idempotency-key retention (keyTTLMs). A
+     restart resumes from the checkpoint; re-sent emails reuse their keys and are
+     dropped by the processor as duplicates. A checkpoint older than the key
+     retention is not trusted: the campaign stops and asks an operator. -->
+<scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0" datamodel="ecmascript"
+       name="campaign" initial="starting">
+  <datamodel>
+    <!-- configuration (spawn data) -->
+    <data id="campaignID" expr="'spring-sale'"/>
+    <data id="template" expr="'spring-sale-v3'"/>
+    <data id="total" expr="50000"/>
+    <data id="concurrency" expr="200"/>            <!-- delivery attempts in flight -->
+    <data id="maxAttempts" expr="5"/>
+    <data id="attemptTimeoutMs" expr="15000"/>
+    <data id="keyTTLMs" expr="24 * 3600 * 1000"/>  <!-- how long the mail processor remembers keys -->
+    <data id="maxUnsavedMs" expr="5000"/>          <!-- pause when progress is unconfirmed this long -->
+    <data id="resume" expr="null"/>                <!-- last checkpoint from the store, if restarting -->
+    <!-- progress -->
+    <data id="cursor" expr="0"/>                   <!-- recipients [0, cursor) have been claimed -->
+    <data id="inflight" expr="({})"/>              <!-- user -> job of a running attempt -->
+    <data id="inflightCount" expr="0"/>
+    <data id="retries" expr="[]"/>                 <!-- { user, attempt, first, due } -->
+    <data id="sent" expr="0"/>
+    <data id="duplicates" expr="0"/>
+    <data id="failed" expr="[]"/>
+    <data id="unknown" expr="[]"/>                 <!-- may have been sent, key possibly forgotten -->
+    <data id="savedAt" expr="Date.now()"/>         <!-- last checkpoint the store confirmed -->
+    <data id="paused" expr="false"/>
+    <data id="j" expr="null"/>
+  </datamodel>
+
+  <script>
+    var WAIT = 'wait', DONE = 'done';
+
+    function job(user, attempt, first, uncertain) {
+      return { campaign: campaignID, user: user, to: 'user' + user + '@example.com',
+               key: campaignID + ':' + user, attempt: attempt, first: first, template: template,
+               uncertain: !!uncertain };
+    }
+
+    /* the next attempt: a due retry, the next recipient, WAIT or DONE */
+    function claim() {
+      var now = Date.now();
+      if (paused || now - savedAt > maxUnsavedMs) return WAIT;
+      var next = null;
+      for (var i = 0; i &lt; retries.length; i++)
+        if (retries[i].due &lt;= now) { var r = retries.splice(i, 1)[0]; next = job(r.user, r.attempt, r.first, r.uncertain); break; }
+      if (!next &amp;&amp; cursor &lt; total) next = job(cursor++, 1, now);
+      if (!next) return retries.length || inflightCount ? WAIT : DONE;
+      inflight[next.user] = next;
+      inflightCount++;
+      return next;
+    }
+
+    /* as many attempts as the window allows */
+    function claimBatch() {
+      var batch = [];
+      while (inflightCount &lt; concurrency) {
+        var next = claim();
+        if (next === WAIT || next === DONE) break;
+        batch.push(next);
+      }
+      return batch;
+    }
+
+    function finished() {
+      return cursor >= total &amp;&amp; !retries.length &amp;&amp; !inflightCount;
+    }
+
+    /* the outcome of an attempt (done.spawn data: { job, outcome, ... }) */
+    function settle(r) {
+      var j = inflight[r.job.user];
+      if (!j) return; /* an attempt from before a restart */
+      delete inflight[j.user];
+      inflightCount--;
+      if (r.outcome === 'sent') { sent++; if (r.duplicate) duplicates++; return; }
+      if (r.outcome === 'failed') { failed.push(j.user); return; }
+      /* retry or unknown: resending reuses the key, which is only safe while
+         the processor still remembers the first attempt. An attempt that timed
+         out may have been delivered: giving up after one is "unknown". */
+      var uncertain = j.uncertain || r.outcome === 'unknown';
+      if (Date.now() - j.first > keyTTLMs * 0.8) unknown.push(j.user);
+      else if (j.attempt >= maxAttempts) (uncertain ? unknown : failed).push(j.user);
+      else retries.push({ user: j.user, attempt: j.attempt + 1, first: j.first, uncertain: uncertain,
+                          due: Date.now() + Math.min(60000, 500 * Math.pow(2, j.attempt)) });
+    }
+
+    /* error.communication for one of our spawns: that attempt never started */
+    function spawnFailed(sendid) {
+      for (var u in inflight)
+        if (inflight[u].spawnId === sendid) { settle({ job: inflight[u], outcome: 'retry' }); return true; }
+      return false;
+    }
+
+    function checkpoint(final) {
+      var open = [];
+      for (var u in inflight) open.push({ user: inflight[u].user, attempt: inflight[u].attempt, first: inflight[u].first, uncertain: inflight[u].uncertain });
+      return { campaign: campaignID, at: Date.now(), final: !!final, total: total, cursor: cursor,
+               sent: sent, duplicates: duplicates, failed: failed, unknown: unknown,
+               inflight: open, retries: retries };
+    }
+
+    /* continue from a checkpoint: what was in flight is attempted again (same keys) */
+    function restore(c) {
+      cursor = c.cursor; sent = c.sent; duplicates = c.duplicates;
+      failed = c.failed.slice(); unknown = c.unknown.slice(); retries = c.retries.slice();
+      for (var i = 0; i &lt; c.inflight.length; i++) {
+        var o = c.inflight[i];
+        retries.push({ user: o.user, attempt: o.attempt, first: o.first, uncertain: true, due: 0 });
+      }
+    }
+  </script>
+
+  <state id="starting">
+    <transition cond="!resume" target="running"/>
+    <transition cond="Date.now() - resume.at &lt; keyTTLMs * 0.8" target="running">
+      <script>restore(resume)</script>
+    </transition>
+    <transition target="stale"/>
+  </state>
+
+  <!-- the checkpoint is older than the processor's memory: resending what
+       followed it could deliver duplicates, so a person decides -->
+  <state id="stale">
+    <onentry>
+      <send type="bench" event="campaign.stale">
+        <param name="checkpointAgeMs" expr="Date.now() - resume.at"/>
+      </send>
+    </onentry>
+    <transition event="campaign.force" target="running"><script>restore(resume)</script></transition>
+    <transition event="campaign.abort" target="aborted"/>
+  </state>
+
+  <parallel id="running">
+    <!-- progress checkpoints; confirmations keep sending enabled -->
+    <state id="checkpointing" initial="saving">
+      <state id="saving">
+        <onentry>
+          <send type="store" event="store.put" target="campaigns">
+            <content expr="checkpoint(false)"/>
+          </send>
+          <send event="checkpoint.due" delay="1s" id="checkpoint"/>
+        </onentry>
+        <onexit><cancel sendid="checkpoint"/></onexit>
+        <transition event="store.saved"><assign location="savedAt" expr="_event.data.at"/></transition>
+        <transition event="checkpoint.due" target="saving">
+          <send type="bench" event="campaign.progress"><content expr="checkpoint(false)"/></send>
+        </transition>
+      </state>
+    </state>
+
+    <state id="control" initial="active">
+      <state id="active">
+        <transition event="campaign.pause" target="held"/>
+      </state>
+      <state id="held">
+        <onentry><assign location="paused" expr="true"/></onentry>
+        <onexit><assign location="paused" expr="false"/><raise event="wake"/></onexit>
+        <transition event="campaign.resume" target="active"/>
+      </state>
+    </state>
+
+    <!-- one actor per delivery attempt, spawned dynamically -->
+    <state id="dispatch" initial="spawning">
+      <state id="spawning">
+        <onentry>
+          <foreach array="claimBatch()" item="j">
+            <send type="system" event="spawn" target="delivery.scxml" idlocation="j.spawnId">
+              <param name="job" expr="j"/>
+              <param name="timeoutMs" expr="attemptTimeoutMs"/>
+            </send>
+          </foreach>
+          <send event="poll" delay="250ms" id="poll"/>
+        </onentry>
+        <onexit><cancel sendid="poll"/></onexit>
+        <transition cond="finished()" target="drained"/>
+        <transition event="done.spawn" target="spawning"><script>settle(_event.data)</script></transition>
+        <transition event="error.communication" cond="spawnFailed(_event.sendid)" target="spawning"/>
+        <transition event="poll wake" target="spawning"/>
+      </state>
+      <final id="drained"/>
+    </state>
+
+    <transition event="done.state.dispatch" target="finished"/>
+    <transition event="campaign.abort" target="aborted"/>
+  </parallel>
+
+  <final id="finished">
+    <onentry>
+      <send type="store" event="store.put" target="campaigns"><content expr="checkpoint(true)"/></send>
+      <send type="bench" event="campaign.finished"><content expr="checkpoint(true)"/></send>
+    </onentry>
+    <donedata><content expr="checkpoint(true)"/></donedata>
+  </final>
+  <final id="aborted">
+    <donedata><content expr="checkpoint(false)"/></donedata>
+  </final>
+</scxml>

@@ -19,7 +19,7 @@ static ta_string_view string_of(const ta_image_view *view, uint32_t id) {
 static ta_string_view state_id(const ta_image_view *view, const ta_chart_record *chart, uint32_t state) {
     if (state == TA_NIL || state >= chart->state_count) return ta_string("");
     ta_string_view id = string_of(view, view->states[chart->first_state + state].id);
-    return id.length ? id : ta_string("<scxml>"); /* the root: its element, never an id */
+    return id.length ? id : ta_string("/scxml"); /* the root: its XPath, never an id */
 }
 
 static ta_string_view expression_text(const ta_image_view *view, const ta_chart_record *chart,
@@ -230,8 +230,7 @@ static void put_send(operand_text *operands, uint32_t index) {
         put_expression(operands, send->delayexpr);
     } else if (send->delay_ns) {
         put(operands, " after ");
-        tool_text_number(&operands->text, send->delay_ns);
-        put(operands, "ns");
+        tool_text_duration(&operands->text, send->delay_ns);
     }
 }
 

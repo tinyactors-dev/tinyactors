@@ -50,6 +50,9 @@ typedef struct tool_platform {
     ta_status (*read)(void *context, const tool_read *request, ta_bytes *out);
     /* TA_OK; TA_ERROR_INVALID: it could not be written. */
     ta_status (*write)(void *context, const tool_write *request);
+    /* The build's version: a development build's (0.4.0-dev.<date>.<n>.g<sha>),
+     * or empty for the library's, which a release carries. */
+    ta_string_view version;
 } tool_platform;
 
 typedef struct tool_command_line {
@@ -79,13 +82,17 @@ typedef enum tool_program_option {
     TOOL_PROGRAM_OPTION_COUNT
 } tool_program_option;
 
+/* -f svg: graph's picture, beside the report's three formats. */
+enum { TOOL_FORMAT_SVG = TA_REPORT_XML + 1 };
+
 /* An invocation: what every command gets. */
 typedef struct tool {
     const tool_platform *platform;
     ta_growable_arena *arena;
     const ta_cli_program *program;
     const ta_cli_parsed *parsed;
-    uint32_t format; /* ta_report_format */
+    uint32_t format; /* ta_report_format, or TOOL_FORMAT_SVG */
+    int answered;    /* the command wrote its answer itself: no report */
     ta_report report;
     /* where the report goes: standard output, or standard error when the
      * command's own output takes standard output (compile -o -) */
@@ -114,6 +121,7 @@ typedef struct tool_text {
 void tool_text_init(tool *t, tool_text *text);
 void tool_text_append(tool_text *text, ta_string_view piece);
 void tool_text_number(tool_text *text, uint64_t value);
+void tool_text_duration(tool_text *text, uint64_t nanoseconds);
 ta_string_view tool_text_view(const tool_text *text);
 
 int tool_equal(ta_string_view a, ta_string_view b);

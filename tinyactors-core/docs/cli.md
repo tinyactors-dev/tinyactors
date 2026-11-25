@@ -56,17 +56,19 @@ inputs give their diagnostics with the answer.
 
 ## Output
 
-`-f` / `--format` chooses `markdown` (the default), `json` or `xml`. The
+`-f` / `--format` chooses `markdown` (the default), `json` or `xml`; `graph`
+also answers in `svg`, the chart drawn. The
 answer goes to standard output; messages about the command line or a file
 that cannot be read go to standard error as `tinyactors: <message>`.
 
 Every answer is one document with the command's name as its title:
 
-- **Markdown**: the title as a heading (a `<` outside a code span is
-  written `&lt;`, so `<scxml>` shows as text where Markdown is rendered); an object's values as
+- **Markdown**: the title as a heading; a value with a `<` outside a code
+  span written as code (`` `attempts < 3` ``, or each such word when the
+  value has code of its own), so it reads the same in a terminal and where
+  Markdown is rendered; an object's values as
   `- **Name**: value` lines; each list of flat records as a table; nested
-  objects under headings; a diagram as a fenced block (Mermaid for
-  `graph`).
+  objects under headings.
 - **JSON**: one object, members in order, two spaces of indent. Numbers
   are integers, text is UTF-8.
 - **XML**: the title as the root element; an object's values as its
@@ -76,7 +78,10 @@ Every answer is one document with the command's name as its title:
 Member names are camelCase (`bootActors`, `doneEvent`) and are the same in
 all three formats: a script reads `charts[0].states` in JSON and
 `/states/charts/chart/states/state` in XML. A state is named by its id;
-the root (the `<scxml>` element itself) by `<scxml>`, which no id can be.
+the root (the `<scxml>` element itself) by its XPath, `/scxml`, which no
+id can be. A delay is written as SCXML writes one, in the largest unit that
+holds it whole (`30s`, `1500ms`). Diagnostics come by file, then line and
+column.
 
 ## Commands
 
@@ -87,14 +92,14 @@ the root (the `<scxml>` element itself) by `<scxml>`, which no id can be.
 | `inspect` | INPUT... | The image: its size, format version, hash, sections (offset, bytes, records), charts (source, datamodel, binding, counts of states, transitions, data, expressions, sends, invokes and code), boot actors. |
 | `states` | INPUT... | Each chart's states in document order: id, kind, parent, depth, initial targets, counts of transitions, invokes and data, whether it has onentry and onexit, its done event. |
 | `transitions` | INPUT... | Each chart's transitions: kind (transition, initial, history default), source, event descriptors, condition, targets, type, whether it has actions. |
-| `events` | INPUT... | Every event name of the image, and how many transitions handle it and raises and sends make it by name. |
+| `events` | INPUT... | Every event name the selected charts use, and how many transitions handle it and raises and sends make it by name. |
 | `data` | INPUT... | Each chart's `<data>`: id, the state declaring it, its expression and line. |
 | `expressions` | INPUT... | Each chart's expressions and scripts: kind, line, column, text; `--kind` keeps some (`condition`, `value`, `location`, `script`, `string`, `content`, `item`, `global-script`). |
 | `disassemble` | INPUT... | Each chart's executable content as instructions: their place, the entry points starting there (onentry and onexit of a state, a transition's actions, an invoke's finalize, the chart's script), the instruction and its operands. |
-| `graph` | INPUT... | Each chart as nodes (states) and edges (one per target of each transition), and as a Mermaid state diagram. |
+| `graph` | INPUT... | Each chart drawn: nested boxes for its states, orthogonal routes for its transitions, labels on their routes. `-f svg` answers the picture (every selected chart, one above the other, under its name; light or dark by the reader's preference); the other formats answer the drawing as data: each box (its state, kind, how it is drawn and its rectangle), each edge (source, target, events, condition and its route as points) and the transitions a box lists inside it (those without a target, and those crossing three or more container borders). See [Graph](#graph). |
 | `diff` | OLD NEW | Two versions, each an image, a manifest or a chart, compared chart by chart (matched by name) as statecharts: states, transitions, data, executable content, invokes and the events each state handles, each change marked breaking for actors running the old version or not, and what a migration does to them. `--breaking` lists only the breaking changes, `--all` the unchanged charts too, and `--exit-code` exits with 1 when they differ (with `--breaking`, when a change breaks running actors). See [Diff](#diff). |
 | `help` | [COMMAND] | The program's commands, or a command's usage, options and examples. |
-| `version` | | The program's version, its library's ABI and the image format version it reads. |
+| `version` | | The program's version (a development build's names its commit: `0.4.0-dev.<date>.<n>.g<sha>`), its library's version and ABI, and the image format version it reads. |
 
 The commands that take inputs also take `-W` / `--warnings-as-errors` (a
 compiled input with a warning is refused), and all but `compile` and
@@ -120,7 +125,7 @@ tinyactors compile order.scxml payment.scxml -o order.tai
 tinyactors check -W charts/*.scxml
 tinyactors inspect --format json order.tai | jq '.charts[].name'
 tinyactors transitions --chart order order.scxml
-tinyactors graph order.scxml > order.md        # renders as a diagram on GitHub
+tinyactors graph -f svg order.scxml > order.svg # the chart, drawn
 tinyactors diff --breaking --exit-code deployed.tai order.scxml   # in CI
 tinyactors compile order.scxml -o - | tinyactors disassemble -
 ```
@@ -142,9 +147,9 @@ tinyactors diff --breaking --exit-code deployed.tai order.scxml
 
 Charts are matched by name. Within a chart:
 
-- **States** by id (the root as `<scxml>`): added, removed, or changed in
+- **States** by id (the root as `/scxml`): added, removed, or changed in
   kind, parent (moved), initial targets, onentry, onexit or invokes.
-  `before` and `after` describe the state: `compound in <scxml>, initial
+  `before` and `after` describe the state: `compound in /scxml, initial
   open`.
 - **Transitions** by their source state's id and their event descriptors,
   ties going by order: added, removed, or changed in condition, targets,
@@ -215,7 +220,7 @@ answers, among the rest:
 
 | State | Change | Breaking | Before | After |
 | --- | --- | --- | --- | --- |
-| paying | removed | yes | atomic in &lt;scxml> |  |
+| paying | removed | yes | atomic in /scxml |  |
 
 #### Events
 
@@ -224,15 +229,40 @@ answers, among the rest:
 | open | cancel | no longer handled |
 ```
 
+## Graph
+
+`tinyactors graph` lays a chart out as scxmljs's `<scxml-view>` does (it is
+that layout, ported to C): the whole chart at once, as nested boxes, each
+container arranging its children in layers by the transitions between them
+(cycles broken by a feedback arc set, crossings reduced by barycentre sweeps),
+parallel regions in a grid, and every transition routed orthogonally from its
+source's far side to its target's near side, its label on its route.
+Transitions without a target, a container's transitions into its own
+states, and transitions that cross three or more container borders are
+listed in their source's box instead of routed. The same chart always gives
+the same picture. Text is measured by estimate (no fonts are read), so a
+name in a font much wider than the system's may run past its box.
+
+```sh
+tinyactors graph -f svg order.scxml > order.svg
+tinyactors graph -f svg --chart payment shop.tai > payment.svg
+tinyactors graph -f json order.scxml | jq '.charts[0].edges[].route'
+```
+
+The layout is checked by a corpus of charts and their expected layouts
+(`tests/diagram`, its README).
+
 ## How it is built
 
-Three layers, from the bottom:
+Four layers, from the bottom:
 
 - **`src/cli`**, freestanding like `src/base`: `arguments.h` reads a
   command line against a program's description (its commands, their
   options and arguments), and `report.h` builds an answer as one tree and
   writes it in the three formats. Neither uses the C library, recurses or
   allocates but from the arena it is given.
+- **`src/diagram`**: a chart laid out (`diagram.h`, freestanding like
+  `src/cli`) and drawn as SVG through `ta_xml_writer` (`svg.h`).
 - **`tools/tinyactors`** but one file: the commands. They compile without
   the C library's headers and reach files only through the platform
   interface in `tool.h`. One invocation is one arena: the parsed line, the

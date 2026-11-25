@@ -97,7 +97,46 @@ static int compiler_out_of_memory(const ta_compiler *compiler) {
            compiler->event_name_map.out_of_memory || compiler->source_map.out_of_memory;
 }
 
+static int same_file(ta_string_view a, ta_string_view b) {
+    return a.length == b.length && (!a.length || memcmp(a.pointer, b.pointer, a.length) == 0);
+}
+
+/* The diagnostics as a reader goes through the documents: by file, in the
+ * order the files first appear, then by line and column; equal places keep
+ * the order they were found in. The note that the rest were not reported
+ * stays last. At most TA_DIAGNOSTICS_MAX: an insertion sort. */
+static void sort_diagnostics(ta_vector *list) {
+    ta_diagnostic *items = (ta_diagnostic *)(void *)list->data;
+    uint32_t count = list->length == TA_DIAGNOSTICS_MAX ? list->length - 1u : list->length;
+    uint32_t rank[TA_DIAGNOSTICS_MAX];
+    for (uint32_t i = 0; i < count; i++) {
+        rank[i] = i;
+        for (uint32_t j = 0; j < i; j++)
+            if (same_file(items[j].file, items[i].file)) {
+                rank[i] = rank[j];
+                break;
+            }
+    }
+    for (uint32_t i = 1; i < count; i++) {
+        ta_diagnostic moving = items[i];
+        uint32_t moving_rank = rank[i], j = i;
+        for (; j > 0; j--) {
+            const ta_diagnostic *before = &items[j - 1];
+            int after = rank[j - 1] < moving_rank ||
+                        (rank[j - 1] == moving_rank &&
+                         (before->line < moving.line ||
+                          (before->line == moving.line && before->column <= moving.column)));
+            if (after) break;
+            items[j] = items[j - 1];
+            rank[j] = rank[j - 1];
+        }
+        items[j] = moving;
+        rank[j] = moving_rank;
+    }
+}
+
 static void compiler_free(ta_compiler *compiler, ta_compile_result *result) {
+    sort_diagnostics(&compiler->diagnostics.list);
     result->diagnostics = compiler->diagnostics.list; /* diagnostics outlive the builder */
     ta_vector *vs[] = {&compiler->strings,        &compiler->charts,      &compiler->states,
                        &compiler->transitions,    &compiler->u32,         &compiler->code,

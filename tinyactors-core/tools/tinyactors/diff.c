@@ -74,11 +74,11 @@ static const ta_transition_record *transition_of(const chart_side *side, uint32_
     return &side->view->transitions[side->chart->first_transition + index];
 }
 
-/* A state as the report names it: its id, "<scxml>" for the root (which no
+/* A state as the report names it: its id, "/scxml" for the root (which no
  * id can be), "" for none. */
 static ta_string_view state_name(const chart_side *side, uint32_t state) {
     if (!side->chart || state == TA_NIL || state >= side->chart->state_count) return ta_string("");
-    if (state == 0) return ta_string("<scxml>");
+    if (state == 0) return ta_string("/scxml");
     return string_of(side->view, state_of(side, state)->id);
 }
 
@@ -331,8 +331,7 @@ static void put_send(code_text *code, uint32_t index) {
         put_expression(code, send->delayexpr);
     } else if (send->delay_ns) {
         put(code, " after ");
-        tool_text_number(&code->text, send->delay_ns);
-        put(code, "ns");
+        tool_text_duration(&code->text, send->delay_ns);
     }
     put_capture(code, send->capture);
 }
@@ -432,7 +431,7 @@ static ta_string_view shortened(tool *t, ta_string_view text) {
 
 /* ---- descriptions ------------------------------------------------------------------------- */
 
-/* "compound in <scxml>, initial open". */
+/* "compound in /scxml, initial open". */
 static ta_string_view state_description(tool *t, const chart_side *side, uint32_t state) {
     const ta_state_record *record = state_of(side, state);
     tool_text text;
@@ -482,7 +481,7 @@ static ta_string_view datum_id(const chart_side *side, uint32_t index) {
     return string_of(side->view, datum_of(side, index)->id);
 }
 
-/* "`0` in <scxml>". */
+/* "`0` in /scxml". */
 static ta_string_view datum_description(tool *t, const chart_side *side, uint32_t index) {
     const ta_data_record *datum = datum_of(side, index);
     tool_text text;

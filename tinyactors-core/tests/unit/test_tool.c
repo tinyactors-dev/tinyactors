@@ -1,6 +1,7 @@
 /* The tinyactors command (tools/tinyactors, docs/cli.md), run as a process:
  * each command on charts, a manifest and an image, in each format, its exit
  * statuses, and what it says when the command line is wrong. */
+#include <dirent.h>
 #include <stdlib.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
@@ -11,6 +12,9 @@
 
 #ifndef TA_TEST_PROGRAMS
 #define TA_TEST_PROGRAMS "."
+#endif
+#ifndef TA_TEST_DIAGRAMS
+#define TA_TEST_DIAGRAMS "tests/diagram"
 #endif
 
 #define NS "xmlns='http://www.w3.org/2005/07/scxml'"
@@ -104,15 +108,17 @@ static void test_the_image_as_c_and_to_standard_output(void) {
 static void test_the_charts_records(void) {
     write_charts();
     CHECK_EQUAL(run("states order.scxml --chart order"), 0);
-    CHECK(has("output", "| 2 | paying | atomic | &lt;scxml> | 1 |  | 1 | 1 | 0 | no | no |  |"));
+    CHECK(has("output", "| 2 | paying | atomic | /scxml | 1 |  | 1 | 1 | 0 | no | no |  |"));
     CHECK(!strstr(text_of("output"), "settled")); /* --chart order: not payment's */
     CHECK_EQUAL(run("transitions -f json order.scxml"), 0);
     CHECK(has("output", "\"condition\": \"_event.data.price > 0\""));
     CHECK(has("output", "\"targets\": \"paid\""));
     CHECK_EQUAL(run("events order.scxml"), 0);
     CHECK(has("output", "| checkout | 1 | 0 | 0 |"));
+    CHECK(!strstr(text_of("output"), "| item | 0 |"));/* a prefix of item.added: none uses it */
+    CHECK(!strstr(text_of("output"), "done.state."));/* no transition handles a state's done event */
     CHECK_EQUAL(run("data order.scxml"), 0);
-    CHECK(has("output", "| total | &lt;scxml> | 0 |"));
+    CHECK(has("output", "| total | /scxml | 0 |"));
     CHECK_EQUAL(run("expressions --kind condition -f json order.scxml"), 0);
     CHECK(has("output", "\"kind\": \"condition\""));
     CHECK(!strstr(text_of("output"), "\"kind\": \"value\""));
@@ -124,13 +130,13 @@ static void test_refusals(void) {
     CHECK(fixture_write("broken.scxml", "<scxml " NS "><state id='a'>\n<transtion target='a'/></state></scxml>"));
     CHECK_EQUAL(run("check broken.scxml"), 1);
     CHECK(has("output", "- **Valid**: no"));
-    CHECK(has("output", "| broken.scxml | 2 | 1 | error | unknown element &lt;transtion> in &lt;state> |"));
+    CHECK(has("output", "| broken.scxml | 2 | 1 | error | `unknown element <transtion> in <state>` |"));
     CHECK_EQUAL(run("compile -f json broken.scxml -o broken.tai"), 1);
     CHECK(has("output", "\"compiled\": false"));
     struct stat status;
     CHECK(stat(fixture_path("broken.tai"), &status) != 0); /* nothing written */
     CHECK_EQUAL(run("states broken.scxml"), 1); /* every command reports why */
-    CHECK(has("output", "unknown element &lt;transtion>"));
+    CHECK(has("output", "`unknown element <transtion>"));
     /* an image that does not verify */
     CHECK(fixture_write("damaged.tai", "TAI1 and then not an image at all"));
     CHECK_EQUAL(run("check damaged.tai"), 1);
@@ -154,7 +160,7 @@ static void test_the_command_line(void) {
     CHECK(has("errors", "unknown option '--frmat'; did you mean '--format'?"));
     CHECK(has("errors", "see 'tinyactors help inspect'"));
     CHECK_EQUAL(run("inspect -f yaml order.tai"), 2);
-    CHECK(has("errors", "'yaml' is not a value of --format (one of: markdown, json, xml)"));
+    CHECK(has("errors", "'yaml' is not a value of --format (one of: markdown, json, xml, svg)"));
     CHECK_EQUAL(run("compile order.scxml"), 2);
     CHECK(has("errors", "option --output is required"));
     CHECK_EQUAL(run("diff order.tai"), 2);
@@ -197,16 +203,104 @@ static void test_disassemble_and_graph(void) {
     CHECK(has("output", "| foreach | `items` as `item` until "));
     CHECK(has("output", "| assign | `count` = `count + 1` |"));
     CHECK(has("output", "| jump-if-false | unless `count > 10` to "));
-    CHECK(has("output", "| send | event parcel.heavy to itself after 30000000000ns |"));
+    CHECK(has("output", "| send | event parcel.heavy to itself after 30s |"));
     CHECK(has("output", "| log | label parcel `count` |"));
-    CHECK_EQUAL(run("graph fulfillment.scxml"), 0);
-    CHECK(has("output", "```mermaid\nstateDiagram-v2\n"));
-    CHECK(has("output", "state \"boxes\" as s2"));
-    CHECK(has("output", "    --\n")); /* the parallel state's regions */
-    CHECK(has("output", "s2 --> s4 : packed"));
     CHECK_EQUAL(run("graph -f json fulfillment.scxml"), 0);
     CHECK(has("output", "\"source\": \"boxes\""));
     CHECK(has("output", "\"target\": \"shipped\""));
+}
+
+/* A support ticket: a compound state with a deep history, a parallel state of two regions, a
+ * self loop, a transition with no target and one listed in its box instead of routed. */
+static const char ticket[] =
+    "<scxml xmlns='http://www.w3.org/2005/07/scxml' version='1.0' name='ticket' initial='open'>\n"
+    "  <datamodel><data id='n' expr='0'/></datamodel>\n"
+    "  <state id='open' initial='triage'><onentry><log expr='1'/></onentry><transition event='ping'/>\n"
+    "    <state id='triage'>\n"
+    "      <transition event='assign' target='working'/>\n"
+    "      <transition event='note' cond='n &lt; 3'><assign location='n' expr='n + 1'/></transition>\n"
+    "    </state>\n"
+    "    <state id='working'><transition event='escalate' target='waiting'/></state>\n"
+    "    <history id='hist' type='deep'><transition target='triage'/></history>\n"
+    "    <transition event='close' target='closed'/>\n"
+    "  </state>\n"
+    "  <parallel id='escalated'>\n"
+    "    <state id='review' initial='waiting'>\n"
+    "      <state id='waiting'><transition event='reviewed' target='approved'/></state>\n"
+    "      <final id='approved'/>\n"
+    "    </state>\n"
+    "    <state id='sla'><state id='ticking'><transition event='tick' target='ticking'/></state></state>\n"
+    "    <transition event='back' target='hist'/>\n"
+    "  </parallel>\n"
+    "  <final id='closed'/>\n"
+    "</scxml>\n";
+
+/* graph's answers: the layout as data (every chart of the corpus, test_layout_corpus, checks
+ * its boxes and routes) and as a picture. */
+static void test_graph_layout(void) {
+    CHECK(fixture_write("support-ticket.scxml", ticket));
+    CHECK_EQUAL(run("graph -f json support-ticket.scxml"), 0);
+    CHECK(has("output", "\"drawnAs\": \"region\""));
+    CHECK(has("output", "\"route\": \"145,208 161,208 161,234 145,234\"")); /* the self loop */
+    /* in their boxes: the targetless ones, and escalate, which crosses three borders */
+    CHECK_EQUAL(run("graph support-ticket.scxml"), 0);
+    CHECK(has("output", "| open | ping |  |  |"));
+    CHECK(has("output", "| triage | note | `n < 3` |  |"));
+    CHECK(has("output", "| working | escalate |  | waiting |"));
+
+    /* the picture: well-formed, escaped, one <g> per chart, its routes as paths */
+    CHECK_EQUAL(run("graph -f svg support-ticket.scxml"), 0);
+    CHECK(has("output", "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"1126.2\" height=\"350\""));
+    CHECK(has("output", "<path class=\"edge\" d=\"M375,197 L459,197 L459,209 L483,209\" marker-end=\"url(#arrow)\"/>"));
+    CHECK(has("output", "<tspan class=\"condition\">[n &lt; 3]</tspan>"));
+    CHECK(has("output", "H*"));
+    CHECK(has("output", "@media (prefers-color-scheme: dark)"));
+    CHECK(!strstr(text_of("output"), "mermaid"));
+    /* a picture is graph's answer only */
+    CHECK_EQUAL(run("states -f svg support-ticket.scxml"), 2);
+    CHECK(has("errors", "--format svg is for graph"));
+}
+
+/* A whole file, NUL-terminated, in memory the caller frees; NULL when it cannot be read. */
+static char *whole_file(const char *path) {
+    FILE *file = fopen(path, "rb");
+    if (!file) return NULL;
+    fseek(file, 0, SEEK_END);
+    long length = ftell(file);
+    fseek(file, 0, SEEK_SET);
+    char *text = length >= 0 ? malloc((size_t)length + 1) : NULL;
+    size_t read = text ? fread(text, 1, (size_t)length, file) : 0;
+    fclose(file);
+    if (text) text[read] = 0;
+    return text;
+}
+
+/* The layout's corpus (tests/diagram, README.md there): each chart's graph is the answer its
+ * .md file holds, box for box and route for route. `mise run diagram:expect` writes the
+ * answers again after a deliberate change to the layout. */
+static void test_layout_corpus(void) {
+    DIR *directory = opendir(TA_TEST_DIAGRAMS);
+    CHECK(directory != NULL);
+    if (!directory) return;
+    int charts = 0;
+    for (struct dirent *entry; (entry = readdir(directory));) {
+        size_t length = strlen(entry->d_name);
+        if (length < 6 || strcmp(entry->d_name + length - 6, ".scxml") != 0) continue;
+        char command[2048], expected[2048];
+        snprintf(command, sizeof command, "graph '%s/%s'", TA_TEST_DIAGRAMS, entry->d_name);
+        snprintf(expected, sizeof expected, "%s/%.*s.md", TA_TEST_DIAGRAMS, (int)(length - 6), entry->d_name);
+        CHECK_EQUAL(run(command), 0);
+        char *answer = whole_file(fixture_path("output")), *wanted = whole_file(expected);
+        int same = answer && wanted && strcmp(answer, wanted) == 0;
+        CHECK(same);
+        if (!same) fprintf(stderr, "  %s: the layout is not %s (mise run diagram:expect after a deliberate change)\n",
+                           entry->d_name, expected);
+        free(answer);
+        free(wanted);
+        charts++;
+    }
+    closedir(directory);
+    CHECK(charts >= 10);
 }
 
 /* A version of order.scxml (write_charts) with `open`'s transitions, the
@@ -255,12 +349,12 @@ static void test_diff(void) {
                 "<state id='settling'><invoke id='pay' src='payment.scxml'/>\n"
                 "<transition event='done.invoke.pay' target='paid'/></state>"});
     CHECK_EQUAL(run("diff --breaking --exit-code order.tai renamed.scxml"), 1);
-    CHECK(has("output", "| paying | removed | yes | atomic in &lt;scxml> |  |"));
+    CHECK(has("output", "| paying | removed | yes | atomic in /scxml |  |"));
     CHECK(!strstr(text_of("output"), "| settling | added |")); /* --breaking: not breaking */
     CHECK(has("output", "Actors in removed states are completed to a legal configuration"));
     CHECK(has("output", "no onentry runs: paying \xe2\x86\x92 open."));
     CHECK_EQUAL(run("diff order.tai renamed.scxml"), 0);
-    CHECK(has("output", "| settling | added | no |  | atomic in &lt;scxml> |"));
+    CHECK(has("output", "| settling | added | no |  | atomic in /scxml |"));
     CHECK(has("output", "| open | checkout | targets changed | no | \xe2\x86\x92 paying (external) | "
                         "\xe2\x86\x92 settling (external) |"));
 
@@ -283,10 +377,10 @@ static void test_diff(void) {
                 (order_version){ORDER_DATA "<data id='currency' expr=\"'EUR'\"/>", ORDER_OPEN, ORDER_PAYING});
     CHECK_EQUAL(run("diff --breaking --exit-code order.tai currency.scxml"), 0);
     CHECK_EQUAL(run("diff --exit-code order.tai currency.scxml"), 1);
-    CHECK(has("output", "| currency | added | no |  | `'EUR'` in &lt;scxml> |"));
+    CHECK(has("output", "| currency | added | no |  | `'EUR'` in /scxml |"));
     CHECK(!strstr(text_of("output"), "**Migration**"));
     CHECK_EQUAL(run("diff --breaking --exit-code currency.scxml order.tai"), 1);
-    CHECK(has("output", "| currency | removed | yes | `'EUR'` in &lt;scxml> |  |"));
+    CHECK(has("output", "| currency | removed | yes | `'EUR'` in /scxml |  |"));
     CHECK(has("output", "Running actors lose currency"));
 
     /* a new condition and new actions: behaviour, never breaking */
@@ -324,7 +418,7 @@ static void test_diff(void) {
                         "</state></state></scxml>\n"));
     CHECK_EQUAL(run("diff --breaking --exit-code -f json ticket.scxml ticket-next.scxml"), 1);
     CHECK(has("output", "\"state\": \"resolved\",\n          \"change\": \"moved\",\n"
-                        "          \"breaking\": true,\n          \"before\": \"atomic in <scxml>\",\n"
+                        "          \"breaking\": true,\n          \"before\": \"atomic in /scxml\",\n"
                         "          \"after\": \"atomic in closing\""));
     /* the stable shape: every list present, empty when nothing is in it */
     CHECK(has("output", "\"transitions\": []"));
@@ -345,6 +439,8 @@ int main(void) {
     RUN(test_refusals);
     RUN(test_the_command_line);
     RUN(test_disassemble_and_graph);
+    RUN(test_graph_layout);
+    RUN(test_layout_corpus);
     RUN(test_diff);
     RUN(test_help_and_version);
     TEST_MAIN_END();

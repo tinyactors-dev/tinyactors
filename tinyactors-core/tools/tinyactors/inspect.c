@@ -21,7 +21,7 @@ static ta_string_view string_of(const ta_image_view *view, uint32_t id) {
 static ta_string_view state_id(const ta_image_view *view, const ta_chart_record *chart, uint32_t state) {
     if (state == TA_NIL || state >= chart->state_count) return ta_string("");
     ta_string_view id = string_of(view, view->states[chart->first_state + state].id);
-    return id.length ? id : ta_string("<scxml>"); /* the root: its element, never an id */
+    return id.length ? id : ta_string("/scxml"); /* the root: its XPath, never an id */
 }
 
 /* An expression's text ("" for none). */
@@ -288,6 +288,9 @@ void tool_events(tool *t) {
     count_uses(&opened, uses);
     open_list(t, "events", "event");
     for (uint32_t i = 0; i < view->event_node_count; i++) {
+        /* The image keeps every prefix of a name ("order" of "order.paid")
+         * and the done events of every state: only names something uses. */
+        if (!uses[i].transitions && !uses[i].raises && !uses[i].sends) continue;
         ta_string_view name = string_of(view, view->event_nodes[i].name);
         ta_report_object(&t->report, ta_string(""));
         ta_report_text(&t->report, ta_string("name"), name.length ? name : ta_string("*"));

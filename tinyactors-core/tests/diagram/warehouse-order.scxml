@@ -1,0 +1,30 @@
+<!-- Edges between the regions of a parallel state (lanes below them), out of a state to its
+     own container, into a descendant from its container, a long edge across three layers,
+     and two edges between states of one layer. -->
+<scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0" name="warehouse-order" initial="received">
+  <state id="received">
+    <transition event="accept" target="fulfilling"/>
+    <transition event="express" target="shipped"/>
+    <transition event="hold" target="held"/>
+  </state>
+  <state id="held"><transition event="release" target="received"/></state>
+  <parallel id="fulfilling">
+    <state id="picking" initial="locating">
+      <state id="locating"><transition event="found" target="picked"/><transition event="short" target="backorder"/></state>
+      <state id="picked"><transition event="recount" target="picking"/></state>
+    </state>
+    <state id="invoicing" initial="drafting">
+      <state id="drafting"><transition event="issue" target="issued"/></state>
+      <state id="issued"/>
+      <state id="backorder"><transition event="restock" target="locating"/></state>
+    </state>
+    <transition event="packed" target="boxing"/>
+  </parallel>
+  <state id="packing" initial="weighing">
+    <transition event="restart" target="boxing"/>
+    <state id="weighing"><transition event="weighed" target="boxing"/></state>
+    <state id="boxing"><transition event="boxed" target="labelled"/></state>
+    <state id="labelled"><transition event="relabel" target="weighing"/></state>
+  </state>
+  <final id="shipped"/>
+</scxml>
