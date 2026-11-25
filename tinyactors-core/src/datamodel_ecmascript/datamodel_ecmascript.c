@@ -88,6 +88,7 @@ typedef struct ecmascript_iterator {
 struct ta_datamodel_ecmascript {
     JSRuntime *runtime;
     size_t heap;          /* bytes allocated by the engine (counted by es_alloc_*) */
+    size_t blocks;        /* the blocks they are in, each behind an ecmascript_header */
     JSContext *auxiliary; /* context for host-side payload operations */
     uint32_t max_ops, operations;
     ecmascript_instance **instances;
@@ -3561,6 +3562,7 @@ static void *ecmascript_alloc_malloc(void *opaque, size_t n) {
     if (!header) return NULL;
     header->size = n;
     ((ta_datamodel_ecmascript *)opaque)->heap += n;
+    ((ta_datamodel_ecmascript *)opaque)->blocks++;
     return header + 1;
 }
 
@@ -3575,6 +3577,7 @@ static void ecmascript_alloc_free(void *opaque, void *ptr) {
     if (!ptr) return;
     ecmascript_header *header = (ecmascript_header *)ptr - 1;
     ((ta_datamodel_ecmascript *)opaque)->heap -= header->size;
+    ((ta_datamodel_ecmascript *)opaque)->blocks--;
     free(header);
 }
 
@@ -3599,6 +3602,10 @@ static size_t ecmascript_alloc_usable(const void *ptr) {
 
 size_t ta_datamodel_ecmascript_heap_bytes(const ta_datamodel_ecmascript *ecmascript) {
     return ecmascript ? ecmascript->heap : 0;
+}
+
+size_t ta_datamodel_ecmascript_heap_blocks(const ta_datamodel_ecmascript *ecmascript) {
+    return ecmascript ? ecmascript->blocks : 0;
 }
 
 /* ---- public API --------------------------------------------------------------------------- */

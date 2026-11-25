@@ -507,3 +507,10 @@ recorded here.
   the allocated bytes hold the regions, so a sum over that metric's
   points would count them twice. The encoder reads it only when the
   caller's `ta_host_stats.size` holds the field.
+- **quickjs's blocks (step 4).** A function beside the bytes,
+  `ta_datamodel_ecmascript_heap_blocks`, returns the count; the header
+  of each block is two `size_t` (16 B on 64-bit targets, 8 B on wasm32),
+  so the engine holds `heap_bytes + blocks × 2 × sizeof(size_t)` of the C
+  library's allocator. `heap_bytes` is unchanged, so no binding changes
+  with this step. The test: after a warm-up, 2,000 systems each spawning
+  and freeing a session leave the block count where it was.

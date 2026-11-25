@@ -175,6 +175,11 @@ TA_API const char *ta_datamodel_ecmascript_last_error(const ta_datamodel_ecmascr
 /* Bytes the engine currently has allocated (all sessions, payloads, code),
  * maintained by the datamodel's allocator: O(1), cheap enough to sample. */
 TA_API size_t ta_datamodel_ecmascript_heap_bytes(const ta_datamodel_ecmascript *ecmascript);
+/* The blocks those bytes are in, counted the same way. Each block also
+ * holds the allocator's header, two size_t (16 bytes on 64-bit targets, 8
+ * on wasm32), which the heap's bytes leave out: the engine holds
+ * heap_bytes + blocks * 2 * sizeof(size_t) of the C library's allocator. */
+TA_API size_t ta_datamodel_ecmascript_heap_blocks(const ta_datamodel_ecmascript *ecmascript);
 /* Change the engine's memory limit (bytes; 0 = the default, SIZE_MAX: none),
  * as memory_limit in the config: allocations beyond it fail the evaluation
  * (error.execution). */

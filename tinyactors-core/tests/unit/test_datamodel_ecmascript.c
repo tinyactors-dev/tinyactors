@@ -260,8 +260,10 @@ static void test_heap_bytes(void) {
            "<assign location='big' expr='null'/></transition></state>"),
         NULL));
     ecmascript_run(&t);
+    JS_RunGC((JSRuntime *)ta_datamodel_ecmascript_js_runtime(t.ecmascript));
     size_t before = ta_datamodel_ecmascript_heap_bytes(t.ecmascript);
-    CHECK(before > 0);
+    size_t blocks = ta_datamodel_ecmascript_heap_blocks(t.ecmascript);
+    CHECK(before > 0 && blocks > 0);
     ta_event_in event;
     memset(&event, 0, sizeof event);
     event.size = sizeof event;
@@ -271,6 +273,7 @@ static void test_heap_bytes(void) {
     ecmascript_run(&t);
     size_t grown = ta_datamodel_ecmascript_heap_bytes(t.ecmascript);
     CHECK(grown > before + 200000 * 16); /* at least the objects */
+    CHECK(ta_datamodel_ecmascript_heap_blocks(t.ecmascript) > blocks); /* the new blocks counted */
     event.name = (ta_string_view){"shrink", 6};
     CHECK_EQUAL(ta_system_send(t.system, &event), TA_OK);
     ecmascript_run(&t);
@@ -772,11 +775,14 @@ static void test_system_per_actor(void) {
         cycle(ecmascript, &image);
     JS_RunGC(rt);
     size_t warm = ta_datamodel_ecmascript_heap_bytes(ecmascript);
+    size_t warm_blocks = ta_datamodel_ecmascript_heap_blocks(ecmascript);
     for (int i = 0; i < 2000; i++)
         cycle(ecmascript, &image);
     JS_RunGC(rt);
     size_t after = ta_datamodel_ecmascript_heap_bytes(ecmascript);
     CHECK(after <= warm + 4096); /* was: a chart (and its compiled expressions) per system */
+    /* each system's sessions went: their blocks with them */
+    CHECK_EQUAL(ta_datamodel_ecmascript_heap_blocks(ecmascript), warm_blocks);
 
     /* 40 distinct charts, twice round: at most ECMASCRIPT_IDLE_CHARTS stay idle */
     enum { K = 40 };

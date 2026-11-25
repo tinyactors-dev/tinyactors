@@ -155,6 +155,19 @@
       "implemented": true
     },
     {
+      "name": "ta_datamodel_ecmascript_heap_blocks",
+      "returns": "size_t",
+      "params": [
+        {
+          "name": "ecmascript",
+          "type": "const ta_datamodel_ecmascript *"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
       "name": "ta_datamodel_ecmascript_heap_bytes",
       "returns": "size_t",
       "params": [
