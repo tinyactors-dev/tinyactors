@@ -1193,7 +1193,9 @@ static void test_metrics_stats(void) {
     systems[1].traces_started = 1;
     ta_host_stats host;
     memset(&host, 0, sizeof host);
+    host.size = sizeof host;
     host.routed = 17;
+    host.allocated_bytes = 300000;
     ta_otlp_stats_input input;
     memset(&input, 0, sizeof input);
     input.size = sizeof input;
@@ -1254,6 +1256,11 @@ static void test_metrics_stats(void) {
     at = 0;
     CHECK_EQUAL(ta_otlp_next_point(view.points, &at, &point), 1);
     CHECK_EQUAL(point.integer, 17);
+    CHECK(metric_named(bytes, length, "tinyactors.memory.allocated", &view));
+    CHECK_EQUAL(view.kind, TA_OTLP_METRIC_GAUGE);
+    at = 0;
+    CHECK_EQUAL(ta_otlp_next_point(view.points, &at, &point), 1);
+    CHECK_EQUAL(point.integer, 300000);
     free(bytes);
     /* not enough room: nothing is added */
     free(memory);

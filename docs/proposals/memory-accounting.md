@@ -501,3 +501,9 @@ recorded here.
   `additionalProperties: false`) was left to the session building
   `tinyactors run`: it still lacks the three keys. No test checks a
   result against it (the server checks params only).
+- **The OTLP metric (step 3).** `allocatedBytes` is exported as a gauge
+  of its own, `tinyactors.memory.allocated` (unit `By`), one point per
+  host, not as a point of `tinyactors.memory.usage` beside the region:
+  the allocated bytes hold the regions, so a sum over that metric's
+  points would count them twice. The encoder reads it only when the
+  caller's `ta_host_stats.size` holds the field.

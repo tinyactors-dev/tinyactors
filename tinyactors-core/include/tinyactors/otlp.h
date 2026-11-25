@@ -216,7 +216,9 @@ TA_API ta_status ta_otlp_add_metric(ta_otlp *otlp, const ta_otlp_metric *metric)
  * ends, macrosteps, fuel, errors and faults; per system the pools, memory,
  * the run queue, overdue timers, delivered events, lost trace records and
  * traces started and sampled, `systems` summed; per host the messages
- * routed and actors migrated. */
+ * routed, actors migrated and `tinyactors.memory.allocated`, the bytes it
+ * holds through its allocator (ta_host_stats.allocated_bytes, read when
+ * `host->size` holds it). */
 typedef struct ta_otlp_stats_input {
     uint32_t size;
     uint32_t chart_count;

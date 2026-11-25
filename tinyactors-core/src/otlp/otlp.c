@@ -2305,6 +2305,11 @@ static const otlp_series OTLP_HOST_SERIES[] = {
      OTLP_FIELD(ta_host_stats, routed), 0, 0},
     {"tinyactors.actors.migrated", "{actor}", TA_OTLP_METRIC_SUM,
      OTLP_FIELD(ta_host_stats, migrated), 0, 0},
+    /* every byte the host holds through its allocator, the regions among
+     * them: a metric of its own, since a point of tinyactors.memory.usage
+     * beside the region would count the region twice in their sum */
+    {"tinyactors.memory.allocated", "By", TA_OTLP_METRIC_GAUGE,
+     OTLP_FIELD(ta_host_stats, allocated_bytes), 0, 0},
 };
 
 static int otlp_same(const char *a, const char *b) {
@@ -2382,9 +2387,13 @@ static ta_status otlp_stats_put(ta_otlp *otlp, const ta_otlp_stats_input *input)
                         (uint32_t)(sizeof OTLP_SYSTEM_SERIES / sizeof OTLP_SYSTEM_SERIES[0]),
                         input->systems, input->system_count, (uint32_t)sizeof(ta_system_stats), 0);
     if (status != TA_OK || !input->host) return status;
-    return otlp_series_put(otlp, input, OTLP_HOST_SERIES,
-                           (uint32_t)(sizeof OTLP_HOST_SERIES / sizeof OTLP_HOST_SERIES[0]),
-                           input->host, 1, (uint32_t)sizeof(ta_host_stats), 0);
+    /* the series a caller's ta_host_stats holds (its size): an older one stops sooner */
+    uint32_t series = 0;
+    while (series < sizeof OTLP_HOST_SERIES / sizeof OTLP_HOST_SERIES[0] &&
+           OTLP_HOST_SERIES[series].offset + OTLP_HOST_SERIES[series].width <= input->host->size)
+        series++;
+    return otlp_series_put(otlp, input, OTLP_HOST_SERIES, series, input->host, 1,
+                           (uint32_t)sizeof(ta_host_stats), 0);
 }
 
 ta_status ta_otlp_add_stats(ta_otlp *otlp, const ta_otlp_stats_input *input) {
