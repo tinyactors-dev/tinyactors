@@ -797,9 +797,12 @@
             "routed": {"$ref": "#/$defs/uint64"},
             "migrated": {"$ref": "#/$defs/uint64"},
             "retired": {"$ref": "#/$defs/uint64"},
-            "fuelClock": {"$ref": "#/$defs/uint64"}
+            "fuelClock": {"$ref": "#/$defs/uint64"},
+            "allocatedBytes": {"$ref": "#/$defs/uint64"},
+            "allocatedPeak": {"$ref": "#/$defs/uint64"},
+            "allocations": {"$ref": "#/$defs/uint64"}
           },
-          "required": ["segments", "actors", "hibernated", "runnable", "migrations", "regionBytes", "delivered", "routed", "migrated", "retired", "fuelClock"],
+          "required": ["segments", "actors", "hibernated", "runnable", "migrations", "regionBytes", "delivered", "routed", "migrated", "retired", "fuelClock", "allocatedBytes", "allocatedPeak", "allocations"],
           "additionalProperties": false
         },
         "pools": {
