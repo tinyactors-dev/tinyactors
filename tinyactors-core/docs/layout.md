@@ -58,6 +58,8 @@ implementation of that layer). Layer dependency rules are in
 │   ├── cli/                   freestanding, for the tools: not in a released library
 │   │   ├── arguments.[ch]     ✅ a command line read against a program's commands and options
 │   │   ├── report.[ch]        ✅ a command's answer as one tree, written as markdown, json or xml
+│   │   ├── decimal.[ch]       ✅ a number's text as the nearest double: Go's strconv.ParseFloat, ported
+│   │   ├── json.[ch]          ✅ JSON text to one CBOR item and back (RFC 8949, sections 6.1 and 6.2)
 │   │
 │   ├── analysis/              for the tools: not in a released library (tests/unit/test_analysis.c)
 │   │   ├── analysis.h         ✅ lint's findings and the shortest path to a state, read from an image
@@ -164,6 +166,9 @@ implementation of that layer). Layer dependency rules are in
 │
 ├── tests/
 │   ├── harness/harness.h      ✅ dependency-free test macros
+│   ├── json/                  ✅ numbers/: numbers' text and the doubles they read as (Go's vectors, hard
+│   │                             cases, a sample of parse-number-fxx-test-data); values.txt: the JSON
+│   │                             each value of the suite's values.txt writes
 │   ├── support/               ✅ datamodel_test (ECMAScript-subset test datamodel) and the W3C tests it
 │   │                             does not pass (datamodel_test_w3c_skip.txt), compile/system/file
 │   │                             helpers, payloads as text

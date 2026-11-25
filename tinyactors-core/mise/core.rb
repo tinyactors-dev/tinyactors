@@ -88,9 +88,11 @@ module Core
     Layer.new(name: 'host', uses: %w[system otlp], freestanding: true, sources: %w[src/host/host.c src/host/telemetry.c src/host/request.c src/host/definitions.c src/host/session_map.c]),
     Layer.new(name: 'runtime', uses: %w[system compile], sources: %w[src/runtime/runtime.c src/runtime/runtime_hosted.c]),
     # The command line, for the tools: the words read against a program's
-    # commands and options, and a report written as Markdown, JSON or XML
-    # (src/cli). Freestanding; not in a released library.
-    Layer.new(name: 'cli', uses: %w[base], freestanding: true, sources: %w[src/cli/arguments.c src/cli/report.c]),
+    # commands and options, a report written as Markdown, JSON or XML, and
+    # JSON text read into CBOR and written from it, its numbers read by a
+    # port of Go's strconv (src/cli). Freestanding; not in a released library.
+    Layer.new(name: 'cli', uses: %w[base], freestanding: true,
+              sources: %w[arguments report decimal json].map { |s| "src/cli/#{s}.c" }),
     # A statechart drawn: scxmljs's layout of nested boxes and orthogonal
     # routes, ported (src/diagram/diagram.h). Freestanding; not in a
     # released library.
@@ -246,6 +248,14 @@ module Core
     unit('test_cli_report', 'cli'),
     # The schema checker against the generator's fixture cases.
     unit('test_schema_check', 'tool', generated: %w[schema_fixtures]),
+    # Numbers' text as doubles against tests/json/numbers (--full: more round
+    # trips, and parse-number-fxx-test-data once `mise run json:corpus`
+    # fetched it).
+    unit('test_cli_decimal', 'cli', full: true,
+                                    defines: { 'TA_JSON_NUMBERS' => ROOT.join('tests/json/numbers'),
+                                               'TA_JSON_NUMBERS_CORPUS' => BUILD.join('parse-number-fxx-test-data') }),
+    unit('test_cli_json', 'cli', defines: { 'TA_VALUES' => SUITE.join('suites/protocol/values.txt'),
+                                            'TA_JSON_VALUES' => ROOT.join('tests/json/values.txt') }),
     unit('test_diagram', 'svg'),
     unit('test_analysis', 'analysis', 'compile'),
     unit('test_table', 'base'),

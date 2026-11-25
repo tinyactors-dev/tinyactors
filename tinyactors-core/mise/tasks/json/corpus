@@ -1,0 +1,54 @@
+#!/usr/bin/env ruby
+#MISE description="Fetch Nigel Tao's parse-number-fxx-test-data (5.3 million numbers and their doubles, Apache-2.0) into build/, for test_cli_decimal --full"
+# vim:ft=ruby
+
+# The corpus is too big to commit (about 200 MB); tests/json/numbers holds a
+# seeded sample of it, which the fast pass reads. `mise run test --full`
+# reads every file when this task fetched them, pinned by commit and
+# checksum.
+
+require_relative '../../core'
+require 'digest'
+require 'fileutils'
+require 'net/http'
+
+COMMIT = '55d79b184b7d8fac2e143e89dc19b766ec4e54b8'
+BASE = "https://raw.githubusercontent.com/nigeltao/parse-number-fxx-test-data/#{COMMIT}/data/"
+FILES = {
+  'freetype-2-7' => '107ac506a0fb6af384b731019f83e184c27bd384364528ff18cd3720681eee66',
+  'google-double-conversion' => '734ac4ea2034818681b76e50623da8fd6a5d66799378cf696b5f110cade5d087',
+  'google-wuffs' => '7d648e3fadd7d75707743c1f091f5e005596aaae44d79b3fd9a960fa79d64605',
+  'ibm-fpgen' => 'a2bb29cfb648f9ebfe153fe03e3113ed682f7efed5950c56e167fc90fed1e835',
+  'lemire-fast-double-parser' => '2f3c6e0afa2bb6d641595dcbb095cfb10466ab871cca261f495524ac90f095a6',
+  'lemire-fast-float' => 'f68aab81b870cffa4606d481f7b841e5dce567a44297fe55d9c79ea77e0fbe4b',
+  'more-test-cases' => 'ea87ec4945712ecad563ba8f728c015d4ae68bed92ab128a8b440b0abf168148',
+  'remyoudompheng-fptest-0' => '9eb7c06fd33084c8edee4c22b191752ecf9b51f3dcfe0bffa16a244aca9f2533',
+  'remyoudompheng-fptest-1' => 'cd4e15a09424575287a5f6cd5479ec098109ace7402611c126b0cb9addcdae36',
+  'remyoudompheng-fptest-2' => '01cdab4298e0441de4ee6e52fa24dac765eaebaf74d8bb1ae4b8615f0c223a44',
+  'remyoudompheng-fptest-3' => 'a1c3bd437ad173b426c725f6bd982b07f722cb2f7a525685c3b8a2fed439614c',
+  'tencent-rapidjson' => '227476db6faf338c0e62efbed51f79c1ddacc63e297fef1b284ea0e9648d3b7b',
+  'ulfjack-ryu' => '5c54633e8301c6ba3e9b9b5c5f6f7e0884cd2311418f2da6f2f9864d274be86c'
+}.freeze
+DESTINATION = Core::BUILD.join('parse-number-fxx-test-data')
+
+def download(uri, redirects = 5)
+  abort "too many redirects downloading #{uri}" if redirects.zero?
+  response = Net::HTTP.get_response(uri)
+  return response.body if response.is_a?(Net::HTTPSuccess)
+  return download(URI.join(uri, response['location']), redirects - 1) if response.is_a?(Net::HTTPRedirection)
+
+  abort "download of #{uri} failed: HTTP #{response.code} #{response.message}"
+end
+
+FileUtils.mkdir_p(DESTINATION)
+FILES.each do |name, sha256|
+  path = DESTINATION.join("#{name}.txt")
+  next if path.file? && Digest::SHA256.file(path).hexdigest == sha256
+
+  body = download(URI("#{BASE}#{name}.txt"))
+  actual = Digest::SHA256.hexdigest(body)
+  abort "#{name}.txt: checksum mismatch: expected #{sha256}, got #{actual}" unless actual == sha256
+  path.binwrite(body)
+  puts "fetched #{name}.txt"
+end
+puts "parse-number-fxx-test-data #{COMMIT[0, 8]} in #{DESTINATION}"
