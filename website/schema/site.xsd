@@ -524,7 +524,8 @@
       A video demo: a recording of tinyactors doing something end to end,
       made by a program in the repository (website/demos/NAME/, `mise run
       demo NAME`), never filmed by hand. `src` is the MP4 under
-      content/videos/ and `poster` its still; `description` says what the
+      content/videos/ (a .webm of the same name beside it, for browsers
+      without H.264) and `poster` its still; `description` says what the
       video shows (its caption, and what a reader without video reads),
       and each `step` is a moment of it: `at` its time (m:ss), the text what
       the video says then. The steps are the transcript: the page lists

@@ -1,7 +1,7 @@
 // The website on Cloudflare Workers: build/site as static assets. A
 // directory is served as its index.html ("/granary/"), and a path the site
 // does not have gets 404.html with a 404. Code runs in front of the assets
-// for /presence/ticket only (worker.mjs, docs/presence.md). `mise run deploy`.
+// for /presence/ticket and the videos' byte ranges (worker.mjs, docs/presence.md). `mise run deploy`.
 {
   "name": "tinyactors-website",
   "compatibility_date": "2026-09-01",
@@ -10,7 +10,7 @@
   "assets": {
     "directory": "build/site",
     "binding": "ASSETS",
-    "run_worker_first": ["/presence/*"],
+    "run_worker_first": ["/presence/*", "/assets/videos/*"],
     "html_handling": "auto-trailing-slash",
     "not_found_handling": "404-page"
   },

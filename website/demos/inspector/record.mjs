@@ -29,7 +29,7 @@ let started = 0;
   const wait = (ms) => page.waitForTimeout(ms);
   const caption = async (text, ms = 3500) => {
     if (text) steps.push({ at: Math.max(0, Math.round((Date.now() - started) / 1000)), text });
-    await page.evaluate((t) => { const c = document.getElementById('__caption'); if (!c) return; c.textContent = t; c.style.opacity = t ? '1' : '0'; }, text);
+    await page.evaluate((t) => { const c = document.querySelector('#__caption'); if (!c) return; c.textContent = t; c.style.opacity = t ? '1' : '0'; }, text);
     if (ms) await wait(ms);
   };
   const glide = async (locator, opts = {}) => {

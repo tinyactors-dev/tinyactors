@@ -13,7 +13,7 @@
 # 2. The built site is served with the demo's files under /demo/<name>/,
 #    and record.mjs plays the flow in Chromium (the environment's
 #    Playwright), writing a WebM and steps.json: each caption and its time.
-# 3. ffmpeg encodes content/videos/<name>.mp4 (H.264, faststart) and takes
+# 3. ffmpeg encodes content/videos/<name>.mp4 (H.264, faststart) and .webm (VP9), and takes
 #    the poster at a third of the video; the steps are printed as the
 #    <step> elements of the page's <demo>, to paste when the timing moved.
 require 'json'
@@ -68,6 +68,9 @@ Dir.mktmpdir('demo') do |dir|
   mp4 = videos.join("#{name}.mp4")
   Website.run('ffmpeg', '-v', 'error', '-y', '-i', webm, '-c:v', 'libx264', '-preset', 'slow', '-crf', '24',
               '-pix_fmt', 'yuv420p', '-movflags', '+faststart', '-an', mp4)
+  # VP9 beside it, for browsers without H.264 (Chromium builds on Linux).
+  Website.run('ffmpeg', '-v', 'error', '-y', '-i', webm, '-c:v', 'libvpx-vp9', '-b:v', '0', '-crf', '40', '-row-mt', '1',
+              '-an', videos.join("#{name}.webm"))
   duration, = Website.capture('ffprobe', '-v', 'error', '-show_entries', 'format=duration', '-of', 'csv=p=0', mp4)
   Website.run('ffmpeg', '-v', 'error', '-y', '-ss', (Float(duration) / 3).round(1), '-i', mp4, '-frames:v', '1',
               '-q:v', '3', videos.join("#{name}.jpg"))

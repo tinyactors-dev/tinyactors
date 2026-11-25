@@ -8,6 +8,7 @@
 
 import { createServer } from 'node:http';
 import { readFile, stat } from 'node:fs/promises';
+import { ranged } from '../range.mjs';
 import { extname, join, normalize } from 'node:path';
 
 const [root = 'build/site', port = '4321'] = process.argv.slice(2);
@@ -25,6 +26,9 @@ const types = {
   '.woff2': 'font/woff2',
   '.xml': 'application/xml; charset=utf-8',
   '.txt': 'text/plain; charset=utf-8',
+  '.mp4': 'video/mp4',
+  '.webm': 'video/webm',
+  '.jpg': 'image/jpeg',
 };
 
 const isFile = async (path) => (await stat(path).catch(() => null))?.isFile() ?? false;
@@ -51,6 +55,9 @@ createServer(async (request, response) => {
     file = join(root, '404.html');
     status = 404;
   }
-  response.writeHead(status, { 'content-type': types[extname(file)] ?? 'application/octet-stream' });
-  response.end(await readFile(file));
+  const type = types[extname(file)] ?? 'application/octet-stream';
+  if (status === 404) return response.writeHead(404, { 'content-type': type }).end(await readFile(file));
+  const part = ranged(await readFile(file), request.headers.range);
+  response.writeHead(part.status, { 'content-type': type, ...part.headers });
+  response.end(part.body ?? undefined);
 }).listen(Number(port), () => console.log(`website: http://localhost:${port}/ serves ${root}`));

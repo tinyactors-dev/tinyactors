@@ -588,9 +588,12 @@
   <xsl:template match="s:demo">
     <figure class="demo">
       <ta-demo class="demo__frame">
+        <!-- H.264 for Safari and Chrome, VP9 for browsers without H.264 (Chromium builds on Linux) -->
         <video class="demo__video" controls="controls" preload="metadata" playsinline="playsinline"
-               src="{replace(@src, '^\.\./videos/', '/assets/videos/')}"
-               poster="{replace(@poster, '^\.\./videos/', '/assets/videos/')}"></video>
+               poster="{replace(@poster, '^\.\./videos/', '/assets/videos/')}">
+          <source src="{replace(@src, '^\.\./videos/', '/assets/videos/')}" type="video/mp4"/>
+          <source src="{replace(replace(@src, '^\.\./videos/', '/assets/videos/'), '\.mp4$', '.webm')}" type="video/webm"/>
+        </video>
         <ol class="demo__steps">
           <xsl:for-each select="s:step">
             <xsl:variable name="seconds" select="xs:integer(substring-before(@at, ':')) * 60 + xs:integer(substring-after(@at, ':'))"/>
