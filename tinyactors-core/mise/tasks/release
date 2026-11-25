@@ -1,5 +1,5 @@
 #!/usr/bin/env ruby
-#MISE description="Release libtinyactors, libtinyactors_runtime and libtinyactors_datamodel_ecmascript: check, version, build every target with zig cc, verify, pack; with --publish, also tag and create the GitHub release"
+#MISE description="Release libtinyactors, libtinyactors_runtime, libtinyactors_datamodel_ecmascript and the tinyactors command: check, version, build every target with zig cc, verify, pack; with --publish, also tag and create the GitHub release"
 #USAGE arg "<version>" help="The version to release, MAJOR.MINOR.PATCH"
 #USAGE flag "--publish" help="Commit the version, tag tinyactors-core/v<version>, push, and create the GitHub release"
 #USAGE flag "--skip-containers" help="Leave out the Linux container smoke tests (no Docker)"
@@ -60,7 +60,7 @@ end
 # signature in glibc and musl, so a Linux library that links no C library
 # binds to either (decision 10), and libSystem has them on macOS, where
 # Darwin's clang also calls bzero and the fortified __memcpy_chk.
-RUNTIME_LIBC = %w[calloc clock_gettime fclose fopen fread free fseek ftell malloc memchr memmove qsort realloc snprintf strchr
+RUNTIME_LIBC = %w[calloc clock_gettime fclose fopen fread free fseek ftell malloc memchr memmove qsort realloc snprintf strchr strcspn strspn
                   strcmp strlen strncmp vsnprintf].freeze
 DARWIN = %w[bzero __memcpy_chk].freeze
 libc = lambda do |list, linux_only: [], darwin_only: []|
@@ -88,6 +88,22 @@ CRelease.release(
       notices: { 'LICENSE.quickjs' => Core::ROOT.join('third_party/quickjs-ng/LICENSE') },
       wasm_test: ->(wasm) { ['node', tests_dir.join('wasm/release_test.mjs'), wasm, core.api, ecmascript.api] },
       libc_imports: libc.call(Core::ECMASCRIPT_LIBC, linux_only: %w[malloc_usable_size], darwin_only: %w[malloc_size])
+    )
+  ],
+  # The tinyactors command (docs/cli.md), its archive named after the
+  # release repository, tinyactors-core, so that
+  # `mise use github:tinyactors-dev/tinyactors-core` installs it.
+  programs: [
+    CRelease::Program.new(
+      name: 'tinyactors', asset: 'tinyactors-core',
+      sources: Core.link_order(%w[tool]).flat_map { |layer| Core::LAYERS.fetch(layer).sources }
+                   .map { |source| Core::ROOT.join(source).to_s } + [Core::ROOT.join('tools/tinyactors/platform.c').to_s],
+      includes: [Core::ROOT.join('include'), Core::ROOT.join('src')],
+      files: { 'order.scxml' => "<scxml xmlns='http://www.w3.org/2005/07/scxml' name='order' initial='open'>" \
+                                "<state id='open'><transition event='paid' target='paid'/></state>" \
+                                "<final id='paid'/></scxml>\n" },
+      smoke: [%w[version --format json], %w[compile order.scxml -o order.tai], %w[inspect order.tai],
+              %w[transitions --format xml order.tai], %w[graph order.scxml]]
     )
   ],
   directory: 'tinyactors-core',

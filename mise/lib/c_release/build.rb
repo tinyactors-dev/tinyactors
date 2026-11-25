@@ -8,6 +8,7 @@ require 'pathname'
 require 'toolchain'
 require 'platform_files'
 require 'release'
+require 'shellwords'
 
 # The C libraries' release (docs/adr/0001-packaging-and-releases.md,
 # decisions 4, 6, 9 and 16): every target built with `zig cc` from the
@@ -559,13 +560,113 @@ module CRelease
     def name = project.name
   end
 
+  # One program of a release, beside its libraries: built from `sources`
+  # (C files, compiled with `includes`) for each native target with zig cc,
+  # statically where the target's C library allows it (musl on Linux), so
+  # it loads nothing but the platform's runtime (libSystem on macOS). Its
+  # `smoke` (lists of arguments) runs from a directory holding `files`
+  # ({name => text}), on this machine and in a container of each Linux
+  # target; each must exit 0. It is packed as
+  # <asset>-<version>-<target>.tar.gz, one directory holding bin/<name>,
+  # LICENSE and the README, which is what `mise install` of the release
+  # repository's github: backend takes: an asset named after the
+  # repository wins its choice among the release's archives.
+  Program = Data.define(:name, :asset, :sources, :includes, :smoke, :files)
+
+  def build_program(program, target_name, out)
+    target = Toolchain::Target.release(target_name)
+    dir = out.join(target_name)
+    FileUtils.rm_rf(dir)
+    flags = %w[-std=c11 -O2 -g0]
+    objects = program.sources.each_with_index.map do |source, index|
+      object = dir.join('work', "#{index}-#{File.basename(source, '.c')}.o")
+      target.compile(source, into: object, includes: program.includes, flags: flags)
+      object.to_s
+    end
+    binary = dir.join('bin', program.name)
+    target.program(objects, into: binary, flags: %w[-O2 -g0 -s]) # -s: no symbols or debug information
+    FileUtils.rm_rf(dir.join('work'))
+    { target: target, dir: dir, binary: binary }
+  end
+
+  def verify_program!(program, build)
+    Toolchain::Binary.new(build[:binary]).must_be_for!(build[:target]).must_load_only!([])
+    puts "release: #{build[:target].name}: #{program.name} loads nothing but the platform's runtime; architecture right"
+  end
+
+  def smoke_directory(program, build)
+    dir = build[:dir].join('smoke')
+    FileUtils.rm_rf(dir)
+    FileUtils.mkdir_p(dir)
+    program.files.each { |name, text| dir.join(name).write(text) }
+    dir
+  end
+
+  # Runs the smoke on this machine, which must be the build's target.
+  def program_host_smoke!(program, build)
+    dir = smoke_directory(program, build)
+    program.smoke.each { |arguments| capture!(build[:binary].to_s, *arguments, chdir: dir.to_s) }
+    puts "release: #{program.name} #{build[:target].name}: #{program.smoke.size} commands ran on this machine"
+  end
+
+  # Runs the smoke in an Alpine container of the build's Linux target (under
+  # qemu for the other architecture): the binary is static, so musl or not,
+  # nothing but the kernel is needed.
+  def program_container_smoke!(program, build)
+    smoke_directory(program, build)
+    script = program.smoke.map { |arguments| (["/r/bin/#{program.name}"] + arguments).shelljoin }.join(' && ')
+    platform = build[:target].container_platform
+    capture!('docker', 'run', '--rm', '--platform', platform, '-v', "#{build[:dir]}:/r", '-w', '/r/smoke', 'alpine:3',
+             'sh', '-c', script)
+    puts "release: #{program.name} #{build[:target].name} in a #{platform} container: #{program.smoke.size} commands ran"
+  end
+
+  def pack_program(program, version:, builds:, readme:, assets:, commit:, epoch:)
+    staging = assets.join('staging', program.asset)
+    FileUtils.mkdir_p(staging)
+    base = "#{program.asset}-#{version}"
+    packed = []
+    targets = {}
+    builds.each do |build|
+      staged = staging.join("#{base}-#{build[:target].name}")
+      FileUtils.mkdir_p(staged.join('bin'))
+      FileUtils.cp(build[:binary], staged.join('bin'))
+      FileUtils.cp(Release::REPO.join('LICENSE'), staged)
+      FileUtils.cp(readme, staged.join('README.md'))
+      packed << tarball(staging, staged.basename, assets.join("#{staged.basename}.tar.gz"), epoch)
+      targets[build[:target].name] = { 'triple' => build[:target].triple, 'files' => sha256_tree(staged) }
+    end
+    manifest = assets.join("#{base}.json")
+    manifest.write("#{JSON.pretty_generate(
+      'name' => program.name, 'asset' => program.asset, 'version' => version, 'commit' => commit,
+      'source_date_epoch' => epoch.to_i, 'zig' => Toolchain::Tool[:zig].identity, 'targets' => targets,
+      'assets' => packed.to_h { |file| [file.basename.to_s, Digest::SHA256.file(file).hexdigest] }
+    )}\n")
+    FileUtils.rm_rf(staging)
+    packed + [manifest]
+  end
+
+  # Builds, verifies, smoke-tests and packs `program` for every native target.
+  def release_program(program, version:, out:, containers:, readme:, assets:, commit:, epoch:)
+    builds = NATIVE_TARGETS.map { |name| build_program(program, name, out.join('targets', program.asset)) }
+    builds.each { |build| verify_program!(program, build) }
+    host = builds.find { |build| build[:target] == Toolchain::Host.current.target }
+    program_host_smoke!(program, host) if host
+    if containers
+      builds.select { |build| build[:target].container_platform }.each { |build| program_container_smoke!(program, build) }
+    else
+      puts "release: --skip-containers: no Linux container smoke test of #{program.name} ran"
+    end
+    pack_program(program, version: version, builds: builds, readme: readme, assets: assets, commit: commit, epoch: epoch)
+  end
+
   # Stages 3 to 5 of a release for `libraries`, each after those it uses:
   # build every native target and the wasm module, verify them, and pack
   # them into <out>/assets/ with one SHA256SUMS. `dependencies` are fetched
   # releases of other projects (fetch_dependency!). Answers the assets,
   # SHA256SUMS last. A release calls it between tagging and publishing; on
   # its own it is a dry run of the build without the checks.
-  def build_libraries(libraries, version:, out:, containers:, readme:, commit:, epoch:, dependencies: [])
+  def build_libraries(libraries, version:, out:, containers:, readme:, commit:, epoch:, dependencies: [], programs: [])
     assets = out.join('assets')
     FileUtils.rm_rf(assets)
     packed = []
@@ -602,6 +703,10 @@ module CRelease
         dependency: { name: project.name, version: version, api: project.api,
                       targets: natives.to_h { |build| [build[:target].name, build[:dir]] } }
       }
+    end
+    programs.each do |program|
+      packed += release_program(program, version: version, out: out, containers: containers, readme: readme,
+                                         assets: assets, commit: commit, epoch: epoch)
     end
     FileUtils.rm_rf(assets.join('staging'))
     sums = Release.write_sha256sums(packed.map(&:to_s), assets.join('SHA256SUMS'))
@@ -640,7 +745,7 @@ module CRelease
   # `--build-only` runs stages 3 to 5 alone, for a look at the packaging
   # before a release: no checks, no version set, nothing committed, into
   # build/release/<version>/ all the same.
-  def release(libraries:, directory:, title:, argv:, checks:, regenerate:, readme:, dependencies: [])
+  def release(libraries:, directory:, title:, argv:, checks:, regenerate:, readme:, dependencies: [], programs: [])
     publish = !argv.delete('--publish').nil?
     containers = argv.delete('--skip-containers').nil?
     build_only = !argv.delete('--build-only').nil?
@@ -656,7 +761,7 @@ module CRelease
       assets = build_libraries(libraries, version: version, out: out, containers: containers, readme: readme,
                                           commit: Release.git('rev-parse', 'HEAD').to_s.strip,
                                           epoch: Release.git('show', '-s', '--format=%ct', 'HEAD').to_s.strip,
-                                          dependencies: fetched)
+                                          dependencies: fetched, programs: programs)
       puts "release: built #{libraries.map(&:name).join(', ')} #{version} without the checks or a version set; " \
            "#{assets.size} assets in #{out.join('assets').relative_path_from(Release::REPO)}"
       return
@@ -703,7 +808,7 @@ module CRelease
       # 3. Build, 4. verify, 5. pack.
       assets = out.join('assets')
       assets_list = build_libraries(libraries, version: version, out: out, containers: containers, readme: readme,
-                                                commit: commit, epoch: epoch, dependencies: fetched)
+                                                commit: commit, epoch: epoch, dependencies: fetched, programs: programs)
 
       unless publish
         puts <<~DRY

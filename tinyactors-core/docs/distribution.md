@@ -3,7 +3,8 @@
 Core's release is built by `mise run release` in `tinyactors-core`, as
 [ADR 0001](../../docs/adr/0001-packaging-and-releases.md) lays out: **the C
 libraries** libtinyactors, libtinyactors_runtime and
-libtinyactors_datamodel_ecmascript, released together, tagged
+libtinyactors_datamodel_ecmascript, and **the `tinyactors` command**
+([cli.md](cli.md)), released together, tagged
 `tinyactors-core/v<version>` in the monorepo and published as `v<version>`
 on the GitHub releases page of `tinyactors-dev/tinyactors-core`. Each
 release and its date is a section of [CHANGELOG.md](../CHANGELOG.md).
@@ -15,6 +16,42 @@ publishes the wheels of `tinyactors` on PyPI (tags
 `@tinyactors/node`, its platform packages and `@tinyactors/wasm` on npm
 (tags `tinyactors-napi/v<version>`). Their releases are in their own
 `CHANGELOG.md`.
+
+## The tinyactors command
+
+Each release carries the command for every native target, as
+`tinyactors-core-<version>-<target>.tar.gz`: one directory holding
+`bin/tinyactors`, `LICENSE` and `README.md`. On Linux the program is
+static (musl), so it runs on any distribution, glibc or musl; on macOS it
+loads only libSystem, and the arm64 one is signed ad hoc. It is about 200
+KB, built without symbols or debug information, and the same bytes for
+the same commit.
+
+The archive is named after the release repository, so mise's `github:`
+backend picks it among the release's archives with no options (an asset
+whose name starts with the repository's name scores above the libraries'
+`tinyactors-<version>-...`), puts its `bin/` on `PATH`, and checks it
+against the release's `SHA256SUMS`:
+
+```sh
+mise use github:tinyactors-dev/tinyactors-core            # the latest release
+mise use github:tinyactors-dev/tinyactors-core@0.4.0
+```
+
+or in a project's `mise.toml`:
+
+```toml
+[tools]
+"github:tinyactors-dev/tinyactors-core" = "latest"
+```
+
+The release builds it from the same sources as `mise run build` (the
+tool layer and the layers it uses, and `tools/tinyactors/platform.c`)
+with the pinned zig, checks that each binary is for its architecture and
+loads nothing but the platform's runtime, runs a few commands with this
+machine's (version, compile, inspect, transitions, graph), and runs them
+again in an Alpine container of each Linux architecture unless
+`--skip-containers`.
 
 ## Release targets
 
@@ -68,6 +105,8 @@ Each library's release assets, in `build/release/<version>/assets/`:
 | `<library>-<version>-wasm32.tar.gz` | `<library>.wasm`, which imports nothing, the headers in `include/`, and `LICENSE` |
 | `<library>-<version>.json` | the manifest: version, commit, source date, zig, the API description's hash, each target's triple, flags and file hashes, and every asset's hash |
 
+and the command's: `tinyactors-core-<version>-<target>.tar.gz` for each
+native target and its manifest `tinyactors-core-<version>.json`;
 plus one `SHA256SUMS` for all of them. The tarballs are deterministic
 (sorted entries, the commit's time, no owners). They hold no CMake or
 pkg-config files. The runtime's and the data model's libraries leave

@@ -7,6 +7,17 @@ library one block of mutable memory sized from that image; plug in a
 datamodel; drive it with `send / run(budget) / advance_time / resume`, and
 drain tagged effects.
 
+The `tinyactors` command compiles charts and system manifests into images
+and looks into them: their states, transitions, events, executable
+content, a diagram, and what changed between two versions
+([docs/cli.md](docs/cli.md)). Each release carries it for Linux and macOS;
+install it with [mise](https://mise.jdx.dev):
+
+```sh
+mise use github:tinyactors-dev/tinyactors-core
+tinyactors help
+```
+
 - [docs/architecture.md](docs/architecture.md) — design, conflicts, building blocks, ABI
 - [docs/concurrency.md](docs/concurrency.md) — concurrency and parallelism: what runs when,
   what you can rely on, from one actor to many systems, and what each transport
@@ -17,8 +28,10 @@ drain tagged effects.
   as CBOR, and other systems through the host's transport
 - [docs/scenarios.md](docs/scenarios.md) — twelve execution walkthroughs
 - [docs/layout.md](docs/layout.md) — file tree, tooling, tasks
-- [docs/distribution.md](docs/distribution.md) — what is released (the C libraries), the
-  release targets and tasks
+- [docs/cli.md](docs/cli.md) — the `tinyactors` command: compile, check, inspect, disassemble,
+  graph and diff charts, manifests and images
+- [docs/distribution.md](docs/distribution.md) — what is released (the C libraries and the
+  command), the release targets and tasks
 - [docs/bindings.md](docs/bindings.md) — writing a binding: the queue loop, effects and
   the drain rule, posted messages, values and other systems, what a binding owns and what it
   must not do
@@ -28,7 +41,7 @@ drain tagged effects.
   environment of pointers
 
 The release version is `TA_VERSION_MAJOR`, `_MINOR` and `_PATCH` in
-`include/tinyactors/types.h` (currently 0.2.0). The build and its tasks
+`include/tinyactors/types.h`. The build and its tasks
 are Ruby, on the repository's pinned toolchain (`mise/core.rb`,
 [layout.md](docs/layout.md#tasks)):
 
