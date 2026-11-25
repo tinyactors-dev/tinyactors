@@ -86,8 +86,15 @@ A page is a hero and sections. Each section has a heading and blocks:
   package at a time, behind the install commands' tabs (the reader's
   platform holds), and one file at a time, a chart's file followed by its
   diagram. Its programs live in one directory under `examples/`, which
-  `mise run test` runs as `main.mjs` and, with a `pyproject.toml` and
-  `uv.lock`, as `main.py` too: each must print `output.txt`.
+  `mise run test` runs: `main.mjs`; `browser.mjs` under Node.js with
+  `tools/file-fetch.mjs`, so its `fetch` of the chart beside it reads the
+  file; `main.py` with uv, against its `uv.lock`; and `main.c`, built with
+  the pinned clang against tinyactors-core's newest release libraries
+  (downloaded once into `build/c/`, checked against the release's
+  `SHA256SUMS`). Each must print `output.txt`. A `<diagram chart>` makes
+  the chart's diagram run as the programs do: an `<event name data>` is
+  what clicking that event's label sends, and an `<answer type event
+  with>` is how the stand-in for an I/O processor replies.
 - **A live example runs in the browser.** `<live src call>` names an
   export of a module under `examples/`, run by a button whose `<label>` is
   the content's. The build serves the module with `@tinyactors/wasm` at

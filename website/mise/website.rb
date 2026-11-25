@@ -3,6 +3,7 @@
 require 'digest'
 require 'fileutils'
 require 'json'
+require 'net/http'
 require 'open3'
 require 'pathname'
 require 'toolchain'
@@ -41,6 +42,53 @@ module Website
   def run(*command, chdir: ROOT, env: {})
     puts "$ #{command.join(' ')}"
     system(env, *command.map(&:to_s), chdir: chdir.to_s) or fail!("#{command.first} failed")
+  end
+
+  # The C libraries an example's main.c links, in link order: the
+  # ECMAScript datamodel and the runtime leave libtinyactors's API undefined.
+  C_LIBRARIES = %w[tinyactors_datamodel_ecmascript tinyactors_runtime tinyactors].freeze
+
+  # The C libraries of tinyactors-core's newest release, for this machine:
+  # each tarball checked against the release's SHA256SUMS and unpacked once
+  # into build/c/<version>/<target>/<library>/ (include/ and lib/), as a
+  # reader who installs them has them.
+  def c_release
+    version = REPO.join('tinyactors-core/CHANGELOG.md').read[/^## \[([^\]]+)\] - /, 1]
+    target = Toolchain::Host.current.target.name
+    dir = BUILD.join('c', version, target)
+    return dir if C_LIBRARIES.all? { |library| dir.join(library, 'lib', "lib#{library}.a").file? }
+
+    base = "https://github.com/tinyactors-dev/tinyactors-core/releases/download/v#{version}/"
+    sums = download("#{base}SHA256SUMS").lines.to_h { |line| line.split.reverse }
+    C_LIBRARIES.each do |library|
+      name = "#{library}-#{version}-#{target}.tar.gz"
+      tarball = download(base + name)
+      fail!("#{name}: its SHA-256 is not the release's") unless Digest::SHA256.hexdigest(tarball) == sums[name]
+      FileUtils.mkdir_p(dir.join(library))
+      Toolchain::Tool[:tar].run('-xz', '--strip-components=1', '-C', dir.join(library), stdin: tarball, binary: true)
+    end
+    dir
+  end
+
+  # An example's main.c, built against c_release with the pinned clang
+  # (warnings are errors) into build/c/programs/<name>.
+  def c_program(dir, name)
+    release = c_release
+    flags = ['-std=c11', '-Wall', '-Wextra', '-Werror', '-Wconversion', '-Wshadow',
+             *C_LIBRARIES.map { |library| "-I#{release.join(library, 'include')}" }]
+    libraries = C_LIBRARIES.map { |library| release.join(library, 'lib', "lib#{library}.a").to_s }
+    into = BUILD.join('c', 'programs', name)
+    Toolchain::Target.host.program([dir.join('main.c').to_s, *libraries, '-lm'], into: into.to_s, flags: flags)
+    into
+  end
+
+  # The body at `url`, following the redirects of a release asset.
+  def download(url, redirects = 5)
+    response = Net::HTTP.get_response(URI(url))
+    return response.body if response.is_a?(Net::HTTPSuccess)
+    return download(response['location'], redirects - 1) if response.is_a?(Net::HTTPRedirection) && redirects.positive?
+
+    fail!("#{url}: #{response.code}")
   end
 
   # `command`'s output and whether it succeeded, without failing.

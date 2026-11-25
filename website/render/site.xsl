@@ -23,7 +23,8 @@
                 xmlns:xs="http://www.w3.org/2001/XMLSchema"
                 xmlns:s="https://www.tinyactors.dev/ns/site"
                 xmlns:f="https://www.tinyactors.dev/ns/site/functions"
-                exclude-result-prefixes="xs s f"
+                xmlns:map="http://www.w3.org/2005/xpath-functions/map"
+                exclude-result-prefixes="xs s f map"
                 expand-text="yes">
 
   <xsl:include href="markdown.xsl"/>
@@ -600,7 +601,15 @@
       <xsl:for-each select="$tabs">
         <xsl:choose>
           <xsl:when test="exists(?chart)">
-            <div role="tabpanel" id="{?id}-panel" aria-labelledby="{?id}-tab" class="chart__diagram" data-src="{f:url(?chart/@src)}" hidden="hidden"></div>
+            <xsl:variable name="diagram" select="?chart/../../s:diagram[@chart = current()?chart/@file]"/>
+            <div role="tabpanel" id="{?id}-panel" aria-labelledby="{?id}-tab" class="chart__diagram" data-src="{f:url(?chart/@src)}" hidden="hidden">
+              <xsl:if test="$diagram/s:event">
+                <xsl:attribute name="data-event-data" select="serialize(map:merge($diagram/s:event ! map { string(@name): parse-json(@data) }), map { 'method': 'json' })"/>
+              </xsl:if>
+              <xsl:if test="$diagram/s:answer">
+                <xsl:attribute name="data-replies" select="serialize(array { $diagram/s:answer ! map { 'type': string(@type), 'event': string(@event), 'with': string(@with) } }, map { 'method': 'json' })"/>
+              </xsl:if>
+            </div>
           </xsl:when>
           <xsl:otherwise>
             <div role="tabpanel" id="{?id}-panel" aria-labelledby="{?id}-tab">

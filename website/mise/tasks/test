@@ -1,6 +1,6 @@
 #!/usr/bin/env ruby
 #MISE description="Test the website: the content against its schema, the refusals the schema and the build must make, the build's internal links and anchors, and every example a page shows, run"
-#MISE sources=["content/**/*", "presence/**/*.{mjs,scxml,json}", ".agents/skills/ant-animation/scripts/ant.mjs", "schema/**/*", "render/**/*", "style/**/*", "icons/**/*", "components/**/*", "../tinyactors-napi/docs/guide/*.md", "../tinyactors-napi/CHANGELOG.md", "../tinyactors-cpython/CHANGELOG.md", "../tinyactors-core/CHANGELOG.md", "examples/**/*.{scxml,mjs,py,txt,json,toml,lock}", "test/**/*", "tools/**/*", "package.json", "package-lock.json", "mise/website.rb", "mise/tasks/*", "../.agents/skills/tinyactors-design/styles.css", "../.agents/skills/tinyactors-design/tokens/**/*", "../.agents/skills/tinyactors-design/components/components.css", "../.agents/skills/tinyactors-design/assets/**/*"]
+#MISE sources=["content/**/*", "presence/**/*.{mjs,scxml,json}", ".agents/skills/ant-animation/scripts/ant.mjs", "schema/**/*", "render/**/*", "style/**/*", "icons/**/*", "components/**/*", "../tinyactors-napi/docs/guide/*.md", "../tinyactors-napi/CHANGELOG.md", "../tinyactors-cpython/CHANGELOG.md", "../tinyactors-core/CHANGELOG.md", "examples/**/*.{scxml,mjs,py,c,txt,json,toml,lock}", "test/**/*", "tools/**/*", "package.json", "package-lock.json", "mise/website.rb", "mise/tasks/*", "../.agents/skills/tinyactors-design/styles.css", "../.agents/skills/tinyactors-design/tokens/**/*", "../.agents/skills/tinyactors-design/components/components.css", "../.agents/skills/tinyactors-design/assets/**/*"]
 #MISE outputs={auto=true}
 # vim:ft=ruby
 
@@ -178,8 +178,12 @@ puts "website: #{purposes.size} pages name their kind and #{linked} audience lin
 
 # 4. The examples, run: every directory under examples/ that holds an
 #    output.txt is a program, its package.json's "main" or main.mjs; with
-#    a pyproject.toml it holds main.py too, run with uv against its
-#    uv.lock (the PyPI package), which must print the same output.txt.
+#    a browser.mjs, that too, under Node.js with tools/file-fetch.mjs (its
+#    fetch of the chart beside it reads the file); with a pyproject.toml it
+#    holds main.py too, run with uv against its
+#    uv.lock (the PyPI package), and with a main.c that too, built against
+#    tinyactors-core's newest release (Website.c_release): each must print
+#    the same output.txt.
 programs = Website::EXAMPLES.glob('*/**/output.txt').map(&:dirname).sort
 Website::EXAMPLES.children.select(&:directory?).each do |root|
   next if !root.join('package.json').file? || root.join('node_modules/.package-lock.json').file?
@@ -198,6 +202,14 @@ programs.each do |dir|
   elsif out != want
     failures << "examples/#{name}: #{main} printed\n#{out}but output.txt says\n#{want}"
   end
+  if dir.join('browser.mjs').file?
+    out, ok = Website.capture('node', '--import', Website::ROOT.join('tools/file-fetch.mjs'), 'browser.mjs', chdir: dir)
+    if !ok
+      failures << "examples/#{name}: browser.mjs failed:\n#{out}"
+    elsif out != want
+      failures << "examples/#{name}: browser.mjs printed\n#{out}but output.txt says\n#{want}"
+    end
+  end
   next unless dir.join('pyproject.toml').file?
 
   Website.fail!("examples/#{name}: a pyproject.toml, but no main.py") unless dir.join('main.py').file?
@@ -207,9 +219,24 @@ programs.each do |dir|
   elsif out != want
     failures << "examples/#{name}: main.py printed\n#{out}but output.txt says\n#{want}"
   end
+  next unless dir.join('main.c').file?
+
+  begin
+    program = Website.c_program(dir, name.to_s.tr('/', '-'))
+    out, ok = Website.capture(program, chdir: dir)
+    if !ok
+      failures << "examples/#{name}: main.c's program failed:\n#{out}"
+    elsif out != want
+      failures << "examples/#{name}: main.c printed\n#{out}but output.txt says\n#{want}"
+    end
+  rescue Toolchain::Error => e
+    failures << "examples/#{name}: main.c did not build:\n#{e.message}"
+  end
 end
-python = programs.count { |dir| dir.join('pyproject.toml').file? }
-puts "website: #{programs.size} example programs ran and printed their output.txt, #{python} of them in Python too"
+also = { 'browsers' => 'browser.mjs', 'Python' => 'pyproject.toml', 'C' => 'main.c' }
+            .map { |language, file| "#{programs.count { |dir| dir.join(file).file? }} in #{language}" }
+puts "website: #{programs.size} example programs ran and printed their output.txt, and of them #{also.join(', ')} too " \
+     "(tinyactors-core #{Website.c_release.parent.basename})"
 
 # 4b. The version the site advertises is published: the newest release in
 #     tinyactors-napi's changelog is the @tinyactors/wasm every example

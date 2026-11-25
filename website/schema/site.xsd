@@ -664,10 +664,44 @@
             <xs:assert test="(: one file of each name :) count(distinct-values(*:code/@file)) = count(*:code)"/>
           </xs:complexType>
         </xs:element>
+        <xs:element ref="diagram" minOccurs="0" maxOccurs="unbounded"/>
         <xs:element ref="code"/>
       </xs:sequence>
+      <xs:assert test="(: a diagram is of a chart the programs read :) every $diagram in *:diagram satisfies $diagram/@chart = *:in/*:code[@language = 'scxml']/@file"/>
       <xs:assert test="(: one program per package :) count(distinct-values(*:in/@package)) = count(*:in)"/>
       <xs:assert test="(: it ends with what the programs print :) *:code[last()]/@role = 'output'"/>
+    </xs:complexType>
+  </xs:element>
+
+  <xs:element name="diagram">
+    <xs:annotation><xs:documentation>
+      How the diagram of a program's chart (`chart`, its file) behaves when
+      a reader runs it, so it runs as the programs do: an `event`'s `data`
+      (a JSON object) is what clicking a transition's label for that event
+      sends, and an `answer` is what the stand-in for an I/O processor
+      (`type`) sends back when the chart sends it `event`: the event `with`,
+      as the programs' processors answer. Without them a label sends no data
+      and the reader answers each processor by clicking the label of its
+      reply.
+    </xs:documentation></xs:annotation>
+    <xs:complexType>
+      <xs:sequence>
+        <xs:element name="event" minOccurs="0" maxOccurs="unbounded">
+          <xs:complexType>
+            <xs:attribute name="name" type="xs:token" use="required"/>
+            <xs:attribute name="data" type="xs:string" use="required"/>
+            <xs:assert test="(: data is a JSON object :) parse-json(@data) instance of map(*)"/>
+          </xs:complexType>
+        </xs:element>
+        <xs:element name="answer" minOccurs="0" maxOccurs="unbounded">
+          <xs:complexType>
+            <xs:attribute name="type" type="xs:token" use="required"/>
+            <xs:attribute name="event" type="xs:token" use="required"/>
+            <xs:attribute name="with" type="xs:token" use="required"/>
+          </xs:complexType>
+        </xs:element>
+      </xs:sequence>
+      <xs:attribute name="chart" type="xs:token" use="required"/>
     </xs:complexType>
   </xs:element>
 

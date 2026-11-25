@@ -28,10 +28,22 @@
         <code src="../../examples/order/main.mjs" language="javascript" file="main.mjs"/>
         <code src="../../examples/order/order.scxml" language="scxml" file="order.scxml"/>
       </in>
+      <in package="wasm">
+        <code src="../../examples/order/browser.mjs" language="javascript" file="browser.mjs"/>
+        <code src="../../examples/order/order.scxml" language="scxml" file="order.scxml"/>
+      </in>
       <in package="python">
         <code src="../../examples/order/main.py" language="python" file="main.py"/>
         <code src="../../examples/order/order.scxml" language="scxml" file="order.scxml"/>
       </in>
+      <in package="c">
+        <code src="../../examples/order/main.c" language="c" file="main.c"/>
+        <code src="../../examples/order/order.scxml" language="scxml" file="order.scxml"/>
+      </in>
+      <diagram chart="order.scxml">
+        <event name="add" data='{"price": 12}'/>
+        <answer type="payments" event="charge" with="charged"/>
+      </diagram>
       <code src="../../examples/order/output.txt" language="text" role="output"/>
     </program>
   </section>

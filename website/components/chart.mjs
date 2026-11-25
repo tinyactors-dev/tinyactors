@@ -11,6 +11,11 @@
 // type a chart sends to gets a stand-in, which keeps what it receives and
 // shows it under the diagram: the reader sees what the payment service was
 // asked, and plays the service by clicking the answer's label (charged).
+// A program's diagram may say more (its <diagram> in the content): the
+// panel's data-event-data is what a label's click sends for each event
+// ({"add": {"price": 12}}), and data-replies what each stand-in answers,
+// as the programs' processors do ([{type, event, with}]): it delivers
+// `with` to the chart once the send's step is over.
 
 const SCXML = new Set(['scxml', 'http://www.w3.org/TR/scxml/#SCXMLEventProcessor']);
 const KEEP = 20; // the newest messages a stand-in lists
@@ -21,8 +26,8 @@ function sendTypes(text) {
   return [...new Set(types)].filter((type) => !SCXML.has(type));
 }
 
-/** A stand-in for the processor of `type`, and the panel that shows what it received. */
-function standIn(type) {
+/** A stand-in for the processor of `type`, and the panel that shows what it received; `answers` are its replies. */
+function standIn(type, answers = []) {
   const received = [];
   let started = performance.now();
   const count = el('span', { class: 'processor__count' });
@@ -51,9 +56,11 @@ function standIn(type) {
     processor: {
       type,
       location: (session) => `${type}#${session.sessionId}`,
-      send(message) {
+      send(message, session) {
         received.push({ at: performance.now() - started, event: message.event, target: message.target, data: message.data });
         render();
+        const answer = answers.find((candidate) => candidate.event === message.event);
+        if (answer) setTimeout(() => session.deliver(answer.with), 0);
       },
     },
   };
@@ -85,12 +92,14 @@ async function mount(panel) {
   const [text] = await Promise.all([fetch(src).then((response) => response.text()), import('@tinyactors/scxmljs/view')]);
   if (panel.querySelector('scxml-view')) return;
   const view = document.createElement('scxml-view');
-  const standIns = sendTypes(text).map(standIn);
+  const answers = JSON.parse(panel.dataset.replies ?? '[]');
+  const standIns = sendTypes(text).map((type) => standIn(type, answers.filter((answer) => answer.type === type)));
   view.options = { ioprocessors: standIns.map((stand) => stand.processor) };
   view.addEventListener('scxml-load', () => standIns.forEach((stand) => stand.restart()));
   view.setAttribute('src', src);
   view.setAttribute('fit', '');
   view.setAttribute('warnings', 'off');
+  if (panel.dataset.eventData) view.setAttribute('event-data', panel.dataset.eventData);
   view.addEventListener('scxml-load', () => enlarge(view, panel), { once: true });
   panel.append(view);
   const again = el('button', { type: 'button', class: 'ta-btn ta-btn--secondary ta-btn--sm' }, 'Run again');
