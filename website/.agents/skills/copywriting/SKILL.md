@@ -117,6 +117,16 @@ Each has examples in `references/patterns.md`.
     store…". The maintainer has flagged this more than once: check every
     list item and card that describes a feature for its problem.
 
+21. **Naming the audience.** "For the operator", "as a tech lead", "if you
+    run agents in production": the roles in `site.xml` are the writer's
+    target, never words on the page (the maintainer, 2026-11-25). Choose
+    what to explain for that role and say it plainly.
+22. **Explaining how the site is made.** "Each page below is made from
+    the command's own help", "from the help of version X, which wrote
+    everything on this page": the reader does not care how a page is
+    built. Say what the thing does for them (the maintainer, 2026-11-25:
+    "why would the reader care about how this is generated?").
+
 ## How a page is ordered
 
 - **A demo page** leads with the experience: the hero invites the reader

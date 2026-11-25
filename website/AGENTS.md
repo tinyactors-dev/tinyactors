@@ -56,6 +56,17 @@ rules.
   section ends where the next one's question starts. The rest of the
   voice holds: literal, measured, no metaphors or hype; headings stay
   findings of at most 8 words.
+- **Copy never names its audience** (the maintainer, 2026-11-25). The
+  roles a page is written for (the tech lead, the operator, the workflow
+  developer, the agent-platform engineer) are the writer's target and the
+  `<purpose for>` bookkeeping, never words on the page: no "as a tech
+  lead", "for operators" or "if you are an engineer". Write for the role
+  by choosing what to explain; address the reader as "you" where a voice
+  allows it.
+- **Copy never explains how the site is made.** A reader does not care
+  that a page is generated, captured or checked: no "this page is made
+  from the command's help", "examples run at build time" or "from the
+  help of version X". State what the thing does for them.
 - **Every sentence says something.** Use the `copywriting` skill
   (`.agents/skills/copywriting`) before writing or changing copy: a
   headline states a benefit, a heading its finding, a lede the page's
