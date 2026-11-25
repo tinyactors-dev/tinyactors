@@ -274,6 +274,24 @@ static const char ta_python_doc_host_next_deadline[] =
     "no timer, increment the clock by it to move straight to the next thing\n"
     "that happens.";
 
+static const char ta_python_doc_host_quickjs_heap_bytes[] =
+    "The bytes quickjs's heap holds now, every \"ecmascript\" actor's\n"
+    "together, read on each access (cheap): what its 1 GiB limit bounds.\n"
+    "None once the host is closed.";
+
+static const char ta_python_doc_host_quickjs_heap_blocks[] =
+    "The blocks quickjs's heap is in, read on each access (cheap). The C\n"
+    "library keeps a header of two words (16 B on a 64-bit machine) beside\n"
+    "each, so the engine holds quickjs_heap_bytes + 16 * quickjs_heap_blocks\n"
+    "of the process's memory. None once the host is closed.";
+
+static const char ta_python_doc_binding_memory[] =
+    "_binding_memory(host, /)\n"
+    "--\n"
+    "\n"
+    "For the binding's tests, no public API: the bytes, the peak and the\n"
+    "blocks of a Host's own tables, arena and writers.";
+
 static const char ta_python_doc_host_add_image[] =
     "add_image(image, /)\n"
     "--\n"

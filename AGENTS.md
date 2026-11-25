@@ -383,7 +383,7 @@ the program that made it, the date, the machine and the versions.
 | Numbers | Where | Made by |
 |---|---|---|
 | the core's records per actor, message, delayed send | `tinyactors-core`: `mise run layout` | the debug information, checked against `ta_system_layout` |
-| memory per actor, message, delayed send, by population | `examples/memory/README.md` in both bindings, the Node capacity guide, the Python README's "Memory" | `examples/memory/main.mjs` and `main.py`; the data in `examples/memory/results/<date>.csv` |
+| memory per actor, message, delayed send and hibernated actor, by population, part by part: core reserved and used, host other, quickjs, accounted, and the process beside them | `examples/memory/README.md` in both bindings, the Node capacity guide, the Python README's "Memory", `website/content/guides/capacity.xml` | `examples/memory/main.mjs` and `main.py` (their tests check each core column against `ta-layout`, which each binding's build makes); the data in `examples/memory/results/<date>.csv` |
 | 2 and 4 million actors: hibernation, migration, snapshots, services | the Node guides (hibernation, migration, snapshots), the Python README's "Performance" | `mise run stress`, `migration`, `snapshot`, `services` in each binding |
 | every operation at N and 2N actors | the Node capacity guide, "Work does not grow with the population" | `mise run scale` in `tinyactors-napi` |
 

@@ -181,11 +181,34 @@ typedef struct ta_python_ask_row {
 /* The system id of ask's reply addresses, and their prefix. */
 #define TA_PYTHON_ASK_PREFIX "tinyactors://tinyactors-ask/@"
 
+/* The binding's own blocks of a host: its tables, its arena and the "python"
+ * datamodel's kept writer grow through a counting allocator over the raw one
+ * (core's host is given the raw one: core counts its own). Plain integers on
+ * the host's thread; the allocator is called at growth and close, never per
+ * event. The binding's tests read them (_binding_memory, no public API).
+ *
+ *   bytes   what the binding holds through it now;
+ *   peak    the most it held at once;
+ *   blocks  the blocks it has allocated since the host was made. */
+typedef struct ta_python_counted {
+    uint64_t bytes, peak, blocks;
+} ta_python_counted;
+
+/* An allocator over PyMem_RawMalloc that counts in `counted`, which must
+ * outlive it (a host's). */
+ta_allocator ta_python_counted_allocator(ta_python_counted *counted);
+
+/* tinyactors._binding_memory(host): the count of a Host's own blocks, a dict
+ * of bytes, peak and blocks; for the binding's tests. */
+PyObject *ta_python_binding_memory(PyObject *module, PyObject *host);
+
 struct ta_python_host {
     PyObject_HEAD
     ta_python_module_state *state;
     ta_host *host;                     /* NULL once freed */
-    ta_allocator allocator;            /* PyMem_RawMalloc and PyMem_RawFree */
+    ta_python_counted counted;         /* the binding's own blocks, counted over ta_python_allocator */
+    ta_allocator allocator;            /* ta_python_counted_allocator(&counted): the tables, the arena and the
+                                          datamodel's writer grow through it; core's host gets the raw one */
     ta_growable_arena arena;           /* a call's scratch, a mark per call */
     ta_allocator arena_allocator;      /* the arena's view, for a call's writer */
     ta_python_datamodel python;

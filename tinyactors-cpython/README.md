@@ -927,13 +927,18 @@ host = tinyactors.Host.restore(blob, compiled, system="shop", config=config, log
 
 The [memory program](https://github.com/tinyactors-dev/tinyactors/tree/main/tinyactors-cpython/examples/memory) measures what one more actor, message and
 delayed send costs in a process: its resident memory, the host
-included. Run it for your interpreter, datamodel, chart and data:
+included, and what of it each part accounts for: the core's reservation
+and use, what the host allocates beside its regions, and quickjs's heap.
+Run it for your interpreter, datamodel, chart and data:
 
 ```sh
 python examples/memory/main.py --counts 1000000 --datamodel python
 ```
 
-One run of it (2026-11-20; Intel Xeon @ 2.10GHz, 4 CPUs, 16 GiB, Linux;
+The tables below show the process's memory only: they come from a run
+of an earlier version of the program, before it accounted each part, and
+will be replaced at the next sweep of the published numbers. One run of
+it (2026-11-20; Intel Xeon @ 2.10GHz, 4 CPUs, 16 GiB, Linux;
 CPython 3.13.18 with the GIL; a counter chart with one `<data>`,
 messages of `{"text": "hello"}`, tracing on). The hibernated row keeps
 at most 1000 actors resident and the rest in a store.
@@ -973,7 +978,9 @@ Each row's data, at every population and on both datamodels, is in
   change. It holds about a million started actors of this chart: at a
   million, the events after them did not fit, and at two million the
   actors did not. Keep a larger quickjs population hibernated, or use
-  the `"python"` datamodel.
+  the `"python"` datamodel. `host.quickjs_heap_bytes` reads the heap
+  now, and `host.quickjs_heap_blocks` the blocks it is in, each with the
+  C library's header of 16 B beside it.
 
 #### Sizing the config
 

@@ -29,6 +29,30 @@ static void ta_python_free(void *context, void *block, size_t size) {
 
 static const ta_allocator ta_python_allocator = {NULL, ta_python_alloc, ta_python_free};
 
+/* The binding's own blocks, counted on their way to the raw allocator
+ * (extension.h, ta_python_counted); free is given the size, so no header. */
+static void *ta_python_counted_alloc(void *context, size_t size, size_t align) {
+    ta_python_counted *counted = (ta_python_counted *)context;
+    void *block = ta_python_alloc(NULL, size, align);
+    if (block) {
+        counted->bytes += size;
+        counted->blocks++;
+        if (counted->bytes > counted->peak) counted->peak = counted->bytes;
+    }
+    return block;
+}
+
+static void ta_python_counted_free(void *context, void *block, size_t size) {
+    if (!block) return;
+    ta_python_counted *counted = (ta_python_counted *)context;
+    ta_python_free(NULL, block, size);
+    counted->bytes -= size;
+}
+
+ta_allocator ta_python_counted_allocator(ta_python_counted *counted) {
+    return (ta_allocator){counted, ta_python_counted_alloc, ta_python_counted_free};
+}
+
 /* A writer in `room` growing through `allocator`, or the host's raw
  * allocator (tinyactors.encode, which has no host). */
 void ta_python_cbor_init(ta_cbor_writer *writer, const ta_python_room *room) {
@@ -613,7 +637,7 @@ static PyObject *ta_python_host_build(PyTypeObject *type, const ta_python_option
     if (!host) return NULL;
     host->state = state;
     host->thread = PyThread_get_thread_ident();
-    host->allocator = ta_python_allocator;
+    host->allocator = ta_python_counted_allocator(&host->counted);
     host->deadline = UINT64_MAX;
     host->log = Py_NewRef(log);
     host->telemetry = Py_NewRef(telemetry);
@@ -705,7 +729,7 @@ static PyObject *ta_python_host_build(PyTypeObject *type, const ta_python_option
     if (written < 0) goto fail;
     ta_buffer refusal = {ta_growable_arena_alloc(&host->arena, 8192, 8), 8192, 0};
     ta_host_environment environment = {sizeof environment, TA_PYTHON_DATAMODELS, host->datamodels,
-                                       host->allocator, NULL, refusal.pointer ? &refusal : NULL, 0};
+                                       ta_python_allocator, NULL, refusal.pointer ? &refusal : NULL, 0};
     /* a restore keeps the snapshot's identity: ta_host_restore ignores the nonce */
     if (!build->pack && ta_python_random(&environment.nonce) < 0) {
         ta_growable_arena_release(&host->arena, mark);
@@ -2010,11 +2034,41 @@ static PyObject *ta_python_host_system(PyObject *self, void *closure) {
     return Py_NewRef(((ta_python_host *)self)->system_id);
 }
 
+/* quickjs's heap in bytes and its blocks (ta_datamodel_ecmascript_heap_bytes,
+ * _heap_blocks, O(1)); None once closed. */
+static PyObject *ta_python_host_quickjs_heap_bytes(PyObject *self, void *closure) {
+    (void)closure;
+    ta_python_host *host = (ta_python_host *)self;
+    if (!host->host || !host->ecmascript) Py_RETURN_NONE;
+    return PyLong_FromSize_t(ta_datamodel_ecmascript_heap_bytes(host->ecmascript));
+}
+
+static PyObject *ta_python_host_quickjs_heap_blocks(PyObject *self, void *closure) {
+    (void)closure;
+    ta_python_host *host = (ta_python_host *)self;
+    if (!host->host || !host->ecmascript) Py_RETURN_NONE;
+    return PyLong_FromSize_t(ta_datamodel_ecmascript_heap_blocks(host->ecmascript));
+}
+
+PyObject *ta_python_binding_memory(PyObject *module, PyObject *object) {
+    ta_python_module_state *state = ta_python_codec_state(module);
+    if (!state) return NULL;
+    if (!PyObject_TypeCheck(object, (PyTypeObject *)state->host_type)) {
+        PyErr_SetString(PyExc_TypeError, "_binding_memory takes a Host");
+        return NULL;
+    }
+    const ta_python_counted *counted = &((ta_python_host *)object)->counted;
+    return Py_BuildValue("{sKsKsK}", "bytes", (unsigned long long)counted->bytes, "peak",
+                         (unsigned long long)counted->peak, "blocks", (unsigned long long)counted->blocks);
+}
+
 static PyGetSetDef ta_python_host_properties[] = {
     {"system", ta_python_host_system, NULL, ta_python_doc_host_system, NULL},
     {"closed", ta_python_host_closed, NULL, ta_python_doc_host_closed, NULL},
     {"ticks_per_second", ta_python_host_ticks, NULL, ta_python_doc_host_ticks, NULL},
     {"next_deadline", ta_python_host_next_deadline, NULL, ta_python_doc_host_next_deadline, NULL},
+    {"quickjs_heap_bytes", ta_python_host_quickjs_heap_bytes, NULL, ta_python_doc_host_quickjs_heap_bytes, NULL},
+    {"quickjs_heap_blocks", ta_python_host_quickjs_heap_blocks, NULL, ta_python_doc_host_quickjs_heap_blocks, NULL},
     {NULL, NULL, NULL, NULL, NULL}
 };
 

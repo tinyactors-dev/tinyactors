@@ -1,7 +1,9 @@
 # Memory
 
 This program measures what an actor, a message and a delayed send cost
-on your interpreter. It prints whole bytes per thing.
+on your interpreter, part by part: what the core reserves and uses, what
+the host allocates beside it, quickjs's heap, and what the process
+holds. It prints whole bytes per thing.
 
 ```sh
 cd examples/memory
@@ -10,6 +12,13 @@ python main.py --counts 1000000
 python main.py --datamodel ecmascript
 python main.py --chart my-chart.scxml --data '{"text": "a longer message"}'
 ```
+
+The table below predates the accounted columns: it comes from the
+earlier version of this program, whose columns were memory, Python heap
+(`tracemalloc`), core reserves and blob. It will be replaced at the next
+sweep of the published numbers (the root `AGENTS.md`, "Published
+numbers"). Its memory column is today's process, and its core reserves
+today's core reserved.
 
 ```
 python 3.13.18, datamodel python, tracing on, 1000000 of each
@@ -24,16 +33,39 @@ per delayed send pending         371 B        209 B          151 B
 
 ## What the columns mean
 
-- **memory** is what the process holds more for each thing, the host
-  included: its own pages, not the code of mapped files. Plan with this
-  number.
-- **Python heap** is the part Python's objects take: on the `python`
-  datamodel, an actor's variables and a message's data. quickjs keeps its
-  own heap, which only memory shows.
-- **core reserves** is the core's records for each thing. The host
-  reserves them when it sizes its pools, and they count in memory once
-  used.
+Each column but process comes from a count that is exact: the core's
+definitions, its own counters, or the bytes an allocator was asked for.
+
+- **core reserved** is the core's region for one more of the thing: what
+  a host sized for the count holds beyond one sized for none of it. The
+  host holds it from its creation, whether the things exist or not, so
+  plan with this number. For an actor it is its record (81 B), the
+  instance of the image's largest chart, and its strings.
+- **core used** is what the things use of that region, from the core's
+  own counters (`host_stats`' pools): the records in use of each pool
+  times the record's size, which the last line prints, and the slab of
+  instances and strings. A hibernated actor keeps its record and gives
+  its instance back.
+- **host other** is what the host allocates beside its regions
+  (`allocatedBytes` less `regionBytes` in `host_stats`): nothing per
+  thing in a host sized up front.
+- **quickjs** is, on the `ecmascript` datamodel, quickjs's heap and the
+  C library's header of 16 B beside each of its blocks
+  (`host.quickjs_heap_bytes` and `host.quickjs_heap_blocks`). An actor's
+  variables and a message's data are here.
+- **accounted** is core reserved, host other and quickjs together.
+- **process** is what the process holds more for each thing, the host
+  included: its own pages, not the code of mapped files. It is the
+  machine's and the interpreter's reading, never exact: the gap between
+  it and accounted is mostly Python's objects holding the chart's data
+  (on the `python` datamodel an actor's variables and a message's data
+  are Python objects, which no column above sees), then malloc's
+  overhead per block and the fixed costs of a host and an interpreter
+  spread over the count.
 - **blob** is what a hibernated actor leaves in your store.
+
+The binding's own tables and arenas (its session rows, for one) are not a
+column: the package has no API for them. Its tests count them.
 
 ## What the rows mean
 
@@ -65,14 +97,19 @@ a million started actors of the program's chart.
 
 ## How it measures
 
-Each row runs in a process of its own, twice: once for memory and once
-for the Python heap, since `tracemalloc` takes memory of its own. The
-host's pools are sized for the count up front, so no pool grows during
-the measurement. It takes the memory, makes the things, and takes it
-again. The difference, divided by the count, is the row. Memory counts
-from before the host is made; the Python heap from after.
+Each row runs in a process of its own. It sizes every pool the row fills
+for the count up front, so no pool grows during the measurement. Core
+reserved is the difference between the regions of two hosts, one sized
+for the count and one for none of it. The rest it reads before and after
+making the things: `host_stats`, quickjs's heap and, after a collection,
+the process's memory, which counts from before the host is made. The
+record sizes come from two more hosts per pool, at 2^16 and 2^17 of it,
+as the core checks its own (`tools/layout/layout.c` in
+`tinyactors-core`); the example's test checks each core column against
+that program, `ta-layout`, which `mise run build` builds beside the
+extension.
 
-On Linux, memory is the process's anonymous pages, in memory or swapped
+On Linux, the process's memory is the process's anonymous pages, in memory or swapped
 out (`RssAnon` and `VmSwap` in `/proc/self/status`): what the host, the
 interpreter and quickjs allocate. It leaves out the pages of mapped
 files, the code of the interpreter and the extension, which the kernel
@@ -81,7 +118,7 @@ run again: they are no cost per thing, and dropped between the two
 samples they made a row negative. On macOS, which has no `/proc`, it is
 the peak resident set.
 
-The numbers vary by a few bytes between runs.
+The process column varies between runs; the others do not.
 
 ## The data
 
@@ -100,7 +137,10 @@ done
 Each line is one row at one count: `runtime`, `datamodel`, `tracing`,
 `count`, `row`, `memory`, `heap`, `core_reserves`, `blob` (bytes),
 `failed` (what stopped a row that failed), `machine` and `date`. Plot
-`memory` against `count` for each `row`.
+`memory` against `count` for each `row`. That file predates the
+accounted columns; a run of this program writes `core_reserved`,
+`core_used`, `host_other`, `quickjs`, `accounted`, `process` and `blob`
+instead, and the next sweep will add such a file.
 
 A new run goes into a new file under `results/`, named by its date; the
 earlier files stay. The root `AGENTS.md` ("Published numbers") says when

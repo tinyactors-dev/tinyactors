@@ -1,8 +1,8 @@
 # Memory accounting: core's costs from its definitions, the rest from counted allocations
 
 **Status:** Accepted (2026-11-25): the maintainer decided it (section 7);
-steps 1 to 4 of section 9 are done (section 10 records where the code
-differs from this text); steps 5 to 7 are not.
+steps 1 to 6 of section 9 are done (section 10 records where the code
+differs from this text); step 7, the published sweep, is not.
 **Touches:** tinyactors-core (`tools/layout`, `mise/tasks/layout`, the
 fast pass in `mise/tasks/test`, `src/host/host.c` at creation,
 `include/tinyactors/stats.h`, `docs/requests.md` `host.stats`,
@@ -546,3 +546,20 @@ recorded here.
   `tools/measure.mjs` and the per-session table of `AGENTS.md` are gone;
   the example's README and the capacity guide say their tables predate
   the accounted columns and wait for step 7.
+- **The Python binding (step 6).** The same as the Node binding's: the
+  host's `allocator` counts over the raw one (`ta_python_counted`), core's
+  host gets the raw one; `tests/test_memory.py` reads the count through
+  the module's `_binding_memory(host)`. Python has no direct layer to
+  hide it in, so O1's "no public API" is a private name: underscored,
+  out of `docs/api-map.md`, the README and the docstring check (which
+  skips private names). `host.quickjs_heap_bytes` and
+  `host.quickjs_heap_blocks` joined the API, since the binding had no
+  reading of quickjs's heap at all. `mise run build` links
+  `build/ta-layout` as Node's does. `main.py` has the Node example's
+  columns and drops tracemalloc and its second process per row (the
+  "Python heap" column); `test_memory.py` the same equalities.
+  `mise run measure`, `tools/measure.py` and the per-session table of
+  `AGENTS.md` are removed; the README's tables say they predate the
+  accounted columns. The root `AGENTS.md`'s "Published numbers" row
+  names the columns, the website's capacity guide and the `ta-layout`
+  check.

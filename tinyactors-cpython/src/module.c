@@ -9,6 +9,7 @@ static PyMethodDef ta_python_methods[] = {
     {"encode", ta_python_encode, METH_O, ta_python_doc_encode},
     {"decode", ta_python_decode, METH_O, ta_python_doc_decode},
     {"decode_traces", ta_python_decode_traces, METH_O, ta_python_doc_decode_traces},
+    {"_binding_memory", ta_python_binding_memory, METH_O, ta_python_doc_binding_memory},
     {"compile_charts", (PyCFunction)(void (*)(void))ta_python_compile_charts, METH_FASTCALL | METH_KEYWORDS,
      ta_python_doc_compile_charts},
     {"compile_system", (PyCFunction)(void (*)(void))ta_python_compile_system, METH_FASTCALL | METH_KEYWORDS,

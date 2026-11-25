@@ -733,6 +733,17 @@ APIs:
   session's datamodel (its chart's `datamodel`, `ta_image_chart_datamodel`).
 - **Statuses are named by core:** a bare status in a message is
   `ta_status_name(status)` (`"TA_ERROR_STATE"`), never a table of ours.
+- **The binding's own blocks are counted** apart from core's: a host's
+  tables, its arena and the `"python"` datamodel's kept writer grow
+  through the host's `allocator`, a counting allocator over the raw one
+  (`ta_python_counted` in the host: the bytes held, the peak and the
+  blocks; nothing per event: the allocator is called at growth and
+  close); core's host gets the raw allocator uncounted, since core counts
+  its own (`host_stats`' `allocatedBytes`). The module's private
+  `_binding_memory(host)` reads the count for the binding's tests; it is
+  in no document, `docs/api-map.md` or the stubs: no public API
+  (docs/proposals/memory-accounting.md, O1). Test:
+  `tests/test_memory.py`, 0 bytes after close.
 - **Where the allocator is called:** in the host's create, free and
   allocator, and through core (`ta_table`, `ta_growable_arena` while it
   grows, the compiler's options); nowhere else, nothing per event or per
@@ -872,22 +883,17 @@ Registered beside quickjs, first; matched by the chart's
   the tables. A value outside the table refuses the snapshot
   (`TA_ERROR_UNSUPPORTED`, a `MemoryError` stays one); values shared
   between variables are copied apart.
-- **Measured cost per session** (`mise run measure`, 2026-10-14: x86_64
-  Linux, 4 CPUs, CPython 3.13.16 with the GIL; 10,000 actors of a chart
-  with three `<data>`, one of them a list, resident and idle): **433 B
-  resident per actor** on the `"python"` datamodel against **1104 B** on
-  quickjs, of which about 193 B are Python's heap (tracemalloc: the
-  instance, its list, the session row) and 204 B core's region (both
-  datamodels). After one event each, a session also keeps its `_event`,
-  one Event of about 100 B (its name is the chart's shared `str` for that
-  name in the image): 814 B resident against quickjs's 13777 B, most of
-  which is core's region growing its pools.
-  The estimate it replaces (the instance 32 B + 8 B per slot, a row
-  ~16 B, the system variables ~100–250 B) was close for the instance (80
-  B with five slots, plus its GC header); the system variables cost
-  nothing here, because they are made only for a chart whose code reads
-  them, and the row was 32 B then (instance, chart, the params until the
-  first event, flags; 24 B since flags left it, 2026-10-14). Compiled code belongs to the chart, never to a session.
+- **What a session costs** is the memory example's to say
+  (`examples/memory/`, run by `mise run test`): per actor, message,
+  delayed send and hibernated actor, the core's reservation and use from
+  its definitions and counters, the host's other allocations, quickjs's
+  heap with its blocks, and the process's memory beside them,
+  informational (docs/proposals/memory-accounting.md). A `"python"`
+  session's instance and values are Python objects, which no column of
+  ours sees (no `tracemalloc`: it also saw the region and the binding's
+  tables); its row in the binding's session table is the binding's,
+  counted apart ("The binding's memory"). Compiled code belongs to the
+  chart, never to a session.
 
 ## C rules
 
@@ -1063,6 +1069,12 @@ build for) and uv; the C toolchain is the root's.
   core task this project's tasks run, never core's build; the extension
   compiles against it with `Toolchain::Target` (root
   `mise/lib/toolchain.rb`; never a compiler from `PATH`, never `$CC`).
+  The build also compiles one source file of core's,
+  `tools/layout/layout.c`, against the same amalgamation into
+  `build/ta-layout` (`Target#program`, with the core objects the
+  extension links but quickjs): the region `ta_system_layout` carves for
+  an image and a config, which the memory example's test checks its core
+  columns with.
 - `mise run lint`: the rules' tests, the rules over `src/`, the adapters'
   lint (`mise run //tinyactors-test:lint -- conform`: the adapter imports
   only `tinyactors` and the standard library), `docs/api-map.md` against
@@ -1149,10 +1161,12 @@ conform/             the suite's adapter, python -m conform; not in the wheel
 tests/               what the suite cannot see: threads, GC, asyncio, refusals, stale views
 examples/            applications over the package, each with a README and test_*.py (mise run test);
                      chat/: workspaces, rooms and connections, a processor per external system,
-                     a store, and the three ways of a send to an actor that is not there
+                     a store, and the three ways of a send to an actor that is not there;
+                     memory/: what an actor, a message, a delayed send and a hibernated actor cost,
+                     part by part
 tools/lint/          rules/, tests/, utils/ (ast-grep)
 mise/cpython.rb      what the tasks share
 mise/wheel.rb        the wheel: the release build per target, its checks, the zip, the smoke tests
 mise/tasks/          build, test, conform, lint, wheel, release
-build/               core's amalgamation and the extension (not in git)
+build/               core's amalgamation, the extension and ta-layout (not in git)
 ```

@@ -31,3 +31,5 @@ CPython.builds.each do |build|
   extension = CPython.build_extension(target, build, core)
   puts "build: #{extension.relative_path_from(CPython::ROOT)}"
 end
+puts "build: #{CPython.build_layout(target, core).relative_path_from(CPython::ROOT)}"
+

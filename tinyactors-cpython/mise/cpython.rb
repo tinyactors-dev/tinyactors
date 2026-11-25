@@ -126,6 +126,24 @@ module CPython
     end
   end
 
+  # ta-layout, core's tools/layout/layout.c built against the same
+  # amalgamation into build/ta-layout: the region ta_system_layout carves
+  # for an image and a config, which the memory example's test checks its
+  # core columns with (docs/proposals/memory-accounting.md, O2). A program,
+  # not the extension: the C library is its own to call. It links the core
+  # objects the extension links but quickjs's, which needs libm and which
+  # it does not call.
+  LAYOUT_SOURCE = ROOT.join('../tinyactors-core/tools/layout/layout.c').expand_path
+  LAYOUT = BUILD.join('ta-layout')
+  LAYOUT_FLAGS = %w[-std=c11 -Wall -Wextra -Wconversion -Werror -O2].freeze
+
+  def build_layout(target, core)
+    object = compile(target, LAYOUT_SOURCE.to_s, BUILD.join('objects/layout/layout.o'), [*LAYOUT_FLAGS, "-I#{CORE_BUILD}"])
+    used = core.reject { |path| File.basename(path.to_s).start_with?('tinyactors_datamodel_ecmascript') }
+    target.program([object, *used].map(&:to_s), into: LAYOUT.to_s)
+    LAYOUT
+  end
+
   # The extension for one interpreter: src/ against its Python.h, linked
   # with core's objects into a module CPython loads (Target#plugin: the
   # interpreter provides the C API's symbols).
