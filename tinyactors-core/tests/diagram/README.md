@@ -42,7 +42,7 @@ git diff tests/diagram
 ## What is here
 
 Charts from the examples, copied so that they do not change under the
-corpus, and three written for it:
+corpus, and five written for it:
 
 | Chart | What it exercises |
 |---|---|
@@ -52,8 +52,10 @@ corpus, and three written for it:
 | `shopping-cart` | many transitions listed inside boxes, self loops |
 | `scheduled-job`, `site-visitor`, `subscription`, `timed`, `chat-user` | back edges, history, labels sliding along their routes |
 | `support-ticket` | a deep history, parallel regions, a self loop, a portal, a targetless transition |
-| `warehouse-order` | edges between parallel regions (lanes), out to the own container, into a descendant from its container, a long edge, same-layer edges |
+| `warehouse-order` | edges between parallel regions (lanes beside them), out to the own container, into a descendant from its container, a long edge, same-layer edges |
 | `insurance-claim` | three levels of nesting, a container's transition into its descendant, edges out of nested states |
+| `order-processing` | three parallel regions and nine edges between them, both ways, sharing the lanes beside them |
+| `checkout` | five parallel regions wrapped into a grid, edges within a column and across to the other |
 
 A new chart needs only its `.scxml` here and `mise run diagram:expect`; give
 it a name of its own, an entity of a real system.

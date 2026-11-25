@@ -1,0 +1,22 @@
+<!-- Three regions of an order, with edges between them both ways: out of a box with another below
+     it, into a box with a sibling beyond it, many routes sharing the margin beside the regions. -->
+<scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0" name="order-processing" initial="processing">
+  <parallel id="processing">
+    <state id="picking" initial="queued">
+      <state id="queued"><transition event="start" target="collecting"/><transition event="cancel" target="voided"/></state>
+      <state id="collecting"><transition event="done" target="collected"/><transition event="missing" target="awaiting"/></state>
+      <state id="collected"><transition event="ship" target="labelled"/></state>
+    </state>
+    <state id="invoicing" initial="draft">
+      <state id="draft"><transition event="issue" target="sent"/></state>
+      <state id="sent"><transition event="paid" target="settled"/><transition event="recount" target="collecting"/></state>
+      <state id="settled"/>
+      <state id="voided"><transition event="reopen" target="queued"/></state>
+    </state>
+    <state id="shipping" initial="awaiting">
+      <state id="awaiting"><transition event="label" target="labelled"/><transition event="bill" target="draft"/></state>
+      <state id="labelled"><transition event="dispatch" target="dispatched"/><transition event="refund" target="voided"/></state>
+      <state id="dispatched"><transition event="lost" target="queued"/></state>
+    </state>
+  </parallel>
+</scxml>

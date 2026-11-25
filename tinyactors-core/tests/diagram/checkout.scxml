@@ -1,0 +1,11 @@
+<!-- Five regions of a checkout, wrapped into a grid of two columns: edges between the regions of
+     one column and across to the other, both ways. -->
+<scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0" name="checkout" initial="checkout">
+  <parallel id="checkout">
+    <state id="cart" initial="open"><state id="open"><transition event="pay" target="authorising"/></state><state id="locked"><transition event="unlock" target="open"/></state></state>
+    <state id="payment" initial="authorising"><state id="authorising"><transition event="ok" target="captured"/><transition event="hold" target="locked"/></state><state id="captured"><transition event="notify" target="emailing"/></state></state>
+    <state id="fraud" initial="scoring"><state id="scoring"><transition event="flag" target="reviewing"/></state><state id="reviewing"><transition event="block" target="locked"/></state></state>
+    <state id="email" initial="idle"><state id="idle"><transition event="send" target="emailing"/></state><state id="emailing"><transition event="bounce" target="scoring"/></state></state>
+    <state id="ledger" initial="pending"><state id="pending"><transition event="post" target="posted"/></state><state id="posted"><transition event="reverse" target="authorising"/></state></state>
+  </parallel>
+</scxml>

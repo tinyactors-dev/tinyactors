@@ -184,6 +184,60 @@ static void test_down(void) {
     ta_growable_arena_free(&a.arena);
 }
 
+/* A fulfilment of three regions, with edges between them both ways: from a box above another box
+ * of its own region, into a box with a sibling beyond it, across two regions. */
+static const ta_diagram_state fulfilment_states[] = {
+    {TA_NIL, TA_DIAGRAM_STATE_ROOT, {"", 0}, 0, 1},             /* 0 */
+    {0, TA_DIAGRAM_STATE_PARALLEL, {"fulfilment", 10}, 0, 0},   /* 1 */
+    {1, TA_DIAGRAM_STATE_STATE, {"picking", 7}, 1, 1},          /* 2 */
+    {2, TA_DIAGRAM_STATE_STATE, {"locating", 8}, 0, 0},         /* 3 */
+    {2, TA_DIAGRAM_STATE_STATE, {"picked", 6}, 0, 0},           /* 4 */
+    {1, TA_DIAGRAM_STATE_STATE, {"invoicing", 9}, 2, 1},        /* 5 */
+    {5, TA_DIAGRAM_STATE_STATE, {"drafting", 8}, 0, 0},         /* 6 */
+    {5, TA_DIAGRAM_STATE_STATE, {"issued", 6}, 0, 0},           /* 7 */
+    {5, TA_DIAGRAM_STATE_STATE, {"backorder", 9}, 0, 0},        /* 8 */
+    {1, TA_DIAGRAM_STATE_STATE, {"shipping", 8}, 3, 1},         /* 9 */
+    {9, TA_DIAGRAM_STATE_STATE, {"awaiting", 8}, 0, 0},         /* 10 */
+    {9, TA_DIAGRAM_STATE_STATE, {"labelled", 8}, 0, 0},         /* 11 */
+};
+static const uint32_t fulfilment_targets[] = {1, 3, 6, 10, 4, 8, 11, 7, 3, 11, 6, 3};
+static const ta_diagram_transition fulfilment_transitions[] = {
+    {3, 4, 1, {"found", 5}, {"", 0}},    {3, 5, 1, {"short", 5}, {"", 0}},  {4, 6, 1, {"ship", 4}, {"", 0}},
+    {6, 7, 1, {"issue", 5}, {"", 0}},    {8, 8, 1, {"restock", 7}, {"", 0}}, {10, 9, 1, {"label", 5}, {"", 0}},
+    {11, 10, 1, {"bill", 4}, {"", 0}},   {10, 11, 1, {"recall", 6}, {"", 0}},
+};
+static const ta_diagram_chart fulfilment = {fulfilment_states, 12, fulfilment_transitions, 8, fulfilment_targets};
+
+/* No route between regions runs through a box, right, down, and down in a narrow space (the
+ * regions then stack), and the layout breaks none of the hard rules. */
+static void test_between_regions(void) {
+    test_arena a;
+    arena_begin(&a, (size_t)-1);
+    drawn d;
+    CHECK_EQUAL(lay_out(&a, &fulfilment, &d), TA_OK);
+    static const struct {
+        uint32_t direction;
+        double max_width;
+    } ways[] = {{TA_DIAGRAM_RIGHT, 0}, {TA_DIAGRAM_DOWN, 0}, {TA_DIAGRAM_DOWN, 300}};
+    for (size_t w = 0; w < sizeof ways / sizeof ways[0]; w++) {
+        ta_diagram_request request = {&fulfilment, ways[w].direction, ways[w].max_width, d.measures.states,
+                                      d.measures.labels, d.portals, &a.arena};
+        ta_diagram_layout layout;
+        CHECK_EQUAL(ta_diagram_layout_chart(&request, &layout), TA_OK);
+        ta_diagram_check_request check = {&fulfilment, &layout, &a.arena};
+        ta_diagram_problems problems;
+        CHECK_EQUAL(ta_diagram_check(&check, &problems), TA_OK);
+        for (uint32_t i = 0; i < problems.count; i++) {
+            uint32_t kind = problems.list[i].kind;
+            CHECK(kind != TA_DIAGRAM_PROBLEM_THROUGH_BOX && kind != TA_DIAGRAM_PROBLEM_START_DETACHED &&
+                  kind != TA_DIAGRAM_PROBLEM_END_DETACHED && kind != TA_DIAGRAM_PROBLEM_INITIAL_DETACHED &&
+                  kind != TA_DIAGRAM_PROBLEM_NOT_ORTHOGONAL && kind != TA_DIAGRAM_PROBLEM_OUTSIDE_PARENT &&
+                  kind != TA_DIAGRAM_PROBLEM_BOXES_OVERLAP);
+        }
+    }
+    ta_growable_arena_free(&a.arena);
+}
+
 /* A chart that is not a tree in document order, or a target past its states, is refused. */
 static void test_refusals(void) {
     test_arena a;
@@ -361,6 +415,7 @@ int main(void) {
     RUN(test_layout_properties);
     RUN(test_deterministic);
     RUN(test_down);
+    RUN(test_between_regions);
     RUN(test_refusals);
     RUN(test_no_memory);
     RUN(test_svg);

@@ -16,6 +16,7 @@ static const double initial_dot = 10; /* the initial marker's diameter */
 static const double self_out = 1.6;   /* how far a self loop reaches past its box, in edge spacings */
 static const double label_row = 320;  /* down: how wide a box may grow to put its outgoing labels side by side */
 static const double big = 1e300;      /* beyond every coordinate */
+static const double port_tie = 1e-6;  /* orders ports whose keys are equal, moving none */
 enum { PORTAL_BORDERS = 3 };          /* a transition crossing this many container borders is listed, not routed */
 
 /* ---- small things ------------------------------------------------------------------------ */
@@ -41,7 +42,7 @@ static rect tr(rect r, int down) {
 
 /* ---- the context ------------------------------------------------------------------------ */
 
-enum { SIDE_NEAR = 0, SIDE_FAR = 1, SIDE_BOTTOM = 2, SIDES = 3 };
+enum { SIDE_NEAR = 0, SIDE_FAR = 1, SIDES = 2 };
 
 enum {
     ROUTE_FORWARD = 0,
@@ -89,6 +90,9 @@ typedef struct container {
     chain *chains;
     uint32_t chain_count;
     uint32_t lanes;
+    uint32_t grid_columns, grid_across; /* a parallel state's grid: real columns, canonical columns */
+    double *column_end;                 /* canonical, from the content origin: where each canonical column ends */
+    uint32_t *gap_lanes;                /* lanes in the gap after each canonical column */
     double *gap_label;
     uint32_t *gap_channels;
     uint32_t right_margin;
@@ -111,7 +115,7 @@ typedef struct channel {
 typedef struct pending {
     uint32_t transition, target, from, to, route, container;
     uint32_t start, end; /* attachments or TA_NIL */
-    uint32_t lane;
+    uint32_t lane, exit_lane, enter_lane; /* between regions: below the grid, in the gaps */
     uint32_t first_channel, channel_count;
 } pending;
 
@@ -426,6 +430,33 @@ static void feedback_arc_order(layout *l, uint32_t count, const arcs *given, uin
 
 /* ---- parallel regions -------------------------------------------------------------------- */
 
+/* An edge between two regions runs in the gaps between them, never across a box: out of its
+ * source's region on the side facing the gap after its column (or before it, when the target's
+ * column comes earlier), along a lane in that gap, and into its target's region on the side facing
+ * the gap it reaches. When the two gaps differ, it crosses from one to the other along a lane
+ * below the grid. Columns and gaps are canonical (across the layer direction regions stack in one
+ * column); a gap is the space after its column, the last one the margin beside the grid. */
+typedef struct passage {
+    uint32_t exit_gap, enter_gap;
+    int exit_far, enter_far; /* leaves, enters, on the far side (else the near one) */
+} passage;
+
+static uint32_t region_column(const layout *l, uint32_t c, uint32_t kid) {
+    uint32_t columns = l->containers[c].grid_columns;
+    return l->down ? l->slot[kid] / columns : l->slot[kid] % columns;
+}
+
+/* the passage from the region ends[0] of `c` to its region ends[1] */
+static passage passage_of(const layout *l, uint32_t c, const uint32_t ends[2]) {
+    uint32_t from = region_column(l, c, ends[0]), to = region_column(l, c, ends[1]);
+    passage w;
+    w.exit_far = to >= from;
+    w.exit_gap = w.exit_far ? from : from - 1;
+    w.enter_far = to <= from;
+    w.enter_gap = w.enter_far ? to : to - 1;
+    return w;
+}
+
 /* Parallel regions side by side in a grid (real orientation). */
 static size arrange_regions(layout *l, uint32_t c, const size *sizes) {
     container *info = &l->containers[c];
@@ -454,33 +485,52 @@ static size arrange_regions(layout *l, uint32_t c, const size *sizes) {
         row_h[i] = 0;
     for (uint32_t i = 0; i < n; i++)
         row_h[i / columns] = ta_diagram_max(row_h[i / columns], sizes[l->kids[first + i]].h);
-    for (uint32_t i = 0; i < n; i++) {
-        uint32_t k = l->kids[first + i], ci = i % columns, ri = i / columns;
-        double x = 0, y = 0;
-        for (uint32_t j = 0; j < ci; j++)
-            x += column_w[j] + sp->node;
-        for (uint32_t j = 0; j < ri; j++)
-            y += row_h[j] + sp->node;
-        /* regions fill their grid cell, so the dashed separators line up */
-        l->local[k] = (rect){x, y, ta_diagram_max(sizes[k].w, column_w[ci]), ta_diagram_max(sizes[k].h, row_h[ri])};
-    }
-    /* transitions between regions run along lanes below the grid */
-    uint32_t lanes = 0;
+    /* transitions between regions run along lanes in the gaps (passage_of), and those that change
+     * gaps along lanes below the grid */
+    uint32_t across = l->down ? rows : columns, lanes = 0;
+    info->grid_columns = columns;
+    info->grid_across = across;
+    info->column_end = take(l, sizeof(double), across);
+    uint32_t *gap_lanes = info->gap_lanes = take(l, sizeof(uint32_t), across);
+    double *after = take(l, sizeof(double), across);
+    if (l->failed) return (size){0, 0};
     for (uint32_t i = 0; i < l->transition_count; i++) {
         const ta_diagram_transition *t = transition_of(l, l->transitions[i]);
         if (!within(l, t->source, c)) continue;
         uint32_t a = child_of(l, c, t->source);
         for (uint32_t j = 0; j < t->target_count; j++) {
             uint32_t b = child_of(l, c, target_of(l, t, j));
-            if (a != TA_NIL && b != TA_NIL && a != b) lanes++;
+            if (a == TA_NIL || b == TA_NIL || a == b) continue;
+            passage w = passage_of(l, c, (const uint32_t[2]){a, b});
+            gap_lanes[w.exit_gap]++;
+            if (w.enter_gap != w.exit_gap) {
+                gap_lanes[w.enter_gap]++;
+                lanes++;
+            }
         }
     }
     info->lanes = lanes;
-    double w = sp->node * (columns - 1), h = sp->node * (rows - 1) + (lanes ? (lanes + 1) * sp->edge : 0);
+    /* the space after each canonical column: between regions, wide enough for its lanes; after
+     * the last, its lanes beside the grid (the padding stays beyond them) */
+    for (uint32_t g = 0; g < across; g++)
+        after[g] = g + 1 < across ? ta_diagram_max(sp->node, (gap_lanes[g] + 1) * sp->edge) : gap_lanes[g] * sp->edge;
+    for (uint32_t i = 0; i < n; i++) {
+        uint32_t k = l->kids[first + i], ci = i % columns, ri = i / columns;
+        double x = 0, y = 0;
+        for (uint32_t j = 0; j < ci; j++)
+            x += column_w[j] + (l->down ? sp->node : after[j]);
+        for (uint32_t j = 0; j < ri; j++)
+            y += row_h[j] + (l->down ? after[j] : sp->node);
+        /* regions fill their grid cell, so the dashed separators line up */
+        l->local[k] = (rect){x, y, ta_diagram_max(sizes[k].w, column_w[ci]), ta_diagram_max(sizes[k].h, row_h[ri])};
+        info->column_end[l->down ? ri : ci] = l->down ? y + row_h[ri] : x + column_w[ci];
+    }
+    double below = lanes ? (lanes + 1) * sp->edge : 0;
+    double w = l->down ? below : after[columns - 1], h = l->down ? after[rows - 1] : below;
     for (uint32_t i = 0; i < columns; i++)
-        w += column_w[i];
+        w += column_w[i] + (i + 1 < columns ? (l->down ? sp->node : after[i]) : 0);
     for (uint32_t i = 0; i < rows; i++)
-        h += row_h[i];
+        h += row_h[i] + (i + 1 < rows ? (l->down ? after[i] : sp->node) : 0);
     return (size){w, h};
 }
 
@@ -1234,6 +1284,86 @@ static void slide(router *r, uint32_t index, double value) {
     }
 }
 
+/* ── 1b. lanes between regions, before the ports: a port's place on its side follows its lane ── */
+static passage passage_of_pending(const layout *l, const pending *p) {
+    uint32_t c = p->container;
+    return passage_of(l, c, (const uint32_t[2]){child_of(l, c, p->from), child_of(l, c, p->to)});
+}
+
+static void region_lanes(router *r) {
+    /* lanes between regions: in each gap, the shortest run nearest the column before it, then
+     * document order; below the grid, the shortest crossing first, then document order */
+    layout *l = r->l;
+    uint32_t *which = take(l, sizeof(uint32_t), 2 * r->pending_count + 1);
+    pending **users = take(l, sizeof(pending *), 2 * r->pending_count + 1);
+    double *spans = take(l, sizeof(double), 2 * r->pending_count + 1);
+    pending **list = take(l, sizeof(pending *), r->pending_count + 1);
+    if (l->failed) return;
+    for (uint32_t c = 0; c < l->n; c++) {
+        const container *info = &l->containers[c];
+        if (info->kind != CONTAINER_PARALLEL) continue;
+        rect whole = canonical(l, c);
+        double bottom = whole.y + whole.h;
+        for (uint32_t g = 0; g < info->grid_across; g++) {
+            uint32_t count = 0;
+            for (uint32_t i = 0; i < r->pending_count; i++) {
+                pending *p = &r->pendings[i];
+                if (p->route != ROUTE_REGIONS || p->container != c) continue;
+                passage w = passage_of_pending(l, p);
+                int crosses = w.exit_gap != w.enter_gap;
+                for (uint32_t end = 0; end < 2; end++) {
+                    if ((end ? w.enter_gap : w.exit_gap) != g || (end && !crosses)) continue;
+                    double from_y = center_y(l, end ? p->to : p->from), to_y = crosses ? bottom : center_y(l, p->to);
+                    double span = ta_diagram_abs(to_y - from_y);
+                    uint32_t j = count++;
+                    for (; j > 0 && spans[j - 1] > span; j--) {
+                        users[j] = users[j - 1];
+                        which[j] = which[j - 1];
+                        spans[j] = spans[j - 1];
+                    }
+                    users[j] = p;
+                    which[j] = end;
+                    spans[j] = span;
+                }
+            }
+            for (uint32_t i = 0; i < count; i++)
+                *(which[i] ? &users[i]->enter_lane : &users[i]->exit_lane) = i;
+        }
+        uint32_t count = 0;
+        for (uint32_t i = 0; i < r->pending_count; i++) {
+            pending *p = &r->pendings[i];
+            if (p->route != ROUTE_REGIONS || p->container != c) continue;
+            passage w = passage_of_pending(l, p);
+            if (w.exit_gap != w.enter_gap) list[count++] = p;
+        }
+        for (uint32_t i = 1; i < count; i++) {
+            pending *moving = list[i];
+            double moving_key = ta_diagram_abs(center_x(l, moving->from) - center_x(l, moving->to));
+            uint32_t j = i;
+            for (; j > 0; j--) {
+                double key = ta_diagram_abs(center_x(l, list[j - 1]->from) - center_x(l, list[j - 1]->to));
+                if (key < moving_key || (key == moving_key && list[j - 1]->transition <= moving->transition)) break;
+                list[j] = list[j - 1];
+            }
+            list[j] = moving;
+        }
+        for (uint32_t i = 0; i < count; i++)
+            list[i]->lane = i;
+    }
+}
+
+/* How far out from the region at its end `exit` (1) or the other an edge's lane lies in its gap,
+ * between 0 (the region's side) and 1 (the gap's other side), never either: routes nest in this
+ * order around the corners between a box and the lane. */
+static double lane_place(const layout *l, const pending *p, int exit) {
+    passage w = passage_of_pending(l, p);
+    int own = exit || w.exit_gap == w.enter_gap; /* a route that stays in one gap has one lane there */
+    uint32_t gap = own ? w.exit_gap : w.enter_gap, lane = own ? p->exit_lane : p->enter_lane;
+    uint32_t count = l->containers[p->container].gap_lanes[gap];
+    int far = exit ? w.exit_far : w.enter_far;
+    return (double)((far ? lane : count - 1 - lane) + 1) / (double)(count + 1);
+}
+
 /* ── 2. ports: attachments per box side, spread evenly, ordered by where the other end is ── */
 static void ports(router *r) {
     layout *l = r->l;
@@ -1258,10 +1388,18 @@ static void ports(router *r) {
             p->start = attach(r, p->from, SIDE_FAR, center_y(l, p->to), 0);
             p->end = attach(r, p->to, SIDE_FAR, center_y(l, p->from), 0);
             break;
-        case ROUTE_REGIONS:
-            p->start = attach(r, p->from, SIDE_BOTTOM, center_x(l, p->to), 0);
-            p->end = attach(r, p->to, SIDE_BOTTOM, center_x(l, p->from), 0);
+        case ROUTE_REGIONS: {
+            /* among ports level with each other, an edge in an outer lane takes the port further
+             * from where its route heads, so routes nest instead of crossing */
+            passage w = passage_of_pending(l, p);
+            int crosses = w.exit_gap != w.enter_gap, down_from = crosses || center_y(l, p->to) > center_y(l, p->from);
+            int down_to = crosses || center_y(l, p->from) > center_y(l, p->to);
+            p->start = attach(r, p->from, w.exit_far ? SIDE_FAR : SIDE_NEAR,
+                              center_y(l, p->to) + (down_from ? -port_tie : port_tie) * lane_place(l, p, 1), 0);
+            p->end = attach(r, p->to, w.enter_far ? SIDE_FAR : SIDE_NEAR,
+                            center_y(l, p->from) + (down_to ? -port_tie : port_tie) * lane_place(l, p, 0), 0);
             break;
+        }
         case ROUTE_TO_ANCESTOR:
             p->start = attach(r, p->from, SIDE_FAR, center_y(l, p->from), 0);
             break;
@@ -1325,15 +1463,15 @@ static void ports(router *r) {
                 list[j] = list[j - 1];
             list[j] = moving;
         }
-        uint32_t box = r->group_box[g], side = r->group_side[g];
+        uint32_t box = r->group_box[g];
         rect rr = canonical(l, box);
         container *info = &l->containers[box];
         int has_info = info->kind != CONTAINER_NONE;
         /* on containers, keep ports clear of the header band */
-        double across = has_info && !down ? info->header : 0, along = has_info && down ? info->header : 0;
-        double span = ta_diagram_max(0, side == SIDE_BOTTOM ? rr.w - along : rr.h - across);
-        double start = side == SIDE_BOTTOM ? rr.x + along : rr.y + across;
-        if (side != SIDE_BOTTOM && state_of(l, box)->kind == TA_DIAGRAM_STATE_FINAL) {
+        double across = has_info && !down ? info->header : 0;
+        double span = ta_diagram_max(0, rr.h - across);
+        double start = rr.y + across;
+        if (state_of(l, box)->kind == TA_DIAGRAM_STATE_FINAL) {
             /* a final's pill: its ports where an edge meets the outline head on, so the arrow runs
              * into it: the straight part of a side, or the middle of a round end */
             double inset = rr.w >= rr.h ? rr.h / 4 : rr.w / 2;
@@ -1573,26 +1711,6 @@ static void channels(router *r) {
         for (uint32_t i = 0; i < count; i++)
             entry[i]->index = i;
     }
-    /* lanes: shortest first, then document order */
-    for (uint32_t c = 0; c < l->n; c++) {
-        if (l->containers[c].kind != CONTAINER_PARALLEL) continue;
-        uint32_t count = 0;
-        for (uint32_t i = 0; i < r->pending_count; i++)
-            if (r->pendings[i].route == ROUTE_REGIONS && r->pendings[i].container == c) list[count++] = &r->pendings[i];
-        for (uint32_t i = 1; i < count; i++) {
-            pending *moving = list[i];
-            double moving_key = ta_diagram_abs(center_x(l, moving->from) - center_x(l, moving->to));
-            uint32_t j = i;
-            for (; j > 0; j--) {
-                double key = ta_diagram_abs(center_x(l, list[j - 1]->from) - center_x(l, list[j - 1]->to));
-                if (key < moving_key || (key == moving_key && list[j - 1]->transition <= moving->transition)) break;
-                list[j] = list[j - 1];
-            }
-            list[j] = moving;
-        }
-        for (uint32_t i = 0; i < count; i++)
-            list[i]->lane = i;
-    }
 }
 
 static uint32_t channel_index(const router *r, const pending *p, uint32_t c, uint32_t gap) {
@@ -1620,21 +1738,33 @@ static double channel_x(const router *r, const pending *p, uint32_t c, uint32_t 
     return gap_start(l, c, g) + info->gap_label[g] + (i + 1) * l->sp.edge;
 }
 
-/* hierarchy-aware exits: leave nested boxes on one side without crossing their siblings */
-static double gutter(router *r, uint32_t parent, double y, double *offset) {
-    layout *l = r->l;
-    uint32_t i = r->escapes[parent]++;
-    rect pr = canonical(l, parent);
-    double top = content_origin(l, parent).y - l->sp.padding / 2;
-    double bottom = pr.y + pr.h - l->sp.padding / 2;
-    *offset = l->sp.edge * (0.6 + (i % 3) * 0.4);
-    return ta_diagram_abs(y - top) <= ta_diagram_abs(y - bottom) ? top : bottom;
-}
-
 typedef struct way {
     uint32_t from, up_to;
     int direction; /* +1: far, -1: near */
+    int toward;    /* the gutter a blocked exit takes: +1 the bottom, -1 the top, 0 the nearer */
+    double place;  /* with `toward`: the route's lane_place, which places it in the gutter */
 } way;
+
+typedef struct escape {
+    double y;      /* the gutter's */
+    double offset; /* how far past the box the route turns into it */
+} escape;
+
+/* hierarchy-aware exits: leave nested boxes on one side without crossing their siblings */
+static escape gutter(router *r, way w, point at) {
+    layout *l = r->l;
+    uint32_t parent = parent_of(l, w.from);
+    uint32_t i = r->escapes[parent]++;
+    rect pr = canonical(l, parent);
+    double content_top = content_origin(l, parent).y, content_bottom = pr.y + pr.h - l->sp.padding;
+    double top = content_top - l->sp.padding / 2, bottom = content_bottom + l->sp.padding / 2;
+    int lower = w.toward ? w.toward > 0 : ta_diagram_abs(at.y - top) > ta_diagram_abs(at.y - bottom);
+    if (!w.toward) return (escape){lower ? bottom : top, l->sp.edge * (0.6 + (i % 3) * 0.4)};
+    /* routes between regions nest, each in a gutter of its own: the nearer its lane, the sooner a
+     * route turns past its box and the further out it runs in the padding */
+    double out = l->sp.padding * (1 - w.place);
+    return (escape){lower ? content_bottom + out : content_top - out, l->sp.edge * (0.6 + 1.6 * w.place)};
+}
 
 /* From `start` on a side of `from` out through the same side of its ancestor `up_to`, onto `out`. */
 static void exit_points(router *r, way w, point start, points *out) {
@@ -1655,12 +1785,11 @@ static void exit_points(router *r, way w, point start, points *out) {
             blocked = beyond && kr.y - 2 < p.y && p.y < kr.y + kr.h + 2;
         }
         if (blocked) {
-            double offset;
-            double gy = gutter(r, parent, p.y, &offset);
-            double xe = w.direction > 0 ? cr.x + cr.w + offset : cr.x - offset;
+            escape e = gutter(r, (way){current, w.up_to, w.direction, w.toward, w.place}, p);
+            double xe = w.direction > 0 ? cr.x + cr.w + e.offset : cr.x - e.offset;
             points_push(l, out, (point){xe, p.y});
-            points_push(l, out, (point){xe, gy});
-            p = (point){border, gy};
+            points_push(l, out, (point){xe, e.y});
+            p = (point){border, e.y};
         } else
             p = (point){border, p.y};
         points_push(l, out, p);
@@ -1702,6 +1831,11 @@ static void corridor(router *r, const pending *p, run c, points *out) {
         if (next)
             points_push(l, out, (point){content_origin(l, c.container).x + info->layer_x[g + 1] + info->layer_w[g + 1], y});
     }
+}
+
+/* where lane place[1] runs in the gap after the canonical column place[0] of the parallel state `c` */
+static double gap_lane_x(const layout *l, uint32_t c, const uint32_t place[2]) {
+    return content_origin(l, c).x + l->containers[c].column_end[place[0]] + (place[1] + 1) * l->sp.edge;
 }
 
 static double lane_y(const layout *l, uint32_t c, uint32_t lane) {
@@ -1775,11 +1909,11 @@ static void route_one(router *r, const pending *p, routed *out, points *all) {
         double early_at = r->attachments[reversed ? p->end : p->start].at;
         double late_at = r->attachments[reversed ? p->start : p->end].at;
         uint32_t a = child_of(l, c, early), b = child_of(l, c, late);
-        exit_points(r, (way){early, a, 1}, (point){er.x + er.w, early_at}, pts);
+        exit_points(r, (way){early, a, 1, 0, 0}, (point){er.x + er.w, early_at}, pts);
         if (l->failed) return;
         double out_y = pts->data[pts->length - 1].y;
         points inn = {0, 0, 0};
-        enter_points(r, (way){late, b, same ? 1 : -1}, (point){same ? lr.x + lr.w : lr.x, late_at}, &inn);
+        enter_points(r, (way){late, b, same ? 1 : -1, 0, 0}, (point){same ? lr.x + lr.w : lr.x, late_at}, &inn);
         if (l->failed) return;
         if (same) {
             double x = channel_x(r, p, c, layer_of(l, c, a));
@@ -1800,16 +1934,37 @@ static void route_one(router *r, const pending *p, routed *out, points *all) {
         break;
     }
     case ROUTE_REGIONS: {
-        double x0 = r->attachments[p->start].at, x1 = r->attachments[p->end].at, ly = lane_y(l, c, p->lane);
-        points_push(l, pts, (point){x0, s.y + s.h});
-        points_push(l, pts, (point){x0, ly});
-        points_push(l, pts, (point){x1, ly});
-        points_push(l, pts, (point){x1, t.y + t.h});
-        prefer = 1;
+        /* out of the source's region into its gap, along the gap's lane (and across below the grid
+         * to the target's gap), into the target's region and on to the target */
+        uint32_t a = child_of(l, c, p->from), b = child_of(l, c, p->to);
+        passage w = passage_of_pending(l, p);
+        int crosses = w.exit_gap != w.enter_gap;
+        /* a blocked end escapes by the gutter on the side the route heads for */
+        int down = crosses || center_y(l, p->to) > center_y(l, p->from);
+        exit_points(r, (way){p->from, a, w.exit_far ? 1 : -1, down ? 1 : -1, lane_place(l, p, 1)},
+                    (point){w.exit_far ? s.x + s.w : s.x, r->attachments[p->start].at}, pts);
+        if (l->failed) return;
+        points inn = {0, 0, 0};
+        enter_points(r, (way){p->to, b, w.enter_far ? 1 : -1, crosses || !down ? 1 : -1, lane_place(l, p, 0)},
+                     (point){w.enter_far ? t.x + t.w : t.x, r->attachments[p->end].at}, &inn);
+        if (l->failed) return;
+        double out_y = pts->data[pts->length - 1].y, in_y = inn.data[0].y;
+        double xa = gap_lane_x(l, c, (const uint32_t[2]){w.exit_gap, p->exit_lane});
+        points_push(l, pts, (point){xa, out_y});
+        if (crosses) {
+            double ly = lane_y(l, c, p->lane), xb = gap_lane_x(l, c, (const uint32_t[2]){w.enter_gap, p->enter_lane});
+            points_push(l, pts, (point){xa, ly});
+            points_push(l, pts, (point){xb, ly});
+            points_push(l, pts, (point){xb, in_y});
+        } else
+            points_push(l, pts, (point){xa, in_y});
+        for (uint32_t i = 0; i < inn.length; i++)
+            points_push(l, pts, inn.data[i]);
+        prefer = 0; /* at the source, as between siblings */
         break;
     }
     case ROUTE_TO_ANCESTOR: {
-        exit_points(r, (way){p->from, child_of(l, p->to, p->from), 1}, (point){s.x + s.w, r->attachments[p->start].at},
+        exit_points(r, (way){p->from, child_of(l, p->to, p->from), 1, 0, 0}, (point){s.x + s.w, r->attachments[p->start].at},
                     pts);
         if (l->failed) return;
         points_push(l, pts, (point){t.x + t.w, pts->data[pts->length - 1].y}); /* onto its border, from inside */
@@ -1819,7 +1974,7 @@ static void route_one(router *r, const pending *p, routed *out, points *all) {
         /* from just inside the container, along its top gutter, then down just before the target */
         uint32_t b = child_of(l, p->from, p->to);
         points inn = {0, 0, 0};
-        enter_points(r, (way){p->to, b, -1}, (point){t.x, r->attachments[p->end].at}, &inn);
+        enter_points(r, (way){p->to, b, -1, 0, 0}, (point){t.x, r->attachments[p->end].at}, &inn);
         if (l->failed) return;
         point first = inn.data[0];
         double gy = content_origin(l, p->from).y - sp->padding / 2;
@@ -2227,6 +2382,7 @@ static void route(layout *l, ta_diagram_layout *out, ta_diagram_box *boxes) {
     routed *all_routed = take(l, sizeof(routed), pairs + 1);
     if (l->failed) return;
     classify(&r);
+    region_lanes(&r);
     ports(&r);
     if (align_boxes(&r)) {
         for (uint32_t i = 0; i < l->n; i++)
