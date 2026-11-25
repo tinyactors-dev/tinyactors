@@ -882,6 +882,264 @@ static void migrate(tool_call *call) {
     result_number(call, "migration", migration);
 }
 
+/* ---- run.snapshot, run.restore -------------------------------------------------------------- */
+
+/* The label of the datamodels' state in a pack the server writes, and the
+ * one it restores: a pack another program wrote holds another state. */
+static const ta_string_view snapshot_label = TA_CLI_TEXT("tinyactors-run");
+
+/* A path of a file the server reads or writes: "-" would be standard
+ * input or output, which are the client's. 1 when it is a file, else 0
+ * with the call's error set. */
+static int file_path_of(tool_call *call, uint32_t at) {
+    if (!tool_equal(text_of(call, at), ta_string("-")) && text_of(call, at).length) return 1;
+    invalid_param(call, "range", ta_string("params.path"), "a file: standard input and output are the protocol's");
+    return 0;
+}
+
+/* What core writes into a ta_buffer for run.snapshot: quickjs's state, or
+ * the pack of the host and the server's state. */
+typedef struct filling {
+    tool_server *server;
+    const ta_datamodel_state *state; /* the pack's; NULL: quickjs's state */
+} filling;
+
+static ta_status fill(const filling *what, ta_buffer *out) {
+    if (!what->state) return ta_datamodel_ecmascript_snapshot(what->server->ecmascript, out);
+    return ta_host_snapshot_pack(what->server->host, what->state, out);
+}
+
+/* It in the request arena: asked with no room for its length, then
+ * written. */
+static ta_status filled(const filling *what, ta_bytes *out) {
+    ta_buffer probe = {0, 0, 0};
+    ta_status status = fill(what, &probe);
+    *out = (ta_bytes){0, 0};
+    if (status == TA_OK) return TA_OK; /* nothing to write */
+    if (status != TA_ERROR_NO_MEMORY || !probe.length) return status;
+    void *room = ta_growable_arena_alloc(&what->server->request, probe.length, SERVE_ALIGN);
+    if (!room) return TA_ERROR_NO_MEMORY;
+    ta_buffer buffer = {room, probe.length, 0};
+    status = fill(what, &buffer);
+    if (status == TA_OK) *out = (ta_bytes){buffer.pointer, buffer.length};
+    return status;
+}
+
+/* The server's state in the pack, beside the host's: quickjs's state (its
+ * sessions, payloads and random state) and the wall clock, which the
+ * host's snapshot does not keep. */
+static ta_status snapshot_state_of(tool_server *server, ta_bytes quickjs, ta_bytes *out) {
+    ta_cbor_writer writer;
+    ta_cbor_writer_init(&writer, (ta_buffer){0, 0, 0}, &server->request_allocator);
+    ta_cbor_write_map(&writer, 2);
+    ta_cbor_write_text(&writer, ta_string("quickjs"));
+    ta_cbor_write_bytes(&writer, quickjs);
+    ta_cbor_write_text(&writer, ta_string("wallNs"));
+    ta_cbor_write_uint(&writer, server->clock.now.wall_ns);
+    return ta_cbor_writer_bytes(&writer, out);
+}
+
+/* The quiescent host packed with the server's state (snapshot_state_of),
+ * labelled as the server's, answered or written whole to `path`. Core
+ * refuses it with a batch open or a migration running: checked first, so
+ * the datamodel's state is not written for nothing. */
+static void snapshot(tool_call *call) {
+    tool_server *server = call->server;
+    uint32_t path = param(call, "path");
+    if (path != TA_NIL && !file_path_of(call, path)) return;
+    ta_buffer quiet = {0, 0, 0};
+    ta_status status = ta_host_snapshot(server->host, &quiet);
+    if (status != TA_OK && status != TA_ERROR_NO_MEMORY) {
+        tool_serve_status(call, status);
+        if (status == TA_ERROR_STATE)
+            call->error.message = ta_string("a migration runs: snapshot after its effect.migrationDone");
+        return;
+    }
+    ta_bytes quickjs, state = {0, 0}, pack;
+    status = filled(&(filling){server, 0}, &quickjs);
+    if (status == TA_ERROR_UNSUPPORTED) {
+        tool_serve_status(call, status);
+        tool_text why;
+        tool_text_over(&why, &server->request);
+        tool_text_append(&why, ta_string(ta_datamodel_ecmascript_last_error(server->ecmascript)));
+        if (tool_text_view(&why).pointer) call->error.message = tool_text_view(&why);
+        return;
+    }
+    if (status == TA_OK) status = snapshot_state_of(server, quickjs, &state);
+    ta_datamodel_state labelled = {snapshot_label, state};
+    if (status == TA_OK) status = filled(&(filling){server, &labelled}, &pack);
+    if (status != TA_OK) {
+        tool_serve_status(call, status);
+        return;
+    }
+    if (path == TA_NIL) {
+        ta_cbor_write_text(&call->result, ta_string("snapshot"));
+        ta_cbor_write_bytes(&call->result, pack); /* JSON writes bytes as base64url */
+        return;
+    }
+    tool *t = server->invocation;
+    tool_write request = {0, text_of(call, path), pack};
+    if (t->platform->write(t->platform->context, &request) != TA_OK) {
+        tool_serve_refuse(call, (tool_serve_refusal){TA_RPC_INVALID, 0, "invalid", ta_string("params.path"),
+                                                     ta_string("the file could not be written")});
+        return;
+    }
+    result_number(call, "bytes", pack.length);
+}
+
+/* A refusal of run.restore: -32005 at `path`, saying why. */
+static void restore_refuse(tool_call *call, ta_string_view path, const char *message) {
+    tool_serve_refuse(call, (tool_serve_refusal){TA_RPC_INVALID, 0, "invalid", path, ta_string(message)});
+    call->error.status = ta_string("TA_ERROR_INVALID");
+}
+
+/* The parts of a pack the server wrote: the host's snapshot and images
+ * (contents), quickjs's state and the wall clock. */
+typedef struct restoring {
+    ta_host_snapshot_contents contents;
+    ta_bytes quickjs;
+    uint64_t wall_ns;
+} restoring;
+
+/* A pack's parts, checked to be the server's: 1, or 0 with the call's
+ * error set. */
+static int restoring_of(tool_call *call, ta_bytes pack, ta_string_view path, restoring *out) {
+    tool_server *server = call->server;
+    ta_memset(out, 0, sizeof *out);
+    out->contents.size = sizeof out->contents;
+    if (ta_host_snapshot_unpack(pack, &out->contents) != TA_OK) {
+        restore_refuse(call, path, "not a snapshot this build writes: of another format, or damaged");
+        return 0;
+    }
+    if (!tool_equal(out->contents.datamodel, snapshot_label)) {
+        restore_refuse(call, path, "a snapshot another program packed: its datamodels' state is not the server's");
+        return 0;
+    }
+    if (!tool_equal(out->contents.system_id, server->system)) {
+        restore_refuse(call, path, "a snapshot of another system: start the server with its --system");
+        return 0;
+    }
+    ta_cbor_document state;
+    ta_status status = ta_rpc_decode(
+        &(ta_rpc_decoding){{out->contents.state, out->contents.state_length}, &server->request}, &state);
+    if (status == TA_ERROR_NO_MEMORY) {
+        refused_at(call, status, path);
+        return 0;
+    }
+    uint32_t quickjs = status == TA_OK && state.tokens[0].kind == TA_CBOR_MAP
+                           ? ta_cbor_member(&state, 0, ta_string("quickjs"))
+                           : TA_NIL;
+    uint32_t wall = quickjs != TA_NIL ? ta_cbor_member(&state, 0, ta_string("wallNs")) : TA_NIL;
+    if (wall == TA_NIL || state.tokens[quickjs].kind != TA_CBOR_BYTES || state.tokens[wall].kind != TA_CBOR_UINT) {
+        restore_refuse(call, path, "the server's state in the snapshot is damaged");
+        return 0;
+    }
+    ta_string_view bytes = ta_cbor_string(&state, quickjs); /* a view into the pack */
+    out->quickjs = (ta_bytes){bytes.pointer, bytes.length};
+    out->wall_ns = state.tokens[wall].value;
+    return 1;
+}
+
+/* A host and its quickjs made from a pack, for the server to take in
+ * place of its own; nothing of the server's is touched. */
+typedef struct restored_host {
+    ta_host *host;
+    ta_datamodel_ecmascript *ecmascript;
+} restored_host;
+
+static ta_status restored_of(tool_server *server, ta_bytes pack, const restoring *parts, restored_host *out) {
+    out->host = 0;
+    out->ecmascript = ta_datamodel_ecmascript_new(&server->ecmascript_config);
+    if (!out->ecmascript) return TA_ERROR_NO_MEMORY;
+    uint32_t count = parts->contents.image_count;
+    ta_bytes *images = count ? (ta_bytes *)ta_growable_arena_alloc(&server->request, sizeof *images * count, SERVE_ALIGN)
+                             : 0;
+    ta_status status = count && !images ? TA_ERROR_NO_MEMORY : TA_OK;
+    for (uint32_t i = 0; status == TA_OK && i < count; i++)
+        images[i] = ta_host_snapshot_image(pack, i);
+    ta_datamodel_binding binding = ta_datamodel_ecmascript_binding(out->ecmascript);
+    ta_host_environment environment;
+    ta_memset(&environment, 0, sizeof environment);
+    environment.size = sizeof environment;
+    environment.datamodel_count = 1;
+    environment.datamodels = &binding;
+    environment.allocator = server->invocation->platform->allocator;
+    ta_host_snapshot_input input = {server->config, {parts->contents.host, parts->contents.host_length}, images, count, 0};
+    if (status == TA_OK) status = ta_host_restore(&environment, &input, &out->host);
+    /* the datamodel's handles valid again, and its random state, before any run */
+    if (status == TA_OK) status = ta_datamodel_ecmascript_restore(out->ecmascript, parts->quickjs);
+    if (status == TA_OK) return TA_OK;
+    if (out->host) ta_host_free(out->host);
+    ta_datamodel_ecmascript_free(out->ecmascript); /* after the host */
+    out->host = 0;
+    out->ecmascript = 0;
+    return status;
+}
+
+/* The host replaced by one restored from a pack run.snapshot wrote, with
+ * the server's config and datamodel limits: the old host and its quickjs
+ * are freed once the new one is whole, and the clock goes on from the
+ * snapshot's time. A refused restore leaves the server's host as it was.
+ * The restored host's first turn announces each invocation that was
+ * running (effect.invoke with `restored`). */
+static void restore(tool_call *call) {
+    tool_server *server = call->server;
+    uint32_t given = param(call, "snapshot"), path = param(call, "path");
+    ta_string_view where = ta_string(given != TA_NIL ? "params.snapshot" : "params.path");
+    ta_bytes pack;
+    ta_status status;
+    if (given != TA_NIL) {
+        status = bytes_of(call, given, &pack); /* 8-aligned, as the pack's parts need */
+        if (status == TA_ERROR_INVALID) {
+            tool_serve_refuse(call, (tool_serve_refusal){TA_RPC_MALFORMED, 0, "malformed", where,
+                                                         ta_string("not base64url text")});
+            return;
+        }
+    } else {
+        if (!file_path_of(call, path)) return;
+        tool *t = server->invocation;
+        tool_read read = {text_of(call, path), &server->request};
+        status = t->platform->read(t->platform->context, &read, &pack); /* 8-aligned */
+        if (status == TA_ERROR_INVALID) {
+            restore_refuse(call, where, "the file cannot be read");
+            return;
+        }
+    }
+    if (status != TA_OK) {
+        refused_at(call, status, where);
+        return;
+    }
+    restoring parts;
+    if (!restoring_of(call, pack, where, &parts)) return;
+    restored_host made;
+    status = restored_of(server, pack, &parts, &made);
+    if (status != TA_OK) {
+        refused_at(call, status, where);
+        if (status == TA_ERROR_INVALID) call->error.message = ta_string("the snapshot does not restore with this build");
+        return;
+    }
+    ta_host_free(server->host);
+    ta_datamodel_ecmascript_free(server->ecmascript); /* after the host */
+    server->host = made.host;
+    server->ecmascript = made.ecmascript;
+    server->datamodel = ta_datamodel_ecmascript_binding(made.ecmascript);
+    server->clock.now = (ta_system_time){parts.contents.time, parts.wall_ns};
+    ta_host_advance_time(server->host, server->clock.now);
+    ta_cbor_write_text(&call->result, ta_string("segments"));
+    ta_cbor_write_array(&call->result, TA_CBOR_COUNT_LATER);
+    uint32_t count = ta_host_segment_count(server->host);
+    for (uint32_t segment = 0; segment < count; segment++) {
+        ta_host_segment_info info;
+        ta_memset(&info, 0, sizeof info);
+        info.size = sizeof info;
+        if (ta_host_segment_info_get(server->host, segment, &info) == TA_OK && info.live)
+            ta_cbor_write_uint(&call->result, segment);
+    }
+    ta_cbor_write_end(&call->result);
+    result_number(call, "time", server->clock.now.monotonic);
+    result_number(call, "wallNs", server->clock.now.wall_ns);
+}
+
 /* ---- run.schema ----------------------------------------------------------------------------- */
 
 static void schema(tool_call *call) {
@@ -945,8 +1203,8 @@ static void forward(tool_call *call) {
  * lookups, the clock, the sweep, a migration started and a blob taken
  * (which joins the batch), which core takes while a batch is open, and the
  * two that end it. Refused: what would need the batch's ack (a forwarded
- * post, whose reply comes only after it) and what keeps the host
- * quiescent (an image added). */
+ * post, whose reply comes only after it) and what needs the host
+ * quiescent (an image added, a snapshot taken or restored). */
 static const tool_method methods[] = {
     {TA_CLI_TEXT("run.addImage"), add_image, 0, 0},
     {TA_CLI_TEXT("run.boot"), boot, TOOL_METHOD_WHILE_HELD, 0},
@@ -965,6 +1223,8 @@ static const tool_method methods[] = {
     {TA_CLI_TEXT("run.wake"), wake, TOOL_METHOD_WHILE_HELD, 0},
     {TA_CLI_TEXT("run.sweep"), sweep, TOOL_METHOD_WHILE_HELD, 0},
     {TA_CLI_TEXT("run.migrate"), migrate, TOOL_METHOD_WHILE_HELD, 0},
+    {TA_CLI_TEXT("run.snapshot"), snapshot, 0, 0},
+    {TA_CLI_TEXT("run.restore"), restore, 0, 0},
     {TA_CLI_TEXT("run.schema"), schema, TOOL_METHOD_WHILE_HELD, 0},
 };
 

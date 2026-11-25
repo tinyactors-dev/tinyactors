@@ -1,0 +1,13 @@
+<scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0" name="invoice"
+       datamodel="ecmascript" initial="draft">
+  <datamodel>
+    <data id="amount" expr="0"/>
+    <data id="format" expr="function (cents) { return (cents / 100).toFixed(2) + ' EUR'; }"/>
+  </datamodel>
+  <state id="draft">
+    <transition event="issue" target="issued">
+      <log label="invoice" expr="'issued for ' + format(amount)"/>
+    </transition>
+  </state>
+  <final id="issued"/>
+</scxml>

@@ -1691,6 +1691,82 @@ left a choice:
 - **`run.sweep`'s room** is a `uint32_t` (at most `maxScan`), so its
   bytes fit `size_t` on wasm32 too (`check:wasm` builds the command).
 
+**Step 8** (2026-11-25): `run.snapshot` and `run.restore`. Where the
+outline left a choice:
+
+- **`run.restore` replaces the host in place**, as 4.5 says, not a
+  startup option: a new quickjs made with the server's datamodel config
+  (kept from startup, with the seed, which the restored state then
+  overrides), `ta_host_restore` with the server's config (its CBOR kept
+  in the invocation's arena), then `ta_datamodel_ecmascript_restore`
+  before anything runs. Only when all three succeed are the old host and
+  its quickjs freed; a refusal at any step frees what it made and leaves
+  the server as it was. A `--restore FILE` at startup was not built: no
+  client needs it yet, and `run.restore` as the first message does the
+  same.
+- **The pack's state is the server's own, labelled `tinyactors-run`**:
+  CBOR `{"quickjs": bytes, "wallNs": uint}`. The wall clock is in it
+  because the host's snapshot keeps only the monotonic time (`time` in
+  the pack), and quickjs's `Date` reads the wall clock: without it a
+  restored session would see another date than the one it snapshotted
+  at. As the bindings do, the restore checks the label and the system id
+  (`ta_host_snapshot_contents.system_id` against `host.config`'s) and
+  nothing else of the config; a snapshot of a server with another
+  `ticksPerSecond` or other capacities but the same system id restores
+  with the server's config, as `ta_host_restore` takes it.
+- **The clock goes back.** 4.3 says neither clock goes back; a restore
+  sets both to the snapshot's, which may be earlier, so its result
+  carries `time` and `wallNs`. **Schema fix:** `run.restore.result` had
+  `segments` only, which left the client to learn the clock had moved
+  from the next `run.turn`; it now requires `time` and `wallNs`. The two
+  methods' descriptions now say when they are refused. `segments` lists
+  the restored host's live segments.
+- **Quiescence first.** `run.snapshot` asks `ta_host_snapshot` with no
+  room before quickjs writes its state, so a migration running is
+  refused (-32002, "snapshot after its effect.migrationDone") without
+  the state written for nothing; a held batch is refused by the method
+  table, as `run.addImage` is. Quickjs's state and the pack are each
+  asked for their length, then written into the request arena; the pack
+  is answered as bytes (base64url) or written whole through the
+  platform. A variable quickjs cannot store is -32007 with
+  `ta_datamodel_ecmascript_last_error` as the message.
+- **Refusals of `run.restore`:** a pack that does not unpack, another
+  program's label, another system id, a damaged state, a file that cannot
+  be read: -32005 at `params.snapshot` or `params.path`, each with its
+  message; text that is not base64url is -32006 as for `cbor` (the
+  schema's pattern refuses most first, -32602); a path of `-` (standard
+  input or output, the protocol's) or empty is -32602 for both methods.
+- **Transcripts run in a copy of their case.** A snapshot written with
+  `path` must not land in the repository, and AGENTS.md has tests write
+  to a temporary directory, so `test_run_transcripts` and `mise run
+  run:transcripts` copy the case's directory into a scratch one and run
+  the server there. The transcripts take snapshots with `path`: the pack
+  is about 290 KB of raw region memory (with the default capacities and
+  tracing on), which would put two lines of 390 KB of base64url per
+  snapshot into a transcript, the client's copy of them stale with every
+  change to the region's layout. The answered form is exercised by
+  `test_run_memory`, which restores from the snapshot the server just
+  answered.
+- **Tests:** `tests/run/snapshot` (orders with a random reference and a
+  checkout stamped with `Date`, snapshotted, the original run past it,
+  restored: the same reference drawn again, a blob taken after the
+  snapshot woken in the restored host, the deadline firing after the
+  restore, the refusals, and -32007 for a function in a `<data>`),
+  `tests/run/snapshot-deadline` (a payment deadline across two restores
+  of one file, firing once and cancelled once) and
+  `tests/run/snapshot-services` (a snapshot refused while a migration
+  runs; both running invocations announced with `restored`, one failed,
+  one done). `test_tool` (`test_run_snapshot_inspected`) reads a snapshot
+  the server wrote with `inspect` and `actors`, and has a server of
+  another system refuse it; `test_run_memory` runs both methods, both
+  forms, with the refusing allocator.
+- **For step 9:** restore runs no `trace.end` and drains nothing of the
+  old host: spans and logs the old host's encoder still holds are lost
+  with it. Step 9 should end the old host's traces (post `trace.end`,
+  drain its `TRACES`/`LOGS` to the client) before freeing it, as the end
+  of input will, and `run.restore`'s response then follows those
+  notifications.
+
 ## 8. Decisions
 
 The maintainer settled every open question (2026-11-25); none is left.

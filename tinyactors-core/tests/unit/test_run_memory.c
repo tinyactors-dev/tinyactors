@@ -10,9 +10,11 @@
  * services invoked, done, failed and cancelled, the lookups; orders swept,
  * hibernated (with no batch open and into a held batch), woken for an
  * event and for a migration to a second version (with its wakes, its end
- * and the retired segment); and the end of input with a batch held, fed a
- * few bytes at a time. The server's method
- * table is held to the schema's run.* methods too. */
+ * and the retired segment); the host snapshotted (answered, and written to
+ * a file the platform keeps in memory) and restored in place from the file
+ * and from the answer; and the end of input with a batch held, fed a few
+ * bytes at a time. The server's method table is held to the schema's run.*
+ * methods too. */
 #include <stdlib.h>
 #include <string.h>
 
@@ -72,6 +74,16 @@ static const char session[] =
     "{\"jsonrpc\":\"2.0\",\"id\":24,\"method\":\"run.schema\"}\n"
     "not json\n";
 
+/* Then the host snapshotted, answered and to a file, and restored from the
+ * file; then (session_restore) from the answer, and a turn. */
+static const char session_snapshot[] =
+    "{\"jsonrpc\":\"2.0\",\"id\":60,\"method\":\"run.snapshot\"}\n"
+    "{\"jsonrpc\":\"2.0\",\"id\":61,\"method\":\"run.snapshot\",\"params\":{\"path\":\"shop.snapshot\"}}\n"
+    "{\"jsonrpc\":\"2.0\",\"id\":62,\"method\":\"run.restore\",\"params\":{\"path\":\"shop.snapshot\"}}\n";
+static const char restore_begin[] = "{\"jsonrpc\":\"2.0\",\"id\":63,\"method\":\"run.restore\",\"params\":{\"snapshot\":\"";
+static const char restore_end[] = "\"}}\n{\"jsonrpc\":\"2.0\",\"id\":64,\"method\":\"run.turn\"}\n";
+static const char snapshot_answered[] = "\"id\":60,\"result\":{\"snapshot\":\"";
+
 /* Then orders hibernated, woken, and migrated to a second version; the
  * input ends with a batch held. */
 static const char session_hibernation[] =
@@ -119,6 +131,10 @@ typedef struct memory_platform {
     size_t at;  /* of the session's parts: what receive gave so far */
     char *output;
     size_t output_length;
+    char *file; /* the one file the session writes, shop.snapshot */
+    size_t file_length;
+    char *restore; /* session_restore's lines, made from the output when reached */
+    size_t restore_length;
 } memory_platform;
 
 static void *memory_alloc(void *context, size_t size, size_t align) {
@@ -138,8 +154,20 @@ static void memory_free(void *context, void *pointer, size_t size) {
     free(pointer);
 }
 
+static int is_written_file(ta_string_view path) {
+    return path.length == strlen("shop.snapshot") && memcmp(path.pointer, "shop.snapshot", path.length) == 0;
+}
+
 static ta_status memory_read(void *context, const tool_read *request, ta_bytes *out) {
-    (void)context;
+    memory_platform *platform = (memory_platform *)context;
+    if (is_written_file(request->path)) {
+        if (!platform->file) return TA_ERROR_INVALID;
+        void *bytes = ta_growable_arena_alloc(request->arena, platform->file_length + 1, 8);
+        if (!bytes) return TA_ERROR_NO_MEMORY;
+        memcpy(bytes, platform->file, platform->file_length);
+        *out = (ta_bytes){bytes, platform->file_length};
+        return TA_OK;
+    }
     char path[1024];
     snprintf(path, sizeof path, "%s/order/%.*s", TA_TEST_TRANSCRIPTS, (int)request->path.length, request->path.pointer);
     FILE *file = fopen(path, "rb");
@@ -157,6 +185,15 @@ static ta_status memory_read(void *context, const tool_read *request, ta_bytes *
 
 static ta_status memory_write(void *context, const tool_write *request) {
     memory_platform *platform = (memory_platform *)context;
+    if (is_written_file(request->path)) { /* replaced whole */
+        char *file = (char *)malloc(request->bytes.length + 1);
+        if (!file) return TA_ERROR_INVALID;
+        memcpy(file, request->bytes.pointer, request->bytes.length);
+        free(platform->file);
+        platform->file = file;
+        platform->file_length = request->bytes.length;
+        return TA_OK;
+    }
     if (request->stream != TOOL_STANDARD_OUTPUT || request->path.length) return TA_OK; /* complaints */
     char *grown = (char *)realloc(platform->output, platform->output_length + request->bytes.length + 1);
     if (!grown) return TA_ERROR_INVALID;
@@ -167,22 +204,49 @@ static ta_status memory_write(void *context, const tool_write *request) {
     return TA_OK;
 }
 
-/* The session's parts, read one after the other. */
-static const struct {
+/* session_restore's lines: run.restore of the snapshot the server
+ * answered to id 60 (none when it was refused), and a turn. */
+static void restore_make(memory_platform *platform) {
+    const char *found = platform->output ? strstr(platform->output, snapshot_answered) : NULL;
+    const char *start = found ? found + strlen(snapshot_answered) : "";
+    size_t length = strcspn(start, "\"");
+    platform->restore_length = strlen(restore_begin) + length + strlen(restore_end);
+    platform->restore = (char *)malloc(platform->restore_length + 1);
+    if (!platform->restore) abort();
+    snprintf(platform->restore, platform->restore_length + 1, "%s%.*s%s", restore_begin, (int)length, start,
+             restore_end);
+}
+
+typedef struct session_part {
     const char *text;
     size_t length;
-} session_parts[] = {{session, sizeof session - 1}, {session_hibernation, sizeof session_hibernation - 1}};
+} session_part;
+
+/* The session's parts, read one after the other; session_restore is made
+ * from the output when it is reached. */
+enum { SESSION_PARTS = 4, SESSION_RESTORE = 2 };
+
+static session_part part_of(memory_platform *platform, size_t part) {
+    switch (part) {
+    case 0: return (session_part){session, sizeof session - 1};
+    case 1: return (session_part){session_snapshot, sizeof session_snapshot - 1};
+    case SESSION_RESTORE:
+        if (!platform->restore) restore_make(platform);
+        return (session_part){platform->restore, platform->restore_length};
+    default: return (session_part){session_hibernation, sizeof session_hibernation - 1};
+    }
+}
 
 /* A few bytes at a time, so lines arrive split. */
 static ta_status memory_receive(void *context, ta_buffer *room) {
     memory_platform *platform = (memory_platform *)context;
     size_t part = 0, at = platform->at;
-    while (part < sizeof session_parts / sizeof session_parts[0] && at >= session_parts[part].length)
-        at -= session_parts[part++].length;
-    size_t left = part < sizeof session_parts / sizeof session_parts[0] ? session_parts[part].length - at : 0;
+    while (part < SESSION_PARTS && at >= part_of(platform, part).length)
+        at -= part_of(platform, part++).length;
+    size_t left = part < SESSION_PARTS ? part_of(platform, part).length - at : 0;
     size_t take = left < 97 ? left : 97;
     if (take > room->capacity) take = room->capacity;
-    if (take) memcpy(room->pointer, session_parts[part].text + at, take);
+    if (take) memcpy(room->pointer, part_of(platform, part).text + at, take);
     platform->at += take;
     room->length = take;
     return TA_OK;
@@ -208,6 +272,8 @@ static outcome serve(long budget) {
     platform.receive = memory_receive;
     platform.version = ta_string("");
     int exit = tool_main(&platform, (tool_command_line){4, words});
+    free(state.file);
+    free(state.restore);
     return (outcome){exit, state.made, state.live, state.output};
 }
 
@@ -231,6 +297,11 @@ static void test_every_refusal_is_a_status(void) {
     CHECK(whole.output && strstr(whole.output, "\"id\":55,\"result\":{}"));
     CHECK(whole.output && strstr(whole.output, "\"migration\":1,\"migrated\":2,\"failed\":[],\"pending\":[]"));
     CHECK(whole.output && strstr(whole.output, "\"method\":\"effect.segmentFreed\""));
+    CHECK(whole.output && strstr(whole.output, "\"id\":60,\"result\":{\"snapshot\":\""));
+    CHECK(whole.output && strstr(whole.output, "\"id\":61,\"result\":{\"bytes\":"));
+    CHECK(whole.output && strstr(whole.output, "\"id\":62,\"result\":{\"segments\":[0,1]"));
+    CHECK(whole.output && strstr(whole.output, "\"id\":63,\"result\":{\"segments\":[0,1]"));
+    CHECK(whole.output && strstr(whole.output, "\"id\":64,\"result\":{\"status\":\"idle\""));
     long tried = 0, answered_memory = 0;
     for (long budget = 0; budget < whole.made; budget++) {
         outcome refused = serve(budget);
@@ -248,7 +319,7 @@ static void test_every_refusal_is_a_status(void) {
 
 /* The run.* methods of the schema that later steps of the protocol build:
  * the server answers them -32601 until then. */
-static const char *const unbuilt[] = {"run.snapshot", "run.restore", "run.traces", "run.metrics", "run.post"};
+static const char *const unbuilt[] = {"run.traces", "run.metrics", "run.post"};
 
 static int is_unbuilt(ta_string_view name) {
     for (size_t i = 0; i < sizeof unbuilt / sizeof unbuilt[0]; i++)

@@ -10,9 +10,11 @@ Each directory is a session with `tinyactors run` (docs/cli.md, "Run"):
 - the charts and the config the arguments name, and a README saying what
   the case shows.
 
-`test_tool` (`test_run_transcripts`) runs the server in the case's
-directory with `TZ=UTC`, feeds it the client's lines and requires the
-server's byte for byte. `mise run run:schema` validates every line against
+`test_tool` (`test_run_transcripts`) runs the server in a copy of the
+case's directory, in its scratch directory, with `TZ=UTC`, feeds it the
+client's lines and requires the server's byte for byte. A file a session
+writes (`run.snapshot`'s `path`) lands in the copy, never in the
+repository, and a later line of the session reads it back. `mise run run:schema` validates every line against
 the protocol's JSON Schema (`clientMessage` or `serverMessage`). After a
 deliberate change to the server, `mise run run:transcripts [case...]`
 writes the server's lines again; review the diff.

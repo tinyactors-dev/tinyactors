@@ -764,12 +764,14 @@ integer) or a local address (`ta_host_resolve`). Every result is an object.
 | `run.wake` | `session`, `blob` (its latest) | `{}` | `ta_host_wake` |
 | `run.sweep` | `maxScan`, `limit` | `sessions`: those at rest since the previous sweep, to hibernate | `ta_host_sweep` |
 | `run.migrate` | `chart` (a name; none: every chart), `session` (one actor), `wake`, `timeout` (ticks or a duration) | `migration`: its id | `ta_host_migrate` (`TA_HOST_MIGRATE_WAKE`); the actors move in later runs |
+| `run.snapshot` | `path` (optional: a file, written whole) | `snapshot`, or `bytes` with `path` | `ta_host_snapshot`, `ta_datamodel_ecmascript_snapshot`, `ta_host_snapshot_pack` (below) |
+| `run.restore` | `snapshot` or `path` | `segments` (the live ones), `time`, `wallNs` | `ta_host_snapshot_unpack`, `ta_host_snapshot_image`, `ta_host_restore`, `ta_datamodel_ecmascript_restore`; the old host and quickjs freed after |
 | `run.schema` | — | `schema`: the protocol's JSON Schema | none |
 | any other | as core's | core's `result` or `error`, with the client's id | `ta_host_post` (`actor.state`, `host.stats`, `trace.*`, ...) |
 
 A `run.*` method the server does not have is -32601 of its own. The
-schema lists methods this release does not serve yet (snapshots,
-telemetry, `run.post`): their params are checked, then the server answers
+schema lists methods this release does not serve yet (telemetry,
+`run.post`): their params are checked, then the server answers
 -32601.
 The only defaults the server owns are `budget` and `runs`, so that a chart
 that never idles cannot hang the client, and `--max-message`.
@@ -825,6 +827,38 @@ moved, those that could not (with the status) and those left pending. A
 segment with no actors left and no current chart retires
 (`effect.segmentFreed`).
 
+### Snapshots
+
+`run.snapshot` packs the whole host (`ta_host_snapshot_pack`: every
+segment's region, the images, the system id and the host's time) with the
+server's state, labelled `tinyactors-run`: quickjs's state (every
+session's variables and `_event`, the payloads, `Math.random`'s state) and
+the wall clock, as CBOR `{"quickjs": bytes, "wallNs": uint}`. It answers
+the pack as `snapshot`, or writes it whole to `path` and answers its
+`bytes`; a path of `-` is refused (-32602), standard input and output
+being the protocol's. Core takes it only from a quiescent host: while a
+batch is held it is refused (-32002), and so it is while a migration runs,
+until its `effect.migrationDone`. A variable quickjs cannot store (a
+function held in a `<data>`) refuses it with -32007, the message naming
+the variable. `tinyactors inspect` and `tinyactors actors` read the file it
+writes ([Snapshots and blobs](#snapshots-and-blobs)).
+
+`run.restore` replaces the server's host, in place, with one made from a
+pack `run.snapshot` wrote: a new quickjs with the server's datamodel
+limits, `ta_host_restore` with the server's config and the pack's images,
+then quickjs's state restored before anything runs. Only once the new
+host is whole are the old host and its quickjs freed; a refused restore
+leaves the server as it was. A pack another program wrote (another label),
+of another system id, or that does not unpack is -32005; it is refused
+while a batch is held (-32002). The clock goes on from the snapshot's
+time, monotonic and wall, which may be earlier than the replaced host's:
+the result says where. Sessions, names and delayed sends are the
+snapshot's, and `Math.random` draws what it drew after the snapshot. The
+restored host keeps the snapshot's identity, so a blob taken before the
+snapshot, or after it, wakes in it. The first `run.turn` after a restore
+announces each invocation that was running as an `effect.invoke` with
+`restored`: the client starts its stand-in again, or fails it.
+
 ### Held batches
 
 With `hold`, `run.turn` leaves open a batch that has a send whose sender
@@ -853,7 +887,7 @@ holding it, so that its response leaves no batch open; nothing runs.
 | `run.advanceTime` | allowed: the clock moves, nothing runs |
 | `run.turn`, `run.ack` | allowed: they ack the held batch |
 | forwarded methods | refused, -32002 `state`: core answers a post made while a batch is open only after its ack, so the response could not come before the next request; an actor's state cannot be read while its sends wait |
-| `run.addImage` | refused, -32002 `state`: images are added to a quiescent host |
+| `run.addImage`, `run.snapshot`, `run.restore` | refused, -32002 `state`: images are added to, and snapshots taken of and restored to, a quiescent host |
 
 ### Notifications
 
@@ -922,12 +956,12 @@ The error object is core's: `{"code", "message", "data": {"reason",
 | no such method | -32601 | `unknown` |
 | a param missing, of the wrong type, unknown, out of range; `data` for a chart that reads no values; the clock moved back | -32602 | `missing`, `type`, `unknown`, `range` |
 | `TA_ERROR_STALE` (no such session or name; a blob not the session's latest) | -32001 | `stale` |
-| `TA_ERROR_STATE`; a method refused while a batch is held; `run.ack` with none held | -32002 | `state` |
+| `TA_ERROR_STATE` (a snapshot while a migration runs); a method refused while a batch is held; `run.ack` with none held | -32002 | `state` |
 | `TA_ERROR_LIMIT` | -32003 | `limit` |
 | `TA_ERROR_NO_MEMORY` | -32004 | `memory` |
-| `TA_ERROR_INVALID` (another system's address, a chart no image has, charts that do not compile: the message holds their diagnostics; a blob of another session or host) | -32005 | `invalid` |
+| `TA_ERROR_INVALID` (another system's address, a chart no image has, charts that do not compile: the message holds their diagnostics; a blob of another session or host; a snapshot that is not the server's, or a file that cannot be read or written) | -32005 | `invalid` |
 | data the datamodel cannot read, `cbor` that is not base64url | -32006 | `malformed` |
-| `TA_ERROR_UNSUPPORTED` (a value outside the value table) | -32007 | `unsupported` |
+| `TA_ERROR_UNSUPPORTED` (a value outside the value table; a variable a snapshot cannot store) | -32007 | `unsupported` |
 | a refusal no call documents | -32603 | `internal` |
 
 Memory a message cannot get is that message's -32004, and the server goes

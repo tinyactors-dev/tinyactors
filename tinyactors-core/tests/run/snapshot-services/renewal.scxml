@@ -1,0 +1,8 @@
+<scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0" name="renewal"
+       datamodel="ecmascript" initial="charging">
+  <state id="charging">
+    <invoke type="payment" src="psp:renewals" id="payment"/>
+    <transition event="done.invoke.payment" target="renewed"/>
+  </state>
+  <final id="renewed"/>
+</scxml>

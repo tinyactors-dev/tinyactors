@@ -55,6 +55,8 @@ typedef struct tool_server {
     ta_host *host;
     ta_datamodel_ecmascript *ecmascript;
     ta_datamodel_binding datamodel; /* the host's one datamodel: quickjs */
+    ta_datamodel_ecmascript_config ecmascript_config; /* its limits, seed and clock: a restore makes it again */
+    ta_bytes config;                /* the host config's CBOR, in the invocation's arena: a restore's too */
     ta_growable_arena request;      /* a mark per message; capped between messages */
     ta_allocator request_allocator; /* its view, for writers */
     ta_table posts;                 /* tool_post rows: a post's id is its handle */

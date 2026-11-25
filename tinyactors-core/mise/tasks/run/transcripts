@@ -13,14 +13,22 @@
 # lacked: the server is deterministic, so a prefix answers the same.
 
 require_relative '../../core'
+require 'fileutils'
 require 'open3'
+require 'tmpdir'
 
 CASES = Core::ROOT.join('tests/run')
 PROGRAM = Core.program_path('dev', 'tinyactors')
 
+# Run in a copy of the case, as the test does, so the files a session
+# writes (a snapshot) stay out of the repository.
 def answers(directory, arguments, lines)
-  output, errors, status = Open3.capture3({ 'TZ' => 'UTC' }, PROGRAM.to_s, 'run', *arguments,
-                                          stdin_data: lines.map { |line| "#{line}\n" }.join, chdir: directory.to_s)
+  output, errors, status = Dir.mktmpdir('run-case') do |scratch|
+    copy = File.join(scratch, 'case')
+    FileUtils.cp_r(directory.to_s, copy)
+    Open3.capture3({ 'TZ' => 'UTC' }, PROGRAM.to_s, 'run', *arguments,
+                   stdin_data: lines.map { |line| "#{line}\n" }.join, chdir: copy)
+  end
   expected = directory.join('exit').file? ? directory.join('exit').read.to_i : 0
   abort "#{directory.basename}: exit #{status.exitstatus}, not #{expected}: #{errors}" unless status.exitstatus == expected
   output.lines.map(&:chomp)

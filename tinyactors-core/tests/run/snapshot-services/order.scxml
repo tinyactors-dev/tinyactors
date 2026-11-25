@@ -1,0 +1,30 @@
+<scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0" name="order"
+       datamodel="ecmascript" initial="open">
+  <datamodel><data id="total" expr="0"/><data id="receipt" expr="null"/></datamodel>
+  <state id="open">
+    <transition event="checkout" target="paying"/>
+  </state>
+  <state id="paying">
+    <invoke type="payment" src="psp:charges" id="payment">
+      <param name="amount" expr="total"/><param name="card" expr="_event.data.card"/>
+    </invoke>
+    <transition event="payment.authorized">
+      <log label="order" expr="'authorized ' + _event.data.authorization"/>
+      <send target="#_payment" event="capture" id="capture">
+        <param name="authorization" expr="_event.data.authorization"/>
+      </send>
+    </transition>
+    <transition event="done.invoke.payment" target="paid">
+      <assign location="receipt" expr="_event.data.receipt"/>
+    </transition>
+    <transition event="error.communication" target="open">
+      <log label="order" expr="'payment failed: ' + _event.name"/>
+    </transition>
+    <transition event="cancel" target="cancelled"/>
+  </state>
+  <final id="paid">
+    <onentry><log label="order" expr="'paid ' + receipt"/></onentry>
+    <donedata><param name="receipt" expr="receipt"/></donedata>
+  </final>
+  <final id="cancelled"/>
+</scxml>

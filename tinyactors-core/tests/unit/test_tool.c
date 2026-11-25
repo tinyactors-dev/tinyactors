@@ -417,7 +417,8 @@ static void test_layout_corpus(void) {
 
 /* The cases of tests/run (README.md there): each directory's transcript.jsonl
  * holds the client's lines ("> ") and the server's ("< "); the server, run
- * in the case's directory with its `arguments` and TZ=UTC, given the
+ * in a copy of the case's directory (in the scratch directory, so what a
+ * session writes stays there) with its `arguments` and TZ=UTC, given the
  * client's lines, must write the server's byte for byte and exit as the
  * case's `exit` says (0 without one). `mise run run:transcripts` writes the
  * server's lines again after a deliberate change. */
@@ -453,10 +454,13 @@ static void test_run_transcripts(void) {
         char *exit_text = whole_file(path);
         int exit_wanted = exit_text ? atoi(exit_text) : 0;
         free(exit_text);
+        /* in a copy of the case, so the files a session writes (a snapshot) stay in the scratch directory */
         snprintf(command, sizeof command,
-                 "cd '%s/%s' && TZ=UTC '%s/tinyactors' run %s < '%s' > '%s/run-output' 2> '%s/run-errors'",
-                 TA_TEST_TRANSCRIPTS, entry->d_name, TA_TEST_PROGRAMS, arguments ? arguments : "",
-                 fixture_path("run-input"), TA_TEST_TEMPORARY_DIRECTORY, TA_TEST_TEMPORARY_DIRECTORY);
+                 "rm -rf '%s/run-case' && cp -R '%s/%s' '%s/run-case' && cd '%s/run-case' && "
+                 "TZ=UTC '%s/tinyactors' run %s < '%s' > '%s/run-output' 2> '%s/run-errors'",
+                 TA_TEST_TEMPORARY_DIRECTORY, TA_TEST_TRANSCRIPTS, entry->d_name, TA_TEST_TEMPORARY_DIRECTORY,
+                 TA_TEST_TEMPORARY_DIRECTORY, TA_TEST_PROGRAMS, arguments ? arguments : "", fixture_path("run-input"),
+                 TA_TEST_TEMPORARY_DIRECTORY, TA_TEST_TEMPORARY_DIRECTORY);
         free(arguments);
         int status = system(command);
         int exited = WIFEXITED(status) ? WEXITSTATUS(status) : -1;
@@ -474,6 +478,52 @@ static void test_run_transcripts(void) {
     }
     closedir(directory);
     CHECK(cases >= 3);
+}
+
+/* A snapshot `tinyactors run` writes is one the commands that read
+ * snapshots read: `inspect` restores it and shows the server's label and
+ * state, `actors` lists its order with the pending deadline. A server of
+ * another system refuses to restore it. */
+static void test_run_snapshot_inspected(void) {
+    static const char session[] =
+        "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"run.spawn\",\"params\":{\"chart\":\"order\",\"name\":\"order-17\","
+        "\"params\":{\"total\":4200}}}\n"
+        "[{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"run.send\",\"params\":{\"target\":1,\"event\":\"checkout\",\"data\":"
+        "{\"card\":\"tok_visa\"}}},{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"run.turn\"}]\n"
+        "{\"jsonrpc\":\"2.0\",\"id\":4,\"method\":\"run.advanceTime\",\"params\":{\"by\":\"10s\"}}\n"
+        "{\"jsonrpc\":\"2.0\",\"id\":5,\"method\":\"run.snapshot\",\"params\":{\"path\":\"shop.snapshot\"}}\n";
+    static const char restore[] =
+        "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"run.restore\",\"params\":{\"path\":\"shop.snapshot\"}}\n";
+    CHECK(fixture_write("run-snapshot-session", session));
+    CHECK(fixture_write("run-snapshot-restore", restore));
+    char command[4096];
+    snprintf(command, sizeof command,
+             "rm -rf '%s/run-snapshot' && cp -R '%s/snapshot-deadline' '%s/run-snapshot' && cd '%s/run-snapshot' && "
+             "'%s/tinyactors' run --config config.json order.scxml < ../run-snapshot-session > ../output 2> ../errors",
+             TA_TEST_TEMPORARY_DIRECTORY, TA_TEST_TRANSCRIPTS, TA_TEST_TEMPORARY_DIRECTORY, TA_TEST_TEMPORARY_DIRECTORY,
+             TA_TEST_PROGRAMS);
+    int status = system(command);
+    CHECK_EQUAL(WIFEXITED(status) ? WEXITSTATUS(status) : -1, 0);
+    CHECK(has("output", "\"id\":5,\"result\":{\"bytes\":"));
+    CHECK_EQUAL(run("inspect run-snapshot/shop.snapshot"), 0);
+    CHECK(has("output", "- **System ID**: tinyactors-run"));
+    CHECK(has("output", "- **Time**: 10000"));
+    CHECK(has("output", "- **Restored**: yes"));
+    CHECK(has("output", "- **Label**: tinyactors-run"));
+    CHECK(has("output", "- **Encoding**: cbor"));
+    CHECK(has("output", "\"wallNs\":10000000000"));
+    CHECK_EQUAL(run("actors run-snapshot/shop.snapshot"), 0);
+    CHECK(has("output", "order-17"));
+    CHECK(has("output", "payment.timeout"));
+    /* another system's server: refused, and it goes on */
+    snprintf(command, sizeof command,
+             "cd '%s/run-snapshot' && '%s/tinyactors' run --system warehouse --config config.json order.scxml "
+             "< ../run-snapshot-restore > ../output 2> ../errors",
+             TA_TEST_TEMPORARY_DIRECTORY, TA_TEST_PROGRAMS);
+    status = system(command);
+    CHECK_EQUAL(WIFEXITED(status) ? WEXITSTATUS(status) : -1, 0);
+    CHECK(has("output", "\"code\":-32005,\"message\":\"a snapshot of another system: start the server with its "
+                        "--system\""));
 }
 
 /* `tinyactors run --schema` is the schema's file, byte for byte. */
@@ -1250,5 +1300,6 @@ int main(void) {
     RUN(test_snapshots_and_blobs);
     RUN(test_run_schema);
     RUN(test_run_transcripts);
+    RUN(test_run_snapshot_inspected);
     TEST_MAIN_END();
 }

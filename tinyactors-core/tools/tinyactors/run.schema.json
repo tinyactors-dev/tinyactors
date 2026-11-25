@@ -631,7 +631,7 @@
     },
 
     "run.snapshot.params": {
-      "description": "A snapshot of the quiescent host (`ta_host_snapshot_pack`), answered, or written whole to `path`.",
+      "description": "A snapshot of the quiescent host (`ta_host_snapshot_pack`, with quickjs's state and the wall clock), answered, or written whole to `path`. Refused (-32002) while a batch is held and while a migration runs, until its `effect.migrationDone`.",
       "type": "object",
       "properties": {"path": {"type": "string"}},
       "additionalProperties": false
@@ -653,7 +653,7 @@
     },
 
     "run.restore.params": {
-      "description": "Replace the host with one restored from a snapshot, given or read from `path`.",
+      "description": "Replace the host with one restored from a snapshot `run.snapshot` wrote for the same system, given or read from `path`, with the server's config and datamodel limits. Refused (-32002) while a batch is held. The next `run.turn` announces each invocation that was running (`effect.invoke` with `restored`).",
       "type": "object",
       "oneOf": [
         {
@@ -669,9 +669,14 @@
       ]
     },
     "run.restore.result": {
+      "description": "The restored host's live segments, and its clocks: the snapshot's time, which may be earlier than the replaced host's.",
       "type": "object",
-      "properties": {"segments": {"type": "array", "items": {"$ref": "#/$defs/segment"}}},
-      "required": ["segments"],
+      "properties": {
+        "segments": {"type": "array", "items": {"$ref": "#/$defs/segment"}},
+        "time": {"$ref": "#/$defs/ticks"},
+        "wallNs": {"$ref": "#/$defs/uint64"}
+      },
+      "required": ["segments", "time", "wallNs"],
       "additionalProperties": false
     },
 

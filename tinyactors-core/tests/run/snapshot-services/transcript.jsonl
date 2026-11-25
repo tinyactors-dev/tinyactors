@@ -1,0 +1,41 @@
+> [{"jsonrpc":"2.0","id":1,"method":"run.spawn","params":{"chart":"order","name":"order-1","params":{"total":4200}}},{"jsonrpc":"2.0","id":2,"method":"run.spawn","params":{"chart":"renewal","name":"renewal-1"}},{"jsonrpc":"2.0","id":3,"method":"run.send","params":{"target":1,"event":"checkout","data":{"card":"tok_visa"}}},{"jsonrpc":"2.0","id":4,"method":"run.turn"}]
+< {"jsonrpc":"2.0","method":"effect.invoke","params":{"batch":1,"index":0,"session":1,"segment":0,"invocation":16777217,"type":"payment","src":"psp:charges","invokeid":"payment","data":{"amount":4200,"card":"tok_visa"}}}
+< {"jsonrpc":"2.0","method":"effect.invoke","params":{"batch":1,"index":1,"session":2,"segment":0,"invocation":16777218,"type":"payment","src":"psp:renewals","invokeid":"payment"}}
+< [{"jsonrpc":"2.0","id":1,"result":{"session":1,"address":"tinyactors://tinyactors-run/#_scxml_1"}},{"jsonrpc":"2.0","id":2,"result":{"session":2,"address":"tinyactors://tinyactors-run/#_scxml_2"}},{"jsonrpc":"2.0","id":3,"result":{}},{"jsonrpc":"2.0","id":4,"result":{"status":"idle","runs":1,"fuel":13,"time":0,"nextDeadline":null}}]
+> {"jsonrpc":"2.0","id":5,"method":"run.addImage","params":{"files":["renewal-v2.scxml"]}}
+< {"jsonrpc":"2.0","id":5,"result":{"segment":1,"charts":[{"name":"renewal","chart":0}],"diagnostics":[]}}
+> {"jsonrpc":"2.0","id":6,"method":"run.migrate","params":{"chart":"renewal"}}
+< {"jsonrpc":"2.0","id":6,"result":{"migration":1}}
+> {"jsonrpc":"2.0","id":7,"method":"run.snapshot","params":{"path":"shop.snapshot"}}
+< {"jsonrpc":"2.0","id":7,"error":{"code":-32002,"message":"a migration runs: snapshot after its effect.migrationDone","data":{"reason":"state","path":"","status":"TA_ERROR_STATE"}}}
+> {"jsonrpc":"2.0","id":8,"method":"run.turn"}
+< {"jsonrpc":"2.0","method":"effect.migrationDone","params":{"batch":2,"index":0,"migration":1,"migrated":0,"failed":[{"session":2,"status":"TA_ERROR_STATE"}],"pending":[]}}
+< {"jsonrpc":"2.0","id":8,"result":{"status":"idle","runs":1,"fuel":0,"time":0,"nextDeadline":null}}
+> {"jsonrpc":"2.0","id":9,"method":"run.snapshot","params":{"path":"shop.snapshot"}}
+< {"jsonrpc":"2.0","id":9,"result":{"bytes":579608}}
+> [{"jsonrpc":"2.0","id":10,"method":"run.send","params":{"target":1,"invocation":16777217,"event":"payment.authorized","data":{"authorization":"auth_81"}}},{"jsonrpc":"2.0","id":11,"method":"run.turn"}]
+< {"jsonrpc":"2.0","method":"effect.log","params":{"batch":3,"index":0,"session":1,"label":"order","text":"authorized auth_81"}}
+< {"jsonrpc":"2.0","method":"effect.send","params":{"batch":3,"index":1,"session":1,"invocation":16777217,"segment":0,"event":"capture","data":{"authorization":"auth_81"},"traceparent":"00-6c160deed2f54c988920ad648fc30a3f-94e8a8f3181c87c4-03","waiting":true}}
+< [{"jsonrpc":"2.0","id":10,"result":{}},{"jsonrpc":"2.0","id":11,"result":{"status":"idle","runs":2,"fuel":8,"time":0,"nextDeadline":null}}]
+> [{"jsonrpc":"2.0","id":12,"method":"run.send","params":{"target":1,"invocation":16777217,"done":true,"data":{"receipt":"rcpt_81"}}},{"jsonrpc":"2.0","id":13,"method":"run.turn"}]
+< {"jsonrpc":"2.0","method":"effect.log","params":{"batch":4,"index":0,"session":1,"label":"order","text":"paid rcpt_81"}}
+< {"jsonrpc":"2.0","method":"effect.done","params":{"batch":4,"index":1,"session":1,"name":"order-1","final":"paid","data":{"receipt":"rcpt_81"}}}
+< [{"jsonrpc":"2.0","id":12,"result":{}},{"jsonrpc":"2.0","id":13,"result":{"status":"idle","runs":1,"fuel":12,"time":0,"nextDeadline":null}}]
+> {"jsonrpc":"2.0","id":14,"method":"run.restore","params":{"path":"shop.snapshot"}}
+< {"jsonrpc":"2.0","id":14,"result":{"segments":[0,1],"time":0,"wallNs":0}}
+> {"jsonrpc":"2.0","id":15,"method":"run.turn"}
+< {"jsonrpc":"2.0","method":"effect.invoke","params":{"batch":5,"index":0,"session":1,"segment":0,"invocation":16777217,"type":"payment","src":"psp:charges","invokeid":"payment","data":{"amount":4200,"card":"tok_visa"},"restored":true}}
+< {"jsonrpc":"2.0","method":"effect.invoke","params":{"batch":5,"index":1,"session":2,"segment":0,"invocation":16777218,"type":"payment","src":"psp:renewals","invokeid":"payment","restored":true}}
+< {"jsonrpc":"2.0","id":15,"result":{"status":"idle","runs":1,"fuel":0,"time":0,"nextDeadline":null}}
+> [{"jsonrpc":"2.0","id":16,"method":"run.fail","params":{"target":1,"invocation":16777217}},{"jsonrpc":"2.0","id":17,"method":"run.turn"}]
+< {"jsonrpc":"2.0","method":"effect.uninvoke","params":{"batch":6,"index":0,"session":1,"segment":0,"invocation":16777217}}
+< {"jsonrpc":"2.0","method":"effect.log","params":{"batch":6,"index":1,"session":1,"label":"order","text":"payment failed: error.communication"}}
+< [{"jsonrpc":"2.0","id":16,"result":{}},{"jsonrpc":"2.0","id":17,"result":{"status":"idle","runs":1,"fuel":10,"time":0,"nextDeadline":null}}]
+> {"jsonrpc":"2.0","id":18,"method":"actor.state","params":{"session":1}}
+< {"jsonrpc":"2.0","id":18,"result":{"value":"open","history":{}}}
+> [{"jsonrpc":"2.0","id":19,"method":"run.send","params":{"target":"tinyactors://tinyactors-run/@renewal-1","invocation":16777218,"done":true}},{"jsonrpc":"2.0","id":20,"method":"run.turn"}]
+< {"jsonrpc":"2.0","method":"effect.done","params":{"batch":8,"index":0,"session":2,"name":"renewal-1","final":"renewed"}}
+< [{"jsonrpc":"2.0","id":19,"result":{}},{"jsonrpc":"2.0","id":20,"result":{"status":"idle","runs":1,"fuel":6,"time":0,"nextDeadline":null}}]
+> [{"jsonrpc":"2.0","id":21,"method":"run.spawn","params":{"chart":"renewal","name":"renewal-2"}},{"jsonrpc":"2.0","id":22,"method":"run.turn"}]
+< {"jsonrpc":"2.0","method":"effect.invoke","params":{"batch":9,"index":0,"session":4294967297,"segment":1,"invocation":16777217,"type":"payment","src":"psp:renewals","invokeid":"payment"}}
+< [{"jsonrpc":"2.0","id":21,"result":{"session":4294967297,"address":"tinyactors://tinyactors-run/#_scxml_4294967297"}},{"jsonrpc":"2.0","id":22,"result":{"status":"idle","runs":1,"fuel":4,"time":0,"nextDeadline":null}}]

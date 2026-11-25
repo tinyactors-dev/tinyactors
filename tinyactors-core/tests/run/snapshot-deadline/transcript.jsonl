@@ -1,0 +1,29 @@
+> [{"jsonrpc":"2.0","id":1,"method":"run.spawn","params":{"chart":"order","name":"order-17","params":{"total":4200}}},{"jsonrpc":"2.0","id":2,"method":"run.send","params":{"target":1,"event":"checkout","data":{"card":"tok_visa"}}},{"jsonrpc":"2.0","id":3,"method":"run.turn"}]
+< {"jsonrpc":"2.0","method":"effect.send","params":{"batch":1,"index":0,"session":1,"type":"payments","target":"charges","event":"charge","sendid":"pay","data":{"amount":4200,"card":"tok_visa"},"traceparent":"00-1a5f849d4933e6e06aa594f1262d2d2c-f075787b740f4422-03","waiting":true}}
+< [{"jsonrpc":"2.0","id":1,"result":{"session":1,"address":"tinyactors://tinyactors-run/#_scxml_1"}},{"jsonrpc":"2.0","id":2,"result":{}},{"jsonrpc":"2.0","id":3,"result":{"status":"idle","runs":2,"fuel":14,"time":0,"nextDeadline":30000}}]
+> {"jsonrpc":"2.0","id":4,"method":"run.advanceTime","params":{"by":"10s"}}
+< {"jsonrpc":"2.0","id":4,"result":{"time":10000,"wallNs":10000000000}}
+> {"jsonrpc":"2.0","id":5,"method":"run.snapshot","params":{"path":"orders.snapshot"}}
+< {"jsonrpc":"2.0","id":5,"result":{"bytes":290048}}
+> [{"jsonrpc":"2.0","id":6,"method":"run.advanceTime","params":{"to":30000}},{"jsonrpc":"2.0","id":7,"method":"run.turn"}]
+< {"jsonrpc":"2.0","method":"effect.log","params":{"batch":2,"index":0,"session":1,"label":"order","text":"payment failed: payment.timeout"}}
+< [{"jsonrpc":"2.0","id":6,"result":{"time":30000,"wallNs":30000000000}},{"jsonrpc":"2.0","id":7,"result":{"status":"idle","runs":1,"fuel":12,"time":30000,"nextDeadline":null}}]
+> {"jsonrpc":"2.0","id":8,"method":"run.restore","params":{"path":"orders.snapshot"}}
+< {"jsonrpc":"2.0","id":8,"result":{"segments":[0],"time":10000,"wallNs":10000000000}}
+> {"jsonrpc":"2.0","id":9,"method":"actor.get","params":{"session":1}}
+< {"jsonrpc":"2.0","id":9,"result":{"session":1,"segment":0,"chart":"order","parent":null,"mailbox":0,"invocations":0,"timers":[{"sendid":"deadline","event":"payment.timeout","due":30000}],"timersPending":1}}
+> [{"jsonrpc":"2.0","id":10,"method":"run.turn"},{"jsonrpc":"2.0","id":11,"method":"run.advanceTime","params":{"by":"19s"}},{"jsonrpc":"2.0","id":12,"method":"run.turn"}]
+< [{"jsonrpc":"2.0","id":10,"result":{"status":"idle","runs":1,"fuel":0,"time":10000,"nextDeadline":30000}},{"jsonrpc":"2.0","id":11,"result":{"time":29000,"wallNs":29000000000}},{"jsonrpc":"2.0","id":12,"result":{"status":"idle","runs":1,"fuel":0,"time":29000,"nextDeadline":30000}}]
+> [{"jsonrpc":"2.0","id":13,"method":"run.advanceTime","params":{"by":"1s"}},{"jsonrpc":"2.0","id":14,"method":"run.turn"}]
+< {"jsonrpc":"2.0","method":"effect.log","params":{"batch":4,"index":0,"session":1,"label":"order","text":"payment failed: payment.timeout"}}
+< [{"jsonrpc":"2.0","id":13,"result":{"time":30000,"wallNs":30000000000}},{"jsonrpc":"2.0","id":14,"result":{"status":"idle","runs":1,"fuel":12,"time":30000,"nextDeadline":null}}]
+> {"jsonrpc":"2.0","id":15,"method":"actor.state","params":{"session":1}}
+< {"jsonrpc":"2.0","id":15,"result":{"value":"open","history":{}}}
+> {"jsonrpc":"2.0","id":16,"method":"run.restore","params":{"path":"orders.snapshot"}}
+< {"jsonrpc":"2.0","id":16,"result":{"segments":[0],"time":10000,"wallNs":10000000000}}
+> [{"jsonrpc":"2.0","id":17,"method":"run.send","params":{"target":1,"event":"charge.ok","sendid":"pay","origintype":"payments","data":{"charge":"ch_81"}}},{"jsonrpc":"2.0","id":18,"method":"run.turn"}]
+< {"jsonrpc":"2.0","method":"effect.log","params":{"batch":6,"index":0,"session":1,"label":"order","text":"paid ch_81"}}
+< {"jsonrpc":"2.0","method":"effect.done","params":{"batch":6,"index":1,"session":1,"name":"order-17","final":"paid","data":{"charge":"ch_81"}}}
+< [{"jsonrpc":"2.0","id":17,"result":{}},{"jsonrpc":"2.0","id":18,"result":{"status":"idle","runs":1,"fuel":15,"time":10000,"nextDeadline":null}}]
+> [{"jsonrpc":"2.0","id":19,"method":"run.advanceTime","params":{"to":30000}},{"jsonrpc":"2.0","id":20,"method":"run.turn"}]
+< [{"jsonrpc":"2.0","id":19,"result":{"time":30000,"wallNs":30000000000}},{"jsonrpc":"2.0","id":20,"result":{"status":"idle","runs":1,"fuel":0,"time":30000,"nextDeadline":null}}]

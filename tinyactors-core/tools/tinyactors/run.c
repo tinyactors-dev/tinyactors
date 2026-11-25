@@ -387,6 +387,7 @@ static int datamodel_make(tool *t, tool_server *server) {
     config.realm = realm && realm->choice == 1 ? TA_DATAMODEL_ECMASCRIPT_REALM_ISOLATED : TA_DATAMODEL_ECMASCRIPT_REALM_AUTO;
     config.random_seed = seed;
     config.clock = TA_DATAMODEL_ECMASCRIPT_CLOCK_HOST;
+    server->ecmascript_config = config;
     server->ecmascript = ta_datamodel_ecmascript_new(&config);
     if (!server->ecmascript) {
         tool_complain(t, ta_string("quickjs could not start: out of memory"));
@@ -538,6 +539,7 @@ static int server_start(tool *t, tool_server *server) {
     ta_table_init(&server->posts, &(ta_table_config){sizeof(ta_table_config), sizeof(tool_post), allocator});
     ta_rpc_lines_init(&server->lines, &(ta_rpc_lines_config){allocator, (size_t)max_message});
     server->clock.now = (ta_system_time){0, wall};
+    server->config = config;
     if (!host_make(t, server, config) || !config_read(t, server)) return 0;
     ta_host_advance_time(server->host, server->clock.now);
     return inputs_add(t, server);
