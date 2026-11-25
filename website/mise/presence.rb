@@ -5,7 +5,6 @@ require 'json'
 require 'net/http'
 require 'securerandom'
 require 'shellwords'
-require 'open3'
 require_relative 'website'
 
 # What the presence tasks share: the exe VM that runs the presence server
@@ -50,11 +49,15 @@ module Presence
     exe("ssh #{VM} echo #{Base64.strict_encode64(script)} | base64 -d | bash", timeout: timeout)
   end
 
-  # The server's files as a .tar.gz, base64, for the VM to unpack.
+  # The server's files as a .tar.gz, base64, for the VM to unpack: the
+  # repository's pinned GNU tar and gzip (Toolchain::Tool), not whichever the
+  # machine has, so a Mac and a Linux box send the same archive.
   def bundle
-    out, status = Open3.capture2('tar', 'czf', '-', *FILES, chdir: DIR.to_s, binmode: true)
-    Website.fail!('tar failed') unless status.success?
-    Base64.strict_encode64(out)
+    tar, error, status = Toolchain::Tool[:tar].capture('cf', '-', *FILES, chdir: DIR, binary: true)
+    Website.fail!("tar failed: #{error}") unless status.success?
+    gzipped, error, status = Toolchain::Tool[:gzip].capture('-n', stdin: tar, binary: true)
+    Website.fail!("gzip failed: #{error}") unless status.success?
+    Base64.strict_encode64(gzipped)
   end
 
   # Node.js 22 (the repository's pin), the release unpacked, its packages
