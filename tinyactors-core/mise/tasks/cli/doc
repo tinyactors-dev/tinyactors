@@ -1,0 +1,122 @@
+#!/usr/bin/env ruby
+#MISE description="Check that docs/cli.md names exactly the commands and options of this tree's tinyactors (help -f json)"
+# vim:ft=ruby
+
+# The command's own tables (`tinyactors help -f json`, `help <command> -f
+# json`: what its argument parser reads) against the hand-written reference,
+# so docs/cli.md cannot drift from the program:
+#
+# - the "## Commands" table lists the binary's commands, in its order;
+# - each option of a command is named in the reference where a reader of
+#   that command looks: its row of the table, its own section ("## Graph"),
+#   the paragraph of options the commands share, or the program options;
+#   its short form too;
+# - every option the reference names (a code span or a code line that
+#   starts with "-", or a `tinyactors ...` line) is one the binary has,
+#   for that command when the line names one.
+
+require 'json'
+require 'open3'
+require_relative '../../core'
+
+binary = Core.program_path('dev', 'tinyactors')
+abort "cli:doc: no #{binary}: mise run build first" unless binary.file?
+DOC = Core::ROOT.join('docs/cli.md')
+
+def help(binary, *command)
+  out, status = Open3.capture2(binary.to_s, 'help', *command, '-f', 'json')
+  abort "cli:doc: tinyactors help #{command.join(' ')} -f json failed" unless status.success?
+  JSON.parse(out)
+end
+
+# An option's names as its usage spells them: "-c, --chart NAME" is -c and --chart.
+def names(option) = option['option'].scan(/(?<![\w-])--?[A-Za-z][\w-]*/)
+
+program = help(binary)
+commands = program['commands'].map { |command| command['command'] }
+program_options = program['programOptions'].flat_map { |option| names(option) }
+options = commands.to_h { |command| [command, (help(binary, command)['options'] || []).flat_map { |option| names(option) }] }
+known = (options.values.flatten + program_options).uniq
+
+text = DOC.read
+lines = text.lines
+failures = []
+
+# The "## Commands" table: its first column, in order.
+section = lambda do |heading|
+  start = lines.index { |line| line.chomp == "## #{heading}" } or next ''
+  rest = lines[(start + 1)..]
+  rest.take_while { |line| !line.start_with?('## ') }.join
+end
+table = section.call('Commands')
+rows = table.lines.grep(/\A\| `[a-z]+` \|/).to_h { |line| [line[/\A\| `([a-z]+)`/, 1], line] }
+failures << "the Commands table lists #{rows.keys.join(', ')}, the binary #{commands.join(', ')}" unless rows.keys == commands
+
+# Where each command's options are named.
+shared = table.split(/\n\n/).select { |paragraph| paragraph.start_with?('The commands that take inputs', 'Program options') }.join("\n")
+# A part's code: its fenced lines whole, and the code spans of the rest.
+code = lambda do |part|
+  inside = false
+  part.lines.map do |line|
+    next (inside = !inside) && '' if line.start_with?('```')
+
+    inside ? line : line.scan(/`([^`]+)`/).flatten.join(' ')
+  end.join(' ')
+end
+options.each do |command, list|
+  places = [rows[command].to_s, section.call(command.capitalize), shared].map { |part| code.call(part) }.join(' ')
+  list.each do |option|
+    next if places.match?(/(?<![\w-])#{Regexp.escape(option)}(?![\w-])/)
+
+    failures << "#{command}'s option #{option} is named neither in its row, its section nor the shared options"
+  end
+end
+program_options.each do |option|
+  failures << "the program option #{option} is not named under \"Program options\"" unless code.call(shared).include?(option)
+end
+
+# Every option the reference names exists, in the command its line names.
+fenced = false
+lines.each_with_index do |line, i|
+  fenced = !fenced if line.start_with?('```')
+  spans = fenced ? [line] : line.scan(/`([^`]+)`/).flatten
+  spans.each do |span|
+    command = span[/(?:\A|\s)tinyactors\s+(?:-\S+\s+)*([a-z]+)/, 1]
+    command = nil unless commands.include?(command)
+    tokens = span.scan(/(?<![\w\-.\/=])--?[A-Za-z][\w-]*/)
+    # A span that is not a command line names options only where it starts with one.
+    tokens = tokens.first(1) if !span.match?(/(?:\A|\s)tinyactors\s/) && span.start_with?('-')
+    tokens = [] if !span.match?(/(?:\A|\s)tinyactors\s/) && !span.start_with?('-')
+    tokens.each do |token|
+      allowed = command ? options[command] + program_options : known
+      next if allowed.include?(token)
+      # flags clustered (-Wf) or a short option's value attached (-cNAME)
+      next if token.match?(/\A-[A-Za-z]/) && allowed.include?(token[0, 2])
+      # a custom property of graph's SVG (--ta-highlight), not an option
+      next if token.start_with?('--ta-')
+
+      failures << "docs/cli.md:#{i + 1}: #{token}#{" (#{command})" if command} is not an option the binary has"
+    end
+  end
+end
+
+# The binary's own examples (help <command>): each command line of one
+# names a command and options the binary has.
+examples = commands.sum do |command|
+  (help(binary, command)['examples'] || []).each do |example|
+    example.split(/\s*\|\s*/).each do |segment|
+      used = segment[/\Atinyactors\s+(?:-\S+\s+)*([a-z]+)/, 1] or next
+      next failures << "help #{command}'s example #{example.inspect}: no command #{used}" unless commands.include?(used)
+
+      segment.scan(/(?<=\s)--?[A-Za-z][\w-]*/).each do |token|
+        next if (options[used] + program_options).include?(token)
+
+        failures << "help #{command}'s example #{example.inspect}: #{used} has no option #{token}"
+      end
+    end
+  end.size
+end
+
+abort "cli:doc: docs/cli.md and the binary's help do not match the binary:\n#{failures.uniq.map { |failure| "  #{failure}" }.join("\n")}" unless failures.empty?
+puts "cli:doc: docs/cli.md names the binary's #{commands.size} commands and #{known.size} options, and no other; " \
+     "the binary's #{examples} examples use only its options"
