@@ -630,3 +630,36 @@ ta_status ta_json_write(ta_json_writing *writing) {
     }
     return ta_output_fits(out) ? TA_OK : TA_ERROR_NO_MEMORY;
 }
+
+/* ---- base64url ---------------------------------------------------------------- */
+
+/* A character's six bits in base64url's alphabet, or -1. */
+static int json_base64url_value(char c) {
+    if (c >= 'A' && c <= 'Z') return c - 'A';
+    if (c >= 'a' && c <= 'z') return c - 'a' + 26;
+    if (c >= '0' && c <= '9') return c - '0' + 52;
+    if (c == '-') return 62;
+    if (c == '_') return 63;
+    return -1;
+}
+
+ta_status ta_json_base64url_read(ta_string_view text, ta_buffer *out) {
+    size_t tail = text.length % 4;
+    if (tail == 1) return TA_ERROR_INVALID;
+    size_t needed = (size_t)text.length / 4 * 3 + (tail ? tail - 1 : 0);
+    for (uint32_t i = 0; i < text.length; i++)
+        if (json_base64url_value(text.pointer[i]) < 0) return TA_ERROR_INVALID;
+    out->length = needed;
+    if (needed > out->capacity) return TA_ERROR_NO_MEMORY;
+    unsigned char *bytes = (unsigned char *)out->pointer;
+    size_t written = 0;
+    for (uint32_t at = 0; at < text.length; at += 4) {
+        uint32_t digits = text.length - at < 4 ? text.length - at : 4;
+        uint32_t group = 0;
+        for (uint32_t i = 0; i < 4; i++)
+            group = group << 6 | (i < digits ? (uint32_t)json_base64url_value(text.pointer[at + i]) : 0u);
+        for (uint32_t i = 0; i + 1 < digits; i++)
+            bytes[written++] = (unsigned char)(group >> (16 - 8 * i));
+    }
+    return TA_OK;
+}

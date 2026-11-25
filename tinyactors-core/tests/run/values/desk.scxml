@@ -1,0 +1,33 @@
+<scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0" name="desk"
+       datamodel="ecmascript" initial="open">
+  <datamodel><data id="number" expr="0"/></datamodel>
+  <state id="open">
+    <onentry>
+      <!-- a ticket number drawn at random, stamped with the host's wall clock -->
+      <assign location="number" expr="Math.floor(Math.random() * 1000000)"/>
+      <log label="desk" expr="'ticket ' + number + ' opened at ' + new Date().toISOString()"/>
+    </onentry>
+    <!-- what the customer sent, handed to the CRM as it came -->
+    <transition event="ticket.update">
+      <send type="crm" target="tickets" event="ticket.updated"><content expr="_event.data"/></send>
+    </transition>
+    <!-- an invoice asked of the billing system, another system: the transport's -->
+    <transition event="ticket.bill">
+      <send target="tinyactors://billing/#_scxml_1" event="invoice.request" id="invoice">
+        <param name="ticket" expr="number"/>
+      </send>
+    </transition>
+    <!-- a chart no image holds: the server refuses the request -->
+    <transition event="ticket.escalate" target="escalating"/>
+    <transition event="ticket.close" target="closed"/>
+  </state>
+  <state id="escalating">
+    <invoke srcexpr="'escalation.scxml'"/>
+    <transition event="error.execution" target="open">
+      <log label="desk" expr="'escalation failed: ' + _event.name"/>
+    </transition>
+  </state>
+  <final id="closed">
+    <donedata><content expr="_event.data"/></donedata>
+  </final>
+</scxml>

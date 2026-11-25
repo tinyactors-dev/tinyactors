@@ -6,7 +6,9 @@ content runs, how two versions differ), and writes charts and manifests in
 one canonical layout. It also reads what a running host writes: a
 snapshot of a whole system, a hibernation blob, an export blob. Every
 command answers in Markdown for people, or in JSON or XML for programs,
-with the same members in the same order.
+with the same members in the same order. And it runs charts: `tinyactors
+run` serves one host over JSON-RPC 2.0 on standard input and output, for
+an agent or a CI job to drive ([Run](#run)).
 
 It serves the application developer first (why does this chart do that,
 what changes if I deploy this version), then the operator and the C
@@ -150,6 +152,7 @@ with their length.
 | `path` | INPUT... | The shortest sequence of transitions from the chart's initial configuration (or `--from STATE`) to a configuration holding `--to STATE`: each step's events (or eventless), condition, source, targets and the atomic states active after it; or that no path exists, or that the search stopped at its limit. `--unreachable` asks the opposite: success when no path exists. `--chart` names the chart (default: the first). See [Path](#path). |
 | `fmt` | FILE... | Writes charts and system manifests in one canonical layout: the canonical text of one file to standard output, `-w` / `--write` rewrites the files in place (each whole or not at all), `--check` writes nothing and exits with 1 when a file is not canonical. With `-w` or `--check` the answer lists the files: whether each changed, whether it was refused, and whether its canonical text compiles to the same image. See [Fmt](#fmt). |
 | `actors` | SNAPSHOT | Every actor of a snapshot: its session, name, chart, segment and state, its parent and running invocations, its configuration, the events queued in its mailbox and its pending delayed sends. `--chart`, `--segment N` and `--session ID` (repeatable) narrow the list. See [Snapshots and blobs](#snapshots-and-blobs). |
+| `run` | [INPUT...] | One host, with quickjs, serving JSON-RPC 2.0 on standard input and output, one message per line: `run.*` methods are the host's calls, every other method its control plane; what actors do comes back as `effect.*` notifications. Experimental. See [Run](#run). |
 | `help` | [COMMAND] | The program's commands, or a command's usage, options and examples. |
 | `version` | | The program's version (a development build's names its commit: `0.4.0-dev.<date>.<n>.g<sha>`), its library's version and ABI, and the image format version it reads. |
 
@@ -174,6 +177,8 @@ describe it), `--version`.
 | 2 | the command line was not understood (and `tinyactors` alone, after printing the commands) |
 | 3 | a file could not be read or written, or memory ran out |
 
+`run` has its own: [Run, Exit status](#exit-status-1).
+
 ## Examples
 
 ```sh
@@ -190,6 +195,7 @@ tinyactors fmt -w charts/*.scxml system.xml
 tinyactors fmt --check charts/*.scxml                               # in CI
 tinyactors actors --chart order shop.snapshot          # where every order is
 tinyactors inspect order-17.blob shop.snapshot         # a stored actor
+tinyactors run --io-processor payments order.scxml < session.jsonl  # run it
 ```
 
 ## Snapshots and blobs
@@ -645,6 +651,256 @@ The layout is checked by a corpus of charts and their expected layouts and
 problems (`tests/diagram`, its README), each laid out down, and one with
 folding and a path.
 
+## Run
+
+**Experimental.** `tinyactors run` and its protocol may change in any
+release, without a deprecation period, until a second client uses them.
+The schema (`tinyactors run --schema`) describes the release you have.
+
+`tinyactors run [options] [INPUT...]` makes one host with the ECMAScript
+datamodel (quickjs), adds the inputs' image, and serves **JSON-RPC 2.0 on
+standard input and output, one message per line**. It is a workbench: an
+agent or a CI job loads charts, spawns actors, sends events, answers the
+actors' sends, moves the clock and reads what happened, without a language
+binding. Its own methods are the host's calls, under `run.`; every other
+method is the host's control plane ([requests.md](requests.md)),
+forwarded. What actors do comes back as `effect.*` notifications, each
+written before the response to the request that caused it. The clock is
+simulated: it moves only when the client says so.
+
+The protocol is defined by a JSON Schema (2020-12),
+[`tools/tinyactors/run.schema.json`](../tools/tinyactors/run.schema.json),
+which `tinyactors run --schema` writes and the method `run.schema` answers:
+every message either way, so a client can be generated from it. The server
+checks the params of every method the schema has against it before it
+calls anything.
+
+### Lines
+
+- Each message is one JSON text (RFC 8259) in UTF-8 on one line, ended by
+  `\n`; the server writes compact JSON. A blank line is ignored, a `\r`
+  before the `\n` dropped, and an unended last line at the end of input is
+  a message. A line longer than `--max-message` (64 MiB) is answered with
+  -32600 `limit` and skipped to its newline.
+- A request has `"jsonrpc": "2.0"`, `method`, `params` (an object; absent:
+  none) and `id` (an integer, a string or null), and no other member;
+  without `id` it is a notification, applied with no response. A message
+  that is not one is answered with -32600 and `"id": null`; one that is not
+  JSON, or repeats a key in an object, with -32700.
+- A batch (an array) runs its elements in order, as if each came alone;
+  their notifications are written as they come, and the responses as one
+  array after the last (none when every element is a notification). An
+  empty batch is one -32600.
+- The server reads a line, answers it, then reads the next: responses come
+  in request order. Standard error is free text for people.
+
+### Startup and the end of input
+
+```text
+tinyactors run [--config FILE] [--system ID] [--io-processor TYPE[=LOCATION]]...
+               [-W] [-I DIR]... [--boot] [--wall-start NS] [--seed N] [--max-ops N]
+               [--memory-limit BYTES] [--realm auto|isolated] [--max-message BYTES]
+               [--schema] [INPUT...]
+```
+
+Nothing is required: `tinyactors run order.scxml` works.
+
+| Option | Meaning | Default |
+|---|---|---|
+| `--config FILE` | the host config ([host-config.md](host-config.md)) as JSON, its `ioProcessors` a map of each processor's type to `{"location": ...}` (`location` optional), written as core's list in the object's order | every key core's |
+| `--system ID` | the config's `systemID`; refused when the config names another | `tinyactors-run` |
+| `--io-processor TYPE[=LOCATION]` | an I/O processor the client serves, after the config's; repeatable; a type named twice is refused | none |
+| `INPUT...` | an image, a manifest or charts, read as every command reads them ([Inputs](#inputs); not `-`, standard input being the client's), added as segment 0; `-W` refuses one with a warning | none: the client adds images with `run.addImage` |
+| `--boot` | the manifest's boot actors spawned (`ta_host_boot`) | off |
+| `--wall-start NS` | the wall clock's start, nanoseconds since the Unix epoch | 0 |
+| `--seed N` | `Math.random`'s seed; 0 is the engine's own, different on every run | 1 |
+| `--max-ops`, `--memory-limit`, `--realm` | quickjs's limits and realm (`datamodel_ecmascript.h`) | quickjs's |
+| `--max-message BYTES` | the longest line taken | 64 MiB |
+| `--schema` | write the protocol's JSON Schema and exit | |
+
+The default system id is `tinyactors-run`: core has none, so that two
+systems never share one by accident, and a lone workbench's id appears only
+in its own addresses. A client that connects two servers as each other's
+transport names each with `--system`.
+
+The server gives the host the platform's allocator, quickjs with the seed
+and the host's clock (`Date` and `performance.now()` read the simulated
+clocks), the default trace policy and a nonce of 0. With the config's
+`system.traceSeed` absent too (core's default is 0), a session repeats byte
+for byte, trace ids included; `Date`'s local-time methods follow `TZ`. It
+reads `host.config` once for `system.ticksPerSecond`, the system id and the
+I/O processors' types. A config core refuses, or an input that does not
+compile, is told on standard error and the command exits with 1 before it
+reads a message (3 for a file it cannot read).
+
+The end of standard input ends the server: there is no `shutdown` method.
+It frees the host and quickjs and exits with 0.
+
+### Methods
+
+A `run.*` method is a host call, its params the call's struct fields in
+camelCase. Values are JSON, or `cbor` (below). Every byte string is
+base64url without padding (RFC 4648, section 5). A target is a session (an
+integer) or a local address (`ta_host_resolve`). Every result is an object.
+
+| Method | Params | Result | Calls |
+|---|---|---|---|
+| `run.addImage` | one of `files` (paths, read as `INPUT`s are), `sources` (`[{name, text}]`, the first the default boot chart, or a manifest; a `src` names another by its name), `image` (a `.tai`); `warningsAsErrors` | `segment`, `charts` (`[{name, chart}]`), `diagnostics` (as `check -f json` writes them) | `ta_compile_charts` or `ta_compile_system`, `ta_host_add_image` |
+| `run.spawn` | `chart` (a name: its current version) or `segment` and `chart` (an index); `name`, `params` or `paramsCBOR`, `traceparent` | `session`, `address` | `ta_host_chart`, the chart's datamodel's `from_wire`, `ta_host_spawn` |
+| `run.send` | `target`, `event`; `data` or `cbor`; `sendid`, `origin`, `origintype`, `raw`, `traceparent` | `{}` | `ta_host_resolve`, `ta_host_locate`, the target's chart's datamodel's `from_wire`, `ta_host_send` |
+| `run.advanceTime` | `by` or `to`: ticks (an integer), or a duration as SCXML writes a delay (`"30s"`, `"150ms"`); `wallNs` | `time`, `wallNs` | `ta_host_advance_time` |
+| `run.turn` | `budget` (fuel per run, default 10,000), `runs` (at most, default 1,000) | `status`, `detail`, `runs`, `fuel`, `time`, `nextDeadline` (`null`: none) | the turn below |
+| `run.schema` | — | `schema`: the protocol's JSON Schema | none |
+| any other | as core's | core's `result` or `error`, with the client's id | `ta_host_post` (`actor.state`, `host.stats`, `trace.*`, ...) |
+
+A `run.*` method the server does not have is -32601 of its own. The
+schema lists methods this release does not serve yet (`hold`, `run.ack`,
+`run.fail`, services, hibernation, migration, snapshots, telemetry):
+their params are checked, then the server answers -32601, or -32602
+`unknown` for a param it does not serve (`hold`, `invocation`, `done`).
+The only defaults the server owns are `budget` and `runs`, so that a chart
+that never idles cannot hang the client, and `--max-message`.
+
+**Forwarded methods** go to `ta_host_post` as the message without
+`jsonrpc`, its id replaced by the handle of a row of the server's pending
+posts; the reply's result or error comes back with the client's id. Core
+answers a method it does not know with -32601. A notification (no `id`)
+is posted and answered with nothing, as in both protocols.
+
+**Time.** Monotonic time starts at 0 and moves only with
+`run.advanceTime`; wall time starts at `--wall-start` and moves by the same
+duration (`wallNs` sets it). Neither goes back. `time`, `nextDeadline`, `by`
+and `to` are the host's ticks at `system.ticksPerSecond` (default 1e9,
+nanoseconds), as `actor.get`'s `due` is; a duration is converted to ticks as
+core converts a delay. Advancing and running are separate:
+`run.advanceTime` then `run.turn`, or both in one batch; `{"to":
+nextDeadline}` moves to the last turn's next deadline.
+
+**The turn.** `run.turn` is the host's loop: it takes, handles and acks
+what is pending, then, at most `runs` times, advances the clocks, runs
+(`ta_host_run` with `budget`), and takes, handles and acks again, writing
+every effect as a notification before its batch's ack. It goes on after
+`TA_RUN_EFFECTS`, `TA_RUN_EFFECTS_FULL` and `TA_RUN_YIELDED`, and after an
+idle run whose effects gave the host an input (a refused request); it
+answers `status` `idle` (with `nextDeadline`), `yielded` (the runs spent),
+`exhausted` (`detail` the pool) or `fault` (`detail` the status's name). A
+run's outcome is not an error: the host goes on. A send's waiting sender
+goes on at the ack, so an answer the client gives later arrives as an
+ordinary event.
+
+### Notifications
+
+Every notification carries `batch` (the server's count of batches handed
+out, from 1) and `index` (the effect's place in its batch). A field the
+effect does not set is left out.
+
+| Effect | Notification `params` | The client may |
+|---|---|---|
+| `TA_EFFECT_SEND` to an I/O processor of the config | `effect.send`: `session`, `type`, `target`, `event`, `sendid`, `data`/`cbor`, `traceparent`, `waiting` | answer: `run.send` to `session` with `sendid`, `origintype` the `type`, `traceparent` |
+| `TA_EFFECT_SEND` to another system (the transport) | `effect.send`: `session`, `message` (`target`, `event`, `data`/`cbor`, `sendid`, `origin`, `traceparent`), `waiting` | pass `message` to another server's `run.send` as it is; nothing (success is silence) |
+| `TA_EFFECT_SEND` to an invoked service | `effect.send`: `session`, `invocation` (the token), `segment`, `target`, `event`, `sendid`, `data`/`cbor`, `traceparent` | nothing yet |
+| `TA_EFFECT_LOG` | `effect.log`: `session`, `label`, `text` | |
+| `TA_EFFECT_DONE` | `effect.done`: `session`, `name`, `final`, `data`/`cbor` (the donedata) | |
+| `TA_EFFECT_ERROR` | `effect.error`: `session`, `status` (the fault's name) | |
+| `TA_EFFECT_REQUEST` | `effect.request`: `session`, `src`; the server answers `ta_host_resume` with `TA_ERROR_INVALID` (the parent gets `error.execution`) | |
+| `TA_HOST_EFFECT_NOTIFICATION` | written as it is, its `method` and `params` (none is defined) | |
+
+An external invocation (`TA_EFFECT_INVOKE`) is refused for now: the
+invoker gets `error.communication`, as a binding's with no service of the
+type. The other effects (wakes, migrations, telemetry) come with later
+releases of the protocol. Every view an effect's notification reads is
+read and written before the ack.
+
+### Values
+
+Neutral values are CBOR ([protocol.md](protocol.md#values)), converted at
+the edge with RFC 8949's rules (sections 6.1 and 6.2):
+
+| CBOR | JSON written | JSON read |
+|---|---|---|
+| integers | a number, exact over -2^64 … 2^64-1 | a number whose value is an integer in that range, written with or without a fraction or exponent (`7`, `7.0`, `7e0`) |
+| floats | the shortest decimal that reads back as the double (`-0.0` kept); NaN, ±Infinity as `null` | any other number, the nearest double, ties to even; `-0` and `-0.0` |
+| text | a string | a string: UTF-8 checked, a lone surrogate refused |
+| bytes | base64url text | — |
+| arrays, maps with text keys | arrays, objects | the same; a repeated key refused |
+| `false`, `true`, `null` | themselves | themselves |
+| `undefined` | `null` | — |
+| a tag (an address, 32) | its item | — |
+
+Where writing changed a value (bytes, `undefined`, a non-finite float, a
+tag), its CBOR follows as the field's twin: `data` and `cbor`, `params` and
+`paramsCBOR`. On input, `cbor` instead of `data` gives a value JSON cannot
+write. A payload is made by the datamodel of the chart that reads it (the
+target's, the spawned chart's): data for a chart of the null datamodel is
+-32602 `range`. A client that reads session ids with a JavaScript
+`JSON.parse` loses bits past 2^53 (segment k numbers its sessions from
+k * 2^32 + 1): parse integers as big integers.
+
+### Errors
+
+The error object is core's: `{"code", "message", "data": {"reason",
+"path"}}`, with core's codes and reasons. The server's own errors add
+`data.status`, the name of the status a C call refused with.
+
+| Condition | Code | Reason |
+|---|---|---|
+| not JSON, or a repeated key | -32700 | `malformed` |
+| not a request: not an object, `jsonrpc` not `"2.0"`, no `method`, `params` not an object, an `id` of another type, a member a request does not have, an empty batch, nested too deep, a line past `--max-message` | -32600 | `type`, `missing`, `unknown`, `limit` |
+| no such method | -32601 | `unknown` |
+| a param missing, of the wrong type, unknown, out of range; `data` for a chart that reads no values; the clock moved back | -32602 | `missing`, `type`, `unknown`, `range` |
+| `TA_ERROR_STALE` (no such session or name) | -32001 | `stale` |
+| `TA_ERROR_STATE` | -32002 | `state` |
+| `TA_ERROR_LIMIT` | -32003 | `limit` |
+| `TA_ERROR_NO_MEMORY` | -32004 | `memory` |
+| `TA_ERROR_INVALID` (another system's address, a chart no image has, charts that do not compile: the message holds their diagnostics) | -32005 | `invalid` |
+| data the datamodel cannot read, `cbor` that is not base64url | -32006 | `malformed` |
+| `TA_ERROR_UNSUPPORTED` (a value outside the value table) | -32007 | `unsupported` |
+| a refusal no call documents | -32603 | `internal` |
+
+Memory a message cannot get is that message's -32004, and the server goes
+on.
+
+### Exit status
+
+| Status | When |
+|---|---|
+| 0 | the input ended |
+| 1 | an input or the config was refused at startup |
+| 2 | the command line was not understood |
+| 3 | an input could not be read, standard input could not be read, standard output could not be written (the client went away), or memory ran out at startup or for the line buffer |
+
+### Example
+
+`order.scxml` asks the payment processor to charge its total and waits at
+most 30 seconds; `config.json` is `{"system": {"ticksPerSecond": 1000},
+"ioProcessors": {"payments": {}}}` (milliseconds). `>` is a line the
+client writes, `<` one the server writes; `…` elides a traceparent. The
+whole session is `tests/run/order`, which core's tests run.
+
+```text
+$ tinyactors run --config config.json order.scxml
+> {"jsonrpc":"2.0","id":1,"method":"run.spawn","params":{"chart":"order","name":"order-17","params":{"total":4200}}}
+< {"jsonrpc":"2.0","id":1,"result":{"session":1,"address":"tinyactors://tinyactors-run/#_scxml_1"}}
+> {"jsonrpc":"2.0","id":2,"method":"run.send","params":{"target":1,"event":"checkout","data":{"card":"tok_visa"}}}
+< {"jsonrpc":"2.0","id":2,"result":{}}
+> {"jsonrpc":"2.0","id":3,"method":"run.turn"}
+< {"jsonrpc":"2.0","method":"effect.send","params":{"batch":1,"index":0,"session":1,"type":"payments","target":"charges","event":"charge","sendid":"pay","data":{"amount":4200,"card":"tok_visa"},"traceparent":"00-…-03","waiting":true}}
+< {"jsonrpc":"2.0","id":3,"result":{"status":"idle","runs":2,"fuel":14,"time":0,"nextDeadline":30000}}
+> {"jsonrpc":"2.0","id":5,"method":"run.send","params":{"target":1,"event":"charge.ok","sendid":"pay","origintype":"payments","data":{"charge":"ch_81"}}}
+< {"jsonrpc":"2.0","id":5,"result":{}}
+> {"jsonrpc":"2.0","id":6,"method":"run.turn"}
+< {"jsonrpc":"2.0","method":"effect.log","params":{"batch":2,"index":0,"session":1,"label":"order","text":"paid ch_81"}}
+< {"jsonrpc":"2.0","method":"effect.done","params":{"batch":2,"index":1,"session":1,"name":"order-17","final":"paid","data":{"charge":"ch_81"}}}
+< {"jsonrpc":"2.0","id":6,"result":{"status":"idle","runs":1,"fuel":15,"time":0,"nextDeadline":null}}
+```
+
+The answer to the charge, given before the next `run.turn`, is in the
+order's queue when it runs again, and the order ends paid. The rest of the
+session spawns a second order in a batch with its `checkout` and a
+`run.turn`, never answers its charge, moves the clock 30 seconds and reads
+the order back in `open` with the forwarded `actor.state`. `tests/run` holds more sessions: refusals, values and their CBOR
+twins, a send to another system, a refused request.
+
 ## How it is built
 
 The layers, from the bottom:
@@ -652,8 +908,11 @@ The layers, from the bottom:
 - **`src/cli`**, freestanding like `src/base`: `arguments.h` reads a
   command line against a program's description (its commands, their
   options and arguments), and `report.h` builds an answer as one tree and
-  writes it in the three formats. Neither uses the C library, recurses or
-  allocates but from the arena it is given.
+  writes it in the three formats; `json.h` reads JSON text into CBOR and
+  writes it back (RFC 8949, sections 6.1 and 6.2), its numbers read by
+  `decimal.h`, a port of Go's `strconv`; `rpc.h` cuts standard input into
+  lines and reads JSON-RPC 2.0 envelopes. None uses the C library, recurses
+  or allocates but from the arena or allocator it is given.
 - **`src/analysis`**: what can be known about a chart without running
   it (`analysis.h`, freestanding like `src/cli`): `lint`'s findings and
   `path`'s search, as arrays in the arena given, knowing nothing of the
@@ -671,10 +930,17 @@ The layers, from the bottom:
   `ta_system_actor_name`), and the blob readers (`ta_blob_read`,
   `ta_blob_session_at`, `ta_blob_configuration`, `ta_blob_delayed_at`,
   `src/system/system_internal.h`).
+  `run.c`, `serve.c` and `effects.c` are `run`: its startup and message
+  loop, its methods, and its drain, which writes each effect as a
+  notification before the ack. A message's CBOR, tokens, converted values
+  and the lines written for it live in a request arena, released once it
+  is answered; a `run.addImage` reads and compiles there
+  (`tool_image_make`). `schema_check.c` checks params against tables
+  generated from `run.schema.json`.
 - **`tools/tinyactors/platform.c`**: `main`, the allocator behind the
-  arena, reading files and standard input, writing streams, and writing a
-  file whole (a temporary file renamed over it). The only file that uses
-  the C library.
+  arena, reading files and standard input (whole, or as it comes for
+  `run`), writing streams, ignoring `SIGPIPE`, and writing a file whole (a
+  temporary file renamed over it). The only file that uses the C library.
 
 The program is built with core (`mise run build`, `build/dev/bin/tinyactors`)
 and tested by running it (`tests/unit/test_tool.c`). Each release carries

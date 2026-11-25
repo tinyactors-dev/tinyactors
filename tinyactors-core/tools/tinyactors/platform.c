@@ -1,9 +1,12 @@
 /* platform.c — the tinyactors command's operating-system half: the only file
  * of the command that uses the C library (tool.h). It gives the commands
- * memory, reads files and standard input, writes standard output and
- * error, and writes a file whole: to a temporary file beside it, renamed
+ * memory, reads files and standard input (whole, or as it comes for the run
+ * server), writes standard output and error, ignores SIGPIPE so that a
+ * client that went away is a failed write, and writes a file whole: to a temporary file beside it, renamed
  * over it once every byte is written, so a failed write leaves the old file
  * (or none) and never half of a new one. */
+#include <errno.h>
+#include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -120,13 +123,33 @@ static ta_status platform_write(void *context, const tool_write *request) {
     return status;
 }
 
+/* One read(2) of standard input: what has come, without waiting for a whole
+ * chunk as fread would (the run server's client waits for each response
+ * before it writes more). */
+static ta_status platform_receive(void *context, ta_buffer *room) {
+    (void)context;
+    room->length = 0;
+    for (;;) {
+        ssize_t got = read(STDIN_FILENO, room->pointer, room->capacity);
+        if (got >= 0) {
+            room->length = (size_t)got;
+            return TA_OK;
+        }
+        if (errno != EINTR) return TA_ERROR_INVALID;
+    }
+}
+
 int main(int count, char **words) {
+    /* a client that went away makes a write fail (exit 3) instead of
+     * killing the process */
+    signal(SIGPIPE, SIG_IGN);
     tool_platform platform;
     platform_state state = {0, {NULL, 0}};
     platform.context = &state;
     platform.allocator = (ta_allocator){NULL, platform_alloc, platform_free};
     platform.read = platform_read;
     platform.write = platform_write;
+    platform.receive = platform_receive;
 #ifdef TA_TOOL_VERSION
     platform.version = ta_string(TA_TOOL_VERSION);
 #else

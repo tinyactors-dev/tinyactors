@@ -110,10 +110,11 @@ module Core
     # in its platform file, which the program adds (TOOLS below). It reads
     # snapshots by restoring them into a host (snapshot.c).
     # Its schema checker walks tables generated from the run protocol's
-    # JSON Schema (GENERATORS).
-    Layer.new(name: 'tool', uses: %w[cli svg analysis compile image host], freestanding: :headers,
+    # JSON Schema (GENERATORS). tinyactors run serves one host with quickjs
+    # over JSON-RPC (run, serve, effects).
+    Layer.new(name: 'tool', uses: %w[cli svg analysis compile image host datamodel_ecmascript], freestanding: :headers,
               sources: %w[program input compile_command inspect disassemble graph diff lint path canonical snapshot
-                          schema_check].map { |s| "tools/tinyactors/#{s}.c" },
+                          schema_check run serve effects].map { |s| "tools/tinyactors/#{s}.c" },
               generated: %w[schema_run]),
     # The BasicHTTP Event I/O Processor's codec; the transport stays with the host.
     Layer.new(name: 'basic_http', uses: %w[base], freestanding: true, sources: %w[src/basic_http/basic_http.c]),
@@ -271,7 +272,10 @@ module Core
     unit('test_tool', 'host', 'runtime', 'compile', *ECMASCRIPT, defines: { 'TA_TEST_TEMPORARY_DIRECTORY' => :scratch,
                                                        'TA_TEST_PROGRAMS' => :programs,
                                                        'TA_TEST_DIAGRAMS' => :diagrams,
+                                                       'TA_TEST_TRANSCRIPTS' => :transcripts,
                                                        'TA_TEST_REPOSITORY' => :repository }),
+    # tinyactors run in this process, its allocator refusing at each count.
+    unit('test_run_memory', 'tool', defines: { 'TA_TEST_TRANSCRIPTS' => :transcripts }),
     unit('test_compile_scale', 'compile', alone: true), # compile times at n and 8n
     unit('test_core', 'core', 'compile', 'test_datamodel', *ECMASCRIPT),
     unit('test_system', 'system', 'compile', 'test_datamodel'),
@@ -491,6 +495,7 @@ module Core
     scratch = directory(variant_name).join('scratch', program.name)
     places = { scratch: -> { scratch }, programs: -> { directory(variant_name).join('bin') },
                version: -> { development_version }, diagrams: -> { ROOT.join('tests', 'diagram') },
+               transcripts: -> { ROOT.join('tests', 'run') },
                repository: -> { ROOT.join('..') } }
     defines = (program.defines || {}).transform_values { |value| places.key?(value) ? places[value].call : value }
     # It reads the generated headers of the layers it links, and compiles

@@ -96,15 +96,21 @@ CRelease.release(
   programs: [
     CRelease::Program.new(
       name: 'tinyactors', asset: 'tinyactors-core',
-      sources: Core.link_order(%w[tool]).flat_map { |layer| Core.layer_sources('release', Core::LAYERS.fetch(layer)) }
-                   .map { |source| Core::ROOT.join(source).to_s } + [Core::ROOT.join('tools/tinyactors/platform.c').to_s],
-      includes: [Core::ROOT.join('include'), Core::ROOT.join('src'),
+      # tinyactors run links the host and quickjs: QuickJS's sources compile with its own flags
+      sources: Core.link_order(%w[tool]).flat_map { |name|
+        layer = Core::LAYERS.fetch(name)
+        Core.layer_sources('release', layer).map { |source|
+          path = Core::ROOT.join(source).to_s
+          layer.flags ? [path, layer.flags] : path
+        }
+      } + [Core::ROOT.join('tools/tinyactors/platform.c').to_s],
+      includes: [Core::ROOT.join('include'), Core::ROOT.join('src'), Core::ROOT.join('third_party/quickjs-ng'),
                  *Core.generated_includes('release', %w[schema_run]).map { |flag| Core::ROOT.join(flag.delete_prefix('-I')) }],
       files: { 'order.scxml' => "<scxml xmlns='http://www.w3.org/2005/07/scxml' name='order' initial='open'>" \
                                 "<state id='open'><transition event='paid' target='paid'/></state>" \
                                 "<final id='paid'/></scxml>\n" },
       smoke: [%w[version --format json], %w[compile order.scxml -o order.tai], %w[inspect order.tai],
-              %w[transitions --format xml order.tai], %w[graph order.scxml]]
+              %w[transitions --format xml order.tai], %w[graph order.scxml], %w[run --schema]]
     )
   ],
   directory: 'tinyactors-core',

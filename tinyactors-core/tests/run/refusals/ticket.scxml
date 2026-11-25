@@ -1,0 +1,8 @@
+<scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0" name="ticket"
+       datamodel="ecmascript" initial="open">
+  <datamodel><data id="subject" expr="''"/></datamodel>
+  <state id="open">
+    <transition event="close" target="closed"/>
+  </state>
+  <final id="closed"/>
+</scxml>

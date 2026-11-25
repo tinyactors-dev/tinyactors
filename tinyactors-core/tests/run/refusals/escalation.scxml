@@ -1,0 +1,7 @@
+<scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0" name="escalation"
+       datamodel="null" initial="waiting">
+  <state id="waiting">
+    <transition event="escalate" target="escalated"/>
+  </state>
+  <final id="escalated"/>
+</scxml>

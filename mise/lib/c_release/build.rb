@@ -570,7 +570,9 @@ module CRelease
   # <asset>-<version>-<target>.tar.gz, one directory holding bin/<name>,
   # LICENSE and the README, which is what `mise install` of the release
   # repository's github: backend takes: an asset named after the
-  # repository wins its choice among the release's archives.
+  # repository wins its choice among the release's archives. A source is a
+  # path, or a path and the flags it compiles with besides the program's
+  # (a vendored library's own, such as QuickJS's).
   Program = Data.define(:name, :asset, :sources, :includes, :smoke, :files)
 
   def build_program(program, target_name, out)
@@ -578,9 +580,10 @@ module CRelease
     dir = out.join(target_name)
     FileUtils.rm_rf(dir)
     flags = %w[-std=c11 -O2 -g0]
-    objects = program.sources.each_with_index.map do |source, index|
+    objects = program.sources.each_with_index.map do |entry, index|
+      source, own = entry.is_a?(Array) ? entry : [entry, []]
       object = dir.join('work', "#{index}-#{File.basename(source, '.c')}.o")
-      target.compile(source, into: object, includes: program.includes, flags: flags)
+      target.compile(source, into: object, includes: program.includes, flags: flags + own)
       object.to_s
     end
     binary = dir.join('bin', program.name)

@@ -1,0 +1,75 @@
+> {"jsonrpc":"2.0","id":1,"method":"run.spawn","params":{"chart":"ticket","name":"ticket-1"}}
+< {"jsonrpc":"2.0","id":1,"result":{"session":1,"address":"tinyactors://tinyactors-run/#_scxml_1"}}
+> {"jsonrpc":"2.0","id":2,"method":"run.spawn","params":{"chart":"escalation"}}
+< {"jsonrpc":"2.0","id":2,"result":{"session":2,"address":"tinyactors://tinyactors-run/#_scxml_2"}}
+> {"jsonrpc":"2.0","id":3,
+< {"jsonrpc":"2.0","id":null,"error":{"code":-32700,"message":"an object's key that is not a string","data":{"reason":"malformed","path":""}}}
+> {"jsonrpc":"2.0","id":4,"method":"run.turn","method":"run.turn"}
+< {"jsonrpc":"2.0","id":null,"error":{"code":-32700,"message":"a key repeated in an object","data":{"reason":"malformed","path":""}}}
+> []
+< {"jsonrpc":"2.0","id":null,"error":{"code":-32600,"message":"an empty batch","data":{"reason":"missing","path":""}}}
+> 42
+< {"jsonrpc":"2.0","id":null,"error":{"code":-32600,"message":"a message is a JSON-RPC 2.0 request: an object","data":{"reason":"type","path":""}}}
+> {"jsonrpc":"1.0","id":5,"method":"run.turn"}
+< {"jsonrpc":"2.0","id":null,"error":{"code":-32600,"message":"a request has \"jsonrpc\": \"2.0\"","data":{"reason":"type","path":"jsonrpc"}}}
+> {"jsonrpc":"2.0","id":6}
+< {"jsonrpc":"2.0","id":null,"error":{"code":-32600,"message":"a request has a method, a string","data":{"reason":"missing","path":"method"}}}
+> {"jsonrpc":"2.0","id":7,"method":"run.turn","params":[1]}
+< {"jsonrpc":"2.0","id":null,"error":{"code":-32600,"message":"params, when given, are an object","data":{"reason":"type","path":"params"}}}
+> {"jsonrpc":"2.0","id":8.5,"method":"run.turn"}
+< {"jsonrpc":"2.0","id":null,"error":{"code":-32600,"message":"an id is an integer, a string or null","data":{"reason":"type","path":"id"}}}
+> {"jsonrpc":"2.0","id":9,"method":"run.turn","result":{}}
+< {"jsonrpc":"2.0","id":null,"error":{"code":-32600,"message":"a request has the members jsonrpc, method, params and id only","data":{"reason":"unknown","path":"result"}}}
+> {"jsonrpc":"2.0","id":10,"method":"run.nothing"}
+< {"jsonrpc":"2.0","id":10,"error":{"code":-32601,"message":"no such method of the server's","data":{"reason":"unknown","path":"method"}}}
+> {"jsonrpc":"2.0","id":11,"method":"actor.nothing"}
+< {"jsonrpc":"2.0","id":11,"error":{"code":-32601,"message":"no such method","data":{"reason":"unknown","path":"method"}}}
+> {"jsonrpc":"2.0","id":12,"method":"run.turn","params":{"runs":0}}
+< {"jsonrpc":"2.0","id":12,"error":{"code":-32602,"message":"is below the schema's minimum","data":{"reason":"range","path":"params.runs"}}}
+> {"jsonrpc":"2.0","id":13,"method":"run.turn","params":{"hold":true}}
+< {"jsonrpc":"2.0","id":13,"error":{"code":-32602,"message":"hold is not served yet","data":{"reason":"unknown","path":"params.hold"}}}
+> {"jsonrpc":"2.0","id":14,"method":"run.spawn","params":{"chart":"refund"}}
+< {"jsonrpc":"2.0","id":14,"error":{"code":-32005,"message":"the host refused it","data":{"reason":"invalid","path":"params.chart","status":"TA_ERROR_INVALID"}}}
+> {"jsonrpc":"2.0","id":15,"method":"run.spawn","params":{"chart":0}}
+< {"jsonrpc":"2.0","id":15,"error":{"code":-32602,"message":"a chart's index needs its segment","data":{"reason":"missing","path":"params.segment"}}}
+> {"jsonrpc":"2.0","id":16,"method":"run.spawn","params":{"chart":"ticket","segment":0}}
+< {"jsonrpc":"2.0","id":16,"error":{"code":-32602,"message":"segment goes with a chart's index, not its name","data":{"reason":"unknown","path":"params.segment"}}}
+> {"jsonrpc":"2.0","id":17,"method":"run.send","params":{"target":99,"event":"close"}}
+< {"jsonrpc":"2.0","id":17,"error":{"code":-32001,"message":"the session or name does not exist (any more)","data":{"reason":"stale","path":"params.target","status":"TA_ERROR_STALE"}}}
+> {"jsonrpc":"2.0","id":18,"method":"run.send","params":{"target":"tinyactors://elsewhere/#_scxml_1","event":"close"}}
+< {"jsonrpc":"2.0","id":18,"error":{"code":-32005,"message":"the host refused it","data":{"reason":"invalid","path":"params.target","status":"TA_ERROR_INVALID"}}}
+> {"jsonrpc":"2.0","id":19,"method":"run.send","params":{"target":"tinyactors://tinyactors-run/@ticket-9","event":"close"}}
+< {"jsonrpc":"2.0","id":19,"error":{"code":-32001,"message":"the session or name does not exist (any more)","data":{"reason":"stale","path":"params.target","status":"TA_ERROR_STALE"}}}
+> {"jsonrpc":"2.0","id":20,"method":"run.send","params":{"target":1}}
+< {"jsonrpc":"2.0","id":20,"error":{"code":-32602,"message":"an event has a name","data":{"reason":"missing","path":"params.event"}}}
+> {"jsonrpc":"2.0","id":21,"method":"run.send","params":{"target":2,"event":"escalate","data":{"reason":"late"}}}
+< {"jsonrpc":"2.0","id":21,"error":{"code":-32602,"message":"the chart's datamodel reads no values","data":{"reason":"range","path":"params.data"}}}
+> {"jsonrpc":"2.0","id":22,"method":"run.send","params":{"target":1,"event":"close","cbor":"_w"}}
+< {"jsonrpc":"2.0","id":22,"error":{"code":-32006,"message":"the datamodel cannot read this value","data":{"reason":"malformed","path":"params.cbor"}}}
+> {"jsonrpc":"2.0","id":23,"method":"run.send","params":{"target":1,"event":"close","data":1,"cbor":"AQ"}}
+< {"jsonrpc":"2.0","id":23,"error":{"code":-32602,"message":"cannot come with the member it excludes","data":{"reason":"range","path":"params.cbor"}}}
+> {"jsonrpc":"2.0","id":24,"method":"run.send","params":{"target":1,"event":"close","invocation":3}}
+< {"jsonrpc":"2.0","id":24,"error":{"code":-32602,"message":"services the client runs are not served yet","data":{"reason":"unknown","path":"params.invocation"}}}
+> {"jsonrpc":"2.0","id":25,"method":"run.advanceTime","params":{"by":"30s","to":5}}
+< {"jsonrpc":"2.0","id":25,"error":{"code":-32602,"message":"cannot come with the member it excludes","data":{"reason":"range","path":"params.to"}}}
+> {"jsonrpc":"2.0","id":26,"method":"run.advanceTime","params":{"by":"soon"}}
+< {"jsonrpc":"2.0","id":26,"error":{"code":-32602,"message":"is not in the form the schema gives","data":{"reason":"range","path":"params.by"}}}
+> {"jsonrpc":"2.0","id":27,"method":"run.advanceTime","params":{"by":"1.5s","wallNs":1}}
+< {"jsonrpc":"2.0","id":27,"result":{"time":1500000000,"wallNs":1}}
+> {"jsonrpc":"2.0","id":28,"method":"run.advanceTime","params":{"to":1000}}
+< {"jsonrpc":"2.0","id":28,"error":{"code":-32602,"message":"the clock does not go back","data":{"reason":"range","path":"params.to"}}}
+> {"jsonrpc":"2.0","id":29,"method":"run.addImage","params":{"files":["missing.scxml"]}}
+< {"jsonrpc":"2.0","id":29,"error":{"code":-32005,"message":"cannot read missing.scxml","data":{"reason":"invalid","path":"params.files","status":"TA_ERROR_INVALID"}}}
+> {"jsonrpc":"2.0","id":30,"method":"run.addImage","params":{"sources":[{"name":"broken.scxml","text":"<scxml xmlns=\"http://www.w3.org/2005/07/scxml\" version=\"1.0\" initial=\"nowhere\"/>"}]}}
+< {"jsonrpc":"2.0","id":30,"error":{"code":-32005,"message":"the inputs make no image: broken.scxml:1:1: error: <scxml> must contain at least one state","data":{"reason":"invalid","path":"params.sources","status":"TA_ERROR_INVALID"}}}
+> {"jsonrpc":"2.0","id":31,"method":"run.addImage","params":{"image":"VEFJMQ"}}
+< {"jsonrpc":"2.0","id":31,"error":{"code":-32005,"message":"the image does not verify: it is damaged, or of another format version","data":{"reason":"invalid","path":"params.image","status":"TA_ERROR_INVALID"}}}
+> {"jsonrpc":"2.0","id":32,"method":"actor.state","params":{"session":99}}
+< {"jsonrpc":"2.0","id":32,"error":{"code":-32001,"message":"no such session in this host","data":{"reason":"stale","path":"params.session"}}}
+> {"jsonrpc":"2.0","method":"run.send","params":{"target":99,"event":"close"}}
+> {"jsonrpc":"2.0","id":33,"method":"run.send","params":{"target":1,"event":"close","data":"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"}}
+< {"jsonrpc":"2.0","id":null,"error":{"code":-32600,"message":"a line longer than --max-message: skipped to its end","data":{"reason":"limit","path":""}}}
+> [{"jsonrpc":"2.0","id":34,"method":"run.send","params":{"target":1,"event":"close"}},{"jsonrpc":"2.0","method":"run.turn"},7,{"jsonrpc":"2.0","id":35,"method":"actor.state","params":{"session":1}}]
+< {"jsonrpc":"2.0","method":"effect.done","params":{"batch":3,"index":0,"session":1,"name":"ticket-1","final":"closed"}}
+< [{"jsonrpc":"2.0","id":34,"result":{}},{"jsonrpc":"2.0","id":null,"error":{"code":-32600,"message":"a message is a JSON-RPC 2.0 request: an object","data":{"reason":"type","path":""}}},{"jsonrpc":"2.0","id":35,"error":{"code":-32001,"message":"no such session in this host","data":{"reason":"stale","path":"params.session"}}}]
+> [{"jsonrpc":"2.0","method":"run.turn"}]

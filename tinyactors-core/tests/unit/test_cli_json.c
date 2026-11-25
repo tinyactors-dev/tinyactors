@@ -535,7 +535,37 @@ static void test_write_out_of_memory(void) {
     CHECK(succeeded);
 }
 
+/* Base64url read back: every length 0 to 40 of bytes as the writer writes
+ * them, and what is refused. */
+static void test_base64url_read(void) {
+    unsigned char bytes[40], cbor[48], room[64];
+    for (size_t length = 0; length <= sizeof bytes; length++) {
+        for (size_t i = 0; i < length; i++)
+            bytes[i] = (unsigned char)(i * 37u + length * 11u + 200u);
+        cbor[0] = (unsigned char)(0x58);
+        cbor[1] = (unsigned char)length;
+        memcpy(cbor + 2, bytes, length);
+        write_outcome outcome = write_cbor(cbor, length + 2);
+        CHECK(outcome.status == TA_OK && outcome.length >= 2);
+        ta_string_view text = {outcome.text + 1, (uint32_t)(outcome.length - 2)}; /* without its quotes */
+        ta_buffer out = {room, sizeof room, 0};
+        CHECK_EQUAL(ta_json_base64url_read(text, &out), TA_OK);
+        CHECK(out.length == length && memcmp(room, bytes, length) == 0);
+        if (length) { /* one byte short: the length it needs */
+            out = (ta_buffer){room, length - 1, 0};
+            CHECK_EQUAL(ta_json_base64url_read(text, &out), TA_ERROR_NO_MEMORY);
+            CHECK_EQUAL(out.length, length);
+        }
+    }
+    static const char *const refused[] = {"A", "AAAAA", "AA==", "AA+/", "AA A", "\xc3\xa9\x41\x41"};
+    for (size_t i = 0; i < sizeof refused / sizeof refused[0]; i++) {
+        ta_buffer out = {room, sizeof room, 0};
+        CHECK_EQUAL(ta_json_base64url_read(ta_string(refused[i]), &out), TA_ERROR_INVALID);
+    }
+}
+
 int main(void) {
+    RUN(test_base64url_read);
     RUN(test_read_values);
     RUN(test_read_refusals);
     RUN(test_read_depth);

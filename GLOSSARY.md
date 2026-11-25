@@ -121,6 +121,11 @@ group, the words build on each other.
   state, the host's stats, traces): a message posted with `ta_host_post`
   and answered by a `REPLY` effect in a later batch. A binding offers a
   *typed method* per message, which takes a response handler.
+- **Workbench.** `tinyactors run` (tinyactors-core/docs/cli.md, "Run"):
+  one host driven by one client over JSON-RPC 2.0 on standard input and
+  output, its clock simulated, every effect written to the client as a
+  notification. Its own methods (`run.spawn`, `run.turn`, ...) are the
+  host's calls; every other method is forwarded to the control plane.
 
 ## Taking actors out of memory, and moving them
 

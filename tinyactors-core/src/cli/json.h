@@ -76,4 +76,13 @@ typedef struct ta_json_writing {
  * output could not grow (its length is what the text needs). */
 ta_status ta_json_write(ta_json_writing *writing);
 
+/* Bytes written as 6.1 writes them, base64url text without padding (RFC
+ * 4648, section 5), read back into out->pointer (out->length set): what a
+ * value's CBOR twin, an image or a blob arrives as. At most
+ * text.length / 4 * 3 + 2 bytes. TA_OK; TA_ERROR_INVALID: a character
+ * outside the alphabet, padding, or a length no such text has (one
+ * character past a multiple of four); TA_ERROR_NO_MEMORY: out->capacity is
+ * too small (out->length the bytes it needs). */
+ta_status ta_json_base64url_read(ta_string_view text, ta_buffer *out);
+
 #endif /* TINYACTORS_CLI_JSON_H */

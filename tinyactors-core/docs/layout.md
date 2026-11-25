@@ -162,11 +162,14 @@ implementation of that layer). Layer dependency rules are in
 │   │                             run.schema.json the run protocol's JSON Schema, schema_check.c its
 │   │                             checker over tables schema/generate.rb writes into
 │   │                             build/<variant>/generated (tests/unit/test_schema_check.c,
-│   │                             mise run run:schema)
+│   │                             mise run run:schema); run.c, serve.c, effects.c the run command
+│   │                             (serve.h): one host over JSON-RPC, its transcripts in tests/run
 │   └── tarun/                 ◻ runner CLI: image + scripted events + simulated time -> trace
 │
 ├── tests/
 │   ├── harness/harness.h      ✅ dependency-free test macros
+│   ├── run/                   ✅ tinyactors run's transcripts: client and server lines, checked byte
+│   │                             for byte (test_tool) and against the schema (run:schema)
 │   ├── json/                  ✅ numbers/: numbers' text and the doubles they read as (Go's vectors, hard
 │   │                             cases, a sample of parse-number-fxx-test-data); values.txt: the JSON
 │   │                             each value of the suite's values.txt writes

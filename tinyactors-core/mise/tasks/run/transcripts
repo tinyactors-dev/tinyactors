@@ -1,0 +1,46 @@
+#!/usr/bin/env ruby
+#MISE description="Write the expected lines of tinyactors run's transcripts (tests/run/<case>/transcript.jsonl) from what the server answers now; review the diff"
+#MISE depends=["build"]
+#USAGE arg "[case]..." help="the cases to write (default: every one)"
+# vim:ft=ruby
+
+# A transcript is the client's lines ("> ") and the server's ("< ") in the
+# order they come: each client line is followed by what it caused. The test
+# (test_tool, test_run_transcripts) feeds the "> " lines and requires the
+# "< " lines byte for byte; this task writes them, after a deliberate change
+# to the server, from the dev build. A client line's own lines are found by
+# running the case with the lines up to it and taking what the run before
+# lacked: the server is deterministic, so a prefix answers the same.
+
+require_relative '../../core'
+require 'open3'
+
+CASES = Core::ROOT.join('tests/run')
+PROGRAM = Core.program_path('dev', 'tinyactors')
+
+def answers(directory, arguments, lines)
+  output, errors, status = Open3.capture3({ 'TZ' => 'UTC' }, PROGRAM.to_s, 'run', *arguments,
+                                          stdin_data: lines.map { |line| "#{line}\n" }.join, chdir: directory.to_s)
+  expected = directory.join('exit').file? ? directory.join('exit').read.to_i : 0
+  abort "#{directory.basename}: exit #{status.exitstatus}, not #{expected}: #{errors}" unless status.exitstatus == expected
+  output.lines.map(&:chomp)
+end
+
+names = ARGV.empty? ? CASES.children.select(&:directory?).map { |path| path.basename.to_s }.sort : ARGV
+names.each do |name|
+  directory = CASES.join(name)
+  transcript = directory.join('transcript.jsonl')
+  arguments = directory.join('arguments').file? ? directory.join('arguments').read.split : []
+  client = transcript.read.lines.map(&:chomp).select { |line| line.start_with?('> ') }.map { |line| line.delete_prefix('> ') }
+  written = []
+  seen = []
+  client.each_index do |i|
+    now = answers(directory, arguments, client[0..i])
+    abort "#{name}: the answers to a prefix changed: the server is not deterministic" unless now.first(seen.size) == seen
+    written << "> #{client[i]}"
+    now.drop(seen.size).each { |line| written << "< #{line}" }
+    seen = now
+  end
+  transcript.write(written.map { |line| "#{line}\n" }.join)
+  puts "run:transcripts: #{name}: #{client.size} client lines, #{seen.size} server lines"
+end

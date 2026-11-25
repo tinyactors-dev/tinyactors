@@ -109,6 +109,39 @@ module SchemaCheck
     bad_client.each { |line| check(!client.valid?(line), "a client line is taken: #{JSON.generate(line)}") }
     good_server.each { |line| check(server.valid?(line), "a server line is refused: #{JSON.generate(line)}") }
     bad_server.each { |line| check(!server.valid?(line), "a server line is taken: #{JSON.generate(line)}") }
+    transcripts(client, server)
+  end
+
+  TRANSCRIPTS = CORE.join('tests/run')
+  # The codes a server gives to a line the schema refuses: not JSON, not a
+  # request, no such method, params refused.
+  REFUSED = [-32700, -32600, -32601, -32602].freeze
+
+  # Every line of tinyactors run's transcripts (tests/run): the server's
+  # against serverMessage, and the client's against clientMessage unless the
+  # server refused it as the schema would.
+  def self.transcripts(client, server)
+    cases = TRANSCRIPTS.glob('*/transcript.jsonl').sort
+    check(cases.size >= 3, 'fewer transcripts than expected in tests/run')
+    cases.each do |path|
+      name = path.dirname.basename.to_s
+      turns = []
+      path.read.each_line(chomp: true) do |line|
+        if line.start_with?('> ') then turns << [line.delete_prefix('> '), []]
+        elsif line.start_with?('< ') then turns.last&.last&.push(line.delete_prefix('< '))
+        else check(false, "#{name}: a line that is neither the client's nor the server's: #{line[0, 60]}")
+        end
+      end
+      turns.each do |sent, answers|
+        responses = answers.map { |text| JSON.parse(text, allow_duplicate_key: false) }
+        responses.each { |message| check(server.valid?(message), "#{name}: a server line is refused: #{JSON.generate(message)[0, 200]}") }
+        codes = responses.flat_map { |message| Array(message.is_a?(Array) ? message : [message]) }
+                         .filter_map { |message| message.dig('error', 'code') }
+        next if codes.intersect?(REFUSED)
+
+        check(client.valid?(JSON.parse(sent, allow_duplicate_key: false)), "#{name}: a client line is refused: #{sent[0, 200]}")
+      end
+    end
   end
 
   def self.fixtures

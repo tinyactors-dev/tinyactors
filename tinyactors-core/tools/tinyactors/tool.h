@@ -51,6 +51,12 @@ typedef struct tool_platform {
     ta_status (*read)(void *context, const tool_read *request, ta_bytes *out);
     /* TA_OK; TA_ERROR_INVALID: it could not be written. */
     ta_status (*write)(void *context, const tool_write *request);
+    /* Bytes from standard input as they come, into `room` (up to its
+     * capacity; room->length set), without waiting for more than one read
+     * gives: TA_OK; TA_OK with length 0 at the end of input;
+     * TA_ERROR_INVALID: it could not be read. For tinyactors run, whose
+     * client waits for each response before it writes more. */
+    ta_status (*receive)(void *context, ta_buffer *room);
     /* The build's version: a development build's (0.4.0-dev.<date>.<n>.g<sha>),
      * or empty for the library's, which a release carries. */
     ta_string_view version;
@@ -283,6 +289,20 @@ typedef enum tool_graph_theme {
 typedef enum tool_actors_option {
     TOOL_ACTORS_SESSION = 4 /* --session N, repeatable: these sessions only */
 } tool_actors_option;
+/* run's: -W and -I at their places, as every command that reads charts */
+typedef enum tool_run_option {
+    TOOL_RUN_CONFIG = 2,       /* --config FILE: the host config as JSON */
+    TOOL_RUN_SYSTEM = 3,       /* --system ID: the config's systemID */
+    TOOL_RUN_IO_PROCESSOR = 4, /* --io-processor TYPE[=LOCATION], repeatable */
+    TOOL_RUN_BOOT = 5,         /* --boot: the image's boot actors */
+    TOOL_RUN_WALL_START = 6,   /* --wall-start NS */
+    TOOL_RUN_SEED = 7,         /* --seed N: Math.random's */
+    TOOL_RUN_MAX_OPS = 8,      /* --max-ops N */
+    TOOL_RUN_MEMORY_LIMIT = 9, /* --memory-limit BYTES */
+    TOOL_RUN_REALM = 10,       /* --realm auto|isolated */
+    TOOL_RUN_MAX_MESSAGE = 11, /* --max-message BYTES */
+    TOOL_RUN_SCHEMA = 12       /* --schema: write the protocol's JSON Schema */
+} tool_run_option;
 
 /* What a command that looks into an image starts with: its arguments as
  * inputs (-W read), the image made from them, and the charts --chart
@@ -330,6 +350,8 @@ void tool_path(tool *t);
 void tool_canonical(tool *t);
 /* snapshot.c: what the runtime writes, a snapshot or a blob */
 void tool_actors(tool *t);
+/* run.c: one host served over JSON-RPC 2.0 on standard input and output */
+void tool_serve(tool *t);
 /* inspect of a snapshot or a blob: 1 when the first input is one (and it
  * was answered), 0 for an image's inputs, which inspect reads itself. */
 int tool_inspect_stored(tool *t);

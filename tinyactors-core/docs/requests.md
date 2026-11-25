@@ -8,8 +8,12 @@ A message is one CBOR map in the shape of JSON-RPC 2.0 without its
 the host appends, read like every other effect. Requests, replies and
 notifications are one ordered stream, so that a JSON-RPC transport is a
 pipe: frames to `ta_host_post`, the bytes of `TA_HOST_EFFECT_REPLY` and
-`TA_HOST_EFFECT_NOTIFICATION` effects to the socket. This page lists every
-method and notification. If one is not listed here, it does not exist.
+`TA_HOST_EFFECT_NOTIFICATION` effects to the socket. `tinyactors run`
+([cli.md](cli.md#run)) is such a transport: it serves one host over
+JSON-RPC 2.0 on standard input and output, forwards every method that is
+not its own to `ta_host_post` and converts at its edge. This page lists
+every method and notification. If one is not listed here, it does not
+exist.
 Examples are in CBOR diagnostic notation.
 
 **Every byte is CBOR; JSON-RPC names only the shape.** Core never reads
@@ -87,6 +91,7 @@ the effect records read through accessors and CBOR, never a third.
 | -32004 | `memory` | the host's allocator refused |
 | -32005 | `invalid` | the host refused a rule as malformed |
 | -32006 | `malformed` | bytes in params are not what the method reads (not OTLP) |
+| -32007 | `unsupported` | `tinyactors run`'s, never core's: a value outside the value table (`TA_ERROR_UNSUPPORTED` from a call the command makes) |
 
 ## Trace rules
 
@@ -477,7 +482,9 @@ binding gets the same answers.
 ### Steps
 
 1. **Name it `area.verb`**, like `trace.watch` or `actor.get`. A method
-   about the whole host is in the area `host` (`host.stats`).
+   about the whole host is in the area `host` (`host.stats`). The area
+   `run` is `tinyactors run`'s, whose own methods (`run.spawn`,
+   `run.turn`, ...) are the host's C calls: core adds no method there.
 2. **Params:** name each (camelCase), its type, its default and its limits.
    Refuse params the method does not take.
 3. **The result:** a map with its keys in a fixed order.

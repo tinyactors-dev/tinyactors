@@ -23,9 +23,13 @@ Each release carries the command for every native target, as
 `tinyactors-core-<version>-<target>.tar.gz`: one directory holding
 `bin/tinyactors`, `LICENSE` and `README.md`. On Linux the program is
 static (musl), so it runs on any distribution, glibc or musl; on macOS it
-loads only libSystem, and the arm64 one is signed ad hoc. It is about 200
-KB, built without symbols or debug information, and the same bytes for
-the same commit.
+loads only libSystem, and the arm64 one is signed ad hoc. It runs charts
+too (`tinyactors run`, [cli.md](cli.md#run)), so it carries the host and
+the ECMAScript datamodel with quickjs inside: about 2 MB (2,080,424 bytes
+for x86_64-linux, measured 2026-11-25; about 170 KB before `run`), built
+without symbols or debug information, and the same bytes for the same
+commit. `tinyactors run --schema` writes the protocol's JSON Schema, which
+the program carries.
 
 The archive is named after the release repository, so mise's `github:`
 backend picks it among the release's archives with no options (an asset
@@ -46,10 +50,11 @@ or in a project's `mise.toml`:
 ```
 
 The release builds it from the same sources as `mise run build` (the
-tool layer and the layers it uses, and `tools/tinyactors/platform.c`)
+tool layer and the layers it uses, and `tools/tinyactors/platform.c`;
+QuickJS's sources with its own flags)
 with the pinned zig, checks that each binary is for its architecture and
 loads nothing but the platform's runtime, runs a few commands with this
-machine's (version, compile, inspect, transitions, graph), and runs them
+machine's (version, compile, inspect, transitions, graph, run --schema), and runs them
 again in an Alpine container of each Linux architecture unless
 `--skip-containers`.
 

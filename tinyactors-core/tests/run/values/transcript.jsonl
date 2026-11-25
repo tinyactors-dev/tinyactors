@@ -1,0 +1,48 @@
+> {"jsonrpc":"2.0","id":1,"method":"run.spawn","params":{"chart":"desk","name":"desk-1"}}
+< {"jsonrpc":"2.0","id":1,"result":{"session":1,"address":"tinyactors://tinyactors-run/#_scxml_1"}}
+> {"jsonrpc":"2.0","id":2,"method":"run.turn"}
+< {"jsonrpc":"2.0","method":"effect.log","params":{"batch":1,"index":0,"session":1,"label":"desk","text":"ticket 294046 opened at 2025-11-24T16:00:00.000Z"}}
+< {"jsonrpc":"2.0","id":2,"result":{"status":"idle","runs":1,"fuel":8,"time":0,"nextDeadline":null}}
+> {"jsonrpc":"2.0","id":3,"method":"run.send","params":{"target":"tinyactors://tinyactors-run/@desk-1","event":"ticket.update","data":{"subject":"Refund for order 17","priority":1.5,"customer":18446744073709551615,"balance":-9007199254740993,"note":"café","flags":[true,null,false]}}}
+< {"jsonrpc":"2.0","id":3,"result":{}}
+> {"jsonrpc":"2.0","id":4,"method":"run.turn"}
+< {"jsonrpc":"2.0","method":"effect.send","params":{"batch":2,"index":0,"session":1,"type":"crm","target":"tickets","event":"ticket.updated","data":{"subject":"Refund for order 17","priority":1.5,"customer":18446744073709551615,"balance":-9007199254740993,"note":"café","flags":[true,null,false]},"traceparent":"00-1a5f849d4933e6e06aa594f1262d2d2c-f075787b740f4422-03","waiting":true}}
+< {"jsonrpc":"2.0","id":4,"result":{"status":"idle","runs":2,"fuel":7,"time":0,"nextDeadline":null}}
+> {"jsonrpc":"2.0","id":5,"method":"run.send","params":{"target":1,"event":"ticket.update","cbor":"QgEC"}}
+< {"jsonrpc":"2.0","id":5,"result":{}}
+> {"jsonrpc":"2.0","id":6,"method":"run.send","params":{"target":1,"event":"ticket.update","cbor":"9w"}}
+< {"jsonrpc":"2.0","id":6,"result":{}}
+> {"jsonrpc":"2.0","id":7,"method":"run.send","params":{"target":1,"event":"ticket.update","cbor":"2CB4HnRpbnlhY3RvcnM6Ly9iaWxsaW5nLyNfc2N4bWxfMQ"}}
+< {"jsonrpc":"2.0","id":7,"result":{}}
+> {"jsonrpc":"2.0","id":8,"method":"run.turn","params":{"budget":50,"runs":1}}
+< {"jsonrpc":"2.0","method":"effect.send","params":{"batch":3,"index":0,"session":1,"type":"crm","target":"tickets","event":"ticket.updated","data":"AQI","cbor":"QgEC","traceparent":"00-bba5ad4a1f842e59ffef8375d9ebcaca-94e8a8f3181c87c4-03","waiting":true}}
+< {"jsonrpc":"2.0","id":8,"result":{"status":"yielded","runs":1,"fuel":4,"time":0,"nextDeadline":null}}
+> {"jsonrpc":"2.0","id":9,"method":"run.turn"}
+< {"jsonrpc":"2.0","method":"effect.send","params":{"batch":4,"index":0,"session":1,"type":"crm","target":"tickets","event":"ticket.updated","data":null,"traceparent":"00-6c160deed2f54c988920ad648fc30a3f-14c089f1b8c1eac4-03","waiting":true}}
+< {"jsonrpc":"2.0","method":"effect.send","params":{"batch":5,"index":0,"session":1,"type":"crm","target":"tickets","event":"ticket.updated","data":"tinyactors://billing/#_scxml_1","traceparent":"00-db032c0ba7539731eb3a475a3e749a3d-bd505e168aadfd58-03","waiting":true}}
+< {"jsonrpc":"2.0","id":9,"result":{"status":"idle","runs":3,"fuel":15,"time":0,"nextDeadline":null}}
+> {"jsonrpc":"2.0","id":10,"method":"run.send","params":{"target":1,"event":"ticket.bill","traceparent":"00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01"}}
+< {"jsonrpc":"2.0","id":10,"result":{}}
+> {"jsonrpc":"2.0","id":11,"method":"run.turn"}
+< {"jsonrpc":"2.0","method":"effect.send","params":{"batch":6,"index":0,"session":1,"message":{"target":"tinyactors://billing/#_scxml_1","event":"invoice.request","data":{"ticket":294046},"sendid":"invoice","origin":"tinyactors://tinyactors-run/#_scxml_1","traceparent":"00-0af7651916cd43dd8448eb211c80319c-daa65b3a80709e7c-01"},"waiting":true}}
+< {"jsonrpc":"2.0","id":11,"result":{"status":"idle","runs":2,"fuel":7,"time":0,"nextDeadline":null}}
+> {"jsonrpc":"2.0","id":12,"method":"run.advanceTime","params":{"by":"1.5s"}}
+< {"jsonrpc":"2.0","id":12,"result":{"time":1500000000,"wallNs":1764000001500000000}}
+> [{"jsonrpc":"2.0","id":13,"method":"run.send","params":{"target":1,"event":"ticket.escalate"}},{"jsonrpc":"2.0","id":14,"method":"run.turn"}]
+< {"jsonrpc":"2.0","method":"effect.request","params":{"batch":7,"index":0,"session":1,"src":"escalation.scxml"}}
+< {"jsonrpc":"2.0","method":"effect.log","params":{"batch":8,"index":0,"session":1,"label":"desk","text":"escalation failed: error.execution"}}
+< {"jsonrpc":"2.0","method":"effect.log","params":{"batch":8,"index":1,"session":1,"label":"desk","text":"ticket 843291 opened at 2025-11-24T16:00:01.500Z"}}
+< [{"jsonrpc":"2.0","id":13,"result":{}},{"jsonrpc":"2.0","id":14,"result":{"status":"idle","runs":2,"fuel":20,"time":1500000000,"nextDeadline":null}}]
+> {"jsonrpc":"2.0","id":15,"method":"run.addImage","params":{"sources":[{"name":"refund.scxml","text":"<scxml xmlns=\"http://www.w3.org/2005/07/scxml\" version=\"1.0\" name=\"refund\" datamodel=\"ecmascript\" initial=\"requested\"><state id=\"requested\"><transition event=\"refund.approve\" target=\"refunded\"/></state><final id=\"refunded\"/></scxml>"}]}}
+< {"jsonrpc":"2.0","id":15,"result":{"segment":1,"charts":[{"name":"refund","chart":0}],"diagnostics":[]}}
+> {"jsonrpc":"2.0","id":16,"method":"run.spawn","params":{"segment":1,"chart":0,"name":"refund-17"}}
+< {"jsonrpc":"2.0","id":16,"result":{"session":4294967297,"address":"tinyactors://tinyactors-run/#_scxml_4294967297"}}
+> {"jsonrpc":"2.0","id":17,"method":"run.addImage","params":{"files":["desk.scxml"]}}
+< {"jsonrpc":"2.0","id":17,"result":{"segment":2,"charts":[{"name":"desk","chart":0}],"diagnostics":[]}}
+> {"jsonrpc":"2.0","id":18,"method":"run.send","params":{"target":1,"event":"ticket.close","data":{"resolution":"answered"}}}
+< {"jsonrpc":"2.0","id":18,"result":{}}
+> {"jsonrpc":"2.0","id":19,"method":"run.turn"}
+< {"jsonrpc":"2.0","method":"effect.done","params":{"batch":9,"index":0,"session":1,"name":"desk-1","final":"closed","data":{"resolution":"answered"}}}
+< {"jsonrpc":"2.0","id":19,"result":{"status":"idle","runs":2,"fuel":8,"time":1500000000,"nextDeadline":null}}
+> {"jsonrpc":"2.0","id":"config","method":"host.config"}
+< {"jsonrpc":"2.0","id":"config","result":{"systemID":"tinyactors-run","system":{"maxActors":64,"maxEvents":256,"maxTimers":64,"workspaces":4,"maxRequests":16,"outbox":64,"quantum":1000,"instanceBytes":0,"stringBytes":17408,"ticksPerSecond":1000000000,"traceBytes":131072,"traceContexts":256,"traceRules":16,"traceSeed":0,"tracing":true},"ioProcessors":[{"type":"crm","location":"https://crm.example/hooks"}],"migrateQuantum":256}}

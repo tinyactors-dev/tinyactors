@@ -142,11 +142,12 @@ shell's `read` handle.
 | LSP's `Content-Length` headers | its clients are editors; an agent's or a shell's client is line-based; a second framing is a second thing to test |
 | the driver protocol's length-prefixed CBOR (`driver.md:21`) | not text: a CI job cannot write it with `echo` or read it with `jq` |
 
-- **Lines.** A blank line is ignored; a `\r` before the `\n` is dropped; a
+- **Lines.** A blank line (nothing, or only spaces and tabs) is ignored; a `\r` before the `\n` is dropped; a
   last line without `\n` at the end of input is a message. A line longer
   than `--max-message` (default 64 MiB, the server's own bound, so a
   client that sends no newline cannot grow it without end) is answered
-  with -32600 and skipped to its newline. After a line longer than 1 MiB
+  with -32600 as soon as it passes the limit (not at its newline, which
+  may never come) and skipped to its newline. After a line longer than 1 MiB
   the server gives the line buffer's block back, so one large message
   does not stay for the server's life.
 - **Envelope.** JSON-RPC 2.0: a request has `"jsonrpc": "2.0"`, `method`,
@@ -155,7 +156,8 @@ shell's `read` handle.
   that is not one is answered with -32600 and `"id": null`, one that is
   not JSON with -32700.
 - **Repeated keys** are refused in every JSON object the server reads
-  (-32700, `data.path` naming the key): the readers behind it disagree on
+  (-32700; as built, `data.path` is `""` and the message says a key is
+  repeated: the JSON reader reports an offset, not the key): the readers behind it disagree on
   which one wins (core's `ta_cbor_member` finds the first, `cbor.h`;
   quickjs's `wire_read` defines the properties in order, so the last
   stays, `src/datamodel_ecmascript/datamodel_ecmascript.c:3123-3138`).
@@ -821,7 +823,7 @@ refused.
 | Condition | Code | Reason |
 |---|---|---|
 | not JSON, or a repeated key | -32700 | `malformed` |
-| not a request: not an object, `jsonrpc` not `"2.0"`, no `method`, `params` not an object, a bad `id`, an empty batch, a line past `--max-message` | -32600 | `type`, `missing`, `limit` |
+| not a request: not an object, `jsonrpc` not `"2.0"`, no `method`, `params` not an object, a bad `id`, a member a request does not have (core's `unknown`), an empty batch (`missing`), nested too deep, a line past `--max-message` (`limit`) | -32600 | `type`, `missing`, `unknown`, `limit` |
 | no such method | -32601 (core's, forwarded) | `unknown` |
 | a param missing, of the wrong type, unknown, out of range; `data` for a chart that reads no values | -32602 | `missing`, `type`, `unknown`, `range` |
 | `TA_ERROR_STALE` | -32001 | `stale` |
@@ -1498,6 +1500,76 @@ line, and the server and the schema cannot disagree on what is accepted.
   require the generator to fail with the expected pointer. Ruby unit tests
   of the generator (`$ref` resolution, the discriminator, the tables'
   order) run in the same task.
+
+### 7.9 As built: steps 3 to 5
+
+Steps 3 to 5 are built (2026-11-25). Where the code needed something this
+outline did not say, or said otherwise, the smallest sound thing was done
+and is recorded here; `docs/cli.md`, "Run", is the reference for what is
+built.
+
+- **`src/cli/rpc.h`** differs from the sketch in 7.2. `ta_rpc_lines` keeps
+  where it has handed out and searched (`consumed`, `scanned`), whether the
+  input ended and whether to give its block back; a line past the limit is
+  reported once, when it passes the limit. `ta_rpc_message` holds its
+  document by value with `at` and a batch's `count`, and
+  `ta_rpc_element_read` checks each element of a batch as a message alone.
+  Writing gained what the server needed: `ta_rpc_decode` (CBOR to tokens
+  in an arena), `ta_rpc_write_item` (an item copied token by token, so a
+  forwarded request, a reply's result and a response's id are copied, not
+  re-encoded), `ta_rpc_response_write`, `ta_rpc_notification_begin` and
+  `ta_rpc_line_write` (one item as a JSON line). `ta_rpc_error` carries
+  `status`. An envelope with a member other than `jsonrpc`, `method`,
+  `params` and `id` is -32600 `unknown`, as core's posted messages are.
+- **`src/cli/json.h`** gained `ta_json_base64url_read`, the way back from
+  6.1's bytes, for `cbor`, `paramsCBOR` and `image`. A value's twin is
+  written as a CBOR byte string, which `ta_json_write` writes as
+  base64url: the server has no encoder of its own.
+- **Where the server's declarations live:** `tools/tinyactors/serve.h`,
+  shared by `run.c` (options, config, startup, the loop), `serve.c` (the
+  methods) and `effects.c` (the drain), not `tool.h`, which gains only the
+  platform's `receive`, the `run` options and `tool_serve`. `tool_call`
+  keeps a forwarded request's response (`response`), made at its `REPLY`;
+  the post kinds built are `FORWARDED` and `CONFIG`.
+- **`tool_image_make`** (step 4) gives a refusal no diagnostic explains as
+  `complaint` and the exit status a command gives for it, and
+  `tool_compilation` takes its arena and, for `run.addImage`'s `sources`,
+  the documents a `src` names by name.
+- **`run.addImage` refusals** are -32005 `invalid` with the diagnostics in
+  the message (`file:line:column: severity: text; ...`): the error object
+  has no member for a list. A file that cannot be read is the same code.
+- **Not built yet, refused:** a `run.*` method the server does not have
+  (`run.ack`, `run.fail`, ...) is -32601 of the server's own, never
+  forwarded; `hold`, and `run.send`'s `invocation` and `done`, are -32602
+  `unknown`. `run.send` needs `event`. An external invocation is refused
+  with `error.communication` to the invoker (no notification) until step
+  6 serves services.
+- **The turn runs again after an idle run whose drain gave the host an
+  input** (a `REQUEST` resumed with `TA_ERROR_INVALID`, a refused
+  invocation): otherwise the invoker's `error.execution` would wait for
+  the client's next `run.turn`.
+- **`batch`** counts the batches handed out after startup (the
+  `host.config` read at creation is not one the client sees), forwarded
+  replies' batches included.
+- **The command line:** `run` takes `-I` too; `-` as an input is refused
+  (standard input is the client's), and `--boot` without an input.
+  Startup diagnostics go to standard error a line each.
+- **The release build** of the command compiles QuickJS's sources with
+  their own flags (`CRelease::Program` sources may carry flags), and its
+  smoke runs `run --schema`. The release binary is 2,080,424 bytes for
+  x86_64-linux (it was about 170 KB): `distribution.md` says so.
+- **Tests:** transcripts in `tests/run/<case>/` (`transcript.jsonl`,
+  `arguments`, `exit`, a README), run by `test_tool`, validated line by
+  line by `run:schema` (a client line the server refused as the schema
+  would is not validated), and written again by `mise run
+  run:transcripts`; `test_run_memory` runs the server in-process with an
+  allocator that refuses at each count. Since core's change of 4.8 had
+  landed, the transcripts read `Date` and `Math.random` (`tests/run/values`).
+  Not yet built: the test that the server's method table and the
+  schema's `run.*` methods agree both ways (the schema already lists the
+  methods of steps 6 to 9).
+- **`undefined` in** (`cbor` `9w`) comes back from quickjs as `null`
+  without a twin: its `to_wire` writes `null`.
 
 ## 8. Decisions
 

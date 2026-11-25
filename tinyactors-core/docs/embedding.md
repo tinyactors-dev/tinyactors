@@ -17,8 +17,10 @@ the headers (`include/tinyactors/host.h`, `datamodel.h`, `cbor.h`,
 - **A compiled image.** `ta_compile_charts` or `ta_compile_system`
   (`compile.h`) turn SCXML into `.tai` bytes (`ta_compile_image`); the
   `tinyactors` command does the same offline (`tinyactors compile
-  chart.scxml... -o out.tai`), and looks into charts, manifests and
-  images: [cli.md](cli.md).
+  chart.scxml... -o out.tai`), looks into charts, manifests and
+  images, and runs them: `tinyactors run` is this page's loop over
+  JSON-RPC on standard input and output, for a client that is not C
+  ([cli.md](cli.md#run)).
 - **The library's version.** A program linked against a shared
   library can run with another build than the header it was compiled
   against: compare `ta_library_version()` (`types.h`) with the header's

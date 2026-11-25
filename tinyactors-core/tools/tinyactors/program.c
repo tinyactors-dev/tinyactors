@@ -121,6 +121,36 @@ static const ta_cli_option canonical_options[] = {
                               T("write nothing; exit with 1 when a file is not in canonical form")},
 };
 
+static const ta_string_view realms[] = {T("auto"), T("isolated")};
+static const ta_cli_option run_options[] = {
+    WARNINGS_AS_ERRORS, INCLUDE,
+    [TOOL_RUN_CONFIG] = {T("config"), 0, TA_CLI_OPTION_VALUE, 0, 0, 0, T("FILE"),
+                         T("the host config as JSON (docs/host-config.md), its ioProcessors a map of type to "
+                           "{location}; default: every key core's")},
+    [TOOL_RUN_SYSTEM] = {T("system"), 0, TA_CLI_OPTION_VALUE, 0, 0, 0, T("ID"),
+                         T("the config's systemID (default: tinyactors-run)")},
+    [TOOL_RUN_IO_PROCESSOR] = {T("io-processor"), 0, TA_CLI_OPTION_VALUE, TA_CLI_OPTION_REPEATABLE, 0, 0,
+                               T("TYPE[=LOCATION]"),
+                               T("an I/O processor the client serves, after the config's; repeat it for more")},
+    [TOOL_RUN_BOOT] = {T("boot"), 0, TA_CLI_OPTION_FLAG, 0, 0, 0, T(""),
+                       T("spawn the boot actors of the inputs' manifest before the first message")},
+    [TOOL_RUN_WALL_START] = {T("wall-start"), 0, TA_CLI_OPTION_VALUE, 0, 0, 0, T("NS"),
+                             T("the wall clock's start, nanoseconds since the Unix epoch (default: 0)")},
+    [TOOL_RUN_SEED] = {T("seed"), 0, TA_CLI_OPTION_VALUE, 0, 0, 0, T("N"),
+                       T("Math.random's seed (default: 1; 0: the engine's own, different on every run)")},
+    [TOOL_RUN_MAX_OPS] = {T("max-ops"), 0, TA_CLI_OPTION_VALUE, 0, 0, 0, T("N"),
+                          T("quickjs's interrupt checks per evaluation (default: quickjs's)")},
+    [TOOL_RUN_MEMORY_LIMIT] = {T("memory-limit"), 0, TA_CLI_OPTION_VALUE, 0, 0, 0, T("BYTES"),
+                               T("quickjs's heap (default: quickjs's)")},
+    [TOOL_RUN_REALM] = {T("realm"), 0, TA_CLI_OPTION_CHOICE, 0, 2, realms, T("REALM"),
+                        T("charts share one realm unless they declare globals (auto, the default), or each "
+                          "session has its own (isolated)")},
+    [TOOL_RUN_MAX_MESSAGE] = {T("max-message"), 0, TA_CLI_OPTION_VALUE, 0, 0, 0, T("BYTES"),
+                              T("the longest line taken (default: 64 MiB)")},
+    [TOOL_RUN_SCHEMA] = {T("schema"), 0, TA_CLI_OPTION_FLAG, 0, 0, 0, T(""),
+                         T("write the protocol's JSON Schema and exit")},
+};
+
 #define OPTIONS(table) (uint32_t)(sizeof(table) / sizeof(table)[0]), (table)
 #define EXAMPLES(table) (uint32_t)(sizeof(table) / sizeof(table)[0]), (table)
 
@@ -164,6 +194,10 @@ static const ta_string_view path_examples[] = {
 static const ta_string_view canonical_examples[] = {
     T("fmt order.scxml"), T("fmt -w charts/*.scxml system.xml"),
     T("fmt --check charts/*.scxml"), T("fmt --check -f json -I shared order.scxml")};
+static const ta_string_view run_examples[] = {
+    T("run order.scxml"), T("run --config shop.json order.scxml payment.scxml"),
+    T("run --io-processor payments --system shop order.scxml < requests.jsonl"),
+    T("run --schema > run.schema.json")};
 static const ta_string_view help_examples[] = {T("help"), T("help compile"),
                                                T("help -f json inspect")};
 static const ta_string_view version_examples[] = {T("version"), T("version -f json")};
@@ -184,6 +218,7 @@ typedef enum tool_command_index {
     TOOL_COMMAND_PATH,
     TOOL_COMMAND_CANONICAL,
     TOOL_COMMAND_ACTORS,
+    TOOL_COMMAND_RUN,
     TOOL_COMMAND_HELP,
     TOOL_COMMAND_VERSION,
     TOOL_COMMAND_COUNT
@@ -292,6 +327,18 @@ static const ta_cli_command commands[TOOL_COMMAND_COUNT] = {
            "its mailbox, and its pending delayed sends with when they are due. --chart, --segment "
            "and --session narrow the list."),
          T("SNAPSHOT"), 1, 1, OPTIONS(actors_options), EXAMPLES(actors_examples)},
+    [TOOL_COMMAND_RUN] =
+        {T("run"), T("run charts: one host served over JSON-RPC 2.0 on standard input and output"),
+         T("Experimental: the protocol may change in any release until a second client uses it. "
+           "Makes one host with quickjs, adds the inputs' image (charts, a manifest or an image, read "
+           "as every command reads them; none: the client adds images), and answers JSON-RPC 2.0 "
+           "messages, one per line, on standard input: run.* methods are the host's calls "
+           "(run.spawn, run.send, run.advanceTime, run.turn, run.addImage, ...), every other method "
+           "is core's control plane (actor.state, host.stats, ...). What actors do comes back as "
+           "effect.* notifications, written before the response to the request that caused them. "
+           "The clock is simulated: it moves only with run.advanceTime. The end of input ends the "
+           "server; the protocol's JSON Schema is run --schema's answer (docs/cli.md, \"Run\")."),
+         T("[INPUT...]"), 0, TA_CLI_UNBOUNDED, OPTIONS(run_options), EXAMPLES(run_examples)},
     [TOOL_COMMAND_HELP] = {T("help"), T("describe a command, or the program"), T(""),
                            T("[COMMAND]"), 0, 1, 0, 0, EXAMPLES(help_examples)},
     [TOOL_COMMAND_VERSION] = {T("version"), T("the version of the program and its library"), T(""),
@@ -300,8 +347,8 @@ static const ta_cli_command commands[TOOL_COMMAND_COUNT] = {
 
 static const ta_cli_program program = {
     T("tinyactors"),
-    T("compile, check and look into tinyactors charts, systems and images, and the snapshots and "
-      "blobs a host writes"),
+    T("compile, check, run and look into tinyactors charts, systems and images, and the snapshots "
+      "and blobs a host writes"),
     TOOL_PROGRAM_OPTION_COUNT, program_options, TOOL_COMMAND_COUNT, commands};
 
 static void tool_help(tool *t);
@@ -315,7 +362,8 @@ static const tool_run runs[TOOL_COMMAND_COUNT] = {
     [TOOL_COMMAND_DISASSEMBLE] = tool_disassemble, [TOOL_COMMAND_GRAPH] = tool_graph,
     [TOOL_COMMAND_DIFF] = tool_diff,               [TOOL_COMMAND_LINT] = tool_lint,
     [TOOL_COMMAND_PATH] = tool_path,               [TOOL_COMMAND_CANONICAL] = tool_canonical,
-    [TOOL_COMMAND_ACTORS] = tool_actors,           [TOOL_COMMAND_HELP] = tool_help,
+    [TOOL_COMMAND_ACTORS] = tool_actors,           [TOOL_COMMAND_RUN] = tool_serve,
+    [TOOL_COMMAND_HELP] = tool_help,
     [TOOL_COMMAND_VERSION] = tool_version,
 };
 

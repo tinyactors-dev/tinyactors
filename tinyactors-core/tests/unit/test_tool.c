@@ -22,6 +22,9 @@
 #ifndef TA_TEST_REPOSITORY
 #define TA_TEST_REPOSITORY ".."
 #endif
+#ifndef TA_TEST_TRANSCRIPTS
+#define TA_TEST_TRANSCRIPTS "tests/run"
+#endif
 
 #define NS "xmlns='http://www.w3.org/2005/07/scxml'"
 
@@ -408,6 +411,93 @@ static void test_layout_corpus(void) {
     }
     closedir(directory);
     CHECK(charts >= 10);
+}
+
+/* ---- tinyactors run: transcripts ----------------------------------------------------- */
+
+/* The cases of tests/run (README.md there): each directory's transcript.jsonl
+ * holds the client's lines ("> ") and the server's ("< "); the server, run
+ * in the case's directory with its `arguments` and TZ=UTC, given the
+ * client's lines, must write the server's byte for byte and exit as the
+ * case's `exit` says (0 without one). `mise run run:transcripts` writes the
+ * server's lines again after a deliberate change. */
+static void test_run_transcripts(void) {
+    DIR *directory = opendir(TA_TEST_TRANSCRIPTS);
+    CHECK(directory != NULL);
+    if (!directory) return;
+    int cases = 0;
+    for (struct dirent *entry; (entry = readdir(directory));) {
+        if (entry->d_name[0] == '.') continue;
+        char path[2048], command[4096];
+        snprintf(path, sizeof path, "%s/%s/transcript.jsonl", TA_TEST_TRANSCRIPTS, entry->d_name);
+        char *transcript = whole_file(path);
+        if (!transcript) continue;
+        FILE *input = fopen(fixture_path("run-input"), "wb"), *expected = fopen(fixture_path("run-expected"), "wb");
+        CHECK(input && expected);
+        for (char *line = transcript; line && *line;) {
+            char *end = strchr(line, '\n');
+            size_t length = end ? (size_t)(end - line) : strlen(line);
+            if (length >= 2 && line[0] == '>' && line[1] == ' ') fprintf(input, "%.*s\n", (int)length - 2, line + 2);
+            if (length >= 2 && line[0] == '<' && line[1] == ' ') fprintf(expected, "%.*s\n", (int)length - 2, line + 2);
+            line = end ? end + 1 : NULL;
+        }
+        fclose(input);
+        fclose(expected);
+        free(transcript);
+        snprintf(path, sizeof path, "%s/%s/arguments", TA_TEST_TRANSCRIPTS, entry->d_name);
+        char *arguments = whole_file(path);
+        if (arguments)
+            for (char *at = arguments; *at; at++)
+                if (*at == '\n') *at = ' ';
+        snprintf(path, sizeof path, "%s/%s/exit", TA_TEST_TRANSCRIPTS, entry->d_name);
+        char *exit_text = whole_file(path);
+        int exit_wanted = exit_text ? atoi(exit_text) : 0;
+        free(exit_text);
+        snprintf(command, sizeof command,
+                 "cd '%s/%s' && TZ=UTC '%s/tinyactors' run %s < '%s' > '%s/run-output' 2> '%s/run-errors'",
+                 TA_TEST_TRANSCRIPTS, entry->d_name, TA_TEST_PROGRAMS, arguments ? arguments : "",
+                 fixture_path("run-input"), TA_TEST_TEMPORARY_DIRECTORY, TA_TEST_TEMPORARY_DIRECTORY);
+        free(arguments);
+        int status = system(command);
+        int exited = WIFEXITED(status) ? WEXITSTATUS(status) : -1;
+        CHECK_EQUAL(exited, exit_wanted);
+        char *answer = whole_file(fixture_path("run-output")), *wanted = whole_file(fixture_path("run-expected"));
+        int same = answer && wanted && strcmp(answer, wanted) == 0;
+        CHECK(same);
+        if (!same || exited != exit_wanted)
+            fprintf(stderr, "  tests/run/%s: the server answered\n%s(standard error: %s)\n(mise run run:transcripts "
+                            "after a deliberate change)\n",
+                    entry->d_name, answer ? answer : "", text_of("run-errors"));
+        free(answer);
+        free(wanted);
+        cases++;
+    }
+    closedir(directory);
+    CHECK(cases >= 3);
+}
+
+/* `tinyactors run --schema` is the schema's file, byte for byte. */
+static void test_run_schema(void) {
+    char path[2048];
+    CHECK_EQUAL(run("run --schema"), 0);
+    snprintf(path, sizeof path, "%s/tinyactors-core/tools/tinyactors/run.schema.json", TA_TEST_REPOSITORY);
+    char *answer = whole_file(fixture_path("output")), *wanted = whole_file(path);
+    CHECK(answer && wanted && strcmp(answer, wanted) == 0);
+    free(answer);
+    free(wanted);
+    /* the command line it refuses, before any message */
+    CHECK_EQUAL(run("run -"), 2);
+    CHECK(has("errors", "standard input is the client's"));
+    CHECK_EQUAL(run("run --boot"), 2);
+    CHECK_EQUAL(run("run --seed x"), 2);
+    CHECK_EQUAL(run("run --io-processor payments --io-processor payments < /dev/null"), 2);
+    CHECK(has("errors", "named twice"));
+    CHECK_EQUAL(run("run --system 'not a system' < /dev/null"), 1);
+    CHECK(has("errors", "the config is refused"));
+    CHECK_EQUAL(run("run missing.scxml < /dev/null"), 3);
+    /* nothing to read: the end of input at once */
+    CHECK_EQUAL(run("run < /dev/null"), 0);
+    CHECK(!*text_of("output"));
 }
 
 /* A version of order.scxml (write_charts) with `open`'s transitions, the
@@ -1158,5 +1248,7 @@ int main(void) {
     RUN(test_include_path);
     RUN(test_canonical_corpus);
     RUN(test_snapshots_and_blobs);
+    RUN(test_run_schema);
+    RUN(test_run_transcripts);
     TEST_MAIN_END();
 }
