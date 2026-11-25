@@ -61,12 +61,29 @@ static ta_status platform_read_stream(FILE *file, ta_growable_arena *arena, ta_b
     return TA_OK;
 }
 
+/* Standard input, once read: a command may read an input twice (inspect
+ * tells a snapshot from an image's inputs first), and the bytes live in the
+ * invocation's arena until it ends. */
+typedef struct platform_state {
+    int standard_input_read;
+    ta_bytes standard_input;
+} platform_state;
+
 static ta_status platform_read(void *context, const tool_read *request, ta_bytes *out) {
-    (void)context;
+    platform_state *state = (platform_state *)context;
     out->pointer = NULL;
     out->length = 0;
-    if (request->path.length == 1 && request->path.pointer[0] == '-')
-        return platform_read_stream(stdin, request->arena, out);
+    if (request->path.length == 1 && request->path.pointer[0] == '-') {
+        if (state->standard_input_read) {
+            *out = state->standard_input;
+            return TA_OK;
+        }
+        ta_status status = platform_read_stream(stdin, request->arena, out);
+        if (status != TA_OK) return status;
+        state->standard_input_read = 1;
+        state->standard_input = *out;
+        return TA_OK;
+    }
     char path[PLATFORM_PATH_MAX];
     if (!platform_path(request->path, path)) return TA_ERROR_INVALID;
     FILE *file = fopen(path, "rb");
@@ -105,7 +122,8 @@ static ta_status platform_write(void *context, const tool_write *request) {
 
 int main(int count, char **words) {
     tool_platform platform;
-    platform.context = NULL;
+    platform_state state = {0, {NULL, 0}};
+    platform.context = &state;
     platform.allocator = (ta_allocator){NULL, platform_alloc, platform_free};
     platform.read = platform_read;
     platform.write = platform_write;

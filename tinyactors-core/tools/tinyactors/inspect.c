@@ -19,9 +19,7 @@ static ta_string_view string_of(const ta_image_view *view, uint32_t id) {
 }
 
 static ta_string_view state_id(const ta_image_view *view, const ta_chart_record *chart, uint32_t state) {
-    if (state == TA_NIL || state >= chart->state_count) return ta_string("");
-    ta_string_view id = string_of(view, view->states[chart->first_state + state].id);
-    return id.length ? id : ta_string("/scxml"); /* the root: its XPath, never an id */
+    return tool_state_id(view, chart, state);
 }
 
 /* An expression's text ("" for none). */
@@ -102,6 +100,7 @@ static ta_string_view kind_name(uint32_t kind) {
 }
 
 void tool_inspect(tool *t) {
+    if (tool_inspect_stored(t)) return; /* a snapshot or a blob (snapshot.c) */
     tool_opened opened;
     if (tool_open(t, arguments_of(t), &opened) != TA_OK) return;
     const ta_image_view *view = view_of(&opened);

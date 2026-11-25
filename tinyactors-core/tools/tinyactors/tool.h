@@ -46,7 +46,8 @@ typedef struct tool_platform {
     void *context;
     ta_allocator allocator; /* what the invocation's arena grows by */
     /* TA_OK; TA_ERROR_INVALID: no such file, or it cannot be read;
-     * TA_ERROR_NO_MEMORY. The bytes are 8-aligned and live in the arena. */
+     * TA_ERROR_NO_MEMORY. The bytes are 8-aligned and live in the arena.
+     * Standard input is read once: a later read of it gives the same bytes. */
     ta_status (*read)(void *context, const tool_read *request, ta_bytes *out);
     /* TA_OK; TA_ERROR_INVALID: it could not be written. */
     ta_status (*write)(void *context, const tool_write *request);
@@ -129,15 +130,23 @@ int tool_equal(ta_string_view a, ta_string_view b);
 /* ---- inputs (input.c) ------------------------------------------------------------- */
 
 typedef enum tool_input_kind {
-    TOOL_INPUT_IMAGE = 0,   /* a compiled image (.tai): bytes starting with "TAI1" */
-    TOOL_INPUT_CHART = 1,   /* SCXML: the root element is <scxml> */
-    TOOL_INPUT_MANIFEST = 2 /* a system manifest: the root element is <system> */
+    TOOL_INPUT_IMAGE = 0,    /* a compiled image (.tai): bytes starting with "TAI1" */
+    TOOL_INPUT_CHART = 1,    /* SCXML: the root element is <scxml> */
+    TOOL_INPUT_MANIFEST = 2, /* a system manifest: the root element is <system> */
+    TOOL_INPUT_SNAPSHOT = 3, /* a whole system, ta_host_snapshot_pack's: "tinyactors-snapshot " */
+    TOOL_INPUT_BLOB = 4,     /* a hibernation ("TAHB") or export ("TAEX") blob */
+    TOOL_INPUT_HOST_SNAPSHOT = 5 /* ta_host_snapshot's alone ("TAHS"): no images */
 } tool_input_kind;
+
+/* What `bytes` are, by their first bytes (never by a file's name): a
+ * tool_input_kind, or TA_NIL for none of them. */
+uint32_t tool_input_kind_of(ta_bytes bytes);
 
 /* The image the inputs make: an image read as it is, a manifest compiled,
  * or charts compiled together (the first the default boot chart). */
 typedef struct tool_image {
-    uint32_t kind;  /* tool_input_kind of the inputs */
+    uint32_t kind;    /* tool_input_kind of the inputs */
+    uint32_t segment; /* a snapshot's: the segment whose image this is */
     ta_image image; /* opened: valid when `opened` */
     int opened;
     ta_bytes bytes; /* the image's bytes, 8-aligned, in the arena */
@@ -149,16 +158,15 @@ typedef struct tool_image {
 typedef struct tool_inputs {
     uint32_t count;
     const ta_string_view *paths;
-    uint32_t flags; /* TA_COMPILE_* for XML inputs */
+    uint32_t flags;   /* TA_COMPILE_* for XML inputs */
+    uint32_t segment; /* a snapshot's segment whose image is read; TA_NIL: its newest */
 } tool_inputs;
 
 /* Read and make the image (diagnostics kept). TA_OK: t->exit untouched and
  * out->opened. Otherwise the reason was told (tool_complain for a file,
- * the report for diagnostics) and t->exit set. */
+ * the report for diagnostics) and t->exit set. A snapshot gives the image
+ * of one of its segments (inputs.segment), each of its images verified. */
 ta_status tool_load(tool *t, tool_inputs inputs, tool_image *out);
-
-/* What the bytes are: a tool_input_kind, TA_NIL when none. */
-uint32_t tool_input_kind_of(ta_bytes bytes);
 
 /* Sources to compile, already read: charts, or one manifest. */
 typedef struct tool_compilation {
@@ -198,7 +206,8 @@ ta_status tool_select_charts(tool *t, tool_selection selection, tool_charts *out
 typedef enum tool_input_option {
     TOOL_OPTION_WARNINGS_AS_ERRORS = 0, /* -W: a compiled input's warnings refuse it */
     TOOL_OPTION_INCLUDE = 1,            /* -I DIR, repeatable: where a src is looked for next */
-    TOOL_OPTION_CHART = 2               /* --chart NAME, repeatable (not check, not compile) */
+    TOOL_OPTION_CHART = 2,              /* --chart NAME, repeatable (not check, not compile) */
+    TOOL_OPTION_SEGMENT = 3             /* --segment N: a snapshot's segment (not check, not compile, not fmt) */
 } tool_input_option;
 typedef enum tool_compile_option {
     TOOL_COMPILE_OUTPUT = 2, /* -o FILE */
@@ -206,11 +215,11 @@ typedef enum tool_compile_option {
     TOOL_COMPILE_SYMBOL = 4  /* --symbol NAME: the C array's name */
 } tool_compile_option;
 typedef enum tool_emit { TOOL_EMIT_IMAGE = 0, TOOL_EMIT_C = 1 } tool_emit;
-typedef enum tool_expressions_option { TOOL_EXPRESSIONS_KIND = 3 } tool_expressions_option;
+typedef enum tool_expressions_option { TOOL_EXPRESSIONS_KIND = 4 } tool_expressions_option;
 typedef enum tool_diff_option {
-    TOOL_DIFF_EXIT_CODE = 3, /* --exit-code: 1 when they differ (only breaking ones with --breaking) */
-    TOOL_DIFF_BREAKING = 4,  /* --breaking: only the differences that break running actors */
-    TOOL_DIFF_ALL = 5        /* --all: unchanged charts too */
+    TOOL_DIFF_EXIT_CODE = 4, /* --exit-code: 1 when they differ (only breaking ones with --breaking) */
+    TOOL_DIFF_BREAKING = 5,  /* --breaking: only the differences that break running actors */
+    TOOL_DIFF_ALL = 6        /* --all: unchanged charts too */
 } tool_diff_option;
 /* fmt's: -I at TOOL_OPTION_INCLUDE, as every command that reads charts */
 typedef enum tool_canonical_option {
@@ -219,14 +228,17 @@ typedef enum tool_canonical_option {
 } tool_canonical_option;
 
 typedef enum tool_lint_option {
-    TOOL_LINT_DENY = 3, /* --deny RULE, repeatable ("all"): its findings exit 1 */
-    TOOL_LINT_ALLOW = 4 /* --allow RULE, repeatable ("all"): its findings are not reported */
+    TOOL_LINT_DENY = 4, /* --deny RULE, repeatable ("all"): its findings exit 1 */
+    TOOL_LINT_ALLOW = 5 /* --allow RULE, repeatable ("all"): its findings are not reported */
 } tool_lint_option;
 typedef enum tool_path_option {
-    TOOL_PATH_TO = 3,         /* --to STATE (required) */
-    TOOL_PATH_FROM = 4,       /* --from STATE */
-    TOOL_PATH_UNREACHABLE = 5 /* --unreachable: succeed when no path exists */
+    TOOL_PATH_TO = 4,         /* --to STATE (required) */
+    TOOL_PATH_FROM = 5,       /* --from STATE */
+    TOOL_PATH_UNREACHABLE = 6 /* --unreachable: succeed when no path exists */
 } tool_path_option;
+typedef enum tool_actors_option {
+    TOOL_ACTORS_SESSION = 4 /* --session N, repeatable: these sessions only */
+} tool_actors_option;
 
 /* What a command that looks into an image starts with: its arguments as
  * inputs (-W read), the image made from them, and the charts --chart
@@ -243,6 +255,11 @@ typedef struct tool_open_request {
     uint32_t flags; /* tool_selection_flags */
 } tool_open_request;
 ta_status tool_open(tool *t, tool_open_request request, tool_opened *out);
+
+/* The id of state `state` of `chart` ("/scxml" for the root, "" for none). */
+ta_string_view tool_state_id(const ta_image_view *view, const ta_chart_record *chart, uint32_t state);
+/* A decimal number of the command line: TA_OK, or TA_ERROR_INVALID. */
+ta_status tool_decimal(ta_string_view text, uint64_t *out);
 
 /* Names for what the image holds. */
 ta_string_view tool_state_kind_name(uint32_t kind);
@@ -267,5 +284,10 @@ void tool_diff(tool *t);
 void tool_lint(tool *t);
 void tool_path(tool *t);
 void tool_canonical(tool *t);
+/* snapshot.c: what the runtime writes, a snapshot or a blob */
+void tool_actors(tool *t);
+/* inspect of a snapshot or a blob: 1 when the first input is one (and it
+ * was answered), 0 for an image's inputs, which inspect reads itself. */
+int tool_inspect_stored(tool *t);
 
 #endif /* TINYACTORS_TOOL_H */

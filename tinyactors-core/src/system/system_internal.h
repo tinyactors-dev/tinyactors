@@ -250,6 +250,84 @@ typedef struct ta_actor_timer_array {
     uint32_t capacity;
 } ta_actor_timer_array;
 uint32_t ta_system_actor_timers(const ta_system *s, uint32_t actor, ta_actor_timer_array timers);
+/* An actor's queued external events (its mailbox), in the order it will
+ * take them: the first `events.capacity` into `events`; returns how many it
+ * holds. Views of region strings, valid until the system runs again; an
+ * event without a sendid has a sendid of {NULL, 0}. For the tinyactors
+ * command, which reads a restored snapshot: nothing per event. */
+typedef struct ta_actor_queued {
+    ta_string_view event, sendid;
+} ta_actor_queued;
+typedef struct ta_actor_queued_array {
+    ta_actor_queued *pointer;
+    uint32_t capacity;
+} ta_actor_queued_array;
+uint32_t ta_system_actor_mailbox(const ta_system *s, uint32_t actor, ta_actor_queued_array events);
+/* The name an actor was spawned with (the chart's name when it was given
+ * none; a boot actor's manifest name), a view of a region string valid
+ * until the system runs again; empty for an actor that is gone. */
+ta_string_view ta_system_actor_name(const ta_system *s, uint32_t actor);
+
+/* ---- reading a blob without a system (hibernate.c) ---------------------------------
+ * What a hibernation or export blob holds, read in place, for the tinyactors
+ * command (docs/cli.md): no system, no datamodel, nothing allocated. The
+ * views point into the blob, which may have any alignment. */
+typedef enum ta_blob_kind {
+    TA_BLOB_UNKNOWN = 0,
+    TA_BLOB_HIBERNATION = 1, /* ta_actor_hibernate's */
+    TA_BLOB_EXPORT = 2       /* ta_actor_export's (a migration's, inside a host) */
+} ta_blob_kind;
+typedef struct ta_blob_contents {
+    uint32_t kind;          /* ta_blob_kind */
+    uint32_t version;       /* the format version it was written in */
+    uint32_t session_count; /* the sessions it holds: 1 for a hibernation */
+    uint32_t identity;      /* a hibernation's writer: it wakes only in a system of this identity */
+    uint32_t migrated;      /* an export translated by ta_blob_migrate */
+    uint32_t pad;
+    uint64_t image_hash; /* the image it was written with (ta_image_info.content_hash) */
+    uint64_t session;    /* the session (an export's root) */
+} ta_blob_contents;
+/* TA_OK: a blob of this build's format, whose sessions ta_blob_session_at
+ * reads. TA_ERROR_UNSUPPORTED: a blob of another format version (out->kind
+ * and out->version say which). TA_ERROR_INVALID: not a blob, or a damaged
+ * one. */
+ta_status ta_blob_read(ta_bytes blob, ta_blob_contents *out);
+/* One session of a blob, parents before their children. */
+typedef struct ta_blob_session {
+    uint64_t session;
+    uint64_t parent;        /* the invoking session; 0 for the root */
+    uint64_t macrostep;     /* macrosteps it had run when it was written */
+    uint32_t chart;         /* its chart's index in the blob's image */
+    uint32_t slot;          /* its invoke slot in the parent; TA_NIL for the root */
+    uint32_t delayed_count; /* pending delayed sends: an export's (a hibernated actor's stay
+                               in the region) */
+    uint32_t pad;
+    ta_string_view name; /* the name it was spawned with (an export's; empty in a hibernation) */
+    ta_bytes instance;   /* its instance words */
+    ta_bytes datamodel;  /* what its datamodel's serialize wrote */
+    ta_bytes delayed;    /* its delayed sends' records (ta_blob_delayed_at) */
+} ta_blob_session;
+/* Session `index` (0: the root) of a blob ta_blob_read accepts: TA_OK, or
+ * TA_ERROR_INVALID past the last session or for a damaged blob. */
+ta_status ta_blob_session_at(ta_bytes blob, uint32_t index, ta_blob_session *out);
+/* The active states of a session, read from its instance words with the
+ * chart of `image`, the image the blob was written with (the caller checks
+ * the hash): the first states.capacity into `states`, in document order;
+ * returns how many. 0 when the chart or the words do not fit the image. */
+uint32_t ta_blob_configuration(const ta_blob_session *session, const ta_image *image,
+                               ta_uint32_array states);
+/* A pending delayed send of an exported session, in firing order. */
+typedef struct ta_blob_delayed {
+    uint64_t due;          /* in the writing system's ticks */
+    uint32_t rank;         /* its place in the firing order of the tree's delayed sends */
+    uint32_t payload_kind; /* 0: no data; 1: `payload` holds the value (payload_serialize's
+                              bytes); 2: a payload handle, valid in the writing process only */
+    ta_string_view event, sendid, target; /* sendid and target: {NULL, 0} for none */
+    ta_bytes payload;
+} ta_blob_delayed;
+/* Delayed send `index` of `session`: TA_OK, or TA_ERROR_INVALID past the
+ * last or for damaged records. */
+ta_status ta_blob_delayed_at(const ta_blob_session *session, uint32_t index, ta_blob_delayed *out);
 /* The states history state `ref.state` of actor `ref.actor` would return
  * to: its parent, the states it recorded and every state between them, in
  * document order. 0 when it has recorded nothing, is no history state or

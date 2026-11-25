@@ -2,6 +2,7 @@
 
 #include "base/format.h"
 #include "base/memory.h"
+#include <tinyactors/cbor.h>
 
 /* What a node is. */
 typedef enum report_kind {
@@ -10,7 +11,8 @@ typedef enum report_kind {
     REPORT_TEXT = 2,
     REPORT_NUMBER = 3,
     REPORT_BOOLEAN = 4,
-    REPORT_BLOCK = 5
+    REPORT_BLOCK = 5,
+    REPORT_VALUE = 6 /* one CBOR item; `text` its diagnostic notation */
 } report_kind;
 
 typedef enum report_constants {
@@ -27,6 +29,7 @@ struct ta_report_node {
     ta_string_view text;     /* a text's value, a block's text */
     ta_string_view language; /* a block's */
     uint64_t number;         /* a number's value; a boolean's, 0 or 1 */
+    ta_bytes value;          /* a value's CBOR */
     ta_report_node *first, *last, *next;
 };
 
@@ -126,6 +129,30 @@ void ta_report_block(ta_report *report, ta_string_view name, ta_report_code code
     node->text = code.text;
 }
 
+void ta_report_value(ta_report *report, ta_string_view name, ta_bytes cbor) {
+    if (report->status != TA_OK) return;
+    ta_buffer probe = {(void *)0, 0, 0};
+    ta_status status = ta_cbor_diagnostic(cbor, &probe);
+    if (status != TA_ERROR_NO_MEMORY) { /* an empty text is no item either */
+        report->status = TA_ERROR_INVALID;
+        return;
+    }
+    char *text = (char *)ta_growable_arena_alloc(report->arena, probe.length, 1);
+    if (!text) {
+        report->status = TA_ERROR_NO_MEMORY;
+        return;
+    }
+    ta_buffer room = {text, probe.length, 0};
+    if (ta_cbor_diagnostic(cbor, &room) != TA_OK) {
+        report->status = TA_ERROR_INVALID;
+        return;
+    }
+    ta_report_node *node = report_add(report, REPORT_VALUE, name);
+    if (!node) return;
+    node->text = (ta_string_view){text, (uint32_t)room.length};
+    node->value = cbor;
+}
+
 ta_string_view ta_report_copy(ta_report *report, ta_string_view text) {
     ta_string_view copy = {"", 0};
     if (report->status != TA_OK || text.length == 0) return copy;
@@ -176,12 +203,150 @@ static void put_span(ta_output *out, report_span span) {
         ta_output_write(out, span.text.pointer + span.start, span.end - span.start);
 }
 
+/* A scalar: one line of Markdown, one JSON value without members of the
+ * report's own. A value is one, but not an XML attribute (xml_open). */
 static int report_is_scalar(const ta_report_node *node) {
-    return node->kind == REPORT_TEXT || node->kind == REPORT_NUMBER || node->kind == REPORT_BOOLEAN;
+    return node->kind == REPORT_TEXT || node->kind == REPORT_NUMBER ||
+           node->kind == REPORT_BOOLEAN || node->kind == REPORT_VALUE;
 }
 
 static int report_same_name(ta_string_view a, ta_string_view b) {
     return a.length == b.length && ta_memcmp(a.pointer, b.pointer, a.length) == 0;
+}
+
+/* ---- values: a CBOR item walked without recursion ------------------------ */
+
+/* An open container of the item: what it still holds, and the place of its
+ * next item (in a map, keys at even places, values at odd ones). */
+typedef struct value_frame {
+    uint64_t remaining;
+    uint32_t kind; /* TA_CBOR_ARRAY, TA_CBOR_MAP or TA_CBOR_TAG */
+    uint32_t position;
+} value_frame;
+
+typedef struct value_walk {
+    ta_cbor_reader reader;
+    value_frame stack[TA_CBOR_DEPTH_MAX + 1];
+    uint32_t depth;
+} value_walk;
+
+typedef enum value_step_kind {
+    VALUE_END = 0,  /* the item is read */
+    VALUE_ITEM = 1, /* an item (a container opens with it) */
+    VALUE_CLOSE = 2 /* the innermost container ends */
+} value_step_kind;
+
+typedef struct value_step {
+    uint32_t kind;      /* value_step_kind */
+    uint32_t parent;    /* the container it is in (TA_CBOR_*), 0 at the top */
+    uint32_t position;  /* its place there */
+    uint32_t depth;     /* containers around it; a closing one's own depth */
+    uint32_t container; /* VALUE_CLOSE: the kind that ends */
+    ta_cbor_item item;
+} value_step;
+
+static void value_walk_init(value_walk *walk, ta_bytes cbor) {
+    ta_cbor_reader_init(&walk->reader, cbor);
+    walk->depth = 0;
+}
+
+static int value_is_key(const value_step *step) {
+    return step->parent == TA_CBOR_MAP && step->position % 2 == 0;
+}
+
+static void value_next(value_walk *walk, value_step *step) {
+    ta_memset(step, 0, sizeof *step);
+    if (walk->depth && walk->stack[walk->depth - 1].remaining == 0) {
+        walk->depth--;
+        step->kind = VALUE_CLOSE;
+        step->container = walk->stack[walk->depth].kind;
+        step->depth = walk->depth;
+        if (walk->depth) step->parent = walk->stack[walk->depth - 1].kind;
+        return;
+    }
+    if (ta_cbor_read(&walk->reader, &step->item) != 1) return; /* VALUE_END */
+    step->kind = VALUE_ITEM;
+    step->depth = walk->depth;
+    if (walk->depth) {
+        value_frame *parent = &walk->stack[walk->depth - 1];
+        step->parent = parent->kind;
+        step->position = parent->position++;
+        parent->remaining--;
+    }
+    uint32_t kind = step->item.kind;
+    if ((kind != TA_CBOR_ARRAY && kind != TA_CBOR_MAP && kind != TA_CBOR_TAG) ||
+        walk->depth > TA_CBOR_DEPTH_MAX)
+        return;
+    value_frame *frame = &walk->stack[walk->depth++];
+    frame->kind = kind;
+    frame->position = 0;
+    frame->remaining = kind == TA_CBOR_TAG   ? 1u
+                       : kind == TA_CBOR_MAP ? (uint64_t)step->item.count * 2u
+                                             : step->item.count;
+}
+
+/* 1 when every key of every map is text or an integer: JSON and XML write
+ * the item as values; otherwise as its diagnostic notation. */
+static int value_keys_plain(ta_bytes cbor) {
+    value_walk walk;
+    value_step step;
+    value_walk_init(&walk, cbor);
+    for (value_next(&walk, &step); step.kind != VALUE_END; value_next(&walk, &step)) {
+        uint32_t kind = step.item.kind;
+        if (step.kind == VALUE_ITEM && value_is_key(&step) && kind != TA_CBOR_TEXT &&
+            kind != TA_CBOR_UINT && kind != TA_CBOR_NEGINT)
+            return 0;
+    }
+    return 1;
+}
+
+/* An integer in decimal: -1 - n for a negative one. */
+static void put_integer(ta_output *out, const ta_cbor_item *item) {
+    if (item->kind == TA_CBOR_UINT) {
+        char digits[TA_FORMAT_U64_MAX];
+        ta_output_write(out, digits, ta_format_u64(digits, item->value));
+        return;
+    }
+    ta_output_write(out, "-", 1);
+    if (item->value == UINT64_MAX) { /* -2^64, past 64 bits */
+        ta_output_write(out, "18446744073709551616", 20);
+        return;
+    }
+    char digits[TA_FORMAT_U64_MAX];
+    ta_output_write(out, digits, ta_format_u64(digits, item->value + 1u));
+}
+
+/* A float as diagnostic notation writes it, the shortest decimal that
+ * reads back as it: the double encoded alone and written so. */
+typedef struct value_float_text {
+    char text[40];
+    uint32_t length;
+} value_float_text;
+
+static void value_float(uint64_t bits, value_float_text *out) {
+    unsigned char encoded[9];
+    encoded[0] = 0xFB; /* major 7, a double */
+    for (uint32_t i = 0; i < 8; i++)
+        encoded[1 + i] = (unsigned char)(bits >> (56 - 8 * i));
+    ta_buffer room = {out->text, sizeof out->text, 0};
+    out->length = ta_cbor_diagnostic((ta_bytes){encoded, sizeof encoded}, &room) == TA_OK
+                      ? (uint32_t)room.length
+                      : 0;
+}
+
+/* NaN, Infinity and -Infinity, which JSON has no number for. */
+static int value_float_is_number(const value_float_text *number) {
+    char first = number->length ? number->text[0] : 'N';
+    return first != 'N' && first != 'I' && !(first == '-' && number->length > 1 && number->text[1] == 'I');
+}
+
+static void put_hexadecimal(ta_output *out, ta_bytes bytes) {
+    static const char lower[] = "0123456789abcdef";
+    const unsigned char *pointer = (const unsigned char *)bytes.pointer;
+    for (size_t i = 0; i < bytes.length; i++) {
+        char pair[2] = {lower[pointer[i] >> 4], lower[pointer[i] & 15u]};
+        ta_output_write(out, pair, 2);
+    }
 }
 
 /* ---- JSON -------------------------------------------------------------- */
@@ -229,8 +394,86 @@ static void report_frame_set(report_frame *frame, const ta_report_node *node, ui
     frame->scalar_run = 0;
 }
 
+/* A scalar item of a value as JSON (report.h, ta_report_value). */
+static void json_scalar(ta_output *out, const ta_cbor_item *item) {
+    switch (item->kind) {
+    case TA_CBOR_UINT:
+    case TA_CBOR_NEGINT:
+        put_integer(out, item);
+        break;
+    case TA_CBOR_TEXT:
+        json_string(out, (ta_string_view){(const char *)item->bytes.pointer, (uint32_t)item->bytes.length});
+        break;
+    case TA_CBOR_BYTES:
+        put_literal(out, "{\"bytes\": \"");
+        put_hexadecimal(out, item->bytes);
+        put_literal(out, "\"}");
+        break;
+    case TA_CBOR_FLOAT: {
+        value_float_text number;
+        value_float(item->value, &number);
+        int plain = value_float_is_number(&number);
+        if (!plain) put_literal(out, "{\"float\": \"");
+        ta_output_write(out, number.text, number.length);
+        if (!plain) put_literal(out, "\"}");
+        break;
+    }
+    default: /* a simple value */
+        if (item->value == TA_CBOR_FALSE) put_literal(out, "false");
+        else if (item->value == TA_CBOR_TRUE) put_literal(out, "true");
+        else if (item->value == TA_CBOR_NULL) put_literal(out, "null");
+        else if (item->value == TA_CBOR_UNDEFINED) put_literal(out, "{\"undefined\": true}");
+        else {
+            put_literal(out, "{\"simple\": ");
+            put_number(out, item->value);
+            put_byte(out, '}');
+        }
+        break;
+    }
+}
+
+static void json_cbor(ta_output *out, const ta_report_node *node) {
+    if (!value_keys_plain(node->value)) {
+        put_literal(out, "{\"diagnostic\": ");
+        json_string(out, node->text);
+        put_byte(out, '}');
+        return;
+    }
+    value_walk walk;
+    value_step step;
+    value_walk_init(&walk, node->value);
+    for (value_next(&walk, &step); step.kind != VALUE_END; value_next(&walk, &step)) {
+        if (step.kind == VALUE_CLOSE) {
+            put_byte(out, step.container == TA_CBOR_ARRAY ? ']' : '}');
+            continue;
+        }
+        if ((step.parent == TA_CBOR_ARRAY || step.parent == TA_CBOR_MAP) && step.position)
+            put_literal(out, step.parent == TA_CBOR_MAP && step.position % 2 ? ": " : ", ");
+        if (value_is_key(&step)) { /* text, or an integer written as text */
+            if (step.item.kind == TA_CBOR_TEXT) {
+                json_scalar(out, &step.item);
+            } else {
+                put_byte(out, '"');
+                put_integer(out, &step.item);
+                put_byte(out, '"');
+            }
+            continue;
+        }
+        if (step.item.kind == TA_CBOR_ARRAY) put_byte(out, '[');
+        else if (step.item.kind == TA_CBOR_MAP) put_byte(out, '{');
+        else if (step.item.kind == TA_CBOR_TAG) {
+            put_literal(out, "{\"tag\": ");
+            put_number(out, step.item.value);
+            put_literal(out, ", \"value\": ");
+        } else json_scalar(out, &step.item);
+    }
+}
+
 static void json_value(ta_output *out, const ta_report_node *node) {
     switch (node->kind) {
+    case REPORT_VALUE:
+        json_cbor(out, node);
+        break;
     case REPORT_NUMBER:
         put_number(out, node->number);
         break;
@@ -324,8 +567,122 @@ static void xml_value(ta_output *out, const ta_report_node *node, int attribute)
         xml_escape(out, node->text, attribute);
 }
 
-/* A scalar item or a block: <name>text</name>. */
+/* An object's scalar but a value: one of its attributes. */
+static int xml_is_attribute(const ta_report_node *node) {
+    return report_is_scalar(node) && node->kind != REPORT_VALUE;
+}
+
+/* A scalar item of a value as its typed element (report.h, ta_report_value). */
+static void xml_scalar(ta_output *out, const ta_cbor_item *item) {
+    switch (item->kind) {
+    case TA_CBOR_UINT:
+    case TA_CBOR_NEGINT:
+        put_literal(out, "<integer>");
+        put_integer(out, item);
+        put_literal(out, "</integer>");
+        break;
+    case TA_CBOR_TEXT:
+        put_literal(out, "<text>");
+        xml_escape(out, (ta_string_view){(const char *)item->bytes.pointer, (uint32_t)item->bytes.length}, 0);
+        put_literal(out, "</text>");
+        break;
+    case TA_CBOR_BYTES:
+        put_literal(out, "<bytes>");
+        put_hexadecimal(out, item->bytes);
+        put_literal(out, "</bytes>");
+        break;
+    case TA_CBOR_FLOAT: {
+        value_float_text number;
+        value_float(item->value, &number);
+        put_literal(out, "<float>");
+        ta_output_write(out, number.text, number.length);
+        put_literal(out, "</float>");
+        break;
+    }
+    default:
+        if (item->value == TA_CBOR_FALSE) put_literal(out, "<false/>");
+        else if (item->value == TA_CBOR_TRUE) put_literal(out, "<true/>");
+        else if (item->value == TA_CBOR_NULL) put_literal(out, "<null/>");
+        else if (item->value == TA_CBOR_UNDEFINED) put_literal(out, "<undefined/>");
+        else {
+            put_literal(out, "<simple>");
+            put_number(out, item->value);
+            put_literal(out, "</simple>");
+        }
+        break;
+    }
+}
+
+/* A value's elements, one a line, from `indent`: a map's entries hold their
+ * values one level in. */
+static void xml_cbor(ta_output *out, const ta_report_node *node, uint32_t indent) {
+    if (!value_keys_plain(node->value)) {
+        put_repeat(out, ' ', indent);
+        put_literal(out, "<diagnostic>");
+        xml_escape(out, node->text, 0);
+        put_literal(out, "</diagnostic>\n");
+        return;
+    }
+    value_walk walk;
+    value_step step;
+    uint32_t entries = 0; /* map entries open: each indents its value */
+    value_walk_init(&walk, node->value);
+    for (value_next(&walk, &step); step.kind != VALUE_END; value_next(&walk, &step)) {
+        uint32_t at = indent + (step.depth + entries) * REPORT_INDENT;
+        if (step.kind == VALUE_CLOSE) {
+            put_repeat(out, ' ', at);
+            put_literal(out, step.container == TA_CBOR_ARRAY ? "</array>\n"
+                             : step.container == TA_CBOR_MAP ? "</map>\n"
+                                                             : "</tag>\n");
+        } else if (value_is_key(&step)) {
+            put_repeat(out, ' ', at);
+            put_literal(out, "<entry key=\"");
+            if (step.item.kind == TA_CBOR_TEXT)
+                xml_escape(out, (ta_string_view){(const char *)step.item.bytes.pointer, (uint32_t)step.item.bytes.length}, 1);
+            else
+                put_integer(out, &step.item);
+            put_literal(out, "\">\n");
+            entries++;
+            continue;
+        } else {
+            put_repeat(out, ' ', at);
+            if (step.item.kind == TA_CBOR_ARRAY) put_literal(out, "<array>\n");
+            else if (step.item.kind == TA_CBOR_MAP) put_literal(out, "<map>\n");
+            else if (step.item.kind == TA_CBOR_TAG) {
+                put_literal(out, "<tag number=\"");
+                put_number(out, step.item.value);
+                put_literal(out, "\">\n");
+            } else {
+                xml_scalar(out, &step.item);
+                put_byte(out, '\n');
+            }
+            uint32_t kind = step.item.kind;
+            if (kind == TA_CBOR_ARRAY || kind == TA_CBOR_MAP || kind == TA_CBOR_TAG) continue;
+        }
+        /* an item ended: a map's value ends its entry */
+        if (step.parent == TA_CBOR_MAP && entries) {
+            entries--;
+            put_repeat(out, ' ', indent + (step.depth + entries) * REPORT_INDENT);
+            put_literal(out, "</entry>\n");
+        }
+    }
+}
+
+/* A scalar item or a block: <name>text</name>; a value: its elements
+ * inside <name>. */
 static void xml_leaf(ta_output *out, const ta_report_node *node, uint32_t indent) {
+    if (node->kind == REPORT_VALUE) {
+        put_repeat(out, ' ', indent);
+        put_byte(out, '<');
+        put(out, node->name);
+        put_literal(out, ">\n");
+        xml_cbor(out, node, indent + REPORT_INDENT);
+        put_repeat(out, ' ', indent);
+        put_literal(out, "</");
+        put(out, node->name);
+        put_literal(out, ">\n");
+        return;
+    }
     put_repeat(out, ' ', indent);
     put_byte(out, '<');
     put(out, node->name);
@@ -341,7 +698,7 @@ static void xml_leaf(ta_output *out, const ta_report_node *node, uint32_t indent
 static const ta_report_node *xml_next_child(const ta_report_node *parent,
                                             const ta_report_node *child) {
     if (parent->kind == REPORT_OBJECT)
-        while (child && report_is_scalar(child))
+        while (child && xml_is_attribute(child))
             child = child->next;
     return child;
 }
@@ -353,7 +710,7 @@ static int xml_open(ta_output *out, const ta_report_node *node, uint32_t indent)
     put(out, node->name);
     if (node->kind == REPORT_OBJECT)
         for (const ta_report_node *member = node->first; member; member = member->next) {
-            if (!report_is_scalar(member)) continue;
+            if (!xml_is_attribute(member)) continue;
             put_byte(out, ' ');
             put(out, member->name);
             put_literal(out, "=\"");
@@ -533,12 +890,22 @@ static void markdown_text(ta_output *out, ta_string_view text, int cell) {
     }
 }
 
+static int markdown_has_backtick(ta_string_view text) {
+    for (uint32_t i = 0; i < text.length; i++)
+        if (text.pointer[i] == '`') return 1;
+    return 0;
+}
+
 static void markdown_value(ta_output *out, const ta_report_node *node, int cell) {
     if (node->kind == REPORT_NUMBER)
         put_number(out, node->number);
     else if (node->kind == REPORT_BOOLEAN)
         put_literal(out, node->number ? "yes" : "no");
-    else
+    else if (node->kind == REPORT_VALUE && !markdown_has_backtick(node->text)) {
+        put_byte(out, '`'); /* as code: its quotes and stars are no emphasis */
+        markdown_bytes(out, (report_span){node->text, 0, node->text.length}, cell);
+        put_byte(out, '`');
+    } else
         markdown_text(out, node->text, cell);
 }
 

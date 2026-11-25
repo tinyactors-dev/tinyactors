@@ -142,6 +142,13 @@ host's snapshot (`src/host/host.c`); a change to a format changes its version.
   target/name/sendid text, payload bytes or handle) | `<data>` to initialize
   (migrated) | name.
 
+Both are read without a system by `ta_blob_read`, `ta_blob_session_at`,
+`ta_blob_configuration` (with the image the blob was written with) and
+`ta_blob_delayed_at` (`src/system/system_internal.h`): what a blob holds,
+in place, allocating nothing and calling no datamodel. The `tinyactors`
+command reads blobs with them, and snapshots by restoring them into a host
+whose datamodels do nothing ([cli.md](cli.md#snapshots-and-blobs)).
+
 ## Fixed by this inventory
 
 `tests/unit/test_durable.c` found these; each has a deterministic test there.

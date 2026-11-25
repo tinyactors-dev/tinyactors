@@ -3,16 +3,18 @@
 `tinyactors` compiles charts and system manifests into images, looks
 into charts, manifests and images (what they hold, how their executable
 content runs, how two versions differ), and writes charts and manifests in
-one canonical layout. Every command answers in Markdown
-for people, or in JSON or XML for programs, with the same members in the
-same order.
+one canonical layout. It also reads what a running host writes: a
+snapshot of a whole system, a hibernation blob, an export blob. Every
+command answers in Markdown for people, or in JSON or XML for programs,
+with the same members in the same order.
 
 It serves the application developer first (why does this chart do that,
 what changes if I deploy this version), then the operator and the C
 embedder, who get an image they did not compile and want to know what it
-is, and the maintainers, who read the compiler's output instruction by
-instruction. It costs nothing at run time: it is a program beside the
-libraries, built from them, and in none of them.
+is, or a snapshot or a stored blob and want to know what is in it, and the
+maintainers, who read the compiler's output instruction by instruction. It
+costs nothing at run time: it is a program beside the libraries, built
+from them, and in none of them.
 
 ## Install
 
@@ -45,14 +47,34 @@ or option is refused with the nearest one ("did you mean 'inspect'?").
 A command that looks into an image takes, as its arguments:
 
 - one compiled image (`.tai`), read as it is and verified;
+- one snapshot (below): the image one of its segments runs, the newest
+  live one, or segment N with `-s` / `--segment N`; every image of it is
+  verified;
 - one system manifest (a `<system>` root): its charts and boot actors,
   compiled;
 - or SCXML charts (`<scxml>` roots), compiled together into one image, the
   first the default boot chart.
 
+What a host writes is read too, by `inspect` and `actors`:
+
+| Input | Written by | Starts with | Read by |
+|---|---|---|---|
+| a snapshot | `ta_host_snapshot_pack`: the host's snapshot, every live segment's image, the system id, the host's time and the datamodels' state under its label | `tinyactors-snapshot ` and the pack's format | `inspect`, `actors`, and the image commands |
+| a hibernation blob | `ta_host_hibernate` (`ta_actor_hibernate`): one session's instance and datamodel state, which the application stores | `TAHB` | `inspect` |
+| an export blob | `ta_actor_export`: a session tree leaving its system, with its delayed sends (a migration's, inside a host; no host call hands one out) | `TAEX` | `inspect` |
+| a host snapshot alone | `ta_host_snapshot`: the regions without the images | `TAHS` | `inspect` (its segments only) |
+
 The kind is read from the bytes, not the file's name: an image starts with
-`TAI1`, and XML is told by its root element. `-` reads standard input.
-Compiled inputs give their diagnostics with the answer.
+`TAI1`, a blob or a host snapshot with its four bytes of magic (as a
+little-endian machine writes them), a snapshot with its text, and XML is
+told by its root element. `-` reads standard input, once: a command that
+reads it again gets the same bytes. Compiled inputs give their diagnostics
+with the answer.
+
+Snapshots and blobs are raw memory of one build of the library, each
+format with a version ([durability.md](durability.md#blob-formats)): the
+command reads the formats of the library it was built with, and of another
+says which format it is and that it cannot read it.
 
 A chart's static `src` (an `<invoke src>`, a `<script src>`, a `<data
 src>`, a manifest's `<chart src>`) is read relative to the file that names
@@ -96,13 +118,26 @@ id can be. A delay is written as SCXML writes one, in the largest unit that
 holds it whole (`30s`, `1500ms`). Diagnostics come by file, then line and
 column.
 
+A value a datamodel wrote (a binding's snapshot state, a blob's
+variables) is shown when it is one CBOR item: in Markdown in CBOR's
+diagnostic notation, which reads as JSON for JSON's values (`null`,
+`undefined`, `h'00ff'` for bytes, `32("...")` for an address), as code; in
+JSON as the JSON value, what JSON has none for as an object
+(`{"bytes": "00ff"}`, `{"undefined": true}`, `{"tag": 32, "value": ...}`,
+`{"float": "NaN"}`); in XML as typed elements (`<map>` of
+`<entry key="...">`, `<array>`, `<text>`, `<integer>`, `<float>`,
+`<bytes>`, `<true/>`, `<false/>`, `<null/>`, `<undefined/>`, `<tag
+number="...">`). Bytes that are not one CBOR item (the ECMAScript
+datamodel's, which are quickjs's own serialization) are said to be opaque,
+with their length.
+
 ## Commands
 
 | Command | Arguments | What it answers |
 |---|---|---|
 | `compile` | INPUT... | Compiles charts or one manifest into an image written to `-o FILE` (required; `-` for standard output, the answer then going to standard error), as the image's bytes or, with `--emit c`, an 8-aligned C array named by `--symbol` for ROM or flash. The answer: whether it compiled, the image's size, hash, charts and boot actors, and the diagnostics. A file is written whole or not at all. |
 | `check` | INPUT... | Compiles the inputs or verifies the image, writing nothing: valid or not, and the diagnostics. |
-| `inspect` | INPUT... | The image: its size, format version, hash, sections (offset, bytes, records), charts (source, datamodel, binding, counts of states, transitions, data, expressions, sends, invokes and code), boot actors. |
+| `inspect` | INPUT... | The image: its size, format version, hash, sections (offset, bytes, records), charts (source, datamodel, binding, counts of states, transitions, data, expressions, sends, invokes and code), boot actors. Of a snapshot, a blob or a host snapshot, what it holds: see [Snapshots and blobs](#snapshots-and-blobs). |
 | `states` | INPUT... | Each chart's states in document order: id, kind, parent, depth, initial targets, counts of transitions, invokes and data, whether it has onentry and onexit, its done event. |
 | `transitions` | INPUT... | Each chart's transitions: kind (transition, initial, history default), source, event descriptors, condition, targets, type, whether it has actions. |
 | `events` | INPUT... | Every event name the selected charts use, and how many transitions handle it and raises and sends make it by name. |
@@ -114,15 +149,18 @@ column.
 | `lint` | INPUT... | What cannot work as written, found without running the charts: each finding's rule, severity (warning or note), chart, state, transition, event, line (0 when the image has none) and a sentence saying what it means. `--deny RULE` (repeatable, `all` for every rule) exits with 1 when that rule finds something; `--allow RULE` (repeatable, `all`) leaves its findings out. See [Lint](#lint). |
 | `path` | INPUT... | The shortest sequence of transitions from the chart's initial configuration (or `--from STATE`) to a configuration holding `--to STATE`: each step's events (or eventless), condition, source, targets and the atomic states active after it; or that no path exists, or that the search stopped at its limit. `--unreachable` asks the opposite: success when no path exists. `--chart` names the chart (default: the first). See [Path](#path). |
 | `fmt` | FILE... | Writes charts and system manifests in one canonical layout: the canonical text of one file to standard output, `-w` / `--write` rewrites the files in place (each whole or not at all), `--check` writes nothing and exits with 1 when a file is not canonical. With `-w` or `--check` the answer lists the files: whether each changed, whether it was refused, and whether its canonical text compiles to the same image. See [Fmt](#fmt). |
+| `actors` | SNAPSHOT | Every actor of a snapshot: its session, name, chart, segment and state, its parent and running invocations, its configuration, the events queued in its mailbox and its pending delayed sends. `--chart`, `--segment N` and `--session ID` (repeatable) narrow the list. See [Snapshots and blobs](#snapshots-and-blobs). |
 | `help` | [COMMAND] | The program's commands, or a command's usage, options and examples. |
 | `version` | | The program's version (a development build's names its commit: `0.4.0-dev.<date>.<n>.g<sha>`), its library's version and ABI, and the image format version it reads. |
 
 The commands that take inputs also take `-W` / `--warnings-as-errors` (a
 compiled input with a warning is refused) and `-I` / `--include DIR`,
 repeatable (where a `src` is looked for next, [Inputs](#inputs)), and all
-but `compile` and `check` take `-c` / `--chart NAME`, repeatable, to look at
-those charts only. `fmt` takes `-I` too: it compiles each file to compare
-images.
+but `compile`, `check` and `fmt` take `-c` / `--chart NAME`, repeatable, to
+look at those charts only, and `-s` / `--segment N`, which of a snapshot's
+segments to read (`lint` and `path` included). `check` of a snapshot
+verifies every image in it; `compile` refuses one, and `fmt` refuses it as
+not XML. `fmt` takes `-I` too: it compiles each file to compare images.
 
 Program options: `-f` / `--format FORMAT`, `-h` / `--help` (any command:
 describe it), `--version`.
@@ -132,7 +170,7 @@ describe it), `--version`.
 | Status | When |
 |---|---|
 | 0 | the command did what was asked |
-| 1 | an input was refused: a chart did not compile, an image did not verify, a file is none of the three; or `diff --exit-code` found differences (breaking ones, with `--breaking`); or `lint` found something a `--deny` rule names; or `path` found no path (with `--unreachable`: found one), or stopped at its limit; or `fmt` refused a file, or `fmt --check` found one not canonical |
+| 1 | an input was refused: a chart did not compile, an image did not verify, a file is none of the kinds above, a snapshot or blob is of another format or damaged; or `diff --exit-code` found differences (breaking ones, with `--breaking`); or `lint` found something a `--deny` rule names; or `path` found no path (with `--unreachable`: found one), or stopped at its limit; or `fmt` refused a file, or `fmt --check` found one not canonical |
 | 2 | the command line was not understood (and `tinyactors` alone, after printing the commands) |
 | 3 | a file could not be read or written, or memory ran out |
 
@@ -150,9 +188,129 @@ tinyactors path order.scxml --to shipped
 tinyactors compile order.scxml -o - | tinyactors disassemble -
 tinyactors fmt -w charts/*.scxml system.xml
 tinyactors fmt --check charts/*.scxml                               # in CI
+tinyactors actors --chart order shop.snapshot          # where every order is
+tinyactors inspect order-17.blob shop.snapshot         # a stored actor
 ```
 
-## Diff
+## Snapshots and blobs
+
+An operator holding a snapshot, or a blob from the application's store,
+asks what is in it: which system and when, which versions it runs, where
+each actor is and what it waits for, and whether a blob can be woken
+where it is meant to go. The command answers with the library's own
+readers, running nothing.
+
+### A snapshot
+
+`inspect SNAPSHOT` unpacks it (`ta_host_snapshot_unpack`), and restores it
+into a host in its own memory (`ta_host_restore`, the images from the
+pack) without restoring the datamodels: each datamodel the images name is
+bound as one that does nothing, and nothing runs, so none is called. It
+answers:
+
+- the pack's format, and the host snapshot's inside it;
+- the system id, the host's time when it was packed (in ticks) and the
+  ticks per second;
+- the host's identity, which every blob it hibernated carries;
+- whether it was restored, and why not (another build's format, damage);
+- every segment: live or retired, its image's hash and size, its charts,
+  its actors and how many are hibernated; the totals;
+- the datamodels' state: the label it was packed under (`ecmascript` for
+  the C ECMAScript datamodel's, a binding's name for a binding's), its
+  size, and its value when it is one CBOR item (a binding's is a CBOR map);
+  quickjs's state is opaque.
+
+`actors SNAPSHOT` lists, for every actor of every live segment, read from
+the restored regions:
+
+- its session id, the name it was spawned with (an invoked session's is
+  its invoke id), its chart and segment, and its state: `idle`,
+  `runnable`, waiting, `done` or `hibernated`;
+- its parent (an invoked session's invoker) and how many invocations it
+  runs;
+- its configuration: the active states, in document order (a hibernated
+  actor's is in its blob, in the application's store);
+- its mailbox: the events queued, in the order it takes them, with their
+  sendids;
+- its pending delayed sends, in firing order: event, sendid, when they
+  are due (ticks) and in how long from the snapshot's time.
+
+The images are the image commands' too: `states --segment 1
+shop.snapshot` reads segment 1's charts.
+
+```text
+$ tinyactors inspect shop.snapshot
+# Inspect
+
+- **From**: snapshot
+- **Format**: 3
+- **Host format**: 4
+- **System ID**: shop
+- **Time**: 0
+- **Ticks per second**: 1000
+- **Identity**: 000000008f43601b
+- **Restored**: yes
+
+## Segments
+
+| Index | Live | Image hash | Image bytes | Charts | Actors | Hibernated |
+| --- | --- | --- | --- | --- | --- | --- |
+| 0 | yes | 07841bf1b335dc2d | 2208 | order, payment | 3 | 1 |
+
+## Datamodel state
+
+- **Label**: ecmascript
+- **Bytes**: 407
+- **Encoding**: opaque
+
+$ tinyactors actors --session 1 shop.snapshot
+### Actor 1: cart-ann
+
+- **Session**: 1
+- **Name**: cart-ann
+- **Chart**: order
+- **State**: runnable
+- **Invocations**: 1
+- **Queued**: 1
+
+#### Configuration
+
+- paying
+
+#### Mailbox
+
+| Event | Sendid |
+| --- | --- |
+| item.added |  |
+
+#### Delayed
+
+| Event | Sendid | Due | In |
+| --- | --- | --- | --- |
+| payment.reminder | reminder | 30000 | 30s |
+```
+
+### A blob
+
+`inspect BLOB` reads a hibernation or export blob in place: its format and
+whether this build reads it, the session it holds (an export's root), the
+hash of the image it was written with, and for each session its parent,
+name (an export's), chart index, macrosteps run, delayed sends (an
+export's: event, sendid, target, due time, place in the tree's firing
+order, and their data's value when it is CBOR) and its datamodel's state
+(a value when it is one CBOR item, as a binding writes it; quickjs's is
+opaque). A hibernated actor's delayed sends stay in the host, so a
+snapshot lists them (`actors`), not its blob.
+
+A hibernation blob wakes only in the host that hibernated it, or one
+restored from that host's snapshot: the answer gives the identity it was
+written with. Given the image it was written with after it (`inspect BLOB
+IMAGE`: an image, the charts, a manifest, or a snapshot), the answer names
+the chart and gives the configuration, says whether the image matches,
+and, for a snapshot, whether the blob wakes in the host restored from it.
+
+A host snapshot alone (`ta_host_snapshot`'s bytes) holds no image: `inspect`
+gives its format and its segments' image hashes only.
 
 `tinyactors diff OLD NEW` answers three questions: a developer about to
 deploy a new version of a chart asks whether the actors running the old
@@ -467,8 +625,14 @@ The layers, from the bottom:
 - **`tools/tinyactors`** but one file: the commands. They compile without
   the C library's headers and reach files only through the platform
   interface in `tool.h`. One invocation is one arena: the parsed line, the
-  files read, the compiled image and the answer live in it, and it is freed
-  once when the command ends.
+  files read, the compiled image, a restored snapshot's host and the answer
+  live in it, and it is freed once when the command ends. `snapshot.c`
+  reads snapshots and blobs with core's readers: `ta_host_snapshot_unpack`
+  and `ta_host_restore`, then the system's inspection readers
+  (`ta_actor_config`, `ta_system_actor_timers`, `ta_system_actor_mailbox`,
+  `ta_system_actor_name`), and the blob readers (`ta_blob_read`,
+  `ta_blob_session_at`, `ta_blob_configuration`, `ta_blob_delayed_at`,
+  `src/system/system_internal.h`).
 - **`tools/tinyactors/platform.c`**: `main`, the allocator behind the
   arena, reading files and standard input, writing streams, and writing a
   file whole (a temporary file renamed over it). The only file that uses

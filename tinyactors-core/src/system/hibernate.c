@@ -1486,3 +1486,120 @@ uint32_t ta_system_cold_actors(ta_system *system, ta_sweep *sweep, ta_uint32_arr
     *cursor = i >= high_water_mark ? 0 : i;
     return n;
 }
+
+/* ---- reading a blob without a system ------------------------------------------------ */
+
+ta_status ta_blob_read(ta_bytes blob, ta_blob_contents *out) {
+    const unsigned char *p = (const unsigned char *)blob.pointer;
+    ta_memset(out, 0, sizeof *out);
+    uint32_t magic_version[2];
+    if (!p || blob.length < sizeof magic_version) return TA_ERROR_INVALID;
+    ta_memcpy(magic_version, p, sizeof magic_version);
+    out->version = magic_version[1];
+    if (magic_version[0] == HIBERNATION_MAGIC) {
+        out->kind = TA_BLOB_HIBERNATION;
+        if (magic_version[1] != HIBERNATION_VERSION) return TA_ERROR_UNSUPPORTED;
+        blob_view view;
+        if (parse_hib(p, blob.length, &view) != TA_OK) return TA_ERROR_INVALID;
+        out->session_count = 1;
+        out->identity = view.identity;
+        out->image_hash = view.image_hash;
+        out->session = view.serial;
+        return TA_OK;
+    }
+    if (magic_version[0] != EXPORT_MAGIC) {
+        out->version = 0;
+        return TA_ERROR_INVALID;
+    }
+    out->kind = TA_BLOB_EXPORT;
+    if (magic_version[1] != EXPORT_VERSION) return TA_ERROR_UNSUPPORTED;
+    export_header header;
+    if (blob.length < sizeof header) return TA_ERROR_INVALID;
+    ta_memcpy(&header, p, sizeof header);
+    out->session_count = header.session_count;
+    out->migrated = (header.flags & EXPORT_MIGRATED) != 0;
+    out->image_hash = header.image_hash;
+    out->session = header.serial;
+    const unsigned char *q = p + sizeof header, *end = p + blob.length;
+    for (uint32_t i = 0; i < header.session_count; i++) {
+        blob_view view;
+        if (!next_session(&q, end, header.image_hash, &view)) return TA_ERROR_INVALID;
+    }
+    return TA_OK;
+}
+
+static void blob_session_of(const blob_view *view, ta_blob_session *out) {
+    ta_instance instance;
+    ta_memcpy(&instance, view->instance, sizeof instance);
+    out->session = view->serial;
+    out->parent = view->parent;
+    out->macrostep = instance.macrostep;
+    out->chart = view->chart;
+    out->slot = view->slot;
+    out->delayed_count = view->timer_count;
+    out->pad = 0;
+    out->name = view->name_length && view->name
+                    ? (ta_string_view){(const char *)view->name, view->name_length}
+                    : (ta_string_view){(const char *)0, 0};
+    out->instance = (ta_bytes){view->instance, view->instance_bytes};
+    out->datamodel = (ta_bytes){view->datamodel, (size_t)view->datamodel_bytes};
+    out->delayed = (ta_bytes){view->timers, view->timers_bytes};
+}
+
+ta_status ta_blob_session_at(ta_bytes blob, uint32_t index, ta_blob_session *out) {
+    ta_blob_contents contents;
+    ta_memset(out, 0, sizeof *out);
+    if (ta_blob_read(blob, &contents) != TA_OK || index >= contents.session_count)
+        return TA_ERROR_INVALID;
+    const unsigned char *p = (const unsigned char *)blob.pointer;
+    blob_view view;
+    if (contents.kind == TA_BLOB_HIBERNATION) {
+        parse_hib(p, blob.length, &view);
+        view.slot = TA_NIL;
+        blob_session_of(&view, out);
+        return TA_OK;
+    }
+    const unsigned char *q = p + sizeof(export_header), *end = p + blob.length;
+    for (uint32_t i = 0; i <= index; i++)
+        next_session(&q, end, contents.image_hash, &view); /* ta_blob_read walked them all */
+    blob_session_of(&view, out);
+    return TA_OK;
+}
+
+uint32_t ta_blob_configuration(const ta_blob_session *session, const ta_image *image,
+                               ta_uint32_array states) {
+    const ta_image_view *view = ta_image_view_of(image);
+    if (session->chart >= view->chart_count) return 0;
+    const ta_chart_record *chart = &view->charts[session->chart];
+    ta_instance_layout layout = ta_instance_layout_of(chart);
+    if (session->instance.length < layout.size) return 0;
+    const unsigned char *words = (const unsigned char *)session->instance.pointer;
+    uint32_t count = 0;
+    for (uint32_t state = 1; state < chart->state_count; state++) {
+        uint32_t word;
+        ta_memcpy(&word, words + 4u * (layout.config + state / 32u), sizeof word);
+        if (!((word >> (state % 32u)) & 1u)) continue;
+        if (count < states.capacity) states.pointer[count] = state;
+        count++;
+    }
+    return count;
+}
+
+ta_status ta_blob_delayed_at(const ta_blob_session *session, uint32_t index, ta_blob_delayed *out) {
+    ta_memset(out, 0, sizeof *out);
+    if (index >= session->delayed_count) return TA_ERROR_INVALID;
+    const unsigned char *q = (const unsigned char *)session->delayed.pointer;
+    const unsigned char *end = q + session->delayed.length;
+    blob_timer record;
+    const char *texts[4];
+    for (uint32_t i = 0; i <= index; i++)
+        if (!timer_rec(&q, end, &record, texts)) return TA_ERROR_INVALID;
+    out->due = record.due;
+    out->rank = record.rank;
+    out->payload_kind = record.payload_kind;
+    out->event = (ta_string_view){texts[1], record.name_length};
+    if (record.sendid_length != TA_NIL) out->sendid = (ta_string_view){texts[2], record.sendid_length};
+    if (record.target_length != TA_NIL) out->target = (ta_string_view){texts[0], record.target_length};
+    if (record.payload_kind == TP_BYTES) out->payload = (ta_bytes){texts[3], record.payload_length};
+    return TA_OK;
+}

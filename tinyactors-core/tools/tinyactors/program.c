@@ -31,8 +31,17 @@ static const ta_cli_option program_options[TOOL_PROGRAM_OPTION_COUNT] = {
     {T("chart"), 'c', TA_CLI_OPTION_VALUE, TA_CLI_OPTION_REPEATABLE, 0, 0, T("NAME"),             \
      T("look at this chart only (by its name); repeat it for more")}
 
+#define SEGMENT                                                                                    \
+    {T("segment"), 's', TA_CLI_OPTION_VALUE, 0, 0, 0, T("N"),                                     \
+     T("of a snapshot, read the image segment N runs (default: the newest)")}
+
 static const ta_cli_option check_options[] = {WARNINGS_AS_ERRORS, INCLUDE};
-static const ta_cli_option image_options[] = {WARNINGS_AS_ERRORS, INCLUDE, CHART};
+static const ta_cli_option image_options[] = {WARNINGS_AS_ERRORS, INCLUDE, CHART, SEGMENT};
+static const ta_cli_option actors_options[] = {
+    WARNINGS_AS_ERRORS, INCLUDE, CHART, SEGMENT,
+    [TOOL_ACTORS_SESSION] = {T("session"), 0, TA_CLI_OPTION_VALUE, TA_CLI_OPTION_REPEATABLE, 0, 0,
+                             T("ID"), T("this session only; repeat it for more")},
+};
 
 static const ta_string_view emits[] = {[TOOL_EMIT_IMAGE] = T("image"), [TOOL_EMIT_C] = T("c")};
 static const ta_cli_option compile_options[] = {
@@ -50,13 +59,13 @@ static const ta_string_view expression_kinds[] = {
     T("condition"), T("value"), T("location"), T("script"),
     T("string"),    T("content"), T("item"),   T("global-script")};
 static const ta_cli_option expressions_options[] = {
-    WARNINGS_AS_ERRORS, INCLUDE, CHART,
+    WARNINGS_AS_ERRORS, INCLUDE, CHART, SEGMENT,
     [TOOL_EXPRESSIONS_KIND] = {T("kind"), 'k', TA_CLI_OPTION_CHOICE, TA_CLI_OPTION_REPEATABLE, 8,
                                expression_kinds, T("KIND"),
                                T("only expressions of this kind; repeat it for more")},
 };
 static const ta_cli_option diff_options[] = {
-    WARNINGS_AS_ERRORS, INCLUDE, CHART,
+    WARNINGS_AS_ERRORS, INCLUDE, CHART, SEGMENT,
     [TOOL_DIFF_EXIT_CODE] = {T("exit-code"), 0, TA_CLI_OPTION_FLAG, 0, 0, 0, T(""),
                              T("exit with 1 when the two differ (with --breaking: when a change breaks "
                                "running actors), as git diff --exit-code does")},
@@ -66,14 +75,14 @@ static const ta_cli_option diff_options[] = {
                        T("list the charts that did not change too")},
 };
 static const ta_cli_option lint_options[] = {
-    WARNINGS_AS_ERRORS, INCLUDE, CHART,
+    WARNINGS_AS_ERRORS, INCLUDE, CHART, SEGMENT,
     [TOOL_LINT_DENY] = {T("deny"), 'd', TA_CLI_OPTION_VALUE, TA_CLI_OPTION_REPEATABLE, 0, 0, T("RULE"),
                         T("exit with 1 when this rule finds something (all: any rule); repeat it for more")},
     [TOOL_LINT_ALLOW] = {T("allow"), 'a', TA_CLI_OPTION_VALUE, TA_CLI_OPTION_REPEATABLE, 0, 0, T("RULE"),
                          T("do not report this rule's findings (all: none); repeat it for more")},
 };
 static const ta_cli_option path_options[] = {
-    WARNINGS_AS_ERRORS, INCLUDE, CHART,
+    WARNINGS_AS_ERRORS, INCLUDE, CHART, SEGMENT,
     [TOOL_PATH_TO] = {T("to"), 't', TA_CLI_OPTION_VALUE, TA_CLI_OPTION_REQUIRED, 0, 0, T("STATE"),
                       T("the state the last configuration holds")},
     [TOOL_PATH_FROM] = {T("from"), 0, TA_CLI_OPTION_VALUE, 0, 0, 0, T("STATE"),
@@ -100,10 +109,15 @@ static const ta_string_view compile_examples[] = {
     T("compile order.scxml -o - | tinyactors inspect -")};
 static const ta_string_view check_examples[] = {T("check charts/*.scxml"),
                                                 T("check -W --format json order.scxml")};
-static const ta_string_view inspect_examples[] = {T("inspect order.tai"), T("inspect system.xml"),
-                                                  T("inspect --format json order.scxml")};
+static const ta_string_view inspect_examples[] = {
+    T("inspect order.tai"), T("inspect system.xml"), T("inspect --format json order.scxml"),
+    T("inspect shop.snapshot"), T("inspect order-17.blob shop.snapshot")};
 static const ta_string_view states_examples[] = {T("states order.scxml"),
-                                                 T("states --chart payment system.tai")};
+                                                 T("states --chart payment system.tai"),
+                                                 T("states --segment 1 shop.snapshot")};
+static const ta_string_view actors_examples[] = {T("actors shop.snapshot"),
+                                                 T("actors --chart order --session 17 shop.snapshot"),
+                                                 T("actors -f json shop.snapshot")};
 static const ta_string_view transitions_examples[] = {T("transitions order.scxml"),
                                                       T("transitions -f json order.tai")};
 static const ta_string_view events_examples[] = {T("events system.xml")};
@@ -145,14 +159,16 @@ typedef enum tool_command_index {
     TOOL_COMMAND_LINT,
     TOOL_COMMAND_PATH,
     TOOL_COMMAND_CANONICAL,
+    TOOL_COMMAND_ACTORS,
     TOOL_COMMAND_HELP,
     TOOL_COMMAND_VERSION,
     TOOL_COMMAND_COUNT
 } tool_command_index;
 
 #define INPUTS                                                                                     \
-    T("Its inputs are one compiled image (.tai), one system manifest (<system>), or SCXML charts " \
-      "(<scxml>), which are compiled together into one image first; - reads standard input.")
+    T("Its inputs are one compiled image (.tai), one snapshot (ta_host_snapshot_pack's; "        \
+      "--segment picks its image), one system manifest (<system>), or SCXML charts (<scxml>), "   \
+      "which are compiled together into one image first; - reads standard input.")
 
 static const ta_cli_command commands[TOOL_COMMAND_COUNT] = {
     [TOOL_COMMAND_COMPILE] =
@@ -167,9 +183,15 @@ static const ta_cli_command commands[TOOL_COMMAND_COUNT] = {
                               "the diagnostics. " "Exits with 1 when an input is refused."),
                             T("INPUT..."), 1, TA_CLI_UNBOUNDED, OPTIONS(check_options),
                             EXAMPLES(check_examples)},
-    [TOOL_COMMAND_INSPECT] = {T("inspect"), T("what an image holds: sections, charts, boot actors"),
-                              INPUTS, T("INPUT..."), 1, TA_CLI_UNBOUNDED, OPTIONS(image_options),
-                              EXAMPLES(inspect_examples)},
+    [TOOL_COMMAND_INSPECT] =
+        {T("inspect"), T("what an image, a snapshot or a blob holds"),
+         T("Of an image (its inputs as the other commands take them): its sections, charts and "
+           "boot actors. Of a snapshot (ta_host_snapshot_pack's): its format, system, time, "
+           "segments with their images, actors, and the datamodels' state, decoded when it is "
+           "CBOR. Of a hibernation or export blob: the session it holds, the image it was written "
+           "with and who can wake it, its datamodel's state, and, given the image it was written "
+           "with after it (an image, charts or a snapshot), its chart and configuration."),
+         T("INPUT..."), 1, TA_CLI_UNBOUNDED, OPTIONS(image_options), EXAMPLES(inspect_examples)},
     [TOOL_COMMAND_STATES] = {T("states"), T("each chart's states, as a tree in document order"),
                              INPUTS, T("INPUT..."), 1, TA_CLI_UNBOUNDED, OPTIONS(image_options),
                              EXAMPLES(states_examples)},
@@ -237,6 +259,15 @@ static const ta_cli_command commands[TOOL_COMMAND_COUNT] = {
            "nothing and exits with 1 when a file is not canonical. With -w or --check the answer "
            "lists the files and whether each changed."),
          T("FILE..."), 1, TA_CLI_UNBOUNDED, OPTIONS(canonical_options), EXAMPLES(canonical_examples)},
+    [TOOL_COMMAND_ACTORS] =
+        {T("actors"), T("every actor of a snapshot: chart, configuration, queued events, delayed sends"),
+         T("Restores the snapshot (ta_host_snapshot_pack's) in memory, without its datamodels and "
+           "running nothing, and lists each actor of each live segment: its session, name, chart, "
+           "segment and state, its parent and running invocations, its configuration (the active "
+           "states, in document order; a hibernated actor's is in its blob), the events queued in "
+           "its mailbox, and its pending delayed sends with when they are due. --chart, --segment "
+           "and --session narrow the list."),
+         T("SNAPSHOT"), 1, 1, OPTIONS(actors_options), EXAMPLES(actors_examples)},
     [TOOL_COMMAND_HELP] = {T("help"), T("describe a command, or the program"), T(""),
                            T("[COMMAND]"), 0, 1, 0, 0, EXAMPLES(help_examples)},
     [TOOL_COMMAND_VERSION] = {T("version"), T("the version of the program and its library"), T(""),
@@ -244,7 +275,9 @@ static const ta_cli_command commands[TOOL_COMMAND_COUNT] = {
 };
 
 static const ta_cli_program program = {
-    T("tinyactors"), T("compile, check and look into tinyactors charts, systems and images"),
+    T("tinyactors"),
+    T("compile, check and look into tinyactors charts, systems and images, and the snapshots and "
+      "blobs a host writes"),
     TOOL_PROGRAM_OPTION_COUNT, program_options, TOOL_COMMAND_COUNT, commands};
 
 static void tool_help(tool *t);
@@ -258,7 +291,7 @@ static const tool_run runs[TOOL_COMMAND_COUNT] = {
     [TOOL_COMMAND_DISASSEMBLE] = tool_disassemble, [TOOL_COMMAND_GRAPH] = tool_graph,
     [TOOL_COMMAND_DIFF] = tool_diff,               [TOOL_COMMAND_LINT] = tool_lint,
     [TOOL_COMMAND_PATH] = tool_path,               [TOOL_COMMAND_CANONICAL] = tool_canonical,
-    [TOOL_COMMAND_HELP] = tool_help,
+    [TOOL_COMMAND_ACTORS] = tool_actors,           [TOOL_COMMAND_HELP] = tool_help,
     [TOOL_COMMAND_VERSION] = tool_version,
 };
 
@@ -321,6 +354,25 @@ void tool_complain(tool *t, ta_string_view text) {
     ta_string_view view = tool_text_view(&message);
     tool_write request = {TOOL_STANDARD_ERROR, {0, 0}, {view.pointer, view.length}};
     t->platform->write(t->platform->context, &request);
+}
+
+ta_string_view tool_state_id(const ta_image_view *view, const ta_chart_record *chart, uint32_t state) {
+    if (state == TA_NIL || state >= chart->state_count) return ta_string("");
+    ta_string_view id = ta_image_view_string(view, view->states[chart->first_state + state].id);
+    return id.length ? id : ta_string("/scxml"); /* the root: its XPath, never an id */
+}
+
+ta_status tool_decimal(ta_string_view text, uint64_t *out) {
+    uint64_t value = 0;
+    if (!text.length) return TA_ERROR_INVALID;
+    for (uint32_t i = 0; i < text.length; i++) {
+        char digit = text.pointer[i];
+        if (digit < '0' || digit > '9' || value > (UINT64_MAX - (uint64_t)(digit - '0')) / 10u)
+            return TA_ERROR_INVALID;
+        value = value * 10u + (uint64_t)(digit - '0');
+    }
+    *out = value;
+    return TA_OK;
 }
 
 ta_string_view tool_hexadecimal(tool *t, uint64_t value) {

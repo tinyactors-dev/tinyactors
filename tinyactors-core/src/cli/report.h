@@ -90,6 +90,23 @@ void ta_report_text(ta_report *report, ta_string_view name, ta_string_view value
 void ta_report_number(ta_report *report, ta_string_view name, uint64_t value);
 void ta_report_boolean(ta_report *report, ta_string_view name, int value);
 void ta_report_block(ta_report *report, ta_string_view name, ta_report_code code);
+/* A value: one CBOR item (a neutral value, docs/protocol.md "Values", or
+ * any well-formed item), borrowed until the render. Markdown writes it in
+ * CBOR's diagnostic notation, which reads as JSON for JSON's values
+ * (null, undefined, h'00ff' for bytes, 32("...") for a tag), as code; JSON
+ * as the JSON value, with what JSON has no value for as an object: bytes
+ * {"bytes": "00ff"}, undefined {"undefined": true}, another simple value
+ * {"simple": 16}, a tag {"tag": 32, "value": ...}, a float JSON cannot
+ * write ({"float": "NaN"}); XML as typed elements inside the member's:
+ * <map> of <entry key="..."> (a key that is an integer as its digits),
+ * <array>, <text>, <integer>, <float>, <bytes> (hexadecimal), <true/>,
+ * <false/>, <null/>, <undefined/>, <simple>, <tag number="...">. A map
+ * with a key that is neither text nor an integer is written, in JSON and
+ * XML, as its diagnostic notation: {"diagnostic": "..."}, <diagnostic>.
+ * A value that is not one well-formed item (ta_cbor_decode refuses it)
+ * fails the report: TA_ERROR_INVALID. Markdown and JSON write it on one
+ * line. In XML it is a child element, never an attribute. */
+void ta_report_value(ta_report *report, ta_string_view name, ta_bytes cbor);
 
 /* A copy of `text` in the report's arena (an empty view when it refused,
  * and the report's status is set). */

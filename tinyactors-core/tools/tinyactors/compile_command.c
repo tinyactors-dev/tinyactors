@@ -10,6 +10,7 @@ static tool_inputs inputs_of(const tool *t) {
     inputs.count = t->parsed->argument_count;
     inputs.paths = t->parsed->arguments;
     inputs.flags = tool_count(t, TOOL_OPTION_WARNINGS_AS_ERRORS) ? TA_COMPILE_WERROR : 0;
+    inputs.segment = TA_NIL; /* a snapshot's newest image: check verifies all of them */
     return inputs;
 }
 
@@ -74,8 +75,10 @@ void tool_compile(tool *t) {
     tool_image image;
     ta_status status = tool_load(t, inputs_of(t), &image);
     if (t->exit == TOOL_EXIT_USAGE || t->exit == TOOL_EXIT_FAILURE) return;
-    if (status == TA_OK && image.kind == TOOL_INPUT_IMAGE) {
-        tool_complain(t, ta_string("the input is an image already: compile takes charts or a manifest"));
+    if (status == TA_OK && (image.kind == TOOL_INPUT_IMAGE || image.kind == TOOL_INPUT_SNAPSHOT)) {
+        tool_complain(t, image.kind == TOOL_INPUT_IMAGE
+                             ? ta_string("the input is an image already: compile takes charts or a manifest")
+                             : ta_string("the input is a snapshot: compile takes charts or a manifest"));
         t->exit = TOOL_EXIT_USAGE;
         return;
     }

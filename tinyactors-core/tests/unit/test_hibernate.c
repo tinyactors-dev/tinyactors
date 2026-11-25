@@ -819,8 +819,106 @@ static void test_session_ids_wrap_around_their_range(void) {
     tsys_free(&t);
 }
 
+/* What a blob holds, read without a system (ta_blob_read and the readers
+ * after it), and what the inspection readers of a resident actor give: its
+ * name and its queued events (the tinyactors command reads both). */
+static void test_blobs_read_without_a_system(void) {
+    test_system t;
+    CHECK(tsys_init(&t,
+                    NULLSC("initial='open'><state id='open'><transition event='pay' target='paying'/>"
+                           "</state><state id='paying'><onentry><send id='reminder' "
+                           "event='payment.reminder' delay='10s'/></onentry>"
+                           "<transition event='paid' target='settled'/></state>"
+                           "<final id='settled'/>"),
+                    NULL, NULL));
+    CHECK_EQUAL(ta_system_boot(t.system), TA_OK);
+    uint32_t a = tsys_actor(&t, "main.scxml");
+    run_all(&t);
+    ta_string_view name = ta_system_actor_name(t.system, a);
+    CHECK(name.length == 10 && memcmp(name.pointer, "main.scxml", 10) == 0);
+    /* queued events, in the order the actor takes them */
+    CHECK_EQUAL(tsys_send(&t, a, "pay", NULL), TA_OK);
+    CHECK_EQUAL(tsys_send(&t, a, "item.added", NULL), TA_OK);
+    ta_actor_queued queued[1];
+    CHECK_EQUAL(ta_system_actor_mailbox(t.system, a, (ta_actor_queued_array){queued, 1}), 2);
+    CHECK(queued[0].event.length == 3 && memcmp(queued[0].event.pointer, "pay", 3) == 0);
+    CHECK(queued[0].sendid.pointer == NULL);
+    run_all(&t);
+    CHECK_EQUAL(ta_system_actor_mailbox(t.system, a, (ta_actor_queued_array){queued, 1}), 0);
+    CHECK(strcmp(tsys_config(&t, a), "paying") == 0);
+
+    /* a hibernation: its session, chart, image and configuration */
+    ta_status status;
+    size_t length = hibernate(&t, a, &status);
+    CHECK_EQUAL(status, TA_OK);
+    ta_bytes bytes = {blob, length};
+    ta_blob_contents contents;
+    CHECK_EQUAL(ta_blob_read(bytes, &contents), TA_OK);
+    CHECK_EQUAL(contents.kind, TA_BLOB_HIBERNATION);
+    CHECK_EQUAL(contents.session_count, 1);
+    CHECK_EQUAL(contents.identity, t.system->config.identity);
+    CHECK_EQUAL(contents.image_hash, ta_image_view_of(&t.image)->hash);
+    ta_actor_info info;
+    info.size = sizeof info;
+    CHECK_EQUAL(ta_actor_info_get(t.system, a, &info), TA_OK);
+    CHECK_EQUAL(contents.session, info.serial);
+    ta_blob_session session;
+    CHECK_EQUAL(ta_blob_session_at(bytes, 0, &session), TA_OK);
+    CHECK_EQUAL(session.session, info.serial);
+    CHECK_EQUAL(session.chart, 0);
+    CHECK_EQUAL(session.slot, TA_NIL);
+    CHECK_EQUAL(session.delayed_count, 0); /* a hibernated actor's stay in the region */
+    CHECK(session.macrostep >= 2);
+    CHECK_EQUAL(ta_blob_session_at(bytes, 1, &session), TA_ERROR_INVALID);
+    CHECK_EQUAL(ta_blob_session_at(bytes, 0, &session), TA_OK);
+    uint32_t states[4];
+    CHECK_EQUAL(ta_blob_configuration(&session, &t.image, (ta_uint32_array){states, 4}), 1);
+    const ta_image_view *view = ta_image_view_of(&t.image);
+    ta_string_view id =
+        ta_image_view_string(view, ta_chart_states(view, &view->charts[0])[states[0]].id);
+    CHECK(id.length == 6 && memcmp(id.pointer, "paying", 6) == 0);
+    /* another version, another kind of bytes, damage */
+    unsigned char other[1 << 10];
+    CHECK(length <= sizeof other);
+    memcpy(other, blob, length);
+    other[4] ^= 0x40; /* the version */
+    CHECK_EQUAL(ta_blob_read((ta_bytes){other, length}, &contents), TA_ERROR_UNSUPPORTED);
+    CHECK_EQUAL(contents.kind, TA_BLOB_HIBERNATION);
+    CHECK_EQUAL(ta_blob_read((ta_bytes){blob, length - 1}, &contents), TA_ERROR_INVALID);
+    CHECK_EQUAL(ta_blob_read((ta_bytes){"TAI1....", 8}, &contents), TA_ERROR_INVALID);
+    CHECK_EQUAL(contents.kind, TA_BLOB_UNKNOWN);
+
+    /* an export: its sessions and their delayed sends, in firing order */
+    CHECK_EQUAL(ta_actor_wake(t.system, a, bytes), TA_OK);
+    run_all(&t);
+    ta_buffer out = {blob, sizeof blob, 0};
+    CHECK_EQUAL(ta_actor_export(t.system, a, &out), TA_OK);
+    bytes = (ta_bytes){blob, out.length};
+    CHECK_EQUAL(ta_blob_read(bytes, &contents), TA_OK);
+    CHECK_EQUAL(contents.kind, TA_BLOB_EXPORT);
+    CHECK_EQUAL(contents.session, info.serial);
+    CHECK_EQUAL(contents.migrated, 0);
+    CHECK_EQUAL(ta_blob_session_at(bytes, 0, &session), TA_OK);
+    CHECK_EQUAL(session.parent, 0);
+    CHECK(session.name.length == 10 && memcmp(session.name.pointer, "main.scxml", 10) == 0);
+    CHECK_EQUAL(session.delayed_count, 1);
+    CHECK_EQUAL(ta_blob_configuration(&session, &t.image, (ta_uint32_array){states, 4}), 1);
+    ta_blob_delayed delayed;
+    CHECK_EQUAL(ta_blob_delayed_at(&session, 0, &delayed), TA_OK);
+    CHECK(delayed.event.length == 16 && memcmp(delayed.event.pointer, "payment.reminder", 16) == 0);
+    CHECK(delayed.sendid.length == 8 && memcmp(delayed.sendid.pointer, "reminder", 8) == 0);
+    CHECK(delayed.target.pointer == NULL);
+    CHECK_EQUAL(delayed.payload_kind, 0);
+    CHECK_EQUAL(delayed.due, 10 * t.system->config.ticks_per_second);
+    CHECK_EQUAL(ta_blob_delayed_at(&session, 1, &delayed), TA_ERROR_INVALID);
+    session.chart = 7; /* a chart the image does not have */
+    CHECK_EQUAL(ta_blob_configuration(&session, &t.image, (ta_uint32_array){states, 4}), 0);
+    tsys_free(&t);
+}
+
 int main(void) {
     RUN(test_session_ids_wrap_around_their_range);
+    RUN(test_blobs_read_without_a_system);
     RUN(test_roundtrip_and_single_wake);
     RUN(test_watch_ends_with_hibernation);
     RUN(test_timer_wakes_actor);

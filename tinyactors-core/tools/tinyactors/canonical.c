@@ -322,6 +322,11 @@ static ta_status canonical_of(canonical_run *run, canonical_file *file) {
     if (kind != TOOL_INPUT_CHART && kind != TOOL_INPUT_MANIFEST) {
         refuse(run, file, kind == TOOL_INPUT_IMAGE
                               ? ta_string("an image: fmt takes SCXML charts and system manifests")
+                          : kind == TOOL_INPUT_SNAPSHOT || kind == TOOL_INPUT_HOST_SNAPSHOT
+                              ? ta_string("a snapshot, not XML: fmt takes SCXML charts and system "
+                                          "manifests")
+                          : kind == TOOL_INPUT_BLOB
+                              ? ta_string("a blob, not XML: fmt takes SCXML charts and system manifests")
                               : ta_string("neither an SCXML chart nor a system manifest"));
         return TA_OK;
     }

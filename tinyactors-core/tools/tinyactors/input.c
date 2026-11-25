@@ -4,6 +4,7 @@
 #include "tool.h"
 
 #include "base/memory.h"
+#include <tinyactors/host.h>
 
 /* ---- telling inputs apart ---------------------------------------------------------- */
 
@@ -28,12 +29,16 @@ static int is_space(char c) {
     return c == ' ' || c == '\t' || c == '\r' || c == '\n';
 }
 
-/* An image by its magic; XML by the local name of its root element, past
- * the byte order mark, the declaration, comments and a doctype. TA_NIL: none
- * of them. */
+/* An image, a snapshot or a blob by its magic (the four bytes a blob's
+ * header starts with, as a little-endian machine writes them); XML by the
+ * local name of its root element, past the byte order mark, the
+ * declaration, comments and a doctype. TA_NIL: none of them. */
 uint32_t tool_input_kind_of(ta_bytes bytes) {
     const char *text = (const char *)bytes.pointer;
     if (starts_with(bytes, 0, "TAI1")) return TOOL_INPUT_IMAGE;
+    if (starts_with(bytes, 0, "tinyactors-snapshot ")) return TOOL_INPUT_SNAPSHOT;
+    if (starts_with(bytes, 0, "TAHB") || starts_with(bytes, 0, "TAEX")) return TOOL_INPUT_BLOB;
+    if (starts_with(bytes, 0, "TAHS")) return TOOL_INPUT_HOST_SNAPSHOT;
     size_t at = starts_with(bytes, 0, "\xEF\xBB\xBF") ? 3 : 0;
     for (;;) {
         while (at < bytes.length && is_space(text[at]))
@@ -184,6 +189,57 @@ static void own_diagnostic(tool *t, tool_image *out, ta_diagnostic diagnostic) {
     out->diagnostic_count = 1;
 }
 
+/* A snapshot's image: every live segment's verified, then the segment
+ * asked for (inputs.segment), or the newest live one. A refusal is told:
+ * a diagnostic, or a complaint for a segment the snapshot does not run. */
+static ta_status snapshot_image(tool *t, tool_inputs inputs, tool_image *out) {
+    ta_bytes pack = out->bytes;
+    ta_host_snapshot_contents contents;
+    ta_memset(&contents, 0, sizeof contents);
+    contents.size = sizeof contents;
+    tool_text text;
+    tool_text_init(t, &text);
+    uint32_t chosen = TA_NIL;
+    out->status = ta_host_snapshot_unpack(pack, &contents);
+    if (out->status != TA_OK)
+        tool_text_append(&text, ta_string("the snapshot cannot be read: it is damaged, or of "
+                                          "another format version"));
+    for (uint32_t i = 0; out->status == TA_OK && i < contents.image_count; i++) {
+        ta_bytes image = ta_host_snapshot_image(pack, i);
+        if (!image.length) continue; /* a retired segment */
+        ta_image opened;
+        out->status = ta_image_open(image, &opened);
+        if (out->status != TA_OK) {
+            tool_text_append(&text, ta_string("the image of segment "));
+            tool_text_number(&text, i);
+            tool_text_append(&text, ta_string(" does not verify: it is damaged"));
+        } else if (inputs.segment == TA_NIL || inputs.segment == i) {
+            chosen = i;
+        }
+    }
+    if (out->status != TA_OK) {
+        own_diagnostic(t, out, (ta_diagnostic){TA_DIAGNOSTIC_ERROR, 0, 0, 0, inputs.paths[0],
+                                               tool_text_view(&text)});
+        t->exit = TOOL_EXIT_REFUSED;
+        return out->status;
+    }
+    if (chosen == TA_NIL) {
+        tool_text_append(&text, inputs.paths[0]);
+        if (inputs.segment == TA_NIL) {
+            tool_text_append(&text, ta_string(" has no live segment"));
+        } else {
+            tool_text_append(&text, ta_string(" has no live segment "));
+            tool_text_number(&text, inputs.segment);
+        }
+        tool_complain(t, tool_text_view(&text));
+        t->exit = TOOL_EXIT_USAGE;
+        return out->status = TA_ERROR_INVALID;
+    }
+    out->bytes = ta_host_snapshot_image(pack, chosen);
+    out->segment = chosen;
+    return TA_OK;
+}
+
 ta_status tool_load(tool *t, tool_inputs inputs, tool_image *out) {
     ta_memset(out, 0, sizeof *out);
     ta_source *sources = (ta_source *)ta_growable_arena_alloc(t->arena, sizeof *sources * inputs.count, 8);
@@ -198,14 +254,28 @@ ta_status tool_load(tool *t, tool_inputs inputs, tool_image *out) {
             return TA_ERROR_INVALID;
         }
         uint32_t this_kind = tool_input_kind_of(bytes);
+        if (this_kind == TOOL_INPUT_BLOB || this_kind == TOOL_INPUT_HOST_SNAPSHOT) {
+            tool_text text;
+            tool_text_init(t, &text);
+            tool_text_append(&text, inputs.paths[i]);
+            tool_text_append(&text, this_kind == TOOL_INPUT_BLOB
+                                        ? ta_string(" is a hibernation or export blob: inspect reads it")
+                                        : ta_string(" is a host snapshot without its images: inspect "
+                                                    "reads it, and the other commands a pack "
+                                                    "(ta_host_snapshot_pack)"));
+            tool_complain(t, tool_text_view(&text));
+            t->exit = TOOL_EXIT_USAGE;
+            return TA_ERROR_INVALID;
+        }
         if (this_kind == TA_NIL || (kind != TA_NIL && (this_kind != kind || kind != TOOL_INPUT_CHART))) {
             tool_text text;
             tool_text_init(t, &text);
             tool_text_append(&text, inputs.paths[i]);
             tool_text_append(&text, this_kind == TA_NIL
-                                        ? ta_string(" is neither an image (.tai) nor an SCXML chart "
-                                                    "nor a system manifest")
-                                        : ta_string(": give one image, one manifest, or charts"));
+                                        ? ta_string(" is neither an image (.tai), a snapshot, an SCXML "
+                                                    "chart nor a system manifest")
+                                        : ta_string(": give one image, one snapshot, one manifest, or "
+                                                    "charts"));
             tool_complain(t, tool_text_view(&text));
             t->exit = this_kind == TA_NIL ? TOOL_EXIT_REFUSED : TOOL_EXIT_USAGE;
             return TA_ERROR_INVALID;
@@ -213,10 +283,11 @@ ta_status tool_load(tool *t, tool_inputs inputs, tool_image *out) {
         kind = this_kind;
         sources[i].name = inputs.paths[i];
         sources[i].text = (ta_string_view){(const char *)bytes.pointer, (uint32_t)bytes.length};
-        if (kind == TOOL_INPUT_IMAGE) out->bytes = bytes;
+        if (kind == TOOL_INPUT_IMAGE || kind == TOOL_INPUT_SNAPSHOT) out->bytes = bytes;
     }
     out->kind = kind;
-    if (kind != TOOL_INPUT_IMAGE) {
+    if (kind == TOOL_INPUT_SNAPSHOT && snapshot_image(t, inputs, out) != TA_OK) return out->status;
+    if (kind != TOOL_INPUT_IMAGE && kind != TOOL_INPUT_SNAPSHOT) {
         tool_compilation compilation = {kind, inputs.flags, {sources, inputs.count}};
         ta_status kept = tool_compile_sources(t, &compilation, out);
         if (kept != TA_OK) return t->exit = TOOL_EXIT_FAILURE, kept;
@@ -298,7 +369,16 @@ ta_status tool_select_charts(tool *t, tool_selection selection, tool_charts *out
 
 ta_status tool_open(tool *t, tool_open_request request, tool_opened *out) {
     tool_inputs inputs = {request.count, request.paths,
-                          tool_count(t, TOOL_OPTION_WARNINGS_AS_ERRORS) ? TA_COMPILE_WERROR : 0u};
+                          tool_count(t, TOOL_OPTION_WARNINGS_AS_ERRORS) ? TA_COMPILE_WERROR : 0u,
+                          TA_NIL};
+    const ta_cli_value *segment = tool_last(t, TOOL_OPTION_SEGMENT);
+    uint64_t number = 0;
+    if (segment && (tool_decimal(segment->text, &number) != TA_OK || number >= TA_NIL)) {
+        tool_complain(t, ta_string("--segment takes a segment's number: 0, 1, ..."));
+        t->exit = TOOL_EXIT_USAGE;
+        return TA_ERROR_INVALID;
+    }
+    if (segment) inputs.segment = (uint32_t)number;
     ta_status status = tool_load(t, inputs, &out->image);
     if (status != TA_OK) {
         if (t->exit == TOOL_EXIT_REFUSED) tool_report_diagnostics(t, &out->image);

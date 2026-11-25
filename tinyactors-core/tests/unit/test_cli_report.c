@@ -504,6 +504,74 @@ static void test_acronyms_in_names(void) {
     document_end(&document);
 }
 
+/* A value: CBOR's diagnostic notation in Markdown, JSON's values in JSON
+ * (what JSON has none for as an object), typed elements in XML. */
+static const unsigned char order_value[] = {
+    0xA6,                                                      /* a map of six */
+    0x65, 't', 'o', 't', 'a', 'l', 0x18, 0x78,                 /* "total": 120 */
+    0x65, 'i', 't', 'e', 'm', 's', 0x83,                       /* "items": [ */
+    0x64, 'b', 'o', 'o', 'k', 0x21, 0xF9, 0x3E, 0x00,          /* "book", -2, 1.5] */
+    0x64, 'n', 'o', 't', 'e', 0xF6,                            /* "note": null */
+    0x64, 'p', 'a', 'i', 'd', 0xF7,                            /* "paid": undefined */
+    0x67, 'r', 'e', 'c', 'e', 'i', 'p', 't', 0x42, 0x00, 0xFF, /* "receipt": h'00ff' */
+    0x65, 'o', 'w', 'n', 'e', 'r', 0xD8, 0x20, 0x6A,           /* "owner": 32("shop/@cart") */
+    's', 'h', 'o', 'p', '/', '@', 'c', 'a', 'r', 't'};
+
+static void test_values(void) {
+    test_document document;
+    document_begin(&document, "order", 0);
+    ta_report_value(&document.report, S("state"), (ta_bytes){order_value, sizeof order_value});
+    ta_report_value(&document.report, S("count"), (ta_bytes){"\x01", 1});
+    CHECK(document_is(&document, TA_REPORT_MARKDOWN,
+                      EXPECT("# Order\n\n- **State**: `{\"total\":120,\"items\":[\"book\",-2,1.5],"
+                             "\"note\":null,\"paid\":undefined,\"receipt\":h'00ff',"
+                             "\"owner\":32(\"shop/@cart\")}`\n- **Count**: `1`\n")));
+    CHECK(document_is(&document, TA_REPORT_JSON,
+                      EXPECT("{\n  \"state\": {\"total\": 120, \"items\": [\"book\", -2, 1.5], "
+                             "\"note\": null, \"paid\": {\"undefined\": true}, \"receipt\": "
+                             "{\"bytes\": \"00ff\"}, \"owner\": {\"tag\": 32, \"value\": "
+                             "\"shop/@cart\"}},\n  \"count\": 1\n}\n")));
+    CHECK(document_is(&document, TA_REPORT_XML,
+                      EXPECT("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<order>\n  <state>\n"
+                             "    <map>\n"
+                             "      <entry key=\"total\">\n        <integer>120</integer>\n      </entry>\n"
+                             "      <entry key=\"items\">\n        <array>\n"
+                             "          <text>book</text>\n          <integer>-2</integer>\n"
+                             "          <float>1.5</float>\n        </array>\n      </entry>\n"
+                             "      <entry key=\"note\">\n        <null/>\n      </entry>\n"
+                             "      <entry key=\"paid\">\n        <undefined/>\n      </entry>\n"
+                             "      <entry key=\"receipt\">\n        <bytes>00ff</bytes>\n      </entry>\n"
+                             "      <entry key=\"owner\">\n        <tag number=\"32\">\n"
+                             "          <text>shop/@cart</text>\n        </tag>\n      </entry>\n"
+                             "    </map>\n  </state>\n  <count>\n    <integer>1</integer>\n  </count>\n"
+                             "</order>\n")));
+    document_end(&document);
+
+    /* an integer key is written as its digits; a key of another kind makes
+     * the value its diagnostic notation; NaN is no JSON number */
+    document_begin(&document, "payment", 0);
+    ta_report_value(&document.report, S("byNumber"), (ta_bytes){"\xA1\x20\xF5", 3}); /* {-1: true} */
+    ta_report_value(&document.report, S("byArray"), (ta_bytes){"\xA1\x80\xF4", 3});  /* {[]: false} */
+    ta_report_value(&document.report, S("ratio"), (ta_bytes){"\xF9\x7E\x00", 3});     /* NaN */
+    CHECK(document_is(&document, TA_REPORT_JSON,
+                      EXPECT("{\n  \"byNumber\": {\"-1\": true},\n  \"byArray\": {\"diagnostic\": "
+                             "\"{[]:false}\"},\n  \"ratio\": {\"float\": \"NaN\"}\n}\n")));
+    CHECK(document_is(&document, TA_REPORT_XML,
+                      EXPECT("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<payment>\n  <byNumber>\n"
+                             "    <map>\n      <entry key=\"-1\">\n        <true/>\n      </entry>\n"
+                             "    </map>\n  </byNumber>\n  <byArray>\n"
+                             "    <diagnostic>{[]:false}</diagnostic>\n  </byArray>\n  <ratio>\n"
+                             "    <float>NaN</float>\n  </ratio>\n</payment>\n")));
+    document_end(&document);
+
+    /* bytes that are no one item fail the report */
+    document_begin(&document, "refund", 0);
+    ta_report_value(&document.report, S("broken"), (ta_bytes){"\x82\x01", 2});
+    CHECK_EQUAL(document.report.status, TA_ERROR_INVALID);
+    CHECK_EQUAL(document_render(&document, TA_REPORT_JSON), TA_ERROR_INVALID);
+    document_end(&document);
+}
+
 static void test_unknown_format(void) {
     test_document document;
     document_begin(&document, "order", 0);
@@ -514,6 +582,7 @@ static void test_unknown_format(void) {
 
 int main(void) {
     RUN(test_every_kind);
+    RUN(test_values);
     RUN(test_escaping);
     RUN(test_headings);
     RUN(test_empty);

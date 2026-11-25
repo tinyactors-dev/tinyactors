@@ -5,10 +5,13 @@
 #include <stdlib.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
+#include <tinyactors/datamodel_ecmascript.h>
+#include <tinyactors/host.h>
 #include <tinyactors/image.h>
 #include <tinyactors/runtime.h>
 #include "../harness/harness.h"
 #include "../support/file_util.h"
+#include "../support/host_config.h"
 
 #ifndef TA_TEST_PROGRAMS
 #define TA_TEST_PROGRAMS "."
@@ -146,7 +149,7 @@ static void test_refusals(void) {
     CHECK(has("output", "the image does not verify"));
     CHECK(fixture_write("notes.txt", "a shopping list"));
     CHECK_EQUAL(run("inspect notes.txt"), 1);
-    CHECK(has("errors", "notes.txt is neither an image (.tai) nor an SCXML chart nor a system manifest"));
+    CHECK(has("errors", "notes.txt is neither an image (.tai), a snapshot, an SCXML chart nor a system manifest"));
     CHECK_EQUAL(run("inspect missing.tai"), 3);
     CHECK(has("errors", "tinyactors: cannot read missing.tai"));
     /* a file that cannot be written leaves nothing behind */
@@ -715,6 +718,287 @@ static void test_canonical_corpus(void) {
     CHECK(!strstr(text_of("output"), "\"image\": \"different\""));
 }
 
+/* ---- what the runtime writes: a snapshot and a blob ----------------------------------- */
+
+/* Bytes into a scratch file. */
+static int write_bytes(const char *name, const void *bytes, size_t length) {
+    FILE *file = fopen(fixture_path(name), "wb");
+    if (!file) return 0;
+    size_t written = fwrite(bytes, 1, length, file);
+    return fclose(file) == 0 && written == length;
+}
+
+static const char shop_order[] =
+    "<scxml " NS " datamodel='ecmascript' name='order' initial='open'>\n"
+    "<datamodel><data id='total' expr='0'/><data id='customer' expr=\"'ann'\"/></datamodel>\n"
+    "<state id='open'>\n"
+    "<transition event='item.added'><assign location='total' expr='total + 25'/></transition>\n"
+    "<transition event='checkout' target='paying'/></state>\n"
+    "<state id='paying'><onentry><send id='reminder' event='payment.reminder' delay='30s'/></onentry>\n"
+    "<invoke id='pay' src='shop-payment.scxml'/>\n"
+    "<transition event='done.invoke.pay' target='paid'/></state>\n"
+    "<final id='paid'/></scxml>\n";
+static const char shop_payment[] = "<scxml " NS " datamodel='ecmascript' name='payment' initial='authorizing'>"
+                                   "<state id='authorizing'><transition event='authorized' target='settled'/>"
+                                   "</state><final id='settled'/></scxml>";
+
+/* The shop image's hash, as the command writes it. */
+static char shop_hash[17];
+
+/* `format` with the shop image's hash for its %s. */
+static const char *with_hash(const char *format) {
+    static char text[256];
+    snprintf(text, sizeof text, format, shop_hash);
+    return text;
+}
+
+static void shop_run(ta_host *host) {
+    for (int i = 0; i < 16; i++) {
+        ta_run result = ta_host_run(host, 1000000);
+        const ta_host_effect *effects;
+        uint32_t count = ta_host_effects(host, &effects);
+        ta_host_effects_ack(host);
+        if (result.status == TA_RUN_IDLE && !count) return;
+    }
+    CHECK(0); /* it never went idle */
+}
+
+static void shop_send(ta_host *host, uint64_t session, const char *name) {
+    ta_event_in event;
+    memset(&event, 0, sizeof event);
+    event.size = sizeof event;
+    event.name = (ta_string_view){name, (uint32_t)strlen(name)};
+    event.session = session;
+    CHECK_EQUAL(ta_host_send(host, &event), TA_OK);
+}
+
+static uint64_t shop_spawn(ta_host *host, uint32_t segment, const char *name) {
+    ta_spawn spawn;
+    memset(&spawn, 0, sizeof spawn);
+    spawn.segment = segment;
+    spawn.chart = 0; /* order */
+    spawn.name = (ta_string_view){name, (uint32_t)strlen(name)};
+    uint64_t session = 0;
+    CHECK_EQUAL(ta_host_spawn(host, &spawn, &session), TA_OK);
+    return session;
+}
+
+/* A shop's host: ann's order paying (a reminder due in 30s, its payment an
+ * invoked session) with an event queued, bob's order hibernated with one
+ * queued. Its snapshot packed twice: with the ECMAScript datamodel's state
+ * as it is (shop.snapshot), and wrapped in CBOR as a binding packs its own
+ * (shop-cbor.snapshot); bob's blob (bob.blob); the image (shop.tai). */
+static void write_shop(void) {
+    CHECK(fixture_write("shop-order.scxml", shop_order));
+    CHECK(fixture_write("shop-payment.scxml", shop_payment));
+    CHECK_EQUAL(run("compile shop-order.scxml -o shop.tai"), 0);
+    ta_bytes image;
+    CHECK_EQUAL(ta_runtime_load_file(fixture_path("shop.tai"), &image), TA_OK);
+    ta_image opened;
+    ta_image_info info;
+    info.size = sizeof info;
+    CHECK_EQUAL(ta_image_open(image, &opened), TA_OK);
+    ta_image_get_info(&opened, &info);
+    snprintf(shop_hash, sizeof shop_hash, "%016llx", (unsigned long long)info.content_hash);
+    ta_datamodel_ecmascript *ecmascript = ta_datamodel_ecmascript_new(NULL);
+    ta_datamodel_binding binding = ta_datamodel_ecmascript_binding(ecmascript);
+    test_host_config config;
+    memset(&config, 0, sizeof config);
+    config.size = sizeof config;
+    config.system_id = (ta_string_view){"shop", 4};
+    config.system.size = sizeof config.system;
+    config.system.ticks_per_second = 1000;
+    config.datamodels = &binding;
+    config.datamodel_count = 1;
+    config.allocator = ta_runtime_malloc();
+    config.nonce = 0x5eed;
+    ta_host *host;
+    CHECK_EQUAL(test_host_new(&config, &host), TA_OK);
+    uint32_t segment;
+    CHECK_EQUAL(ta_host_add_image(host, image, &segment), TA_OK);
+    ta_runtime_free_file(image);
+    uint64_t ann = shop_spawn(host, segment, "cart-ann");
+    uint64_t bob = shop_spawn(host, segment, "cart-bob");
+    shop_run(host);
+    shop_send(host, ann, "item.added");
+    shop_send(host, ann, "checkout");
+    shop_send(host, bob, "item.added");
+    shop_run(host);
+    /* bob hibernated, its blob written before the ack ends it */
+    ta_bytes blob;
+    CHECK_EQUAL(ta_host_hibernate(host, bob, &blob), TA_OK);
+    CHECK(write_bytes("bob.blob", blob.pointer, blob.length));
+    ta_host_effects_ack(host);
+    shop_send(host, bob, "checkout"); /* it waits in the mailbox; the WAKE is let go */
+    shop_run(host);
+    shop_send(host, ann, "item.added"); /* queued, not run */
+    /* the datamodel's state, then the host packed with it */
+    ta_buffer probe = {NULL, 0, 0};
+    CHECK_EQUAL(ta_datamodel_ecmascript_snapshot(ecmascript, &probe), TA_ERROR_NO_MEMORY);
+    unsigned char *state = malloc(probe.length);
+    ta_buffer state_out = {state, probe.length, 0};
+    CHECK_EQUAL(ta_datamodel_ecmascript_snapshot(ecmascript, &state_out), TA_OK);
+    ta_cbor_writer writer;
+    ta_cbor_writer_init(&writer, (ta_buffer){NULL, 0, 0}, &config.allocator);
+    ta_cbor_write_map(&writer, 2);
+    ta_cbor_write_text(&writer, ta_string("datamodel"));
+    ta_cbor_write_text(&writer, ta_string("ecmascript"));
+    ta_cbor_write_text(&writer, ta_string("quickjs"));
+    ta_cbor_write_bytes(&writer, (ta_bytes){state, state_out.length});
+    ta_bytes wrapped;
+    CHECK_EQUAL(ta_cbor_writer_bytes(&writer, &wrapped), TA_OK);
+    const ta_datamodel_state states[2] = {{ta_string("ecmascript"), {state, state_out.length}},
+                                          {ta_string("tinyactors-test"), wrapped}};
+    const char *const names[2] = {"shop.snapshot", "shop-cbor.snapshot"};
+    for (int i = 0; i < 2; i++) {
+        probe = (ta_buffer){NULL, 0, 0};
+        CHECK_EQUAL(ta_host_snapshot_pack(host, &states[i], &probe), TA_ERROR_NO_MEMORY);
+        void *pack = aligned_alloc(8, (probe.length + 7) & ~(size_t)7);
+        ta_buffer pack_out = {pack, probe.length, 0};
+        CHECK_EQUAL(ta_host_snapshot_pack(host, &states[i], &pack_out), TA_OK);
+        CHECK(write_bytes(names[i], pack, pack_out.length));
+        free(pack);
+    }
+    /* the host's snapshot alone, without its images */
+    probe = (ta_buffer){NULL, 0, 0};
+    CHECK_EQUAL(ta_host_snapshot(host, &probe), TA_ERROR_NO_MEMORY);
+    void *alone = aligned_alloc(8, (probe.length + 7) & ~(size_t)7);
+    ta_buffer alone_out = {alone, probe.length, 0};
+    CHECK_EQUAL(ta_host_snapshot(host, &alone_out), TA_OK);
+    CHECK(write_bytes("shop.host", alone, alone_out.length));
+    free(alone);
+    /* ann's order and its payment exported, as a migration does inside a host */
+    shop_run(host);
+    ta_host_location where;
+    CHECK_EQUAL(ta_host_locate(host, ann, &where), TA_OK);
+    unsigned char exported[1 << 14];
+    ta_buffer export_out = {exported, sizeof exported, 0};
+    CHECK_EQUAL(ta_actor_export(ta_host_system(host, where.segment), where.actor, &export_out), TA_OK);
+    CHECK(write_bytes("ann.export", exported, export_out.length));
+    CHECK(write_bytes("notes.blob", "TAHB\x09\0\0\0", 8)); /* another format version */
+    ta_cbor_writer_free(&writer);
+    free(state);
+    ta_host_free(host);
+    ta_datamodel_ecmascript_free(ecmascript);
+}
+
+static void test_snapshots_and_blobs(void) {
+    write_shop();
+    /* a snapshot: its format, system, clock, segments and datamodels' state */
+    CHECK_EQUAL(run("inspect shop.snapshot"), 0);
+    CHECK(has("output", "- **From**: snapshot\n"));
+    CHECK(has("output", "- **Format**: 3\n"));
+    CHECK(has("output", "- **System ID**: shop\n"));
+    CHECK(has("output", "- **Ticks per second**: 1000\n"));
+    CHECK(has("output", "- **Restored**: yes\n"));
+    CHECK(has("output", with_hash("| 0 | yes | %s |")));
+    CHECK(has("output", "| order, payment | 3 | 1 |"));
+    CHECK(has("output", "- **Label**: ecmascript\n"));
+    CHECK(has("output", "- **Encoding**: opaque\n")); /* quickjs's own */
+    CHECK_EQUAL(run("inspect - < shop.snapshot"), 0); /* standard input, read once */
+    CHECK(has("output", "- **System ID**: shop\n"));
+    /* a state a binding packs as CBOR is decoded: bytes as hexadecimal */
+    CHECK_EQUAL(run("inspect -f json shop-cbor.snapshot"), 0);
+    CHECK(has("output", "\"label\": \"tinyactors-test\""));
+    CHECK(has("output", "\"encoding\": \"cbor\""));
+    CHECK(has("output", "\"value\": {\"datamodel\": \"ecmascript\", \"quickjs\": {\"bytes\": \""));
+    CHECK_EQUAL(run("inspect shop-cbor.snapshot"), 0);
+    CHECK(has("output", "- **Value**: `{\"datamodel\":\"ecmascript\",\"quickjs\":h'"));
+
+    /* every actor: ann paying, with a queued event, a reminder and its payment invoked;
+     * bob hibernated with an event queued; the payment, ann's child */
+    CHECK_EQUAL(run("actors shop.snapshot"), 0);
+    CHECK(has("output", "### Actor 1: cart-ann\n\n- **Session**: 1\n- **Name**: cart-ann\n"
+                        "- **Chart**: order\n- **Segment**: 0\n- **State**: runnable\n"
+                        "- **Invocations**: 1\n- **Queued**: 1\n\n#### Configuration\n\n- paying\n"));
+    CHECK(has("output", "| item.added |  |"));
+    CHECK(has("output", "| payment.reminder | reminder | 30000 | 30s |"));
+    CHECK(has("output", "### Actor 2: cart-bob\n\n- **Session**: 2\n- **Name**: cart-bob\n"
+                        "- **Chart**: order\n- **Segment**: 0\n- **State**: hibernated\n"));
+    CHECK(has("output", "| checkout |  |"));
+    CHECK(has("output", "### Actor 3: pay\n\n- **Session**: 3\n- **Name**: pay\n- **Chart**: payment\n"
+                        "- **Segment**: 0\n- **State**: idle\n- **Parent**: 1\n"));
+    CHECK_EQUAL(run("actors --chart payment shop.snapshot"), 0);
+    CHECK(has("output", "### Actor 1: pay\n"));
+    CHECK(!strstr(text_of("output"), "cart-ann"));
+    CHECK_EQUAL(run("actors --session 2 -f xml shop.snapshot"), 0);
+    CHECK(has("output", "<actor session=\"2\" name=\"cart-bob\" chart=\"order\" segment=\"0\" "
+                        "state=\"hibernated\""));
+    CHECK(has("output", "<event event=\"checkout\" sendid=\"\"/>"));
+    CHECK(!strstr(text_of("output"), "cart-ann"));
+    CHECK_EQUAL(run("actors -f json --session 1 shop.snapshot"), 0);
+    CHECK(has("output", "\"configuration\": [\n        \"paying\"\n      ]"));
+    CHECK(has("output", "\"in\": \"30s\""));
+    CHECK_EQUAL(run("actors --chart refund shop.snapshot"), 2);
+    CHECK(has("errors", "no chart 'refund' in the snapshot's images"));
+    CHECK_EQUAL(run("actors --segment 3 shop.snapshot"), 2);
+    CHECK(has("errors", "no live segment 3 in the snapshot"));
+    CHECK_EQUAL(run("actors --session ann shop.snapshot"), 2);
+    CHECK_EQUAL(run("actors bob.blob"), 2);
+    CHECK(has("errors", "bob.blob is not a snapshot"));
+
+    /* the image commands read a snapshot's images */
+    CHECK_EQUAL(run("states --chart payment shop.snapshot"), 0);
+    CHECK(has("output", "| 1 | authorizing | atomic | /scxml |"));
+    CHECK_EQUAL(run("states --segment 0 shop.snapshot"), 0);
+    CHECK_EQUAL(run("states --segment 3 shop.snapshot"), 2);
+    CHECK(has("errors", "shop.snapshot has no live segment 3"));
+    CHECK_EQUAL(run("states --segment x shop.snapshot"), 2);
+    CHECK_EQUAL(run("check shop.snapshot"), 0);
+    CHECK(has("output", "- **Valid**: yes\n"));
+    CHECK_EQUAL(run("compile shop.snapshot -o again.tai"), 2);
+    CHECK(has("errors", "the input is a snapshot"));
+    CHECK_EQUAL(run("lint --segment 0 shop.snapshot"), 0);
+    CHECK(has("output", "# Lint"));
+    CHECK_EQUAL(run("path --chart order shop.snapshot --to paying"), 0);
+    CHECK(has("output", "- **Result**: found"));
+    CHECK_EQUAL(run("path --segment 3 shop.snapshot --to paying"), 2);
+    CHECK_EQUAL(run("fmt shop.snapshot"), 1);
+    CHECK(has("output", "a snapshot, not XML"));
+    CHECK_EQUAL(run("states bob.blob"), 2);
+    CHECK(has("errors", "bob.blob is a hibernation or export blob: inspect reads it"));
+
+    /* a hibernation blob: its session, image and identity; its chart and
+     * configuration with the image it was written with, from a snapshot,
+     * an image or the charts */
+    CHECK_EQUAL(run("inspect bob.blob"), 0);
+    CHECK(has("output", "- **From**: hibernation blob\n"));
+    CHECK(has("output", "- **Format**: 4\n- **Readable**: yes\n- **Session**: 2\n"
+                        "- **Image hash**: "));
+    CHECK(has("output", with_hash("- **Image hash**: %s\n")));
+    CHECK(has("output", "- **Wakes**: only in the host that hibernated it"));
+    CHECK(!strstr(text_of("output"), "Configuration"));
+    CHECK_EQUAL(run("inspect bob.blob shop.snapshot"), 0);
+    CHECK(has("output", "- **Image matches**: yes\n"));
+    CHECK(has("output", "- **Wakes in that snapshot**: yes\n"));
+    CHECK(has("output", "- **Chart**: order\n- **Macrosteps**: 2\n\n#### Configuration\n\n- open\n"));
+    CHECK_EQUAL(run("inspect bob.blob shop-order.scxml"), 0);
+    CHECK(has("output", "- open\n"));
+    CHECK_EQUAL(run("inspect bob.blob shop.tai"), 0);
+    CHECK(has("output", "- **Image matches**: yes\n"));
+    CHECK(fixture_write("voucher.scxml", "<scxml " NS " name='voucher'><final id='done'/></scxml>"));
+    CHECK_EQUAL(run("inspect bob.blob voucher.scxml"), 0);
+    CHECK(has("output", "- **Image matches**: no\n"));
+    CHECK(!strstr(text_of("output"), "Configuration"));
+    CHECK_EQUAL(run("inspect notes.blob"), 1);
+    CHECK(has("output", "- **Format**: 9\n- **Readable**: no\n"));
+
+    /* an export blob: the session tree, parents first, its delayed sends */
+    CHECK_EQUAL(run("inspect ann.export shop.tai"), 0);
+    CHECK(has("output", "- **From**: export blob\n"));
+    CHECK(has("output", "- **Sessions**: 2\n- **Migrated**: no\n"));
+    CHECK(has("output", "### Session 1: cart-ann\n"));
+    CHECK(has("output", "| payment.reminder | reminder |  | 30000 | 0 | none |"));
+    CHECK(has("output", "### Session 2: pay\n\n- **Session**: 3\n- **Name**: pay\n- **Parent**: 1\n"));
+    CHECK(has("output", "- authorizing\n"));
+
+    /* the host's snapshot alone: its segments, and that its actors need a pack */
+    CHECK_EQUAL(run("inspect shop.host"), 0);
+    CHECK(has("output", "- **From**: host snapshot\n"));
+    CHECK(has("output", with_hash("| 0 | yes | %s |")));
+    CHECK_EQUAL(run("inspect shop.snapshot shop.tai"), 2);
+}
+
 int main(void) {
     RUN(test_compile_and_inspect);
     RUN(test_a_system);
@@ -731,5 +1015,6 @@ int main(void) {
     RUN(test_canonical);
     RUN(test_include_path);
     RUN(test_canonical_corpus);
+    RUN(test_snapshots_and_blobs);
     TEST_MAIN_END();
 }

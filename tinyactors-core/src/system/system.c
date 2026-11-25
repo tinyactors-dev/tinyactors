@@ -1085,6 +1085,31 @@ uint32_t ta_system_actor_timers(const ta_system *system, uint32_t actor, ta_acto
     return count;
 }
 
+uint32_t ta_system_actor_mailbox(const ta_system *system, uint32_t actor, ta_actor_queued_array events) {
+    uint32_t index = ta_system_resolve_actor(system, actor);
+    if (index == TA_NIL) return 0;
+    const ta_core *core = &system->core;
+    uint32_t count = 0;
+    for (uint32_t event_index = ta_actor_at(system, index)->mailbox_head; event_index != TA_NIL;) {
+        const ta_event *event = ta_event_at(core, event_index);
+        if (count < events.capacity) {
+            ta_actor_queued *queued = &events.pointer[count];
+            queued->event = ta_shared_string_get(core, event->name);
+            queued->sendid = event->sendid == TA_NIL ? (ta_string_view){(const char *)0, 0}
+                                                     : ta_shared_string_get(core, event->sendid);
+        }
+        count++;
+        event_index = event->next;
+    }
+    return count;
+}
+
+ta_string_view ta_system_actor_name(const ta_system *system, uint32_t actor) {
+    uint32_t index = ta_system_resolve_actor(system, actor);
+    if (index == TA_NIL) return (ta_string_view){(const char *)0, 0};
+    return names_actor_name(system, index);
+}
+
 uint32_t ta_system_actor_history(const ta_system *system, ta_actor_state_ref ref, ta_uint32_array states) {
     uint32_t index = ta_system_resolve_actor(system, ref.actor);
     if (index == TA_NIL) return 0;

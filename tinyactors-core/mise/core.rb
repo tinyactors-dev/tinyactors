@@ -69,9 +69,10 @@ module Core
     # linked as freestanding.
     Layer.new(name: 'svg', uses: %w[diagram compile], freestanding: :headers, sources: %w[src/diagram/svg.c]),
     # The tinyactors command's commands (tools/tinyactors): the C library only
-    # in its platform file, which the program adds (TOOLS below).
-    Layer.new(name: 'tool', uses: %w[cli svg analysis compile image], freestanding: :headers,
-              sources: %w[program input compile_command inspect disassemble graph diff lint path canonical]
+    # in its platform file, which the program adds (TOOLS below). It reads
+    # snapshots by restoring them into a host (snapshot.c).
+    Layer.new(name: 'tool', uses: %w[cli svg analysis compile image host], freestanding: :headers,
+              sources: %w[program input compile_command inspect disassemble graph diff lint path canonical snapshot]
                 .map { |s| "tools/tinyactors/#{s}.c" }),
     # The BasicHTTP Event I/O Processor's codec; the transport stays with the host.
     Layer.new(name: 'basic_http', uses: %w[base], freestanding: true, sources: %w[src/basic_http/basic_http.c]),
@@ -213,7 +214,7 @@ module Core
     unit('test_image', 'compile'),
     unit('test_compile', 'compile'),
     # Runs the tinyactors program the build made beside it.
-    unit('test_tool', 'runtime', 'compile', defines: { 'TA_TEST_TEMPORARY_DIRECTORY' => :scratch,
+    unit('test_tool', 'host', 'runtime', 'compile', *ECMASCRIPT, defines: { 'TA_TEST_TEMPORARY_DIRECTORY' => :scratch,
                                                        'TA_TEST_PROGRAMS' => :programs,
                                                        'TA_TEST_DIAGRAMS' => :diagrams,
                                                        'TA_TEST_REPOSITORY' => :repository }),
