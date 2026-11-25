@@ -260,6 +260,12 @@ async function measure({ what, count, datamodel, tracing, chart, data, quickjsMe
     }
   } else if (what === 'hibernated') {
     await batches(() => host.spawn(name)); // after each turn the host hibernates all but RESIDENT
+    // then the last RESIDENT too, so the row holds hibernated actors only: a
+    // resident actor's instance holds whole slab pages. A sweep passes over an
+    // actor that ran since the last one, so it takes up to three rounds.
+    for (let round = 0; round < 3; round++) {
+      for (const session of host.sweep(count, count)) store.save(session, host.hibernate(session));
+    }
     result.hibernated = { ...row(await sample()), blob: Math.round(store.bytes / store.saved) };
   } else if (what === 'message') {
     // the messages wait in the mailbox: nothing runs until the next turn

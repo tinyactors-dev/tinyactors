@@ -40,12 +40,13 @@ definitions, its own counters, or the bytes an allocator was asked for.
   a host sized for the count holds beyond one sized for none of it. The
   host holds it from its creation, whether the things exist or not, so
   plan with this number. For an actor it is its record (81 B), the
-  instance of the image's largest chart, and its strings.
+  instance of the image's largest chart, and its share of the string
+  slab (16 B by default).
 - **core used** is what the things use of that region, from the core's
   own counters (`host_stats`' pools): the records in use of each pool
   times the record's size, which the last line prints, and the slab of
   instances and strings. A hibernated actor keeps its record and gives
-  its instance back.
+  its instance back; a name it was spawned with stays in the string slab.
 - **host other** is what the host allocates beside its regions
   (`allocatedBytes` less `regionBytes` in `host_stats`): nothing per
   thing in a host sized up front.
@@ -73,8 +74,12 @@ column: the package has no API for them. Its tests count them.
 - **per actor, after an event:** the same actor after it handled one
   event. It keeps that event as `_event` until the next one.
 - **per actor, hibernated:** an actor in a population that keeps at most
-  1000 actors in memory and the rest in a store. It keeps its core
-  records, 81 B to 89 B, and its blob is in the store.
+  1000 actors in memory and the rest in a store, measured once the last
+  1000 are hibernated too. It uses its core records, 81 B (89 B is only
+  the reservation's bound when an index doubles), and its blob is in the
+  store; its instance went back to the slab, and a name it was spawned
+  with would stay in the string slab (the default config reserves 16 B
+  of strings per actor).
 - **per message waiting:** an event in an actor's mailbox, before the
   actor handles it.
 - **per delayed send pending:** a `<send delay>` that has not fallen due.

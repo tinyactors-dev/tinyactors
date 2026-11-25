@@ -99,8 +99,8 @@ class Memory(unittest.TestCase):
         self.assertEqual(started["pools"]["actors"], COUNT)
         self.assertEqual(handled["pools"], {"actors": COUNT, "events": kept * COUNT, "timers": 0})
         self.assertGreater(started["used"], units["actor"])
-        self.assertEqual(hibernated["pools"]["actors"], COUNT)
-        self.assertGreaterEqual(hibernated["used"], units["actor"])
+        self.assertEqual(hibernated["pools"], {"actors": COUNT, "events": 0, "timers": 0})
+        self.assertEqual(hibernated["used"], units["actor"])  # its instance went back to the slab
         self.assertGreater(hibernated["blob"], 0)
         # a host sized up front allocates nothing per thing beside its region
         for row in (started, waiting, pending):

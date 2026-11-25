@@ -111,7 +111,8 @@ each capacity (`layout.c:58-67`), and fails on a difference
 ```
 actor            81 B  record 48, links 16, session index 8, name index 8, generation 1
                        up to 89 B: the two indexes round up to a power of two
-                       in memory it also holds its chart's instance and 16 B of strings
+                       in memory it also holds its chart's instance, and its name if it has one
+                       in the string slab (the default config reserves 16 B of strings per actor)
 message         106 B  event 56, trace context 48, generations 2  (57 B with tracing off)
 delayed send    151 B  timer 24, heap entry 20, generation 1, its message 106  (102 B off)
 request 41 B, outbox entry 256 B, trace rule 72 B, chart of the image 114 B,
@@ -462,7 +463,8 @@ recorded here.
 
 - **The layout check (step 1).** Core's `mise run test` runs `mise run
   layout`, which gained a `hibernated` line (an actor's records; its
-  instance goes back to the slab, its strings stay) and `--json` (the
+  instance goes back to the slab, and a name it was spawned with stays in
+  the string slab) and `--json` (the
   document of `build/debuginfo/layout.json` on stdout, nothing else).
   `ta-layout FILE [NAME=VALUE ...]` is the other mode: FILE a compiled
   image, or an `.scxml` document it compiles; the capacities named as the

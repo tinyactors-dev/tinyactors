@@ -119,8 +119,8 @@ async function check(image, datamodel, tracing) {
   assert.equal(started.pools.actors, COUNT);
   assert.deepEqual(rows.handled[0].pools, { actors: COUNT, events: kept * COUNT, timers: 0 });
   assert.ok(started.used > units.actor, `a started actor uses its record and its instance: ${started.used} B`);
-  assert.equal(hibernated.pools.actors, COUNT);
-  assert.ok(hibernated.used >= units.actor, `a hibernated actor keeps its record: ${hibernated.used} B`);
+  assert.deepEqual(hibernated.pools, { actors: COUNT, events: 0, timers: 0 });
+  assert.equal(hibernated.used, units.actor, 'a hibernated actor uses its record: its instance went back to the slab');
   assert.ok(hibernated.blob > 0, `a hibernated actor's blob: ${hibernated.blob} B`);
   // a host sized up front allocates nothing per thing beside its region
   for (const row of [started, waiting, pending]) assert.equal(row.hostOther, 0, JSON.stringify(row));

@@ -233,6 +233,12 @@ def measure(what, count, datamodel, tracing, chart, data, unit):
                 result["handled"] = {"failed": f"{type(error).__name__}: {error}"}
         elif what == "hibernated":                # after each turn the host hibernates all but RESIDENT
             batches(lambda i: host.spawn(name))
+            # then the last RESIDENT too, so the row holds hibernated actors only: a resident
+            # actor's instance holds whole slab pages. A sweep passes over an actor that ran since
+            # the last one, so it takes up to three rounds.
+            for _ in range(3):
+                for session in host.sweep(count, count):
+                    store.save(session, host.hibernate(session))
             result["hibernated"] = {**row(sample()), "blob": round(store.bytes / store.saved)}
         elif what == "message":                   # the messages wait in the mailbox: nothing runs
             for _ in range(count):

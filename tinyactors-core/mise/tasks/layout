@@ -78,8 +78,9 @@ actor = [['record', slot.('ta_actor')], ['links', size.('ta_actor_links')], ['se
          ['name index', 8], ['generation', generation]]
 COSTS = {
   'actor' => actor,
-  # a hibernated actor keeps its records and its strings, and gives its
-  # instance back to the slab (unload in src/system/hibernate.c)
+  # a hibernated actor keeps its records and gives its instance back to the
+  # slab (unload in src/system/hibernate.c); a name it was spawned with stays
+  # in the string slab
   'hibernated actor' => actor,
   'message' => message,
   'delayed send' => timer + [['its message', message.sum { |_, bytes| bytes }]],
@@ -103,9 +104,13 @@ out.puts
 out.puts format('  %-14<name>s %6<bytes>s  %<parts>s', name: 'actor', bytes: "#{total.('actor')} B", parts: parts.('actor'))
 out.puts format('  %-14<name>s %6<bytes>s  %<note>s', name: '', bytes: '', note: "up to #{actor_most} B: the two indexes round up to a power of two")
 out.puts format('  %-14<name>s %6<bytes>s  %<note>s', name: '', bytes: '',
-                                                 note: "in memory it also holds its chart's instance and #{strings} B of strings")
+                                                 note: "in memory it also holds its chart's instance, and its name if it has one")
+out.puts format('  %-14<name>s %6<bytes>s  %<note>s', name: '', bytes: '',
+                                                 note: "in the string slab (the default config reserves #{strings} B of strings per actor)")
 out.puts format('  %-14<name>s %6<bytes>s  %<note>s', name: 'hibernated', bytes: "#{total.('hibernated actor')} B",
-                                                 note: "its records; its instance goes back to the slab, its #{strings} B of strings stay")
+                                                 note: 'its records; its instance goes back to the slab')
+out.puts format('  %-14<name>s %6<bytes>s  %<note>s', name: '', bytes: '',
+                                                 note: 'a name it was spawned with stays in the string slab')
 out.puts format('  %-14<name>s %6<bytes>s  %<parts>s', name: 'message', bytes: "#{total.('message')} B", parts: parts.('message'))
 out.puts format('  %-14<name>s %6<bytes>s  %<note>s', name: '', bytes: '', note: "#{untraced} B with tracing off")
 out.puts format('  %-14<name>s %6<bytes>s  %<parts>s', name: 'delayed send', bytes: "#{total.('delayed send')} B", parts: parts.('delayed send'))
