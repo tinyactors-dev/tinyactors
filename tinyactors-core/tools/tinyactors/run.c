@@ -451,7 +451,7 @@ static int config_read(tool *t, tool_server *server) {
         return 0;
     }
     post->kind = TOOL_POST_CONFIG;
-    tool_drain(server);
+    tool_drain(server, 0);
     server->batches = 0; /* the client's first batch is batch 1 */
     ta_growable_arena_release(&server->request, mark);
     if (!server->system.length || !server->clock.ticks_per_second) {
@@ -543,8 +543,17 @@ static int server_start(tool *t, tool_server *server) {
     return inputs_add(t, server);
 }
 
+/* The end of input: a held batch is acked (its senders go on, as if the
+ * client had taken their sends without an answer), what is pending drained
+ * to the client, then the host freed and quickjs after it. */
 static void server_stop(tool_server *server) {
-    if (server->host) ta_host_free(server->host);
+    if (server->host) {
+        ta_growable_arena_mark mark = ta_growable_arena_position(&server->request);
+        tool_held_ack(server);
+        tool_drain(server, 0);
+        ta_growable_arena_release(&server->request, mark);
+        ta_host_free(server->host);
+    }
     if (server->ecmascript) ta_datamodel_ecmascript_free(server->ecmascript); /* after the host */
     ta_table_free(&server->posts);
     ta_rpc_lines_free(&server->lines);

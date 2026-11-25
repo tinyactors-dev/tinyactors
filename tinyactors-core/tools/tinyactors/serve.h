@@ -64,8 +64,12 @@ typedef struct tool_server {
     const ta_string_view *processors; /* the effective ioProcessors' types, in order */
     uint32_t processor_count;
     uint32_t failed;  /* standard output could not be written: the client went away */
-    uint32_t woke;    /* the drain gave the host an input (a refused request or invocation):
+    uint32_t woke;    /* the drain gave the host an input (a refused request):
                          a run that went idle before it runs again */
+    uint32_t open;    /* a batch is open: a take that returned effects, or an output
+                         taken with no batch open, opened it; the ack closes it */
+    uint32_t held;    /* the open batch is left for the client (run.turn's hold),
+                         until its run.turn, run.ack or the end of input */
     uint32_t pad;
     uint64_t batches; /* batches handed out */
 } tool_server;
@@ -92,6 +96,27 @@ void tool_serve_write(tool_server *server, ta_bytes cbor);
  * TA_CBOR_COUNT_LATER), or call->response (a forwarded one). */
 void tool_serve_call(tool_call *call);
 
+/* The server's own methods: a name, the function that answers it, and
+ * whether it is allowed while a batch is held. */
+typedef void (*tool_method_run)(tool_call *call);
+typedef enum tool_method_flags {
+    TOOL_METHOD_WHILE_HELD = 1u << 0 /* allowed while a batch is held (docs/cli.md, "Held batches") */
+} tool_method_flags;
+typedef struct tool_method {
+    ta_string_view name;
+    tool_method_run run;
+    uint32_t flags; /* tool_method_flags */
+    uint32_t pad;
+} tool_method;
+/* The table the server answers from, for the test that holds it to the
+ * schema's run.* methods. */
+typedef struct tool_method_list {
+    const tool_method *methods;
+    uint32_t count;
+    uint32_t pad;
+} tool_method_list;
+tool_method_list tool_serve_methods(void);
+
 /* An error of the server's own for a status a C call refused with. */
 void tool_serve_status(tool_call *call, ta_status status);
 /* An error with a code, a reason and a path (static texts), and a message. */
@@ -105,9 +130,19 @@ void tool_serve_refuse(tool_call *call, tool_serve_refusal refusal);
 
 /* ---- effects.c -------------------------------------------------------------------- */
 
-/* Take, handle, ack until nothing is pending: each effect written as an
- * effect.* notification before the ack, each REPLY given to its post. */
-void tool_drain(tool_server *server);
+/* Take, handle, ack until nothing is pending and no batch is open: each
+ * effect written as an effect.* notification before the ack, each REPLY
+ * given to its post. With TOOL_DRAIN_HOLD, a batch with a waiting send
+ * (only the client decides it) is left open, held, instead of acked. 1 when
+ * a batch is held (by this drain or before it: a held batch is never taken
+ * again), else 0. */
+typedef enum tool_drain_flags {
+    TOOL_DRAIN_HOLD = 1u << 0
+} tool_drain_flags;
+int tool_drain(tool_server *server, uint32_t flags);
+/* Ack the held batch, if one is: its parked senders go on, with what the
+ * client gave them meanwhile in their queues. */
+void tool_held_ack(tool_server *server);
 
 /* A payload as `name` (and its CBOR twin `cbor_name` when JSON changed
  * it), a member of the map the writer has open; nothing for no payload. */

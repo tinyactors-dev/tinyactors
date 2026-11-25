@@ -734,7 +734,9 @@ compile, is told on standard error and the command exits with 1 before it
 reads a message (3 for a file it cannot read).
 
 The end of standard input ends the server: there is no `shutdown` method.
-It frees the host and quickjs and exits with 0.
+It acks a held batch (its senders go on, as if the client had taken their
+sends without an answer: success is silence), writes what is pending, frees
+the host and quickjs and exits with 0.
 
 ### Methods
 
@@ -746,18 +748,25 @@ integer) or a local address (`ta_host_resolve`). Every result is an object.
 | Method | Params | Result | Calls |
 |---|---|---|---|
 | `run.addImage` | one of `files` (paths, read as `INPUT`s are), `sources` (`[{name, text}]`, the first the default boot chart, or a manifest; a `src` names another by its name), `image` (a `.tai`); `warningsAsErrors` | `segment`, `charts` (`[{name, chart}]`), `diagnostics` (as `check -f json` writes them) | `ta_compile_charts` or `ta_compile_system`, `ta_host_add_image` |
+| `run.boot` | `segment` | `{}` | `ta_host_boot` (a manifest's boot actors) |
+| `run.chart` | `name` | `segment`, `chart` | `ta_host_chart` |
 | `run.spawn` | `chart` (a name: its current version) or `segment` and `chart` (an index); `name`, `params` or `paramsCBOR`, `traceparent` | `session`, `address` | `ta_host_chart`, the chart's datamodel's `from_wire`, `ta_host_spawn` |
-| `run.send` | `target`, `event`; `data` or `cbor`; `sendid`, `origin`, `origintype`, `raw`, `traceparent` | `{}` | `ta_host_resolve`, `ta_host_locate`, the target's chart's datamodel's `from_wire`, `ta_host_send` |
+| `run.send` | `target`, `event`; `data` or `cbor`; `sendid`, `origin`, `origintype`, `raw`, `traceparent`; as a service the client runs, `invocation` (the token of its `effect.invoke`), and `done` (no `event`: core's `done.invoke.<id>`) | `{}` | `ta_host_resolve`, `ta_host_locate`, the target's chart's datamodel's `from_wire`, `ta_host_send` (`TA_EVENT_IN_FROM_INVOKE`, `TA_EVENT_IN_INVOKE_DONE`) |
+| `run.sendMany` | `events`: `run.send`'s params each | `accepted`: the accepted prefix's length | every event read first (one the server cannot read refuses the request, and nothing is sent), then `ta_host_send_many` |
+| `run.fail` | `target` and `sendid` (a send), or `target` and `invocation` (an invocation the client runs) | `{}` | `ta_host_send` with `TA_EVENT_IN_ERROR_COMMUNICATION` (and `TA_EVENT_IN_FROM_INVOKE`): `error.communication` for the sender or the invoker |
+| `run.terminate` | `target` | `{}` | `ta_host_terminate` |
+| `run.resolve` | `address` | `session` (`null`: none) | `ta_host_resolve` |
+| `run.actorByName` | `name` | `session` (`null`: none) | `ta_host_actor_by_name` |
 | `run.advanceTime` | `by` or `to`: ticks (an integer), or a duration as SCXML writes a delay (`"30s"`, `"150ms"`); `wallNs` | `time`, `wallNs` | `ta_host_advance_time` |
-| `run.turn` | `budget` (fuel per run, default 10,000), `runs` (at most, default 1,000) | `status`, `detail`, `runs`, `fuel`, `time`, `nextDeadline` (`null`: none) | the turn below |
+| `run.turn` | `budget` (fuel per run, default 10,000), `runs` (at most, default 1,000), `hold` | `status`, `detail`, `runs`, `fuel`, `time`, `nextDeadline` (`null`: none, or not known: below) | the turn below |
+| `run.ack` | — | `{}` | `ta_host_effects_ack` of the held batch, then what it lets come is written |
 | `run.schema` | — | `schema`: the protocol's JSON Schema | none |
 | any other | as core's | core's `result` or `error`, with the client's id | `ta_host_post` (`actor.state`, `host.stats`, `trace.*`, ...) |
 
 A `run.*` method the server does not have is -32601 of its own. The
-schema lists methods this release does not serve yet (`hold`, `run.ack`,
-`run.fail`, services, hibernation, migration, snapshots, telemetry):
-their params are checked, then the server answers -32601, or -32602
-`unknown` for a param it does not serve (`hold`, `invocation`, `done`).
+schema lists methods this release does not serve yet (hibernation,
+migration, snapshots, telemetry, `run.post`): their params are checked,
+then the server answers -32601.
 The only defaults the server owns are `budget` and `runs`, so that a chart
 that never idles cannot hang the client, and `--max-message`.
 
@@ -783,10 +792,37 @@ every effect as a notification before its batch's ack. It goes on after
 `TA_RUN_EFFECTS`, `TA_RUN_EFFECTS_FULL` and `TA_RUN_YIELDED`, and after an
 idle run whose effects gave the host an input (a refused request); it
 answers `status` `idle` (with `nextDeadline`), `yielded` (the runs spent),
-`exhausted` (`detail` the pool) or `fault` (`detail` the status's name). A
-run's outcome is not an error: the host goes on. A send's waiting sender
-goes on at the ack, so an answer the client gives later arrives as an
-ordinary event.
+`held` (below), `exhausted` (`detail` the pool) or `fault` (`detail` the
+status's name). A run's outcome is not an error: the host goes on.
+Without `hold`, a send's waiting sender goes on at the ack, so an answer
+the client gives later arrives as an ordinary event.
+
+### Held batches
+
+With `hold`, `run.turn` leaves open a batch that has a send whose sender
+waits (`waiting` in its `effect.send`: to an I/O processor, to another
+system or to a service the client runs): every notification of the batch
+is written, and the turn answers `status` `held`. The senders stay parked
+until the client's next `run.turn` (with or without `hold`) or `run.ack`
+acks the batch, or the input ends. What the client sends meanwhile is in
+their queues when they go on: an answer (`run.send` with the send's
+`sendid`), or `run.fail`'s `error.communication`, which is how SCXML
+describes a `<send>` that failed. A held turn's `nextDeadline` is `null`:
+the run that stops at waiting sends gives none, and the next `run.turn`
+answers it.
+
+`run.ack` acks the held batch and writes what the ack lets come, without
+holding it, so that its response leaves no batch open; nothing runs.
+`run.ack` with no batch held is -32002 `state`.
+
+| While a batch is held | |
+|---|---|
+| `run.send`, `run.sendMany`, `run.fail`, `run.terminate`, `run.spawn`, `run.boot` | allowed: inputs apply now, their effects come after the ack |
+| `run.chart`, `run.resolve`, `run.actorByName`, `run.schema` | allowed: lookups |
+| `run.advanceTime` | allowed: the clock moves, nothing runs |
+| `run.turn`, `run.ack` | allowed: they ack the held batch |
+| forwarded methods | refused, -32002 `state`: core answers a post made while a batch is open only after its ack, so the response could not come before the next request; an actor's state cannot be read while its sends wait |
+| `run.addImage` | refused, -32002 `state`: images are added to a quiescent host |
 
 ### Notifications
 
@@ -798,18 +834,20 @@ effect does not set is left out.
 |---|---|---|
 | `TA_EFFECT_SEND` to an I/O processor of the config | `effect.send`: `session`, `type`, `target`, `event`, `sendid`, `data`/`cbor`, `traceparent`, `waiting` | answer: `run.send` to `session` with `sendid`, `origintype` the `type`, `traceparent` |
 | `TA_EFFECT_SEND` to another system (the transport) | `effect.send`: `session`, `message` (`target`, `event`, `data`/`cbor`, `sendid`, `origin`, `traceparent`), `waiting` | pass `message` to another server's `run.send` as it is; nothing (success is silence) |
-| `TA_EFFECT_SEND` to an invoked service | `effect.send`: `session`, `invocation` (the token), `segment`, `target`, `event`, `sendid`, `data`/`cbor`, `traceparent` | nothing yet |
+| `TA_EFFECT_SEND` to an invoked service | `effect.send`: `session`, `invocation` (the token), `segment`, `target`, `event`, `sendid`, `data`/`cbor`, `traceparent`, `waiting` | answer as the service: `run.send` with `invocation` |
+| `TA_EFFECT_INVOKE` | `effect.invoke`: `session` (the invoker), `segment`, `invocation` (the token), `type`, `src`, `invokeid`, `data`/`cbor` (the invoke's params), `restored` | run the service: `run.send` with `invocation` (and `done` to end it), or `run.fail` with `invocation` |
+| `TA_EFFECT_UNINVOKE` | `effect.uninvoke`: `session` (the invoker), `segment`, `invocation` | stop the service; its token is stale from now on |
 | `TA_EFFECT_LOG` | `effect.log`: `session`, `label`, `text` | |
 | `TA_EFFECT_DONE` | `effect.done`: `session`, `name`, `final`, `data`/`cbor` (the donedata) | |
 | `TA_EFFECT_ERROR` | `effect.error`: `session`, `status` (the fault's name) | |
 | `TA_EFFECT_REQUEST` | `effect.request`: `session`, `src`; the server answers `ta_host_resume` with `TA_ERROR_INVALID` (the parent gets `error.execution`) | |
 | `TA_HOST_EFFECT_NOTIFICATION` | written as it is, its `method` and `params` (none is defined) | |
 
-An external invocation (`TA_EFFECT_INVOKE`) is refused for now: the
-invoker gets `error.communication`, as a binding's with no service of the
-type. The other effects (wakes, migrations, telemetry) come with later
+The client runs every service a chart invokes (`<invoke>` of a type
+that is not a chart): an invocation is its segment and token, never its
+invoke id. The other effects (wakes, migrations, telemetry) come with later
 releases of the protocol. Every view an effect's notification reads is
-read and written before the ack.
+read and written before the ack, held batch or not.
 
 ### Values
 
@@ -849,7 +887,7 @@ The error object is core's: `{"code", "message", "data": {"reason",
 | no such method | -32601 | `unknown` |
 | a param missing, of the wrong type, unknown, out of range; `data` for a chart that reads no values; the clock moved back | -32602 | `missing`, `type`, `unknown`, `range` |
 | `TA_ERROR_STALE` (no such session or name) | -32001 | `stale` |
-| `TA_ERROR_STATE` | -32002 | `state` |
+| `TA_ERROR_STATE`; a method refused while a batch is held; `run.ack` with none held | -32002 | `state` |
 | `TA_ERROR_LIMIT` | -32003 | `limit` |
 | `TA_ERROR_NO_MEMORY` | -32004 | `memory` |
 | `TA_ERROR_INVALID` (another system's address, a chart no image has, charts that do not compile: the message holds their diagnostics) | -32005 | `invalid` |
@@ -883,23 +921,29 @@ $ tinyactors run --config config.json order.scxml
 < {"jsonrpc":"2.0","id":1,"result":{"session":1,"address":"tinyactors://tinyactors-run/#_scxml_1"}}
 > {"jsonrpc":"2.0","id":2,"method":"run.send","params":{"target":1,"event":"checkout","data":{"card":"tok_visa"}}}
 < {"jsonrpc":"2.0","id":2,"result":{}}
-> {"jsonrpc":"2.0","id":3,"method":"run.turn"}
+> {"jsonrpc":"2.0","id":3,"method":"run.turn","params":{"hold":true}}
 < {"jsonrpc":"2.0","method":"effect.send","params":{"batch":1,"index":0,"session":1,"type":"payments","target":"charges","event":"charge","sendid":"pay","data":{"amount":4200,"card":"tok_visa"},"traceparent":"00-…-03","waiting":true}}
-< {"jsonrpc":"2.0","id":3,"result":{"status":"idle","runs":2,"fuel":14,"time":0,"nextDeadline":30000}}
+< {"jsonrpc":"2.0","id":3,"result":{"status":"held","runs":1,"fuel":11,"time":0,"nextDeadline":null}}
+> {"jsonrpc":"2.0","id":4,"method":"actor.state","params":{"session":1}}
+< {"jsonrpc":"2.0","id":4,"error":{"code":-32002,"message":"a batch is held: answer its sends, then run.turn or run.ack","data":{"reason":"state","path":""}}}
 > {"jsonrpc":"2.0","id":5,"method":"run.send","params":{"target":1,"event":"charge.ok","sendid":"pay","origintype":"payments","data":{"charge":"ch_81"}}}
 < {"jsonrpc":"2.0","id":5,"result":{}}
 > {"jsonrpc":"2.0","id":6,"method":"run.turn"}
 < {"jsonrpc":"2.0","method":"effect.log","params":{"batch":2,"index":0,"session":1,"label":"order","text":"paid ch_81"}}
 < {"jsonrpc":"2.0","method":"effect.done","params":{"batch":2,"index":1,"session":1,"name":"order-17","final":"paid","data":{"charge":"ch_81"}}}
-< {"jsonrpc":"2.0","id":6,"result":{"status":"idle","runs":1,"fuel":15,"time":0,"nextDeadline":null}}
+< {"jsonrpc":"2.0","id":6,"result":{"status":"idle","runs":1,"fuel":17,"time":0,"nextDeadline":null}}
 ```
 
-The answer to the charge, given before the next `run.turn`, is in the
-order's queue when it runs again, and the order ends paid. The rest of the
-session spawns a second order in a batch with its `checkout` and a
-`run.turn`, never answers its charge, moves the clock 30 seconds and reads
-the order back in `open` with the forwarded `actor.state`. `tests/run` holds more sessions: refusals, values and their CBOR
-twins, a send to another system, a refused request.
+The order is parked after its `<send>` while the batch is held, and its
+state cannot be read. The answer to the charge, given before the next
+`run.turn` acks the batch, is in the order's queue when it goes on, and
+the order ends paid. The rest of the session spawns a second order in a
+batch with its `checkout` and a `run.turn` without `hold`, never answers
+its charge, moves the clock 30 seconds and reads the order back in `open`
+with the forwarded `actor.state`. `tests/run` holds more sessions:
+refusals, values and their CBOR twins, a send to another system, a refused
+request, sends answered and failed while held (`hold`), and services the
+client runs (`services`).
 
 ## How it is built
 

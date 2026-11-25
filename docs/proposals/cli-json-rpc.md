@@ -1571,6 +1571,66 @@ built.
 - **`undefined` in** (`cbor` `9w`) comes back from quickjs as `null`
   without a twin: its `to_wire` writes `null`.
 
+**Step 6** (2026-11-25): `hold`, `run.ack`, `run.fail`, services,
+`run.sendMany`, `run.terminate`, the lookups and the end of input with a
+batch held. It replaces the refusals of step 5 listed above (`hold`,
+`invocation`, `done`, the refused invocation), and where the outline left
+a choice:
+
+- **The drain** is `tool_drain(server, flags)` with `TOOL_DRAIN_HOLD`, and
+  the server keeps `open` and `held` (4.4). A batch is held when it has a
+  `TA_EFFECT_SEND` flagged `TA_EFFECT_FLAG_WAITING`: every send the host
+  hands out is one only the client decides. While a batch is held the drain
+  takes nothing (a take would hand the same batch out again), so no method
+  drains then. The method table carries `TOOL_METHOD_WHILE_HELD`; a
+  forwarded method and `run.addImage` are refused while held (-32002
+  `state`, "a batch is held: answer its sends, then run.turn or run.ack"),
+  after the schema has checked their params. The test that holds the
+  table to the schema's `run.*` methods, both ways, is in
+  `test_run_memory` (`tool_serve_methods`), with the methods of steps 7 to
+  9 listed there as unbuilt.
+- **`run.ack`** acks the held batch, then drains without holding, so its
+  response leaves no batch open (a post or a snapshot may follow); nothing
+  runs. The outline did not say whether it drains. After the ack only what
+  the client's inputs appended can be pending, and a waiting send comes
+  only from a run, so nothing it drains needs holding.
+- **A held turn's `nextDeadline` is `null`.** The run that stops at
+  waiting sends (`TA_RUN_EFFECTS`) gives none (`ta_host_run` takes each
+  segment's deadline from `ta_system_run`, which computes it only for an
+  idle or yielded run), so transcript A's `"nextDeadline":30000` on the
+  held turn is not what core answers; the next `run.turn` answers it. The
+  schema's description says so. Asking core for the deadline of a run
+  that stopped at its sends is a possible request, not made: no client
+  needs it yet.
+- **`run.boot`** is built here: no step of 7.7 named it.
+- **`run.send` as a service:** `invocation` sets `TA_EVENT_IN_FROM_INVOKE`
+  and the token; with `done`, `TA_EVENT_IN_INVOKE_DONE` alone, as the
+  bindings send it. `done` without `invocation` is -32602 `missing`, and
+  `done` with an `event` -32602 `unknown` (core names it
+  `done.invoke.<id>`). A refusal of the host's for an event with an
+  invocation (an invocation that ended: `TA_ERROR_STALE`) points at
+  `params.invocation`; `run.fail` too.
+- **`run.sendMany` reads every event first**: an event it cannot read (a
+  target that is not there, a value the datamodel cannot read) refuses the
+  whole request at its path (`params.events[1].target`) and nothing is
+  sent; then `ta_host_send_many`, its result the accepted prefix, the rest
+  of the payloads released.
+- **`run.resolve`** answers `null` for `TA_ERROR_STALE` and refuses
+  another system's address (-32005); `run.actorByName` answers `null` for
+  none.
+- **`effect.uninvoke` carries `session`**, the invoker, which the host
+  sets on the effect: the schema had no member for it and now has.
+- **The end of input** acks a held batch and drains what is pending (no
+  run), then frees the host. `trace.end` comes with step 9.
+- **Transcripts:** `tests/run/hold` (transcript A of 4.9, with the rows of
+  the held table and the end of input with a batch held) and
+  `tests/run/services` (an order invoking a payment service: authorized,
+  done, failed, cancelled). `tests/run/order` is the worked example with
+  `hold` again, as section 6 has it. In transcript A as built, the
+  answer and the failure come in one batch of three effects (the first
+  order's log, the second's log, the first's done), the `fuel` numbers
+  are the ones core gives, and the held turn's `nextDeadline` is `null`.
+
 ## 8. Decisions
 
 The maintainer settled every open question (2026-11-25); none is left.

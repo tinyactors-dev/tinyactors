@@ -175,18 +175,35 @@ static void host_notice(notice *note) {
     if (ta_cbor_writer_bytes(&note->writer, &cbor) == TA_OK) tool_serve_write(note->server, cbor);
 }
 
-/* An external invocation: the client running services comes with a later
- * step of the protocol; until then the invoker is told it cannot start
- * (error.communication), as a binding with no service of the type does. */
-static void invoke_refused(notice *note) {
-    ta_event_in failure;
-    ta_memset(&failure, 0, sizeof failure);
-    failure.size = sizeof failure;
-    failure.session = note->effect->session;
-    failure.token = note->effect->token;
-    failure.flags = TA_EVENT_IN_FROM_INVOKE | TA_EVENT_IN_ERROR_COMMUNICATION;
-    ta_host_send(note->server->host, &failure);
-    note->server->woke = 1;
+/* An external invocation: the client runs every service. It answers as the
+ * service with run.send (its token as `invocation`, and `done`), or fails it
+ * with run.fail. */
+static void invoke_notice(notice *note) {
+    const ta_host_effect *effect = note->effect;
+    ta_cbor_writer *writer = &note->writer;
+    notice_begin(note, "effect.invoke");
+    member_number(writer, "segment", effect->segment);
+    member_number(writer, "invocation", effect->token);
+    member_text(writer, "type", effect->event);
+    member_text(writer, "src", effect->target);
+    member_text(writer, "invokeid", effect->sendid);
+    tool_value_write(note->server,
+                     &(tool_value_out){effect->payload, effect->datamodel, 0, ta_string("data"), ta_string("cbor")},
+                     writer);
+    if (effect->flags & TA_EFFECT_FLAG_RESTORED) {
+        ta_cbor_write_text(writer, ta_string("restored"));
+        ta_cbor_write_simple(writer, TA_CBOR_TRUE);
+    }
+    notice_end(note);
+}
+
+/* An invocation cancelled: the client stops what stands in for it; its
+ * token is stale from now on. */
+static void uninvoke_notice(notice *note) {
+    notice_begin(note, "effect.uninvoke");
+    member_number(&note->writer, "segment", note->effect->segment);
+    member_number(&note->writer, "invocation", note->effect->token);
+    notice_end(note);
 }
 
 /* ---- replies ----------------------------------------------------------------------- */
@@ -287,7 +304,8 @@ static void handle(tool_server *server, const ta_host_effect *effect, uint32_t i
     case TA_EFFECT_DONE: done_notice(&note); break;
     case TA_EFFECT_ERROR: error_notice(&note); break;
     case TA_EFFECT_REQUEST: request_notice(&note); break;
-    case TA_EFFECT_INVOKE: invoke_refused(&note); break;
+    case TA_EFFECT_INVOKE: invoke_notice(&note); break;
+    case TA_EFFECT_UNINVOKE: uninvoke_notice(&note); break;
     case TA_HOST_EFFECT_NOTIFICATION: host_notice(&note); break;
     case TA_HOST_EFFECT_REPLY: reply_given(server, effect); return;
     default: break; /* the rest come with later steps of the protocol */
@@ -295,13 +313,41 @@ static void handle(tool_server *server, const ta_host_effect *effect, uint32_t i
     ta_growable_arena_release(&server->request, mark);
 }
 
-void tool_drain(tool_server *server) {
-    const ta_host_effect *effects;
-    uint32_t count;
-    while ((count = ta_host_effects(server->host, &effects)) > 0) {
-        server->batches++;
-        for (uint32_t i = 0; i < count; i++)
-            handle(server, &effects[i], i);
-        ta_host_effects_ack(server->host);
+/* Whether a batch holds a send only the client decides and whose sender
+ * waits for the ack: to an I/O processor of the config, to the transport or
+ * to a service the client runs (every send the host hands out is one). */
+static int waits_for_the_client(const ta_host_effect *effects, uint32_t count) {
+    for (uint32_t i = 0; i < count; i++)
+        if (effects[i].kind == TA_EFFECT_SEND && (effects[i].flags & TA_EFFECT_FLAG_WAITING)) return 1;
+    return 0;
+}
+
+static void batch_ack(tool_server *server) {
+    ta_host_effects_ack(server->host);
+    server->open = 0;
+    server->held = 0;
+}
+
+int tool_drain(tool_server *server, uint32_t flags) {
+    for (;;) {
+        if (server->held) return 1; /* a take would hand the same batch out again */
+        const ta_host_effect *effects;
+        uint32_t count = ta_host_effects(server->host, &effects);
+        if (!count && !server->open) return 0;
+        if (count) {
+            server->open = 1;
+            server->batches++;
+            for (uint32_t i = 0; i < count; i++)
+                handle(server, &effects[i], i);
+            if ((flags & TOOL_DRAIN_HOLD) && waits_for_the_client(effects, count)) {
+                server->held = 1;
+                return 1;
+            }
+        }
+        batch_ack(server); /* a batch of outputs alone (count 0) is acked here too */
     }
+}
+
+void tool_held_ack(tool_server *server) {
+    if (server->held) batch_ack(server);
 }

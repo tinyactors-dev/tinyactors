@@ -2,15 +2,17 @@
 < {"jsonrpc":"2.0","id":1,"result":{"session":1,"address":"tinyactors://tinyactors-run/#_scxml_1"}}
 > {"jsonrpc":"2.0","id":2,"method":"run.send","params":{"target":1,"event":"checkout","data":{"card":"tok_visa"}}}
 < {"jsonrpc":"2.0","id":2,"result":{}}
-> {"jsonrpc":"2.0","id":3,"method":"run.turn"}
+> {"jsonrpc":"2.0","id":3,"method":"run.turn","params":{"hold":true}}
 < {"jsonrpc":"2.0","method":"effect.send","params":{"batch":1,"index":0,"session":1,"type":"payments","target":"charges","event":"charge","sendid":"pay","data":{"amount":4200,"card":"tok_visa"},"traceparent":"00-1a5f849d4933e6e06aa594f1262d2d2c-f075787b740f4422-03","waiting":true}}
-< {"jsonrpc":"2.0","id":3,"result":{"status":"idle","runs":2,"fuel":14,"time":0,"nextDeadline":30000}}
+< {"jsonrpc":"2.0","id":3,"result":{"status":"held","runs":1,"fuel":11,"time":0,"nextDeadline":null}}
+> {"jsonrpc":"2.0","id":4,"method":"actor.state","params":{"session":1}}
+< {"jsonrpc":"2.0","id":4,"error":{"code":-32002,"message":"a batch is held: answer its sends, then run.turn or run.ack","data":{"reason":"state","path":""}}}
 > {"jsonrpc":"2.0","id":5,"method":"run.send","params":{"target":1,"event":"charge.ok","sendid":"pay","origintype":"payments","data":{"charge":"ch_81"}}}
 < {"jsonrpc":"2.0","id":5,"result":{}}
 > {"jsonrpc":"2.0","id":6,"method":"run.turn"}
 < {"jsonrpc":"2.0","method":"effect.log","params":{"batch":2,"index":0,"session":1,"label":"order","text":"paid ch_81"}}
 < {"jsonrpc":"2.0","method":"effect.done","params":{"batch":2,"index":1,"session":1,"name":"order-17","final":"paid","data":{"charge":"ch_81"}}}
-< {"jsonrpc":"2.0","id":6,"result":{"status":"idle","runs":1,"fuel":15,"time":0,"nextDeadline":null}}
+< {"jsonrpc":"2.0","id":6,"result":{"status":"idle","runs":1,"fuel":17,"time":0,"nextDeadline":null}}
 > [{"jsonrpc":"2.0","id":7,"method":"run.spawn","params":{"chart":"order","params":{"total":990}}},{"jsonrpc":"2.0","id":8,"method":"run.send","params":{"target":2,"event":"checkout","data":{"card":"tok_expired"}}},{"jsonrpc":"2.0","id":9,"method":"run.turn"}]
 < {"jsonrpc":"2.0","method":"effect.send","params":{"batch":3,"index":0,"session":2,"type":"payments","target":"charges","event":"charge","sendid":"pay","data":{"amount":990,"card":"tok_expired"},"traceparent":"00-db032c0ba7539731eb3a475a3e749a3d-dd8d121244a64d16-03","waiting":true}}
 < [{"jsonrpc":"2.0","id":7,"result":{"session":2,"address":"tinyactors://tinyactors-run/#_scxml_2"}},{"jsonrpc":"2.0","id":8,"result":{}},{"jsonrpc":"2.0","id":9,"result":{"status":"idle","runs":2,"fuel":14,"time":0,"nextDeadline":30000}}]

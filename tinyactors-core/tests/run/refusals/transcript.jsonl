@@ -26,8 +26,8 @@
 < {"jsonrpc":"2.0","id":11,"error":{"code":-32601,"message":"no such method","data":{"reason":"unknown","path":"method"}}}
 > {"jsonrpc":"2.0","id":12,"method":"run.turn","params":{"runs":0}}
 < {"jsonrpc":"2.0","id":12,"error":{"code":-32602,"message":"is below the schema's minimum","data":{"reason":"range","path":"params.runs"}}}
-> {"jsonrpc":"2.0","id":13,"method":"run.turn","params":{"hold":true}}
-< {"jsonrpc":"2.0","id":13,"error":{"code":-32602,"message":"hold is not served yet","data":{"reason":"unknown","path":"params.hold"}}}
+> {"jsonrpc":"2.0","id":13,"method":"run.ack"}
+< {"jsonrpc":"2.0","id":13,"error":{"code":-32002,"message":"no batch is held: run.turn with hold holds one","data":{"reason":"state","path":""}}}
 > {"jsonrpc":"2.0","id":14,"method":"run.spawn","params":{"chart":"refund"}}
 < {"jsonrpc":"2.0","id":14,"error":{"code":-32005,"message":"the host refused it","data":{"reason":"invalid","path":"params.chart","status":"TA_ERROR_INVALID"}}}
 > {"jsonrpc":"2.0","id":15,"method":"run.spawn","params":{"chart":0}}
@@ -49,7 +49,7 @@
 > {"jsonrpc":"2.0","id":23,"method":"run.send","params":{"target":1,"event":"close","data":1,"cbor":"AQ"}}
 < {"jsonrpc":"2.0","id":23,"error":{"code":-32602,"message":"cannot come with the member it excludes","data":{"reason":"range","path":"params.cbor"}}}
 > {"jsonrpc":"2.0","id":24,"method":"run.send","params":{"target":1,"event":"close","invocation":3}}
-< {"jsonrpc":"2.0","id":24,"error":{"code":-32602,"message":"services the client runs are not served yet","data":{"reason":"unknown","path":"params.invocation"}}}
+< {"jsonrpc":"2.0","id":24,"error":{"code":-32001,"message":"the session or name does not exist (any more)","data":{"reason":"stale","path":"params.invocation","status":"TA_ERROR_STALE"}}}
 > {"jsonrpc":"2.0","id":25,"method":"run.advanceTime","params":{"by":"30s","to":5}}
 < {"jsonrpc":"2.0","id":25,"error":{"code":-32602,"message":"cannot come with the member it excludes","data":{"reason":"range","path":"params.to"}}}
 > {"jsonrpc":"2.0","id":26,"method":"run.advanceTime","params":{"by":"soon"}}

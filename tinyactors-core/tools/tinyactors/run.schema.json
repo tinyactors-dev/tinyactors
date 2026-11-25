@@ -566,7 +566,7 @@
         "runs": {"$ref": "#/$defs/uint32"},
         "fuel": {"$ref": "#/$defs/uint64"},
         "time": {"$ref": "#/$defs/ticks"},
-        "nextDeadline": {"description": "null: none.", "type": ["integer", "null"], "minimum": 0, "maximum": 18446744073709551615}
+        "nextDeadline": {"description": "null: none, or not known yet: a run that stops at waiting sends (status `held`) gives none, and the next `run.turn` answers it.", "type": ["integer", "null"], "minimum": 0, "maximum": 18446744073709551615}
       },
       "required": ["status", "runs", "fuel", "time", "nextDeadline"],
       "additionalProperties": false
@@ -1093,11 +1093,12 @@
       "additionalProperties": false
     },
     "effect.uninvoke.params": {
-      "description": "An invocation cancelled: stop its stand-in.",
+      "description": "An invocation cancelled: stop its stand-in. `session` is its invoker's; the token is stale from now on.",
       "type": "object",
       "properties": {
         "batch": {"$ref": "#/$defs/uint64"},
         "index": {"$ref": "#/$defs/uint32"},
+        "session": {"$ref": "#/$defs/session"},
         "segment": {"$ref": "#/$defs/segment"},
         "invocation": {"$ref": "#/$defs/invocation"}
       },

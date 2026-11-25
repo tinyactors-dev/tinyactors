@@ -1,0 +1,26 @@
+<scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0" name="order"
+       datamodel="ecmascript" initial="open">
+  <datamodel><data id="total" expr="0"/><data id="charge" expr="null"/></datamodel>
+  <state id="open">
+    <transition event="checkout" target="paying"/>
+  </state>
+  <state id="paying">
+    <onentry>
+      <send type="payments" target="charges" event="charge" id="pay">
+        <param name="amount" expr="total"/><param name="card" expr="_event.data.card"/>
+      </send>
+      <send event="payment.timeout" delay="30s" id="deadline"/>
+    </onentry>
+    <onexit><cancel sendid="deadline"/></onexit>
+    <transition event="charge.ok" target="paid">
+      <assign location="charge" expr="_event.data.charge"/>
+    </transition>
+    <transition event="charge.declined error.communication payment.timeout" target="open">
+      <log label="order" expr="'payment failed: ' + _event.name"/>
+    </transition>
+  </state>
+  <final id="paid">
+    <onentry><log label="order" expr="'paid ' + charge"/></onentry>
+    <donedata><param name="charge" expr="charge"/></donedata>
+  </final>
+</scxml>

@@ -126,6 +126,10 @@ group, the words build on each other.
   output, its clock simulated, every effect written to the client as a
   notification. Its own methods (`run.spawn`, `run.turn`, ...) are the
   host's calls; every other method is forwarded to the control plane.
+- **Held batch.** A batch of effects the workbench leaves open for its
+  client (`run.turn` with `hold`) because a send in it has a sender that
+  waits: what the client answers or fails before its `run.turn` or
+  `run.ack` is in the sender's queue when it goes on.
 
 ## Taking actors out of memory, and moving them
 

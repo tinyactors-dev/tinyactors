@@ -52,14 +52,19 @@ void tool_serve_status(tool_call *call, ta_status status) {
     call->error.status = ta_string(name ? name : "");
 }
 
-/* The same, with the param it is about. */
-static void refused_at(tool_call *call, ta_status status, const char *path) {
-    tool_serve_status(call, status);
-    call->error.path = ta_string(path);
+/* The same, with the param it is about (a path the request arena could
+ * not hold, NULL: -32004). */
+static void refused_at(tool_call *call, ta_status status, ta_string_view path) {
+    tool_serve_status(call, path.pointer ? status : TA_ERROR_NO_MEMORY);
+    if (path.pointer) call->error.path = path;
 }
 
-static void invalid_param(tool_call *call, const char *reason, const char *path, const char *message) {
-    tool_serve_refuse(call, (tool_serve_refusal){TA_RPC_INVALID_PARAMS, 0, reason, ta_string(path), ta_string(message)});
+static void invalid_param(tool_call *call, const char *reason, ta_string_view path, const char *message) {
+    if (!path.pointer) {
+        tool_serve_status(call, TA_ERROR_NO_MEMORY);
+        return;
+    }
+    tool_serve_refuse(call, (tool_serve_refusal){TA_RPC_INVALID_PARAMS, 0, reason, path, ta_string(message)});
 }
 
 /* ---- params ---------------------------------------------------------------------------- */
@@ -68,10 +73,38 @@ static const ta_cbor_document *document_of(const tool_call *call) {
     return &call->message->document;
 }
 
+/* Where params are read: an object of the message (TA_NIL: none), and the
+ * path that names it in a refusal ("params", "params.events[2]"). */
+typedef struct params_at {
+    uint32_t object;
+    uint32_t pad;
+    ta_string_view path;
+} params_at;
+
+static params_at params_of(const tool_call *call) {
+    return (params_at){call->message->params, 0, ta_string("params")};
+}
+
+/* A member's token; TA_NIL when absent. */
+static uint32_t member_of(const tool_call *call, const params_at *at, const char *name) {
+    if (at->object == TA_NIL) return TA_NIL;
+    return ta_cbor_member(document_of(call), at->object, ta_string(name));
+}
+
+/* A member's path, "<at>.<name>", in the request arena (NULL: no room). */
+static ta_string_view path_of(tool_call *call, const params_at *at, const char *name) {
+    tool_text text;
+    tool_text_over(&text, &call->server->request);
+    tool_text_append(&text, at->path);
+    tool_text_append(&text, ta_string("."));
+    tool_text_append(&text, ta_string(name));
+    return tool_text_view(&text);
+}
+
 /* A param's token; TA_NIL when absent. */
 static uint32_t param(const tool_call *call, const char *name) {
-    if (call->message->params == TA_NIL) return TA_NIL;
-    return ta_cbor_member(document_of(call), call->message->params, ta_string(name));
+    params_at at = params_of(call);
+    return member_of(call, &at, name);
 }
 
 static const ta_cbor_token *token(const tool_call *call, uint32_t at) {
@@ -88,14 +121,17 @@ static uint64_t number_of(const tool_call *call, const char *name, uint64_t othe
     return at == TA_NIL ? otherwise : token(call, at)->value;
 }
 
-static int flag_of(const tool_call *call, const char *name) {
-    uint32_t at = param(call, name);
+static int is_true(const tool_call *call, uint32_t at) {
     return at != TA_NIL && token(call, at)->kind == TA_CBOR_SIMPLE && token(call, at)->value == TA_CBOR_TRUE;
+}
+
+static int flag_of(const tool_call *call, const char *name) {
+    return is_true(call, param(call, name));
 }
 
 static int refuse_present(tool_call *call, const char *name, const char *path, const char *message) {
     if (param(call, name) == TA_NIL) return 0;
-    invalid_param(call, "unknown", path, message);
+    invalid_param(call, "unknown", ta_string(path), message);
     return 1;
 }
 
@@ -113,20 +149,24 @@ static void result_text(tool_call *call, const char *name, ta_string_view text) 
 
 /* ---- values in ------------------------------------------------------------------------- */
 
-/* A value param ("data" or "cbor", "params" or "paramsCBOR") as a payload of
- * the datamodel of the chart that reads it. */
+/* A value param ("data" or "cbor", "params" or "paramsCBOR") of an object,
+ * as a payload of the datamodel of the chart that reads it. */
 typedef struct value_param {
+    const params_at *at;
     const char *json_name, *cbor_name;
-    const char *json_path, *cbor_path;
     uint32_t segment, chart;
 } value_param;
 
 static ta_status value_read(tool_call *call, const value_param *value, ta_payload *out) {
     tool_server *server = call->server;
     *out = 0;
-    uint32_t json = param(call, value->json_name), cbor = param(call, value->cbor_name);
+    uint32_t json = member_of(call, value->at, value->json_name), cbor = member_of(call, value->at, value->cbor_name);
     if (json == TA_NIL && cbor == TA_NIL) return TA_OK;
-    const char *path = json != TA_NIL ? value->json_path : value->cbor_path;
+    ta_string_view path = path_of(call, value->at, json != TA_NIL ? value->json_name : value->cbor_name);
+    if (!path.pointer) {
+        tool_serve_status(call, TA_ERROR_NO_MEMORY);
+        return TA_ERROR_NO_MEMORY;
+    }
     ta_host_segment_info info;
     ta_memset(&info, 0, sizeof info);
     info.size = sizeof info;
@@ -157,7 +197,7 @@ static ta_status value_read(tool_call *call, const value_param *value, ta_payloa
             return TA_ERROR_NO_MEMORY;
         }
         if (ta_json_base64url_read(text, &buffer) != TA_OK) {
-            tool_serve_refuse(call, (tool_serve_refusal){TA_RPC_MALFORMED, 0, "malformed", ta_string(path),
+            tool_serve_refuse(call, (tool_serve_refusal){TA_RPC_MALFORMED, 0, "malformed", path,
                                                          ta_string("not base64url text")});
             return TA_ERROR_INVALID;
         }
@@ -168,7 +208,7 @@ static ta_status value_read(tool_call *call, const value_param *value, ta_payloa
     if (status == TA_ERROR_NO_MEMORY) {
         refused_at(call, status, path);
     } else if (status != TA_OK) {
-        tool_serve_refuse(call, (tool_serve_refusal){TA_RPC_MALFORMED, 0, "malformed", ta_string(path),
+        tool_serve_refuse(call, (tool_serve_refusal){TA_RPC_MALFORMED, 0, "malformed", path,
                                                      ta_string("the datamodel cannot read this value")});
     }
     if (status != TA_OK) *out = 0;
@@ -255,7 +295,7 @@ static void add_image(tool_call *call) {
     tool_server *server = call->server;
     uint32_t files = param(call, "files"), sources = param(call, "sources"), bytes = param(call, "image");
     uint32_t flags = flag_of(call, "warningsAsErrors") ? TA_COMPILE_WERROR : 0u;
-    const char *path = files != TA_NIL ? "params.files" : sources != TA_NIL ? "params.sources" : "params.image";
+    ta_string_view path = ta_string(files != TA_NIL ? "params.files" : sources != TA_NIL ? "params.sources" : "params.image");
     tool_image image;
     ta_memset(&image, 0, sizeof image);
     ta_status status;
@@ -287,7 +327,7 @@ static void add_image(tool_call *call) {
         return;
     }
     if (!image.opened) {
-        tool_serve_refuse(call, (tool_serve_refusal){TA_RPC_INVALID, 0, "invalid", ta_string(path),
+        tool_serve_refuse(call, (tool_serve_refusal){TA_RPC_INVALID, 0, "invalid", path,
                                                      diagnostics_text(server, &image)});
         call->error.status = ta_string(ta_status_name(image.status) ? ta_status_name(image.status) : "");
         return;
@@ -341,12 +381,12 @@ static void spawn(tool_call *call) {
             return;
         ta_status status = ta_host_chart(server->host, text_of(call, chart), &ref);
         if (status != TA_OK) {
-            refused_at(call, status, "params.chart");
+            refused_at(call, status, ta_string("params.chart"));
             return;
         }
     } else {
         if (segment == TA_NIL) {
-            invalid_param(call, "missing", "params.segment", "a chart's index needs its segment");
+            invalid_param(call, "missing", ta_string("params.segment"), "a chart's index needs its segment");
             return;
         }
         ref.segment = (uint32_t)token(call, segment)->value;
@@ -358,13 +398,14 @@ static void spawn(tool_call *call) {
     request.chart = ref.chart;
     request.name = text_of(call, param(call, "name"));
     request.traceparent = text_of(call, param(call, "traceparent"));
-    value_param params = {"params", "paramsCBOR", "params.params", "params.paramsCBOR", ref.segment, ref.chart};
+    params_at at = params_of(call);
+    value_param params = {&at, "params", "paramsCBOR", ref.segment, ref.chart};
     if (value_read(call, &params, &request.params) != TA_OK) return;
     uint64_t session = 0;
     ta_status status = ta_host_spawn(server->host, &request, &session);
     if (status != TA_OK) {
         value_release(server, request.params);
-        refused_at(call, status, "params.chart");
+        refused_at(call, status, ta_string("params.chart"));
         return;
     }
     char address[TA_ADDRESS_SESSION_MAX];
@@ -374,61 +415,199 @@ static void spawn(tool_call *call) {
         result_text(call, "address", (ta_string_view){address, (uint32_t)buffer.length});
 }
 
-/* ---- run.send ----------------------------------------------------------------------------- */
+/* ---- run.send, run.sendMany, run.fail, run.terminate --------------------------------------- */
 
-/* The session a target names: a session, or a local address. */
-static ta_status target_of(tool_call *call, uint64_t *session) {
-    uint32_t at = param(call, "target");
-    if (token(call, at)->kind == TA_CBOR_UINT) {
-        *session = token(call, at)->value;
-        return TA_OK;
+/* The session a target names (a session, or a local address), live in the
+ * host, and where it lives. */
+typedef struct live_session {
+    uint64_t session;
+    ta_host_location location;
+} live_session;
+
+/* TA_OK, or the call's error set at the target's path. */
+static ta_status target_of(tool_call *call, const params_at *at, live_session *out) {
+    tool_server *server = call->server;
+    uint32_t target = member_of(call, at, "target");
+    ta_status status = TA_OK;
+    if (token(call, target)->kind == TA_CBOR_UINT) out->session = token(call, target)->value;
+    else status = ta_host_resolve(server->host, text_of(call, target), &out->session);
+    if (status == TA_OK) status = ta_host_locate(server->host, out->session, &out->location);
+    if (status != TA_OK) refused_at(call, status, path_of(call, at, "target"));
+    return status;
+}
+
+/* One event of run.send or run.sendMany as the host takes it, its payload
+ * made by the datamodel of the target's chart: TA_OK, or the call's error
+ * set and no payload made. As a service the client runs, `invocation` names
+ * the invocation, and `done` ends it with core's done.invoke.<id>. */
+static ta_status event_read(tool_call *call, const params_at *at, ta_event_in *event) {
+    tool_server *server = call->server;
+    ta_memset(event, 0, sizeof *event);
+    event->size = sizeof *event;
+    uint32_t name = member_of(call, at, "event"), invocation = member_of(call, at, "invocation");
+    int done = is_true(call, member_of(call, at, "done"));
+    if (done && invocation == TA_NIL) {
+        invalid_param(call, "missing", path_of(call, at, "invocation"), "done ends an invocation: name it");
+        return TA_ERROR_INVALID;
     }
-    return ta_host_resolve(call->server->host, text_of(call, at), session);
+    if (done && name != TA_NIL) {
+        invalid_param(call, "unknown", path_of(call, at, "event"), "done's event is core's, done.invoke.<id>");
+        return TA_ERROR_INVALID;
+    }
+    if (!done && name == TA_NIL) {
+        invalid_param(call, "missing", path_of(call, at, "event"), "an event has a name");
+        return TA_ERROR_INVALID;
+    }
+    live_session target;
+    ta_status status = target_of(call, at, &target);
+    if (status != TA_OK) return status;
+    ta_actor_info info;
+    ta_memset(&info, 0, sizeof info);
+    info.size = sizeof info;
+    status = ta_actor_info_get(ta_host_system(server->host, target.location.segment), target.location.actor, &info);
+    if (status != TA_OK) {
+        refused_at(call, status, path_of(call, at, "target"));
+        return status;
+    }
+    event->session = target.session;
+    if (invocation != TA_NIL) {
+        event->flags = done ? TA_EVENT_IN_INVOKE_DONE : TA_EVENT_IN_FROM_INVOKE;
+        event->token = (uint32_t)token(call, invocation)->value;
+    }
+    event->name = text_of(call, name);
+    event->sendid = text_of(call, member_of(call, at, "sendid"));
+    event->origin = text_of(call, member_of(call, at, "origin"));
+    event->origintype = text_of(call, member_of(call, at, "origintype"));
+    event->raw = text_of(call, member_of(call, at, "raw"));
+    event->traceparent = text_of(call, member_of(call, at, "traceparent"));
+    value_param data = {at, "data", "cbor", target.location.segment, info.chart};
+    return value_read(call, &data, &event->data);
+}
+
+/* Where the host's refusal of an event points: the invocation it names, or
+ * the event. */
+static ta_string_view refusal_path(tool_call *call, const params_at *at) {
+    return member_of(call, at, "invocation") != TA_NIL ? path_of(call, at, "invocation") : at->path;
 }
 
 static void send(tool_call *call) {
     tool_server *server = call->server;
-    if (refuse_present(call, "invocation", "params.invocation", "services the client runs are not served yet") ||
-        refuse_present(call, "done", "params.done", "services the client runs are not served yet"))
-        return;
-    if (param(call, "event") == TA_NIL) {
-        invalid_param(call, "missing", "params.event", "an event has a name");
-        return;
-    }
-    uint64_t session = 0;
-    ta_status status = target_of(call, &session);
-    ta_host_location location;
-    if (status == TA_OK) status = ta_host_locate(server->host, session, &location);
+    params_at at = params_of(call);
+    ta_event_in event;
+    if (event_read(call, &at, &event) != TA_OK) return;
+    ta_status status = ta_host_send(server->host, &event);
     if (status != TA_OK) {
-        refused_at(call, status, "params.target");
+        value_release(server, event.data);
+        refused_at(call, status, refusal_path(call, &at));
+    }
+}
+
+/* "params.events[<index>]", in the request arena. */
+static ta_string_view element_path(tool_call *call, uint32_t index) {
+    tool_text text;
+    tool_text_over(&text, &call->server->request);
+    tool_text_append(&text, ta_string("params.events["));
+    tool_text_number(&text, index);
+    tool_text_append(&text, ta_string("]"));
+    return tool_text_view(&text);
+}
+
+/* Every event is read first: one the server cannot read refuses the request
+ * and nothing is sent. Then the host takes them in order and stops at the
+ * first it refuses; the result is the accepted prefix's length. */
+static void send_many(tool_call *call) {
+    tool_server *server = call->server;
+    const ta_cbor_document *document = document_of(call);
+    uint32_t list = param(call, "events"), count = document->tokens[list].count;
+    ta_event_in *events =
+        count ? (ta_event_in *)ta_growable_arena_alloc(&server->request, sizeof *events * count, SERVE_ALIGN) : 0;
+    if (count && !events) {
+        refused_at(call, TA_ERROR_NO_MEMORY, ta_string("params.events"));
         return;
     }
-    ta_actor_info info;
-    ta_memset(&info, 0, sizeof info);
-    info.size = sizeof info;
-    status = ta_actor_info_get(ta_host_system(server->host, location.segment), location.actor, &info);
-    if (status != TA_OK) {
-        refused_at(call, status, "params.target");
-        return;
+    uint32_t read = 0, at = list + 1;
+    for (; read < count; read++) {
+        params_at element = {at, 0, element_path(call, read)};
+        if (!element.path.pointer) {
+            tool_serve_status(call, TA_ERROR_NO_MEMORY);
+            break;
+        }
+        if (event_read(call, &element, &events[read]) != TA_OK) break;
+        at = ta_cbor_next(document, at);
     }
+    uint32_t accepted = read == count ? ta_host_send_many(server->host, events, count) : 0;
+    for (uint32_t i = accepted; i < read; i++) /* refused, or never sent: still the server's */
+        value_release(server, events[i].data);
+    if (read == count) result_number(call, "accepted", accepted);
+}
+
+/* error.communication for a send's sender (its sendid), or for the invoker
+ * of an invocation the client runs: it failed. */
+static void fail(tool_call *call) {
+    tool_server *server = call->server;
+    params_at at = params_of(call);
+    live_session target;
+    if (target_of(call, &at, &target) != TA_OK) return;
+    uint32_t invocation = param(call, "invocation");
     ta_event_in event;
     ta_memset(&event, 0, sizeof event);
     event.size = sizeof event;
-    event.session = session;
-    event.name = text_of(call, param(call, "event"));
+    event.session = target.session;
+    event.flags = TA_EVENT_IN_ERROR_COMMUNICATION;
     event.sendid = text_of(call, param(call, "sendid"));
-    event.origin = text_of(call, param(call, "origin"));
-    event.origintype = text_of(call, param(call, "origintype"));
-    event.raw = text_of(call, param(call, "raw"));
-    event.traceparent = text_of(call, param(call, "traceparent"));
-    value_param data = {"data", "cbor", "params.data", "params.cbor", location.segment, info.chart};
-    if (value_read(call, &data, &event.data) != TA_OK) return;
-    status = ta_host_send(server->host, &event);
+    if (invocation != TA_NIL) {
+        event.flags |= TA_EVENT_IN_FROM_INVOKE;
+        event.token = (uint32_t)token(call, invocation)->value;
+    }
+    ta_status status = ta_host_send(server->host, &event);
+    if (status != TA_OK) refused_at(call, status, refusal_path(call, &at));
+}
+
+static void terminate(tool_call *call) {
+    params_at at = params_of(call);
+    live_session target;
+    if (target_of(call, &at, &target) != TA_OK) return;
+    ta_status status = ta_host_terminate(call->server->host, target.session);
+    if (status != TA_OK) refused_at(call, status, ta_string("params.target"));
+}
+
+/* ---- the lookups, run.boot ----------------------------------------------------------------- */
+
+static void chart(tool_call *call) {
+    ta_host_chart_ref ref;
+    ta_status status = ta_host_chart(call->server->host, text_of(call, param(call, "name")), &ref);
     if (status != TA_OK) {
-        value_release(server, event.data);
-        refused_at(call, status, "params");
+        refused_at(call, status, ta_string("params.name"));
         return;
     }
+    result_number(call, "segment", ref.segment);
+    result_number(call, "chart", ref.chart);
+}
+
+/* A session, or null for none. */
+static void result_session(tool_call *call, uint64_t session) {
+    ta_cbor_write_text(&call->result, ta_string("session"));
+    if (session) ta_cbor_write_uint(&call->result, session);
+    else ta_cbor_write_simple(&call->result, TA_CBOR_NULL);
+}
+
+static void resolve(tool_call *call) {
+    uint64_t session = 0;
+    ta_status status = ta_host_resolve(call->server->host, text_of(call, param(call, "address")), &session);
+    if (status != TA_OK && status != TA_ERROR_STALE) {
+        refused_at(call, status, ta_string("params.address"));
+        return;
+    }
+    result_session(call, status == TA_OK ? session : 0);
+}
+
+static void actor_by_name(tool_call *call) {
+    result_session(call, ta_host_actor_by_name(call->server->host, text_of(call, param(call, "name"))));
+}
+
+static void boot(tool_call *call) {
+    ta_status status = ta_host_boot(call->server->host, (uint32_t)number_of(call, "segment", 0));
+    if (status != TA_OK) refused_at(call, status, ta_string("params.segment"));
 }
 
 /* ---- run.advanceTime -------------------------------------------------------------------- */
@@ -471,7 +650,7 @@ static void advance_time(tool_call *call) {
     uint32_t by = param(call, "by"), to = param(call, "to"), wall = param(call, "wallNs");
     time_value moved = {0, 0};
     if (by != TA_NIL || to != TA_NIL) {
-        const char *path = by != TA_NIL ? "params.by" : "params.to";
+        ta_string_view path = ta_string(by != TA_NIL ? "params.by" : "params.to");
         if (!time_of(call, by != TA_NIL ? by : to, &moved)) {
             invalid_param(call, "range", path, "not a duration");
             return;
@@ -493,7 +672,7 @@ static void advance_time(tool_call *call) {
     }
     if (wall != TA_NIL) {
         if (token(call, wall)->value < server->clock.now.wall_ns) {
-            invalid_param(call, "range", "params.wallNs", "the wall clock does not go back");
+            invalid_param(call, "range", ta_string("params.wallNs"), "the wall clock does not go back");
             return;
         }
         now.wall_ns = token(call, wall)->value;
@@ -516,24 +695,25 @@ static ta_string_view pool_name(uint32_t pool) {
 
 static void turn(tool_call *call) {
     tool_server *server = call->server;
-    if (flag_of(call, "hold")) {
-        invalid_param(call, "unknown", "params.hold", "hold is not served yet");
-        return;
-    }
+    uint32_t flags = flag_of(call, "hold") ? (uint32_t)TOOL_DRAIN_HOLD : 0u;
     uint32_t budget = (uint32_t)number_of(call, "budget", TOOL_SERVE_BUDGET);
     uint64_t allowed = number_of(call, "runs", TOOL_SERVE_RUNS);
-    tool_drain(server);
+    tool_held_ack(server); /* the client has answered what it held */
+    int held = tool_drain(server, flags);
     ta_run run = {TA_RUN_IDLE, 0, 0, 0, UINT64_MAX};
     uint32_t runs = 0;
     uint64_t fuel = 0;
-    ta_string_view status = ta_string("yielded"), detail = ta_string("");
-    while (runs < allowed && !server->failed) {
+    ta_string_view status = ta_string(held ? "held" : "yielded"), detail = ta_string("");
+    while (!held && runs < allowed && !server->failed) {
         ta_host_advance_time(server->host, server->clock.now); /* before every run */
         run = ta_host_run(server->host, budget);
         runs++;
         fuel += run.used;
         server->woke = 0;
-        tool_drain(server);
+        if (tool_drain(server, flags)) {
+            status = ta_string("held"); /* its senders wait for the client's run.turn or run.ack */
+            break;
+        }
         if (run.status == TA_RUN_EFFECTS || run.status == TA_RUN_EFFECTS_FULL || run.status == TA_RUN_YIELDED ||
             (run.status == TA_RUN_IDLE && server->woke))
             continue;
@@ -557,6 +737,21 @@ static void turn(tool_call *call) {
     ta_cbor_write_text(&call->result, ta_string("nextDeadline"));
     if (run.next_deadline == UINT64_MAX) ta_cbor_write_simple(&call->result, TA_CBOR_NULL);
     else ta_cbor_write_uint(&call->result, run.next_deadline);
+}
+
+/* The held batch acked: its senders go on, with what the client gave them
+ * meanwhile. What the ack lets come is drained, without holding, so the
+ * response leaves nothing open (a post or a snapshot may follow); nothing
+ * runs. */
+static void ack(tool_call *call) {
+    tool_server *server = call->server;
+    if (!server->held) {
+        tool_serve_refuse(call, (tool_serve_refusal){TA_RPC_STATE, 0, "state", ta_string(""),
+                                                     ta_string("no batch is held: run.turn with hold holds one")});
+        return;
+    }
+    tool_held_ack(server);
+    tool_drain(server, 0);
 }
 
 /* ---- run.schema ----------------------------------------------------------------------------- */
@@ -606,7 +801,7 @@ static void forward(tool_call *call) {
         tool_serve_status(call, status);
         return;
     }
-    tool_drain(server);
+    tool_drain(server, 0);
     if (!answered) return;
     tool_post *post = (tool_post *)ta_table_get(&server->posts, handle);
     if (post) { /* no reply came: the post is no longer this call's */
@@ -618,17 +813,36 @@ static void forward(tool_call *call) {
 
 /* ---- the methods ----------------------------------------------------------------------------- */
 
-typedef void (*tool_method_run)(tool_call *call);
-typedef struct tool_method {
-    ta_string_view name;
-    tool_method_run run;
-} tool_method;
-
+/* The methods a held batch allows (docs/cli.md, "Held batches"): inputs,
+ * lookups and the clock, which core takes while a batch is open, and the
+ * two that end it. Refused: what would need the batch's ack (a forwarded
+ * post, whose reply comes only after it) and what keeps the host
+ * quiescent (an image added). */
 static const tool_method methods[] = {
-    {TA_CLI_TEXT("run.addImage"), add_image},     {TA_CLI_TEXT("run.spawn"), spawn},
-    {TA_CLI_TEXT("run.send"), send},              {TA_CLI_TEXT("run.advanceTime"), advance_time},
-    {TA_CLI_TEXT("run.turn"), turn},              {TA_CLI_TEXT("run.schema"), schema},
+    {TA_CLI_TEXT("run.addImage"), add_image, 0, 0},
+    {TA_CLI_TEXT("run.boot"), boot, TOOL_METHOD_WHILE_HELD, 0},
+    {TA_CLI_TEXT("run.chart"), chart, TOOL_METHOD_WHILE_HELD, 0},
+    {TA_CLI_TEXT("run.spawn"), spawn, TOOL_METHOD_WHILE_HELD, 0},
+    {TA_CLI_TEXT("run.send"), send, TOOL_METHOD_WHILE_HELD, 0},
+    {TA_CLI_TEXT("run.sendMany"), send_many, TOOL_METHOD_WHILE_HELD, 0},
+    {TA_CLI_TEXT("run.fail"), fail, TOOL_METHOD_WHILE_HELD, 0},
+    {TA_CLI_TEXT("run.terminate"), terminate, TOOL_METHOD_WHILE_HELD, 0},
+    {TA_CLI_TEXT("run.resolve"), resolve, TOOL_METHOD_WHILE_HELD, 0},
+    {TA_CLI_TEXT("run.actorByName"), actor_by_name, TOOL_METHOD_WHILE_HELD, 0},
+    {TA_CLI_TEXT("run.advanceTime"), advance_time, TOOL_METHOD_WHILE_HELD, 0},
+    {TA_CLI_TEXT("run.turn"), turn, TOOL_METHOD_WHILE_HELD, 0},
+    {TA_CLI_TEXT("run.ack"), ack, TOOL_METHOD_WHILE_HELD, 0},
+    {TA_CLI_TEXT("run.schema"), schema, TOOL_METHOD_WHILE_HELD, 0},
 };
+
+tool_method_list tool_serve_methods(void) {
+    return (tool_method_list){methods, (uint32_t)(sizeof methods / sizeof methods[0]), 0};
+}
+
+static void refuse_held(tool_call *call) {
+    tool_serve_refuse(call, (tool_serve_refusal){TA_RPC_STATE, 0, "state", ta_string(""),
+                                                 ta_string("a batch is held: answer its sends, then run.turn or run.ack")});
+}
 
 static int is_server_area(ta_string_view name) {
     static const ta_string_view area = TA_CLI_TEXT("run.");
@@ -657,7 +871,8 @@ void tool_serve_call(tool_call *call) {
     }
     for (size_t i = 0; i < sizeof methods / sizeof methods[0]; i++)
         if (tool_equal(methods[i].name, name)) {
-            methods[i].run(call);
+            if (server->held && !(methods[i].flags & TOOL_METHOD_WHILE_HELD)) refuse_held(call);
+            else methods[i].run(call);
             return;
         }
     if (is_server_area(name)) {
@@ -665,5 +880,6 @@ void tool_serve_call(tool_call *call) {
                                                      ta_string("no such method of the server's")});
         return;
     }
-    forward(call);
+    if (server->held) refuse_held(call);
+    else forward(call);
 }

@@ -1,0 +1,59 @@
+> [{"jsonrpc":"2.0","id":1,"method":"run.spawn","params":{"chart":"order","name":"order-1","params":{"total":4200}}},{"jsonrpc":"2.0","id":2,"method":"run.spawn","params":{"chart":"order","name":"order-2","params":{"total":990}}},{"jsonrpc":"2.0","id":3,"method":"run.spawn","params":{"chart":"order","name":"order-3","params":{"total":150}}}]
+< [{"jsonrpc":"2.0","id":1,"result":{"session":1,"address":"tinyactors://tinyactors-run/#_scxml_1"}},{"jsonrpc":"2.0","id":2,"result":{"session":2,"address":"tinyactors://tinyactors-run/#_scxml_2"}},{"jsonrpc":"2.0","id":3,"result":{"session":3,"address":"tinyactors://tinyactors-run/#_scxml_3"}}]
+> {"jsonrpc":"2.0","id":4,"method":"run.sendMany","params":{"events":[{"target":1,"event":"checkout","data":{"card":"tok_visa"}},{"target":2,"event":"checkout","data":{"card":"tok_expired"}},{"target":3,"event":"checkout","data":{"card":"tok_slow"}}]}}
+< {"jsonrpc":"2.0","id":4,"result":{"accepted":3}}
+> {"jsonrpc":"2.0","id":5,"method":"run.turn","params":{"hold":true}}
+< {"jsonrpc":"2.0","method":"effect.send","params":{"batch":1,"index":0,"session":1,"type":"payments","target":"charges","event":"charge","sendid":"pay","data":{"amount":4200,"card":"tok_visa"},"traceparent":"00-6c160deed2f54c988920ad648fc30a3f-f075787b740f4422-03","waiting":true}}
+< {"jsonrpc":"2.0","method":"effect.send","params":{"batch":1,"index":1,"session":2,"type":"payments","target":"charges","event":"charge","sendid":"pay","data":{"amount":990,"card":"tok_expired"},"traceparent":"00-db032c0ba7539731eb3a475a3e749a3d-dd8d121244a64d16-03","waiting":true}}
+< {"jsonrpc":"2.0","method":"effect.send","params":{"batch":1,"index":2,"session":3,"type":"payments","target":"charges","event":"charge","sendid":"pay","data":{"amount":150,"card":"tok_slow"},"traceparent":"00-1d42993fa43f2a5411361bf526a14bb5-2364e01f7525351a-03","waiting":true}}
+< {"jsonrpc":"2.0","id":5,"result":{"status":"held","runs":1,"fuel":33,"time":0,"nextDeadline":null}}
+> {"jsonrpc":"2.0","id":6,"method":"actor.state","params":{"session":1}}
+< {"jsonrpc":"2.0","id":6,"error":{"code":-32002,"message":"a batch is held: answer its sends, then run.turn or run.ack","data":{"reason":"state","path":""}}}
+> {"jsonrpc":"2.0","id":7,"method":"run.addImage","params":{"files":["order.scxml"]}}
+< {"jsonrpc":"2.0","id":7,"error":{"code":-32002,"message":"a batch is held: answer its sends, then run.turn or run.ack","data":{"reason":"state","path":""}}}
+> {"jsonrpc":"2.0","id":8,"method":"run.chart","params":{"name":"order"}}
+< {"jsonrpc":"2.0","id":8,"result":{"segment":0,"chart":0}}
+> {"jsonrpc":"2.0","id":9,"method":"run.actorByName","params":{"name":"order-2"}}
+< {"jsonrpc":"2.0","id":9,"result":{"session":2}}
+> {"jsonrpc":"2.0","id":10,"method":"run.resolve","params":{"address":"tinyactors://tinyactors-run/@order-3"}}
+< {"jsonrpc":"2.0","id":10,"result":{"session":3}}
+> {"jsonrpc":"2.0","id":11,"method":"run.send","params":{"target":1,"event":"charge.ok","sendid":"pay","origintype":"payments","data":{"charge":"ch_81"}}}
+< {"jsonrpc":"2.0","id":11,"result":{}}
+> {"jsonrpc":"2.0","id":12,"method":"run.fail","params":{"target":2,"sendid":"pay"}}
+< {"jsonrpc":"2.0","id":12,"result":{}}
+> {"jsonrpc":"2.0","id":13,"method":"run.turn"}
+< {"jsonrpc":"2.0","method":"effect.log","params":{"batch":2,"index":0,"session":1,"label":"order","text":"paid ch_81"}}
+< {"jsonrpc":"2.0","method":"effect.log","params":{"batch":2,"index":1,"session":2,"label":"order","text":"payment failed: error.communication"}}
+< {"jsonrpc":"2.0","method":"effect.done","params":{"batch":2,"index":2,"session":1,"name":"order-1","final":"paid","data":{"charge":"ch_81"}}}
+< {"jsonrpc":"2.0","id":13,"result":{"status":"idle","runs":1,"fuel":35,"time":0,"nextDeadline":30000}}
+> {"jsonrpc":"2.0","id":14,"method":"run.ack"}
+< {"jsonrpc":"2.0","id":14,"error":{"code":-32002,"message":"no batch is held: run.turn with hold holds one","data":{"reason":"state","path":""}}}
+> {"jsonrpc":"2.0","id":15,"method":"run.advanceTime","params":{"by":"30s"}}
+< {"jsonrpc":"2.0","id":15,"result":{"time":30000,"wallNs":30000000000}}
+> {"jsonrpc":"2.0","id":16,"method":"run.turn"}
+< {"jsonrpc":"2.0","method":"effect.log","params":{"batch":3,"index":0,"session":3,"label":"order","text":"payment failed: payment.timeout"}}
+< {"jsonrpc":"2.0","id":16,"result":{"status":"idle","runs":1,"fuel":12,"time":30000,"nextDeadline":null}}
+> {"jsonrpc":"2.0","id":17,"method":"actor.state","params":{"session":2}}
+< {"jsonrpc":"2.0","id":17,"result":{"value":"open","history":{}}}
+> {"jsonrpc":"2.0","id":18,"method":"run.send","params":{"target":"tinyactors://tinyactors-run/@order-2","event":"checkout","data":{"card":"tok_visa"}}}
+< {"jsonrpc":"2.0","id":18,"result":{}}
+> {"jsonrpc":"2.0","id":19,"method":"run.turn","params":{"hold":true}}
+< {"jsonrpc":"2.0","method":"effect.send","params":{"batch":5,"index":0,"session":2,"type":"payments","target":"charges","event":"charge","sendid":"pay","data":{"amount":990,"card":"tok_visa"},"traceparent":"00-7efdaa95605dfc9c4bde97c0a78eaab8-63c3721caf3ede87-03","waiting":true}}
+< {"jsonrpc":"2.0","id":19,"result":{"status":"held","runs":1,"fuel":7,"time":30000,"nextDeadline":null}}
+> {"jsonrpc":"2.0","id":20,"method":"run.ack"}
+< {"jsonrpc":"2.0","id":20,"result":{}}
+> {"jsonrpc":"2.0","id":21,"method":"run.turn","params":{"hold":true}}
+< {"jsonrpc":"2.0","id":21,"result":{"status":"idle","runs":1,"fuel":3,"time":30000,"nextDeadline":60000}}
+> {"jsonrpc":"2.0","id":22,"method":"run.terminate","params":{"target":2}}
+< {"jsonrpc":"2.0","id":22,"result":{}}
+> {"jsonrpc":"2.0","id":23,"method":"run.turn"}
+< {"jsonrpc":"2.0","id":23,"result":{"status":"idle","runs":1,"fuel":4,"time":30000,"nextDeadline":null}}
+> {"jsonrpc":"2.0","id":24,"method":"run.actorByName","params":{"name":"order-2"}}
+< {"jsonrpc":"2.0","id":24,"result":{"session":null}}
+> {"jsonrpc":"2.0","id":25,"method":"run.spawn","params":{"chart":"order","name":"order-4","params":{"total":1250}}}
+< {"jsonrpc":"2.0","id":25,"result":{"session":4,"address":"tinyactors://tinyactors-run/#_scxml_4"}}
+> {"jsonrpc":"2.0","id":26,"method":"run.send","params":{"target":4,"event":"checkout","data":{"card":"tok_visa"}}}
+< {"jsonrpc":"2.0","id":26,"result":{}}
+> {"jsonrpc":"2.0","id":27,"method":"run.turn","params":{"hold":true}}
+< {"jsonrpc":"2.0","method":"effect.send","params":{"batch":6,"index":0,"session":4,"type":"payments","target":"charges","event":"charge","sendid":"pay","data":{"amount":1250,"card":"tok_visa"},"traceparent":"00-52558c68a9316824a0bd00c592471176-987148694f05a5a9-03","waiting":true}}
+< {"jsonrpc":"2.0","id":27,"result":{"status":"held","runs":1,"fuel":11,"time":30000,"nextDeadline":null}}
