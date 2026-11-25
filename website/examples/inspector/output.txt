@@ -1,5 +1,5 @@
-sample.snapshot: format 4, 319872 bytes
-system tinyactors-run, datamodel tinyactors-run, library 0.3.0, layout cec775464fa664e2, time 4000000000
+sample.snapshot: format 4, 321440 bytes
+system tinyactors-run, datamodel tinyactors-run, library 0.3.0, layout fb87ca7efbf61d87, time 4000000000
 segment 0: 287442 bytes, 51 actors
   pool actors: 51 used of 64, high water 53, 48 bytes a slot
   pool events: 68 used of 256, high water 79, 56 bytes a slot
@@ -7,54 +7,90 @@ segment 0: 287442 bytes, 51 actors
   pool workspaces: 0 used of 4, high water 1, 328 bytes a slot
   pool requests: 0 used of 16, high water 0, 40 bytes a slot
   pool contexts: 68 used of 256, high water 79, 48 bytes a slot
-  actor 3 (slot 2): idle, 0 queued
-  actor 4 (slot 3): idle, 0 queued
-  actor 5 (slot 4): idle, 0 queued
-  actor 6 (slot 5): idle, 0 queued
-  actor 7 (slot 6): idle, 0 queued
-  actor 8 (slot 7): idle, 0 queued
-  actor 9 (slot 8): idle, 0 queued, 1 timers
-  actor 10 (slot 9): idle, 0 queued, 1 timers
-  actor 11 (slot 10): idle, 0 queued, 1 timers
-  actor 12 (slot 11): idle, 0 queued, 1 timers
-  actor 13 (slot 12): idle, 0 queued, 1 timers
-  actor 14 (slot 13): idle, 0 queued, 1 timers
-  actor 15 (slot 14): idle, 0 queued, 1 timers
-  actor 16 (slot 15): idle, 0 queued, 1 timers
-  actor 17 (slot 16): idle, 0 queued, 1 timers
-  actor 18 (slot 17): idle, 0 queued, 1 timers
-  actor 19 (slot 18): idle, 0 queued, 1 timers
-  actor 20 (slot 19): idle, 0 queued, 1 timers
-  actor 21 (slot 20): idle, 0 queued, 1 timers
-  actor 22 (slot 21): idle, 0 queued, 1 timers
-  actor 24 (slot 23): runnable, 1 queued
-  actor 25 (slot 24): runnable, 1 queued
-  actor 26 (slot 25): runnable, 1 queued
-  actor 27 (slot 26): runnable, 1 queued
-  actor 28 (slot 27): runnable, 1 queued
-  actor 29 (slot 28): runnable, 1 queued
-  actor 30 (slot 29): runnable, 1 queued
-  actor 31 (slot 30): runnable, 1 queued
-  actor 32 (slot 31): idle, 0 queued
-  actor 33 (slot 32): idle, 0 queued
-  actor 34 (slot 33): idle, 0 queued
-  actor 35 (slot 34): idle, 0 queued
-  actor 36 (slot 35): hibernated, 0 queued
-  actor 37 (slot 36): hibernated, 0 queued
-  actor 38 (slot 37): hibernated, 0 queued
-  actor 39 (slot 38): hibernated, 0 queued
-  actor 40 (slot 39): hibernated, 0 queued
-  actor 49 (slot 1): idle, 0 queued, 1 timers
-  actor 50 (slot 0): idle, 0 queued, 1 timers
-  actor 51 (slot 47): idle, 0 queued, 1 timers
-  actor 52 (slot 46): idle, 0 queued, 1 timers
-  actor 53 (slot 45): idle, 0 queued, 1 timers
-  actor 54 (slot 44): idle, 0 queued, 1 timers
-  actor 55 (slot 43): idle, 0 queued, 1 timers
-  actor 56 (slot 42): idle, 0 queued, 1 timers
-  actor 57 (slot 41): idle, 0 queued, 1 timers
-  actor 58 (slot 40): idle, 0 queued, 1 timers
-  actor 59 (slot 48): idle, 0 queued, 1 timers
-  actor 60 (slot 49): idle, 0 queued, 1 timers
-  actor 61 (slot 50): idle, 0 queued, 1 timers
-  actor 62 (slot 51): idle, 0 queued, 1 timers
+  actor 3 order-1003 (slot 2): idle, 0 queued
+  actor 4 order-1004 (slot 3): idle, 0 queued
+  actor 5 order-1005 (slot 4): idle, 0 queued
+  actor 6 order-1006 (slot 5): idle, 0 queued
+  actor 7 order-1007 (slot 6): idle, 0 queued
+  actor 8 order-1008 (slot 7): idle, 0 queued
+  actor 9 order-1009 (slot 8): idle, 0 queued, 1 timers
+    delayed payment.reminder
+  actor 10 order-1010 (slot 9): idle, 0 queued, 1 timers
+    delayed payment.reminder
+  actor 11 order-1011 (slot 10): idle, 0 queued, 1 timers
+    delayed payment.reminder
+  actor 12 order-1012 (slot 11): idle, 0 queued, 1 timers
+    delayed payment.reminder
+  actor 13 order-1013 (slot 12): idle, 0 queued, 1 timers
+    delayed payment.reminder
+  actor 14 order-1014 (slot 13): idle, 0 queued, 1 timers
+    delayed payment.reminder
+  actor 15 order-1015 (slot 14): idle, 0 queued, 1 timers
+    delayed payment.reminder
+  actor 16 order-1016 (slot 15): idle, 0 queued, 1 timers
+    delayed payment.reminder
+  actor 17 order-1017 (slot 16): idle, 0 queued, 1 timers
+    delayed payment.reminder
+  actor 18 order-1018 (slot 17): idle, 0 queued, 1 timers
+    delayed payment.reminder
+  actor 19 order-1019 (slot 18): idle, 0 queued, 1 timers
+    delayed payment.reminder
+  actor 20 order-1020 (slot 19): idle, 0 queued, 1 timers
+    delayed payment.reminder
+  actor 21 order-1021 (slot 20): idle, 0 queued, 1 timers
+    delayed payment.reminder
+  actor 22 order-1022 (slot 21): idle, 0 queued, 1 timers
+    delayed payment.reminder
+  actor 24 order-1024 (slot 23): runnable, 1 queued
+    queued item.added
+  actor 25 order-1025 (slot 24): runnable, 1 queued
+    queued item.added
+  actor 26 order-1026 (slot 25): runnable, 1 queued
+    queued item.added
+  actor 27 order-1027 (slot 26): runnable, 1 queued
+    queued item.added
+  actor 28 order-1028 (slot 27): runnable, 1 queued
+    queued item.added
+  actor 29 order-1029 (slot 28): runnable, 1 queued
+    queued item.added
+  actor 30 order-1030 (slot 29): runnable, 1 queued
+    queued checkout
+  actor 31 order-1031 (slot 30): runnable, 1 queued
+    queued checkout
+  actor 32 order-1032 (slot 31): idle, 0 queued
+  actor 33 order-1033 (slot 32): idle, 0 queued
+  actor 34 order-1034 (slot 33): idle, 0 queued
+  actor 35 order-1035 (slot 34): idle, 0 queued
+  actor 36 order-1036 (slot 35): hibernated, 0 queued
+  actor 37 order-1037 (slot 36): hibernated, 0 queued
+  actor 38 order-1038 (slot 37): hibernated, 0 queued
+  actor 39 order-1039 (slot 38): hibernated, 0 queued
+  actor 40 order-1040 (slot 39): hibernated, 0 queued
+  actor 49 payment (slot 1): idle, 0 queued, 1 timers
+    delayed authorized
+  actor 50 payment (slot 0): idle, 0 queued, 1 timers
+    delayed authorized
+  actor 51 payment (slot 47): idle, 0 queued, 1 timers
+    delayed authorized
+  actor 52 payment (slot 46): idle, 0 queued, 1 timers
+    delayed authorized
+  actor 53 payment (slot 45): idle, 0 queued, 1 timers
+    delayed authorized
+  actor 54 payment (slot 44): idle, 0 queued, 1 timers
+    delayed authorized
+  actor 55 payment (slot 43): idle, 0 queued, 1 timers
+    delayed authorized
+  actor 56 payment (slot 42): idle, 0 queued, 1 timers
+    delayed authorized
+  actor 57 payment (slot 41): idle, 0 queued, 1 timers
+    delayed authorized
+  actor 58 payment (slot 40): idle, 0 queued, 1 timers
+    delayed authorized
+  actor 59 payment (slot 48): idle, 0 queued, 1 timers
+    delayed authorized
+  actor 60 payment (slot 49): idle, 0 queued, 1 timers
+    delayed authorized
+  actor 61 payment (slot 50): idle, 0 queued, 1 timers
+    delayed authorized
+  actor 62 payment (slot 51): idle, 0 queued, 1 timers
+    delayed authorized

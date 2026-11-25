@@ -155,13 +155,15 @@
         <!-- The copywriter's widget, on a device that turned it on at /copywriter/ (mise/website.rb, copywriter!). -->
         <script type="module" xsl:expand-text="no">try{if(localStorage.getItem('tinyactors-copywriter')==='on')import('/copywriter/embed.js')}catch(e){}</script>
       </head>
+      <!-- A page that is one application fills the window: its body has the class style/site.css lays out as an app page. -->
       <body>
+        <xsl:if test="s:app"><xsl:attribute name="class">page--app</xsl:attribute></xsl:if>
         <a class="skip" href="#main">Skip to content</a>
         <xsl:call-template name="header">
           <xsl:with-param name="current" select="."/>
         </xsl:call-template>
         <main id="main">
-          <xsl:apply-templates select="s:hero, s:section, s:reference"/>
+          <xsl:apply-templates select="s:hero, s:section, s:reference, s:app"/>
         </main>
         <xsl:call-template name="footer"/>
         <xsl:apply-templates select="$site/s:presence">
@@ -328,6 +330,15 @@
     </section>
   </xsl:template>
 
+  <!-- An application page: the tool's name for screen readers, then the
+       application, full-bleed below the site's header. -->
+  <xsl:template match="s:app">
+    <section class="app" aria-labelledby="title">
+      <h1 id="title" class="app__name"><xsl:apply-templates select="s:name/node()"/></h1>
+      <xsl:apply-templates select="s:playground"/>
+    </section>
+  </xsl:template>
+
   <!-- A reference page: its name, the facts the reader came for, then
        the blocks, with no hero to scroll past. -->
   <xsl:template match="s:reference">
@@ -408,6 +419,11 @@
 
   <xsl:template match="s:section/s:p | s:reference/s:p">
     <p class="prose"><xsl:apply-templates/></p>
+  </xsl:template>
+
+  <!-- A passage: the deep-dive voice's paragraph, set for reading at length. -->
+  <xsl:template match="s:section/s:passage">
+    <p class="prose passage"><xsl:apply-templates/></p>
   </xsl:template>
 
   <xsl:template match="s:list">

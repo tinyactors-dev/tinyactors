@@ -1,8 +1,11 @@
 // The inspector's decoder: a snapshot pack (format 4) into plain objects.
 // The pack describes its own region layout (a CBOR part written by the
 // build that made it), so everything below reads records through that
-// description: member names are the only thing known in advance. Pure: no
-// DOM and no file system, so main.mjs and page.mjs decode the same bytes.
+// description: member names are the only thing known in advance. Its
+// "strings" part says how a string member (an actor's name, an event's
+// name and sendid, ...) reads as text from the region and the segment's
+// image, which the pack holds too. Pure: no DOM and no file system, so
+// main.mjs and page.mjs decode the same bytes.
 
 // ---- the pack's fixed header (tinyactors-core/src/host/host.c,
 // ta_host_snapshot_pack). Every offset is here, so a change of format is
@@ -244,9 +247,10 @@ export function decodePack(input) {
   const layoutPart = part(lengths.layout, 'layout');
   const hostPart = part(lengths.host, 'host snapshot');
   const statePart = part(lengths.state, 'datamodel state');
-  const imageParts = images.map((length, i) => ({ index: i, length, offset: part(length, `image ${i}`).offset }));
+  const imageParts = images.map((length, i) => ({ index: i, length, ...part(length, `image ${i}`) }));
   const layout = indexLayout(decodeCBOR(layoutPart.bytes));
-  const host = decodeHost(layout, hostPart.bytes);
+  // segment i's image is the pack's image i
+  const host = decodeHost(layout, hostPart.bytes, imageParts.map((image) => image.bytes));
   return {
     format: PACK.format, bytes: bytes.length, systemID, datamodel, time: u64(PACK.time), layoutID: view.getBigUint64(PACK.layoutID, true),
     library: layout.library ?? null, layout,
@@ -261,8 +265,8 @@ export function decodePack(input) {
   };
 }
 
-/** The host snapshot: its header and each segment's region, decoded. */
-export function decodeHost(layout, bytes) {
+/** The host snapshot: its header and each segment's region, decoded; `images[i]` is segment i's image, for its strings. */
+export function decodeHost(layout, bytes, images = []) {
   const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
   if (bytes.length < HOST.header || view.getUint32(0, true) !== HOST.magic) throw new SnapshotError('host', 'The host snapshot inside the pack does not start with “TAHS”.');
   const u32 = (i) => view.getUint32(i * 4, true);
@@ -288,20 +292,23 @@ export function decodeHost(layout, bytes) {
     if (at + regionBytes > bytes.length) throw new SnapshotError('host', `The host snapshot ends inside segment ${index}'s region.`);
     const region = bytes.subarray(at, at + regionBytes);
     at += align8(regionBytes);
-    segments.push({ index, live, imageHash, regionBytes, config, ...decodeRegion(layout, region) });
+    segments.push({ index, live, imageHash, regionBytes, config, ...decodeRegion(layout, region, images[index] ?? null) });
   }
   return { header, segments };
 }
 
 /**
  * A segment's region: the system's header record, its pools and arrays
- * (where each lies and how full it is), its actors, and the memory map.
+ * (where each lies and how full it is), its actors with their queued
+ * events and delayed sends, and the memory map. `image` (the segment's
+ * image, from the pack) lets string members read as text.
  */
-export function decodeRegion(layout, region) {
+export function decodeRegion(layout, region, image = null) {
   const view = new DataView(region.buffer, region.byteOffset, region.byteLength);
   const systemType = layout.system ?? 'ta_system';
   const systemSize = layout.typeMap.get(systemType)?.size ?? 0;
   const system = readStruct(layout, view, 0, systemType);
+  const resolve = stringResolver(layout, view, image);
   const poolType = 'ta_pool';
   const pools = [];
   for (const description of layout.pools ?? []) {
@@ -348,6 +355,16 @@ export function decodeRegion(layout, region) {
     return out;
   };
 
+  // A pool's record with its strings: its raw fields, and `strings` for each string member that reads as text.
+  const recordOf = (poolName, index) => {
+    const p = pool(poolName);
+    if (!p || p.offset === null || index >= p.capacity) return null;
+    const record = readStruct(layout, view, at(p, index), p.element) ?? {};
+    return { slot: index, ...record, strings: stringsOf(layout, p.element, record, resolve) };
+  };
+  // An event's name as text: its `name`, else the image's event name its `name_id` indexes.
+  const withEventName = (event) => (event ? { ...event, eventName: event.strings.name ?? event.strings.name_id ?? null } : event);
+
   const actorsPool = pool('actors');
   const actors = [];
   const slots = [];
@@ -355,17 +372,28 @@ export function decodeRegion(layout, region) {
     const element = actorsPool.element;
     const kindOf = (name) => memberOf(layout, element, name)?.kind ?? '';
     const poolOfKind = (kind) => (/^(index|handle):(.+)$/.exec(kind) ?? [])[2] ?? null;
+    const mailboxPool = poolOfKind(kindOf('mailbox_head'));
+    const timersPool = poolOfKind(kindOf('timers'));
+    const timerEvent = timersPool && layout.typeMap.get(pool(timersPool)?.element)?.members?.find((member) => member.kind === `index:${mailboxPool}`);
     for (let index = 0; index < Math.min(actorsPool.highWater, actorsPool.capacity); index++) {
       if (!live(actorsPool, index)) { slots.push(null); continue; }
       const record = readStruct(layout, view, at(actorsPool, index), element) ?? {};
-      const mailboxPool = poolOfKind(kindOf('mailbox_head'));
-      const timersPool = poolOfKind(kindOf('timers'));
+      const strings = stringsOf(layout, element, record, resolve);
+      const mailbox = mailboxPool ? chain(mailboxPool, record.mailbox_head, 4096) : [];
+      const timerSlots = timersPool ? chain(timersPool, record.timers, 4096) : [];
       const actor = {
         slot: index, session: record.serial ?? null, state: record.state ?? null,
         mailboxLength: record.mailbox_length ?? null,
-        mailbox: mailboxPool ? chain(mailboxPool, record.mailbox_head, 4096) : [],
-        timers: timersPool ? chain(timersPool, record.timers, 4096).length : null,
-        parent: handleSlot(record.parent), name: record.name ?? null,
+        mailbox,
+        timers: timersPool ? timerSlots.length : null,
+        parent: handleSlot(record.parent), name: strings.name ?? null,
+        record, strings,
+        queued: mailbox.map((slot) => withEventName(recordOf(mailboxPool, slot))),
+        delayed: timerSlots.map((slot) => {
+          const timer = recordOf(timersPool, slot);
+          const event = timer && timerEvent ? withEventName(recordOf(mailboxPool, timer[timerEvent.name])) : null;
+          return { ...timer, event };
+        }),
       };
       actors.push(actor);
       slots.push(actor.state);
@@ -373,7 +401,154 @@ export function decodeRegion(layout, region) {
     // the slots never handed out yet, so the grid shows the whole pool
     for (let index = slots.length; index < Math.min(actorsPool.capacity, 1 << 22); index++) slots.push(null);
   }
-  return { region, system, systemSize, pools, arrays, actors, slots, memoryMap: memoryMap(region.length, systemType, systemSize, pools, arrays) };
+  return { region, system, systemSize, pools, arrays, actors, slots, resolve, memoryMap: memoryMap(region.length, systemType, systemSize, pools, arrays) };
+}
+
+// ---- strings: the description's "strings" says how a string member reads as text
+
+/** Whether a member's kind holds for this record: always, or when its `when` member has one of its values. */
+export function kindHolds(member, record) {
+  if (!member.when) return true;
+  return (member.when.values ?? []).includes(record?.[member.when.member]);
+}
+
+/**
+ * Reads text through the description: `string(reference)` (a slab string
+ * of the region or a string of the image) and `eventName(index)` (the
+ * image's event names), each null for none or for what does not lie where
+ * it should. Without an image only slab strings read.
+ */
+export function stringResolver(layout, view, image) {
+  const description = layout.strings;
+  const none = { string: () => null, eventName: () => null, text: () => null };
+  if (!description) return none;
+  const systemType = layout.system ?? 'ta_system';
+  const slab = pathOf(layout, systemType, description.slab);
+  const slabRecord = slab ? readStruct(layout, view, slab.offset, slab.member.type) : null;
+  const pages = slabRecord && typeof slabRecord[description.pages] === 'number' ? slab.offset + slabRecord[description.pages] : null;
+  const header = layout.typeMap.get(description.header);
+  const lengthMember = memberOf(layout, description.header, description.length);
+  const decoder = new TextDecoder('utf-8', { fatal: true });
+  const textAt = (bytes) => { try { return decoder.decode(bytes); } catch { return null; } };
+  const slabBit = description.slabBit >>> 0;
+  const scale = 2 ** description.slabShift;
+
+  const slabString = (reference) => {
+    if (pages === null || !header || !lengthMember) return null;
+    const at = pages + ((reference & ~slabBit) >>> 0) * scale;
+    if (at < 0 || at + header.size > view.byteLength) return null;
+    const length = readScalar(layout, view, at + lengthMember.offset, lengthMember.type);
+    const start = at + header.size;
+    if (typeof length !== 'number' || start + length > view.byteLength) return null;
+    return textAt(new Uint8Array(view.buffer, view.byteOffset + start, length));
+  };
+
+  // the image: its header, its sections, its strings and event names
+  const format = description.image;
+  let imageString = () => null;
+  let eventName = () => null;
+  if (image && format) {
+    const imageLayout = { ...layout, little: format.byteOrder !== 'big' };
+    const imageView = new DataView(image.buffer, image.byteOffset, image.byteLength);
+    const head = layout.typeMap.get(format.header);
+    const sectionType = layout.typeMap.get(format.section);
+    const record = head && head.size <= image.length ? readStruct(imageLayout, imageView, 0, format.header) : null;
+    const sections = [];
+    for (let i = 0; record && sectionType && i < (record[format.sectionCount] ?? 0); i++) {
+      const at = head.size + i * sectionType.size;
+      if (at + sectionType.size > image.length) break;
+      sections.push(readStruct(imageLayout, imageView, at, format.section));
+    }
+    const section = (kind) => sections.find((s) => s[format.kind] === kind) ?? null;
+    const strings = section(format.strings);
+    const names = section(format.eventNames);
+    const lengthSize = SCALARS[format.length] ?? 4;
+    imageString = (id) => {
+      if (!strings || typeof id !== 'number' || id + lengthSize > strings[format.size]) return null;
+      const at = strings[format.offset] + id;
+      const length = readScalar(imageLayout, imageView, at, format.length);
+      if (typeof length !== 'number' || id + lengthSize + length > strings[format.size]) return null;
+      return textAt(image.subarray(at + lengthSize, at + lengthSize + length));
+    };
+    const nameType = layout.typeMap.get(format.eventName);
+    const nameMember = memberOf(layout, format.eventName, format.name);
+    eventName = (index) => {
+      if (!names || !nameType || !nameMember || typeof index !== 'number' || index >= names[format.count]) return null;
+      const at = names[format.offset] + index * nameType.size;
+      if (at + nameType.size > image.length) return null;
+      return imageString(readScalar(imageLayout, imageView, at + nameMember.offset, nameMember.type));
+    };
+  }
+  const string = (reference) => {
+    if (typeof reference !== 'number' || reference === description.none) return null;
+    return (reference & slabBit) >>> 0 ? slabString(reference) : imageString(reference);
+  };
+  /** A member's value as text, by its kind: null when it is none or not a string. */
+  const text = (kind, value) => (kind === 'string' ? string(value) : kind === 'event-name' ? eventName(value) : null);
+  return { string, eventName, text };
+}
+
+/** A record's string members as text: { member: text } for each that reads. */
+export function stringsOf(layout, typeName, record, resolve) {
+  const out = {};
+  for (const member of layout.typeMap.get(typeName)?.members ?? []) {
+    if ((member.kind !== 'string' && member.kind !== 'event-name') || !kindHolds(member, record)) continue;
+    const value = resolve.text(member.kind, record?.[member.name]);
+    if (value !== null) out[member.name] = value;
+  }
+  return out;
+}
+
+/**
+ * One record of a segment's region, field by field: each field's name
+ * (dotted inside a nested struct), offset from the record's start, size,
+ * type, kind (none where its `when` does not hold), raw value, and, where
+ * they apply, its text (a string member) and its link (an index or handle:
+ * the pool, the slot and its offset in the region; a relative offset: the
+ * offset in the region).
+ */
+export function decodeRecord(snapshot, segment, typeName, offset) {
+  const found = typeof segment === 'number' ? snapshot.segments[segment] : segment;
+  if (!found?.region) return { fields: [] };
+  const layout = snapshot.layout;
+  const view = new DataView(found.region.buffer, found.region.byteOffset, found.region.byteLength);
+  const resolve = found.resolve ?? stringResolver(layout, view, null);
+  const pools = new Map((found.pools ?? []).map((p) => [p.name, p]));
+  const fields = [];
+  const walk = (type, at, prefix, base, depth) => {
+    const description = layout.typeMap.get(type);
+    if (!description) return;
+    const record = readStruct(layout, view, at, type, 8);
+    for (const member of description.members ?? []) {
+      const name = prefix ? `${prefix}.${member.name}` : member.name;
+      const count = member.count ?? 1;
+      if (layout.typeMap.has(member.type) && count === 1 && depth < 3) {
+        walk(member.type, at + member.offset, name, base + member.offset, depth + 1);
+        continue;
+      }
+      const kind = member.kind && kindHolds(member, record) ? member.kind : null;
+      const value = record?.[member.name] ?? null;
+      const field = { name, offset: base + member.offset, size: member.size, type: member.type, kind, value };
+      const text = kind ? resolve.text(kind, value) : null;
+      if (text !== null) field.text = text;
+      const link = linkOf(layout, pools, kind, value, at);
+      if (link) field.link = link;
+      fields.push(field);
+    }
+  };
+  walk(typeName, offset, '', 0, 0);
+  return { fields };
+}
+
+function linkOf(layout, pools, kind, value, recordOffset) {
+  if (!kind || typeof value !== 'number') return null;
+  if (kind === 'relative') return { offset: recordOffset + value };
+  const match = /^(index|handle):(.+)$/.exec(kind);
+  if (!match) return null;
+  const slot = match[1] === 'handle' ? handleSlot(value) : value === layout.nil ? null : value;
+  const p = pools.get(match[2]);
+  if (slot === null || !p || slot >= p.capacity) return null;
+  return { pool: match[2], slot, offset: p.offset + slot * p.stride };
 }
 
 /** A handle (generation:8 | index+1:24) as its slot, null for 0. */
@@ -421,7 +596,9 @@ export function summarize(pack, name = 'snapshot') {
     for (const p of segment.pools) lines.push(`  pool ${p.name}: ${p.used} used of ${p.capacity}, high water ${p.highWater}, ${p.stride} bytes a slot`);
     const actors = [...segment.actors].sort((a, b) => (a.session < b.session ? -1 : a.session > b.session ? 1 : 0));
     for (const actor of actors) {
-      lines.push(`  actor ${actor.session} (slot ${actor.slot}): ${stateName(actor.state)}, ${actor.mailboxLength ?? '?'} queued${actor.timers ? `, ${actor.timers} timers` : ''}`);
+      lines.push(`  actor ${actor.session} ${actor.name ?? '(no name)'} (slot ${actor.slot}): ${stateName(actor.state)}, ${actor.mailboxLength ?? '?'} queued${actor.timers ? `, ${actor.timers} timers` : ''}`);
+      for (const event of actor.queued ?? []) lines.push(`    queued ${event?.eventName ?? '?'}${event?.strings?.sendid ? ` (sendid ${event.strings.sendid})` : ''}`);
+      for (const timer of actor.delayed ?? []) lines.push(`    delayed ${timer.event?.eventName ?? '?'}${timer.strings?.target ? ` to ${timer.strings.target}` : ''}`);
     }
   }
   return lines;

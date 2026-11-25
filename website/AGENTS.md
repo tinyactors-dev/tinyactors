@@ -40,6 +40,20 @@ rules.
   code, output, a claim with its source. No metaphors, no adjectives that
   do not measure something, no hype words, no emoji. Actions are a verb
   and an object, 2 to 4 words.
+- **The deep-dive voice** (the maintainer, 2026-11-25: the Architecture
+  page "should read like a book or a technical deep dive"). An
+  explanation page a reader follows from start to end, written for the
+  tech lead who must understand the design before depending on it, is
+  prose in `<passage>` blocks: up to five sentences each, at most 32 words
+  a sentence (the schema's `passage` type; only explanation pages have
+  them). Its hero lede sets the context a newcomer lacks: what the thing
+  is, what problem the page explains, and what the reader will be able to
+  judge after it. Each section opens with the question it answers, builds
+  the idea in passages, then shows the proof (a figure, a table, a claim
+  with its source). Terms are introduced before they are used, and each
+  section ends where the next one's question starts. The rest of the
+  voice holds: literal, measured, no metaphors or hype; headings stay
+  findings of at most 8 words.
 - **Every sentence says something.** Use the `copywriting` skill
   (`.agents/skills/copywriting`) before writing or changing copy: a
   headline states a benefit, a heading its finding, a lede the page's

@@ -1,0 +1,3 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- An application page holds its name and the application, no prose or actions. expect: cvc-complex-type.2.4 -->
+<page xmlns="https://www.tinyactors.dev/ns/site" id="t" path="/t/"><title>T</title><description>A test page.</description><purpose kind="reference" for="a"/><app><name>Tool</name><p>Text.</p><playground src="../../examples/inspector/page.mjs"><description>A tool.</description></playground></app></page>

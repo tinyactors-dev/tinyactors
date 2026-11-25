@@ -13,7 +13,8 @@
   goes missing here: a new element of the schema gets its template in
   mode "md" too.
 
-  A page whose content is a reference (the changelog) is optional: llms.txt
+  A page whose content is a reference (the changelog) or an application
+  (the snapshot inspector) is optional: llms.txt
   lists it under "Optional", and llms-full.txt leaves it out.
 -->
 <xsl:stylesheet version="4.0"
@@ -32,7 +33,7 @@
 
   <xsl:function name="f:optional" as="xs:boolean">
     <xsl:param name="page" as="element(s:page)"/>
-    <xsl:sequence select="exists($page/s:reference)"/>
+    <xsl:sequence select="exists($page/(s:reference, s:app))"/>
   </xsl:function>
 
   <!-- ===================================================== the files -->
@@ -141,7 +142,7 @@
       <xsl:sequence select="'&lt;!-- ' || $origin || $page/@path || ' --&gt;' || $nl || '# ' || normalize-space($page/s:title)"/>
       <xsl:sequence select="$page/s:purpose ! f:purpose-md(.)"/>
       <xsl:sequence select="'> ' || normalize-space($page/s:description)"/>
-      <xsl:apply-templates select="$page/(s:hero, s:reference, s:section)" mode="md"/>
+      <xsl:apply-templates select="$page/(s:hero, s:reference, s:app, s:section)" mode="md"/>
     </xsl:variable>
     <xsl:sequence select="string-join($blocks[. != ''], $blank) || $nl"/>
   </xsl:function>
@@ -165,11 +166,17 @@
     <xsl:apply-templates select="* except s:headline" mode="md"/>
   </xsl:template>
 
+  <!-- An application: what it shows, and where it runs; the page's
+       title already names it. -->
+  <xsl:template match="s:app" mode="md" as="xs:string*">
+    <xsl:apply-templates select="s:playground" mode="md"/>
+  </xsl:template>
+
   <xsl:template match="s:reference" mode="md" as="xs:string*">
     <xsl:apply-templates select="* except s:headline" mode="md"/>
   </xsl:template>
 
-  <xsl:template match="s:lede | s:section/s:p | s:reference/s:p" mode="md" as="xs:string">
+  <xsl:template match="s:lede | s:section/s:p | s:section/s:passage | s:reference/s:p" mode="md" as="xs:string">
     <xsl:sequence select="f:md-inline(.)"/>
   </xsl:template>
 

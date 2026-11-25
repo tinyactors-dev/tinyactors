@@ -229,6 +229,8 @@ summary.changelog__title { cursor: pointer; }
 .section__head h2 { font: var(--type-h1); letter-spacing: var(--tracking-display); }
 .section__body { display: grid; gap: var(--space-6); }
 .section__body > .prose, .section__body > .items { max-width: var(--prose-max); }
+/* The deep-dive voice: consecutive passages read as one text, a book's paragraphs. */
+.section__body > .passage + .passage { margin-top: calc(-1 * var(--space-3)); }
 .prose { font: var(--type-prose); color: var(--fg-1); }
 
 .items { margin: 0; padding: 0; list-style: none; display: grid; gap: 0; border-top: 1px solid var(--border-1); }
@@ -360,6 +362,24 @@ ta-tabs { display: block; }
 
 .playground { display: grid; gap: var(--space-3); }
 .playground__description--quiet { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
+
+/* An application page (body.page--app): the application fills the window
+   below the header, edge to edge; the footer waits below the fold. Its
+   name is for screen readers. The ant docks small in the application's
+   bottom-right corner, which the application keeps free
+   (--app-inset-end); with the copywriter's launcher on (bottom left), the
+   application keeps that corner free too (--app-inset-start, -bottom). */
+.app { --app-inset-end: 40px; --app-inset-start: 0px; --app-inset-bottom: 0px;
+  display: flex; flex-direction: column; height: calc(100dvh - var(--header-row) - 1px); min-height: 360px; }
+html:has(> #tinyactors-copywriter) .app { --app-inset-start: 68px; --app-inset-bottom: 52px; }
+.app__name { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+.app > .playground { display: flex; flex-direction: column; flex: 1; min-height: 0; gap: 0; }
+.page--app .site-footer { margin-top: 0; }
+.page--app .presence { right: 6px; bottom: 3px; }
+.page--app .presence__button { width: 24px; height: 24px; box-shadow: none; border-color: var(--border-2); }
+.page--app .presence__button img { width: 16px; height: 16px; }
+.page--app .presence__menu { inset: auto 6px 34px auto; }
+.page--app .presence__toast { bottom: 32px; }
 .anthill__controls { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-3) var(--space-5); }
 .anthill__population { display: flex; align-items: center; gap: var(--space-3); font: var(--type-ui); color: var(--fg-2); }
 .anthill__population input { width: 200px; accent-color: var(--accent); }

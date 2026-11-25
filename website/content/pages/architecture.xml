@@ -5,17 +5,24 @@
   <purpose kind="explanation" for="tech-lead agent-platform"/>
 
   <hero>
-    <headline>One host runs a segment per image</headline>
-    <lede>A host runs each image you add as a segment, and each segment keeps its actors in one block of memory. An actor's record there takes <link to="architecture" section="costs">81 bytes</link>.</lede>
+    <headline>How tinyactors runs actors in your process</headline>
+    <lede>tinyactors is an embeddable C library that runs SCXML statechart actors inside your process from Node.js, Bun, Python, WebAssembly, and C. This page explains the moving parts, where actor state lives, what a crash loses, memory costs, upgrades, and snapshots. After reading, you can judge whether to depend on tinyactors and inspect its memory layout and compiled C core yourself.</lede>
     <actions>
       <action to="architecture" section="atlas">Explore core's source</action>
       <action to="inspector">Open a snapshot</action>
     </actions>
   </hero>
 
+  <section id="what">
+    <heading>Actors run SCXML charts inside your process</heading>
+    <passage>What runs inside your process when your application embeds tinyactors? Each actor runs one SCXML statechart, which defines discrete states, transitions between those states, and a datamodel of variables. Instead of parsing XML at runtime, a compiler turns those charts into a binary image of .tai bytes. Your application embeds a host, which is the runtime instance that lives in your process and runs those compiled charts.</passage>
+    <passage>The engine inside that host never opens sockets, writes files, or sleeps on its own. Whenever an actor sends a message, writes a log, or invokes an external service, the host emits that request as an effect. Your application receives those effects, executes the I/O in Node.js, Bun, Python, WebAssembly, or C, and feeds events back. Because teams update statecharts over time, the next question is how one host loads compiled images and handles deploys.</passage>
+  </section>
+
   <section id="host">
     <heading>A host runs one segment per image</heading>
-    <p>Adding an image to a host adds a segment, and its charts become the current version. Older segments run until their actors end or migrate.</p>
+    <passage>How does a host organize compiled images and run chart upgrades without stopping active work? Adding a compiled image to a host creates a segment, which is one running instance of that image inside the host. Inside each segment sits a system, the C engine that manages that segment's actors, mailboxes, and timers inside one memory block. Each segment assigns its actors unique session ids starting at k·2³²+1, where k is the segment index.</passage>
+    <passage>Adding an image that contains a chart of the same name performs a deploy. New actors start in the newest segment, while running actors stay on their existing segment until they end or migrate. To migrate an actor, the host moves it to the newer segment at a stable point while keeping its session id. The host also carries a system id, which identifies the whole host in addresses seen from other processes. Notice that the word system now names two distinct scopes, which the next section separates.</passage>
     <figure src="../images/host-segments.svg">
       <description>A process holds the application and one host. The host holds three segments, each a system with its own region of memory and its own range of session ids. An actor migrates from segment 0 to segment 1 and keeps its session id. A send to another system leaves through the application's transport.</description>
     </figure>
@@ -31,7 +38,8 @@
 
   <section id="two-systems">
     <heading>System names two different things</heading>
-    <p>In C, a system is one segment's engine. In addresses, a system is a whole host, named by its system id.</p>
+    <passage>Why does the word system appear in both the C API and external actor addresses? In the C library, a system is a ta_system struct, meaning one segment's engine inside a host. In actor addresses, a system is an entire host, named in addresses by its system id.</passage>
+    <passage>This distinction decides where messages go when one actor sends an event to another. When the destination address has the same system id, the host routes the event directly between its own segments. When the address names another system id, the send leaves the host as an effect for your application's transport. To keep that boundary strict across languages, tinyactors divides its C implementation into explicit layers.</passage>
     <claims>
       <claim>
         <statement>A host owns one system per image</statement>
@@ -51,7 +59,8 @@
 
   <section id="layers">
     <heading>Each C layer calls only the layers below</heading>
-    <p>The C libraries link in layers, and core through the host never call the C library.</p>
+    <passage>How are the C libraries structured so that the statechart engine stays independent of operating systems and language runtimes? The modules base, image, trace, core, and system form the freestanding core, which never calls the C standard library. Core never allocates memory after its initial creation and never performs I/O. Instead, core reports side effects upward and calls back only into a datamodel evaluator and an allocator.</passage>
+    <passage>Above core sits the host layer, which coordinates multiple segments and allocates memory only through the allocator it is given. Above the host sit the SCXML compiler, datamodel engines such as quickjs for ECMAScript or a binding's own language, and bindings. Those bindings expose the host to Node.js, Bun, Python, WebAssembly, or C, while your application controls storage and policy. With core isolated from I/O, the next question is how your application drives the host during execution.</passage>
     <table>
       <head><cell>Layer</cell><cell>What it does</cell><cell>Where</cell></head>
       <row><cell>Core</cell><cell>Runs statecharts over a compiled image, in one region sized at creation</cell><cell><code>src/base</code>, <code>image</code>, <code>trace</code>, <code>core</code>, <code>system</code></cell></row>
@@ -70,26 +79,24 @@
     </claims>
   </section>
 
-  <section id="atlas">
-    <heading>Explore every type and call of core</heading>
-    <p>Core's C hides its costs: padding, struct sizes and inlined calls exist only after the compiler runs. Atlas reads them from the debug information of an optimized build.</p>
-    <p>Pick a struct to see its bytes on cache lines, or a function to see its callers and callees.</p>
-    <playground src="../../examples/atlas/page.mjs">
-      <description>Atlas draws each struct of tinyactors' C core to scale on 64-byte cache lines, padding included, starting with the 48-byte actor record. Each function lists its callers, its callees and the calls the compiler inlined, grouped by layer.</description>
-    </playground>
+  <section id="loop">
+    <heading>Effects leave in batches between runs</heading>
+    <passage>How does an embedded host exchange events and side effects with your application's event loop? Your binding or application drives the host in a loop: take a batch of effects, handle them, acknowledge, and run. A batch holds the outgoing sends, logs, and service invocations produced by the previous run.</passage>
+    <passage>Everything the host hands out with a batch, every field and every output, remains valid until your code acknowledges that batch. A run refuses while a batch is still open, so every effect of a batch is handled before any actor moves again. Once the application acknowledges the batch, the next run processes queued events and updates actors inside memory. Where, then, does the state of those actors live?</passage>
     <claims>
       <claim>
-        <statement>Atlas reads the build's own debug information</statement>
-        <p>The <code>mise run atlas</code> task reads each function, call site and struct from the DWARF of core's optimized build.</p>
-        <p>Atlas names the commit its data was built from.</p>
-        <source href="https://github.com/tinyactors-dev/tinyactors/blob/main/tinyactors-core/mise/tasks/atlas">tinyactors, <code>tinyactors-core/mise/tasks/atlas</code></source>
+        <statement>One loop drives every binding</statement>
+        <p>The loop is take, handle, acknowledge and run, and a run refuses while a batch is open.</p>
+        <p>Each binding runs this loop in C on its own event loop.</p>
+        <source href="https://github.com/tinyactors-dev/tinyactors/blob/main/tinyactors-core/docs/embedding.md">tinyactors, <code>tinyactors-core/docs/embedding.md</code></source>
       </claim>
     </claims>
   </section>
 
   <section id="region">
     <heading>A system keeps its actors in one region</heading>
-    <p>A system carves its region once into pools of actors, events and timers. The region holds offsets instead of pointers, so its bytes can move.</p>
+    <passage>Where does a segment store its actors, events, and timers if core never allocates after creation? Each segment stores all of its runtime state inside one contiguous block of memory called a region. At creation, the system partitions that region once into fixed pools for actors, events, timers, and requests. The same partitioning also sets aside slab pages for chart state and strings, an outbox, and a trace journal.</passage>
+    <passage>Records inside a region reference one another with relative offsets instead of raw memory pointers. Because offsets stay valid regardless of base address, the bytes of a region can be relocated or written straight to disk. When a pool fills up, the host grows the segment by allocating a larger block and copying the region into it. Knowing how a region is partitioned leads directly to the memory cost of each actor, message, and timer.</passage>
     <claims>
       <claim>
         <statement>The region is carved once at creation</statement>
@@ -107,7 +114,8 @@
 
   <section id="costs">
     <heading>An actor's record takes 81 bytes</heading>
-    <p>These are the region's costs for one more of each, read from the types' debug information. The actor's chart state and datamodel variables come on top.</p>
+    <passage>How much memory inside a region does each actor, message, and delayed send consume? In the region pools, one actor uses 81 bytes, which includes the 48-byte ta_actor record, indices, links, and a generation byte. One queued message uses 106 bytes with tracing enabled, or 57 bytes when tracing is off. One delayed send uses 151 bytes with tracing enabled, or 102 bytes untraced, because it stores timer state alongside its message.</passage>
+    <passage>An actor's chart state and datamodel variables sit in slab pages or the datamodel engine on top of that 81-byte record. These byte counts come directly from C struct definitions and are verified by mise run layout against ta_system_layout. Because all active state lives in memory pools, you also need to know what a crash loses and how state persists.</passage>
     <table>
       <caption>From <code>mise run layout</code> in tinyactors-core on 2026-11-25, at commit 2dc827ac, checked against <code>ta_system_layout</code>.</caption>
       <head><cell>One more</cell><cell>Bytes, tracing on</cell><cell>Bytes, tracing off</cell><cell>Parts</cell></head>
@@ -126,22 +134,10 @@
     </claims>
   </section>
 
-  <section id="loop">
-    <heading>Effects leave in batches between runs</heading>
-    <p>Your code takes a batch of effects, handles it and acknowledges it, then runs the host again. Everything in a batch stays valid until the acknowledgement.</p>
-    <claims>
-      <claim>
-        <statement>One loop drives every binding</statement>
-        <p>The loop is take, handle, acknowledge and run, and a run refuses while a batch is open.</p>
-        <p>Each binding runs this loop in C on its own event loop.</p>
-        <source href="https://github.com/tinyactors-dev/tinyactors/blob/main/tinyactors-core/docs/embedding.md">tinyactors, <code>tinyactors-core/docs/embedding.md</code></source>
-      </claim>
-    </claims>
-  </section>
-
   <section id="snapshots">
     <heading>A snapshot is the regions as bytes</heading>
-    <p>A snapshot holds every segment's region, the images, the system id and the host's time. It also describes its own memory layout, so a reader needs no matching build.</p>
+    <passage>What does a process crash lose, and how do hibernation and snapshots preserve actor state? A crash loses everything held only in memory, so only data written to your application's store survives. To persist idle actors individually, hibernation serializes an actor's state into a blob stored by your application. That actor's 81-byte record remains in the region so events and timers still locate it, and the next event wakes it.</passage>
+    <passage>To capture the entire host at once, a snapshot writes every segment's region, the compiled images, system id, and host time. A snapshot also stores datamodel state and a description of its memory layout with a hashed layout id. When restoring, the host checks that layout id and refuses a snapshot from a different layout instead of misreading bytes. Because the layout description travels with the bytes, the Inspector page and CLI can read snapshots without running the engine. For inspecting the C core itself rather than a saved snapshot, the page closes with Atlas.</passage>
     <claims>
       <claim>
         <statement>Snapshots are raw region memory</statement>
@@ -165,5 +161,22 @@
       <action to="inspector">Open a snapshot</action>
       <action to="guide-snapshots">Take a snapshot</action>
     </actions>
+  </section>
+
+  <section id="atlas">
+    <heading>Atlas shows every type and call of core</heading>
+    <passage>How can an architect verify core's struct sizes, padding, and call paths without trusting hand-written diagrams? Compiler optimizations change the binary by inserting struct padding and inlining functions across translation units. To reflect the actual compiled code, the mise run atlas task extracts DWARF debug information from an optimized build of core.</passage>
+    <passage>Atlas renders every core struct across 64-byte cache lines, starting with the 48-byte ta_actor record, with padding bytes shown. Selecting any function displays its callers, its callees, and the calls inlined by the compiler, grouped by C layer. Each dataset names the commit its data came from, letting you inspect core directly below.</passage>
+    <playground src="../../examples/atlas/page.mjs">
+      <description>Atlas draws each struct of tinyactors' C core to scale on 64-byte cache lines, padding included, starting with the 48-byte actor record. Each function lists its callers, its callees and the calls the compiler inlined, grouped by layer.</description>
+    </playground>
+    <claims>
+      <claim>
+        <statement>Atlas reads the build's own debug information</statement>
+        <p>The <code>mise run atlas</code> task reads each function, call site and struct from the DWARF of core's optimized build.</p>
+        <p>Atlas names the commit its data was built from.</p>
+        <source href="https://github.com/tinyactors-dev/tinyactors/blob/main/tinyactors-core/mise/tasks/atlas">tinyactors, <code>tinyactors-core/mise/tasks/atlas</code></source>
+      </claim>
+    </claims>
   </section>
 </page>

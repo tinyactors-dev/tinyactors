@@ -111,6 +111,12 @@ export async function mount(root) {
     const padding = paddingBytes(atlas, type);
     const ruler = el('div', { class: 'atlas__ruler', role: 'group', 'aria-label': `${type.name}, ${type.size} bytes on ${LINE}-byte cache lines` });
     const rows = layoutRows(atlas, type);
+    // Every member is numbered in offset order; a block shows its name when
+    // it fits, else its number, and the key under the ruler names each
+    // member shown by number (or too narrow for one), so no name needs a hover.
+    const numbers = new Map();
+    const labelled = [];
+    for (const row of rows) for (const piece of row.pieces) if (piece.span.kind !== 'padding' && !numbers.has(piece.span)) numbers.set(piece.span, numbers.size + 1);
     for (const row of rows) {
       const line = el('div', { class: 'atlas__line' }, el('span', { class: 'atlas__offset', 'aria-hidden': 'true' }, String(row.offset)));
       const track = el('div', { class: 'atlas__track', style: `height:${Math.max(40, 22 * row.lanes)}px` });
@@ -126,7 +132,11 @@ export async function mount(root) {
         if (span.kind === 'padding') block = el('span', { ...attributes, role: 'img' });
         else if (span.described) block = el('a', { ...attributes, href: `#type-${span.described}` });
         else block = el('span', { ...attributes, tabindex: piece.first ? '0' : '-1', role: 'img' });
-        if (span.kind !== 'padding' && piece.first && piece.end - piece.start >= 3) block.append(el('span', { class: 'atlas__label' }, span.name));
+        if (span.kind !== 'padding' && piece.first) {
+          const label = el('span', { class: 'atlas__label' }, span.name);
+          block.append(label);
+          labelled.push({ block, label, span, n: numbers.get(span) });
+        }
         block.addEventListener('pointerenter', () => showTip(block, describe));
         block.addEventListener('pointerleave', hideTip);
         block.addEventListener('focus', () => showTip(block, describe));
@@ -144,7 +154,27 @@ export async function mount(root) {
       el('tbody', {}, ...rowsOf(type).map(([name, offset, size, typeName, target]) => el('tr', { class: name === field ? 'is-focus' : '' },
         el('td', {}, name), el('td', { class: 'atlas__num' }, String(offset)), el('td', { class: 'atlas__num' }, String(size)),
         el('td', {}, target ? link(`type-${target}`, typeName) : typeName ?? '')))));
-    const parts = [heading(type, `struct · ${number.format(type.size)} bytes${padding ? ` · ${padding} of padding` : ''}`), ruler, el('div', { class: 'atlas__scroll' }, table)];
+    const key = el('ol', { class: 'atlas__key', 'aria-label': 'Members too narrow to name on the ruler' });
+    const fit = () => {
+      const shown = [];
+      for (const item of labelled) {
+        item.label.textContent = item.span.name;
+        const room = item.block.clientWidth - 6;
+        if (item.label.scrollWidth <= room) { item.block.dataset.mark = 'name'; continue; }
+        item.label.textContent = String(item.n);
+        item.block.dataset.mark = item.label.scrollWidth <= room ? 'number' : 'none';
+        shown.push(item);
+      }
+      key.replaceChildren(...shown.map((item) => {
+        const entry = el('li', {}, el('b', {}, String(item.n)), ` ${item.span.name} `, el('span', { class: 'atlas__muted' }, `+${item.span.offset}`));
+        entry.addEventListener('pointerenter', () => item.block.classList.add('is-hot'));
+        entry.addEventListener('pointerleave', () => item.block.classList.remove('is-hot'));
+        return entry;
+      }));
+      key.hidden = !shown.length;
+    };
+    new ResizeObserver(fit).observe(ruler);
+    const parts = [heading(type, `struct · ${number.format(type.size)} bytes${padding ? ` · ${padding} of padding` : ''}`), ruler, key, el('div', { class: 'atlas__scroll' }, table)];
     const containers = atlas.containedIn.get(type.name) ?? [];
     if (containers.length) {
       parts.push(el('h4', {}, 'Contained in'), list(containers.map(({ type: outer, member, offset }) =>
@@ -325,7 +355,13 @@ function injectStyle() {
   background: repeating-linear-gradient(135deg, transparent 0 3px, var(--border-2) 3px 4px); }
 .atlas__block.is-focus { outline: 2px solid var(--accent); outline-offset: 1px; z-index: 2; }
 .atlas__beyond { position: absolute; top: 0; bottom: 0; right: 0; background: var(--surface-1); opacity: .7; }
-.atlas__label { font: 11px var(--font-mono, monospace); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; pointer-events: none; }
+.atlas__label { font: 11px var(--font-mono, monospace); white-space: nowrap; overflow: hidden; pointer-events: none; }
+.atlas__block[data-mark="number"] .atlas__label { font-weight: 600; color: var(--fg-2); margin: 0 auto; }
+.atlas__block[data-mark="none"] .atlas__label { visibility: hidden; }
+.atlas__block.is-hot { outline: 2px solid var(--accent); outline-offset: 1px; z-index: 2; }
+.atlas__key { display: flex; flex-wrap: wrap; gap: 2px 14px; margin: calc(-1 * var(--space-1, 4px)) 0 var(--space-3, 12px) 42px; padding: 0; list-style: none; font: 12px var(--font-mono, monospace); color: var(--fg-1); }
+.atlas__key[hidden] { display: none; }
+.atlas__key b { display: inline-block; min-width: 16px; padding: 0 3px; border: 1px solid var(--border-strong); border-radius: 1px; font-weight: 600; text-align: center; color: var(--fg-2); }
 .atlas__tip { position: absolute; z-index: 10; display: grid; gap: 2px; max-width: 280px; padding: 6px 8px; background: var(--surface-1); border: 1px solid var(--border-2);
   border-radius: 2px; box-shadow: var(--shadow-pop, 0 4px 12px rgba(0,0,0,.15)); font: 12px var(--font-mono, monospace); pointer-events: none; }
 .atlas__tip[hidden] { display: none; }
@@ -363,7 +399,7 @@ function injectStyle() {
   .atlas__layers { display: flex; flex-wrap: wrap; gap: 4px; }
   .atlas__layer { width: auto; gap: 8px; border: 1px solid var(--border-1); }
   .atlas__columns { grid-template-columns: 1fr; }
-  .atlas__label { display: none; }
+  .atlas__key { margin-left: 0; }
 }`;
   document.head.append(style);
 }
