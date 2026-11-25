@@ -53,7 +53,12 @@ static const ta_cli_option expressions_options[] = {
 static const ta_cli_option diff_options[] = {
     WARNINGS_AS_ERRORS, CHART,
     [TOOL_DIFF_EXIT_CODE] = {T("exit-code"), 0, TA_CLI_OPTION_FLAG, 0, 0, 0, T(""),
-                             T("exit with 1 when the two differ, as git diff --exit-code does")},
+                             T("exit with 1 when the two differ (with --breaking: when a change breaks "
+                               "running actors), as git diff --exit-code does")},
+    [TOOL_DIFF_BREAKING] = {T("breaking"), 0, TA_CLI_OPTION_FLAG, 0, 0, 0, T(""),
+                            T("list only the changes that break actors running the old version")},
+    [TOOL_DIFF_ALL] = {T("all"), 0, TA_CLI_OPTION_FLAG, 0, 0, 0, T(""),
+                       T("list the charts that did not change too")},
 };
 
 #define OPTIONS(table) (uint32_t)(sizeof(table) / sizeof(table)[0]), (table)
@@ -79,8 +84,9 @@ static const ta_string_view expressions_examples[] = {
 static const ta_string_view disassemble_examples[] = {T("disassemble --chart order order.tai")};
 static const ta_string_view graph_examples[] = {T("graph order.scxml > order.md"),
                                                 T("graph -f json order.tai")};
-static const ta_string_view diff_examples[] = {T("diff order-v1.tai order-v2.scxml"),
-                                               T("diff --exit-code old.tai new.tai")};
+static const ta_string_view diff_examples[] = {
+    T("diff order-v1.tai order-v2.scxml"), T("diff --breaking --exit-code deployed.tai order.scxml"),
+    T("diff -f json --chart order old.tai new.tai")};
 static const ta_string_view help_examples[] = {T("help"), T("help compile"),
                                                T("help -f json inspect")};
 static const ta_string_view version_examples[] = {T("version"), T("version -f json")};
@@ -148,11 +154,14 @@ static const ta_cli_command commands[TOOL_COMMAND_COUNT] = {
                             INPUTS, T("INPUT..."), 1, TA_CLI_UNBOUNDED, OPTIONS(image_options),
                             EXAMPLES(graph_examples)},
     [TOOL_COMMAND_DIFF] =
-        {T("diff"), T("what changed between two versions, and what a migration does with it"),
+        {T("diff"), T("what changed between two versions, and what it does to running actors"),
          T("Compares two images (each given as an image, a manifest or one chart) chart by chart, "
-           "matched by name: the states, data, transitions and events added and removed. A "
-           "migration moves an actor's state by id, so an actor in a state the new version "
-           "removed is completed to a legal configuration of the new version."),
+           "matched by name, as statecharts: states by id, transitions by source and events, "
+           "data by id, invokes, executable content as decoded instructions, and the events each "
+           "state handles. Each change is breaking for actors running the old version (a state "
+           "removed, moved or of another kind, data removed, another datamodel, an event a state "
+           "no longer handles) or a change of behaviour, and the answer says what a migration "
+           "does to running actors. --breaking --exit-code fails a build that would break them."),
          T("OLD NEW"), 2, 2, OPTIONS(diff_options), EXAMPLES(diff_examples)},
     [TOOL_COMMAND_HELP] = {T("help"), T("describe a command, or the program"), T(""),
                            T("[COMMAND]"), 0, 1, 0, 0, EXAMPLES(help_examples)},

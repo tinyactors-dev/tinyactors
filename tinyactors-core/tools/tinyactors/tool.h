@@ -183,7 +183,11 @@ typedef enum tool_compile_option {
 } tool_compile_option;
 typedef enum tool_emit { TOOL_EMIT_IMAGE = 0, TOOL_EMIT_C = 1 } tool_emit;
 typedef enum tool_expressions_option { TOOL_EXPRESSIONS_KIND = 2 } tool_expressions_option;
-typedef enum tool_diff_option { TOOL_DIFF_EXIT_CODE = 2 } tool_diff_option;
+typedef enum tool_diff_option {
+    TOOL_DIFF_EXIT_CODE = 2, /* --exit-code: 1 when they differ (only breaking ones with --breaking) */
+    TOOL_DIFF_BREAKING = 3,  /* --breaking: only the differences that break running actors */
+    TOOL_DIFF_ALL = 4        /* --all: unchanged charts too */
+} tool_diff_option;
 
 /* What a command that looks into an image starts with: its arguments as
  * inputs (-W read), the image made from them, and the charts --chart

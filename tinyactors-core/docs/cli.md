@@ -13,6 +13,18 @@ is, and the maintainers, who read the compiler's output instruction by
 instruction. It costs nothing at run time: it is a program beside the
 libraries, built from them, and in none of them.
 
+## Install
+
+Each release of tinyactors-core carries the command for Linux and macOS
+(x86_64 and arm64), installable with [mise](https://mise.jdx.dev):
+
+```sh
+mise use github:tinyactors-dev/tinyactors-core
+```
+
+or from a checkout, `mise run build` in `tinyactors-core`
+(`build/dev/bin/tinyactors`).
+
 ## Synopsis
 
 ```text
@@ -50,7 +62,8 @@ that cannot be read go to standard error as `tinyactors: <message>`.
 
 Every answer is one document with the command's name as its title:
 
-- **Markdown**: the title as a heading; an object's values as
+- **Markdown**: the title as a heading (a `<` outside a code span is
+  written `&lt;`, so `<scxml>` shows as text where Markdown is rendered); an object's values as
   `- **Name**: value` lines; each list of flat records as a table; nested
   objects under headings; a diagram as a fenced block (Mermaid for
   `graph`).
@@ -79,7 +92,7 @@ the root (the `<scxml>` element itself) by `<scxml>`, which no id can be.
 | `expressions` | INPUT... | Each chart's expressions and scripts: kind, line, column, text; `--kind` keeps some (`condition`, `value`, `location`, `script`, `string`, `content`, `item`, `global-script`). |
 | `disassemble` | INPUT... | Each chart's executable content as instructions: their place, the entry points starting there (onentry and onexit of a state, a transition's actions, an invoke's finalize, the chart's script), the instruction and its operands. |
 | `graph` | INPUT... | Each chart as nodes (states) and edges (one per target of each transition), and as a Mermaid state diagram. |
-| `diff` | OLD NEW | Two versions, each an image, a manifest or a chart, compared chart by chart (matched by name): states, data, transitions and events added and removed, and what a migration does with an actor in a state the new version removed. `--exit-code` exits with 1 when they differ. |
+| `diff` | OLD NEW | Two versions, each an image, a manifest or a chart, compared chart by chart (matched by name) as statecharts: states, transitions, data, executable content, invokes and the events each state handles, each change marked breaking for actors running the old version or not, and what a migration does to them. `--breaking` lists only the breaking changes, `--all` the unchanged charts too, and `--exit-code` exits with 1 when they differ (with `--breaking`, when a change breaks running actors). See [Diff](#diff). |
 | `help` | [COMMAND] | The program's commands, or a command's usage, options and examples. |
 | `version` | | The program's version, its library's ABI and the image format version it reads. |
 
@@ -96,7 +109,7 @@ describe it), `--version`.
 | Status | When |
 |---|---|
 | 0 | the command did what was asked |
-| 1 | an input was refused: a chart did not compile, an image did not verify, a file is none of the three; or `diff --exit-code` found differences |
+| 1 | an input was refused: a chart did not compile, an image did not verify, a file is none of the three; or `diff --exit-code` found differences (breaking ones, with `--breaking`) |
 | 2 | the command line was not understood (and `tinyactors` alone, after printing the commands) |
 | 3 | a file could not be read or written, or memory ran out |
 
@@ -108,8 +121,107 @@ tinyactors check -W charts/*.scxml
 tinyactors inspect --format json order.tai | jq '.charts[].name'
 tinyactors transitions --chart order order.scxml
 tinyactors graph order.scxml > order.md        # renders as a diagram on GitHub
-tinyactors diff --exit-code deployed.tai order.scxml
+tinyactors diff --breaking --exit-code deployed.tai order.scxml   # in CI
 tinyactors compile order.scxml -o - | tinyactors disassemble -
+```
+
+## Diff
+
+`tinyactors diff OLD NEW` answers three questions: a developer about to
+deploy a new version of a chart asks whether the actors running the old
+version will migrate correctly and what they will do differently; a
+reviewer asks what changed in behaviour, as a statechart rather than as
+XML text (paste the Markdown into a pull request); and CI fails a build
+that would break running actors:
+
+```sh
+tinyactors diff --breaking --exit-code deployed.tai order.scxml
+```
+
+### What is compared
+
+Charts are matched by name. Within a chart:
+
+- **States** by id (the root as `<scxml>`): added, removed, or changed in
+  kind, parent (moved), initial targets, onentry, onexit or invokes.
+  `before` and `after` describe the state: `compound in <scxml>, initial
+  open`.
+- **Transitions** by their source state's id and their event descriptors,
+  ties going by order: added, removed, or changed in condition, targets,
+  type (internal or external) or actions: ``cond `total > 100` → paid
+  (external)``.
+- **Data** by id: added, removed, or changed in expression or declaring
+  state.
+- **Actions**: the executable content of what both versions have (the
+  chart's script, onentry and onexit of kept states, a matched transition's
+  actions, a matched invoke's finalize), decoded into instructions as
+  `disassemble` does, with expressions and event names as text and jumps
+  relative to their instruction, so code that only moved elsewhere in the
+  chart is the same. A changed one shows its text before and after, cut at
+  about 200 bytes.
+- **Invokes** of kept states, by id or by position among those without
+  one: added, removed, or changed in type, src or autoforward.
+- **Events**: for each kept state an actor can rest in (atomic or final),
+  the events it handles before and after, counting the transitions of its
+  ancestors and the prefix matching of descriptors (`order` handles
+  `order.paid`). Image-wide, the event names added and removed.
+- The chart's **datamodel** and **binding**: `ecmascript`, or
+  `ecmascript → python` when it changed.
+
+Every list is present, empty when nothing is in it, so a script reading
+JSON sees one shape. Only the charts that differ are listed; `--all` adds
+the others with the change `unchanged`. The summary counts the charts and
+the differences over all of them, `--breaking` or not.
+
+### Breaking or behaviour
+
+A migration (`ta_host_migrate`) moves an actor's configuration by state
+id, completes it to a legal configuration of the new version without
+running onentry, keeps the variables the new chart declares and
+initializes the ones it adds. So a change is **breaking**, for the actors
+running the old version, when it changes what they hold:
+
+| Change | What a running actor gets |
+|---|---|
+| a state removed | an actor in it is completed to a legal configuration: the nearest kept ancestor enters its initial state |
+| a state's kind changed | its configuration is completed for the new kind (a compound state enters its initial state, an atomic one drops its children) |
+| a state moved to another parent | it enters its new ancestors; a compound ancestor that then has two active children keeps the first |
+| data removed | the value is dropped; the old bindings are only in the data of `error.platform.upgrade`, the first event it gets |
+| the datamodel changed | the new datamodel is given the old one's state, which it may refuse |
+| binding from late to early | the data of states it never entered stays unset |
+| a kept state no longer handles an event | an actor waiting there ignores the event |
+
+Everything else is **behaviour**: added states, transitions and data, new
+conditions, targets and actions, changed invokes. These change what an
+actor does on its next event, not what it holds. An invoke removed from a
+kept state does not break running actors: a migration never cancels a
+running invocation (an actor whose invocations run moves once they
+finished). An invoke added to a kept state does not start for the actors
+already in it; only states entered later invoke.
+
+`migration` sums up the breaking changes in sentences; it is present only
+when there are some.
+
+### Example
+
+```text
+$ tinyactors diff --breaking order-v1.scxml order-v2.scxml
+```
+
+answers, among the rest:
+
+```markdown
+#### States
+
+| State | Change | Breaking | Before | After |
+| --- | --- | --- | --- | --- |
+| paying | removed | yes | atomic in &lt;scxml> |  |
+
+#### Events
+
+| State | Event | Change |
+| --- | --- | --- |
+| open | cancel | no longer handled |
 ```
 
 ## How it is built
@@ -132,5 +244,5 @@ Three layers, from the bottom:
   the C library.
 
 The program is built with core (`mise run build`, `build/dev/bin/tinyactors`)
-and tested by running it (`tests/unit/test_tool.c`). It is not in the
-release assets yet.
+and tested by running it (`tests/unit/test_tool.c`). Each release carries
+it for every native target ([distribution.md](distribution.md#the-tinyactors-command)).

@@ -104,7 +104,7 @@ static void test_the_image_as_c_and_to_standard_output(void) {
 static void test_the_charts_records(void) {
     write_charts();
     CHECK_EQUAL(run("states order.scxml --chart order"), 0);
-    CHECK(has("output", "| 2 | paying | atomic | <scxml> | 1 |  | 1 | 1 | 0 | no | no |  |"));
+    CHECK(has("output", "| 2 | paying | atomic | &lt;scxml> | 1 |  | 1 | 1 | 0 | no | no |  |"));
     CHECK(!strstr(text_of("output"), "settled")); /* --chart order: not payment's */
     CHECK_EQUAL(run("transitions -f json order.scxml"), 0);
     CHECK(has("output", "\"condition\": \"_event.data.price > 0\""));
@@ -112,7 +112,7 @@ static void test_the_charts_records(void) {
     CHECK_EQUAL(run("events order.scxml"), 0);
     CHECK(has("output", "| checkout | 1 | 0 | 0 |"));
     CHECK_EQUAL(run("data order.scxml"), 0);
-    CHECK(has("output", "| total | <scxml> | 0 |"));
+    CHECK(has("output", "| total | &lt;scxml> | 0 |"));
     CHECK_EQUAL(run("expressions --kind condition -f json order.scxml"), 0);
     CHECK(has("output", "\"kind\": \"condition\""));
     CHECK(!strstr(text_of("output"), "\"kind\": \"value\""));
@@ -124,13 +124,13 @@ static void test_refusals(void) {
     CHECK(fixture_write("broken.scxml", "<scxml " NS "><state id='a'>\n<transtion target='a'/></state></scxml>"));
     CHECK_EQUAL(run("check broken.scxml"), 1);
     CHECK(has("output", "- **Valid**: no"));
-    CHECK(has("output", "| broken.scxml | 2 | 1 | error | unknown element <transtion> in <state> |"));
+    CHECK(has("output", "| broken.scxml | 2 | 1 | error | unknown element &lt;transtion> in &lt;state> |"));
     CHECK_EQUAL(run("compile -f json broken.scxml -o broken.tai"), 1);
     CHECK(has("output", "\"compiled\": false"));
     struct stat status;
     CHECK(stat(fixture_path("broken.tai"), &status) != 0); /* nothing written */
     CHECK_EQUAL(run("states broken.scxml"), 1); /* every command reports why */
-    CHECK(has("output", "unknown element <transtion>"));
+    CHECK(has("output", "unknown element &lt;transtion>"));
     /* an image that does not verify */
     CHECK(fixture_write("damaged.tai", "TAI1 and then not an image at all"));
     CHECK_EQUAL(run("check damaged.tai"), 1);
@@ -180,14 +180,14 @@ static void test_help_and_version(void) {
 
 /* An order with its executable content: a foreach, a condition, sends. */
 #define FULFILLMENT                                                                                \
-    "<scxml " NS " datamodel='ecmascript' name='fulfillment' initial='packing'>\n"                 \
+    "<scxml " NS " datamodel='ecmascript' name='fulfillment' initial='packing'>\n"             \
     "<datamodel><data id='items' expr='[]'/><data id='count' expr='0'/></datamodel>\n"             \
-    "<parallel id='packing'><state id='boxes'><onentry>"                                           \
+    "<parallel id='packing'><state id='boxes'><onentry>"                                       \
     "<foreach array='items' item='item'><assign location='count' expr='count + 1'/></foreach>"     \
-    "<if cond='count &gt; 10'><send event='parcel.heavy' delay='30s'/>"                            \
-    "<else/><log label='parcel' expr='count'/></if></onentry>"                                     \
-    "<transition event='packed' target='shipped'/></state>"                                        \
-    "<state id='labels'><transition event='printed'/></state></parallel>\n"                       \
+    "<if cond='count &gt; 10'><send event='parcel.heavy' delay='30s'/>"                        \
+    "<else/><log label='parcel' expr='count'/></if></onentry>"                                 \
+    "<transition event='packed' target='shipped'/></state>"                                    \
+    "<state id='labels'><transition event='printed'/></state></parallel>\n"                   \
     "<final id='shipped'/></scxml>\n"
 
 static void test_disassemble_and_graph(void) {
@@ -209,26 +209,131 @@ static void test_disassemble_and_graph(void) {
     CHECK(has("output", "\"target\": \"shipped\""));
 }
 
+/* A version of order.scxml (write_charts) with `open`'s transitions, the
+ * paying state and the data replaced as given. */
+typedef struct order_version {
+    const char *data, *open, *paying;
+} order_version;
+
+static void write_order(const char *name, order_version version) {
+    char text[2048];
+    snprintf(text, sizeof text,
+             "<scxml " NS " datamodel='ecmascript' name='order' initial='open'>\n"
+             "<datamodel>%s</datamodel>\n<state id='open'>%s</state>\n%s\n<final id='paid'/></scxml>\n",
+             version.data, version.open, version.paying);
+    CHECK(fixture_write(name, text));
+}
+
+#define ORDER_DATA "<data id='total' expr='0'/>"
+#define ORDER_OPEN                                                                                 \
+    "<transition event='item.added' cond='_event.data.price &gt; 0'>"                         \
+    "<assign location='total' expr='total + _event.data.price'/></transition>\n"               \
+    "<transition event='checkout' target='paying'/>"
+#define ORDER_PAYING                                                                               \
+    "<state id='paying'><invoke id='pay' src='payment.scxml'/>\n"                              \
+    "<transition event='done.invoke.pay' target='paid'/></state>"
+
 static void test_diff(void) {
     write_charts();
     CHECK_EQUAL(run("compile order.scxml -o order.tai"), 0);
-    /* the next version: paying is now settling, and the order keeps a currency */
-    CHECK(fixture_write("order-next.scxml",
-                        "<scxml " NS " datamodel='ecmascript' name='order' initial='open'>\n"
-                        "<datamodel><data id='total' expr='0'/><data id='currency' expr=\"'EUR'\"/></datamodel>\n"
-                        "<state id='open'><transition event='checkout' target='settling'/></state>\n"
-                        "<state id='settling'><invoke id='pay' src='payment.scxml'/>\n"
-                        "<transition event='done.invoke.pay' target='paid'/></state>\n"
-                        "<final id='paid'/></scxml>\n"));
-    CHECK_EQUAL(run("diff order.tai order.scxml"), 0);
-    CHECK(has("output", "- **Identical**: yes"));
+    /* identical versions: nothing listed, every list there */
     CHECK_EQUAL(run("diff --exit-code order.tai order.scxml"), 0);
-    CHECK_EQUAL(run("diff -f json --exit-code order.tai order-next.scxml"), 1);
-    CHECK(has("output", "\"statesAdded\": \"settling\""));
-    CHECK(has("output", "\"statesRemoved\": \"paying\""));
-    CHECK(has("output", "\"dataAdded\": \"currency\""));
-    CHECK(has("output", "one in a state the new version removed is completed to a legal configuration"));
-    CHECK_EQUAL(run("diff --chart shipment order.tai order-next.scxml"), 2);
+    CHECK(has("output", "- **Identical**: yes"));
+    CHECK(has("output", "- **Differences**: 0"));
+    CHECK(!strstr(text_of("output"), "**Migration**"));
+    CHECK_EQUAL(run("diff -f json order.tai order.scxml"), 0);
+    CHECK(has("output", "\"charts\": []"));
+    CHECK(has("output", "\"eventsAdded\": []"));
+    CHECK(has("output", "\"eventsRemoved\": []"));
+    /* --all: the unchanged charts too, with empty lists */
+    CHECK_EQUAL(run("diff -f json --all order.tai order.scxml"), 0);
+    CHECK(has("output", "\"name\": \"payment\",\n      \"change\": \"unchanged\""));
+    CHECK(has("output", "\"chartsUnchanged\": 2"));
+
+    /* paying renamed settling: actors in paying lose their state */
+    write_order("renamed.scxml", (order_version){ORDER_DATA, "<transition event='checkout' target='settling'/>",
+                "<state id='settling'><invoke id='pay' src='payment.scxml'/>\n"
+                "<transition event='done.invoke.pay' target='paid'/></state>"});
+    CHECK_EQUAL(run("diff --breaking --exit-code order.tai renamed.scxml"), 1);
+    CHECK(has("output", "| paying | removed | yes | atomic in &lt;scxml> |  |"));
+    CHECK(!strstr(text_of("output"), "| settling | added |")); /* --breaking: not breaking */
+    CHECK(has("output", "Actors in removed states are completed to a legal configuration"));
+    CHECK(has("output", "no onentry runs: paying \xe2\x86\x92 open."));
+    CHECK_EQUAL(run("diff order.tai renamed.scxml"), 0);
+    CHECK(has("output", "| settling | added | no |  | atomic in &lt;scxml> |"));
+    CHECK(has("output", "| open | checkout | targets changed | no | \xe2\x86\x92 paying (external) | "
+                        "\xe2\x86\x92 settling (external) |"));
+
+    /* open no longer handles checkout: actors waiting there ignore it */
+    write_order("submit.scxml", (order_version){ORDER_DATA,
+                "<transition event='item.added'><assign location='total' expr='total + _event.data.price'/>"
+                "</transition>\n<transition event='order.submit' target='paying'/>",
+                ORDER_PAYING});
+    CHECK_EQUAL(run("diff --breaking --exit-code order.tai submit.scxml"), 1);
+    CHECK(has("output", "| open | checkout | no longer handled |"));
+    CHECK(has("output", "Actors in open no longer handle checkout"));
+    CHECK_EQUAL(run("diff -f json order.tai submit.scxml"), 0);
+    CHECK(has("output", "\"event\": \"order.submit\",\n          \"change\": \"newly handled\""));
+    /* a name, not the prefix "order" its node hangs from */
+    CHECK(has("output", "\"eventsAdded\": [\n    \"order.submit\"\n  ]"));
+    CHECK(has("output", "\"eventsRemoved\": [\n    \"checkout\"\n  ]"));
+
+    /* data added: not breaking; data removed: breaking */
+    write_order("currency.scxml",
+                (order_version){ORDER_DATA "<data id='currency' expr=\"'EUR'\"/>", ORDER_OPEN, ORDER_PAYING});
+    CHECK_EQUAL(run("diff --breaking --exit-code order.tai currency.scxml"), 0);
+    CHECK_EQUAL(run("diff --exit-code order.tai currency.scxml"), 1);
+    CHECK(has("output", "| currency | added | no |  | `'EUR'` in &lt;scxml> |"));
+    CHECK(!strstr(text_of("output"), "**Migration**"));
+    CHECK_EQUAL(run("diff --breaking --exit-code currency.scxml order.tai"), 1);
+    CHECK(has("output", "| currency | removed | yes | `'EUR'` in &lt;scxml> |  |"));
+    CHECK(has("output", "Running actors lose currency"));
+
+    /* a new condition and new actions: behaviour, never breaking */
+    write_order("quantity.scxml", (order_version){ORDER_DATA,
+                "<transition event='item.added' cond='_event.data.price &gt; 0 &amp;&amp; _event.data.quantity &gt; 0'>"
+                "<assign location='total' expr='total + _event.data.price * _event.data.quantity'/>"
+                "<log label='order' expr='total'/></transition>\n"
+                "<transition event='checkout' target='paying'/>",
+                ORDER_PAYING});
+    CHECK_EQUAL(run("diff --breaking --exit-code order.tai quantity.scxml"), 0);
+    CHECK(has("output", "- **Breaking**: 0"));
+    CHECK_EQUAL(run("diff --exit-code order.tai quantity.scxml"), 1);
+    CHECK(has("output", "| open | item.added | condition changed, actions changed | no | "
+                        "cond `_event.data.price > 0`, no target | "
+                        "cond `_event.data.price > 0 && _event.data.quantity > 0`, no target |"));
+    CHECK(has("output", "| transition open on item.added | changed | assign `total` = `total + _event.data.price` | "
+                        "assign `total` = `total + _event.data.price * _event.data.quantity`; log label order `total` |"));
+    /* the same code elsewhere in the chart is the same code */
+    write_order("moved-code.scxml", (order_version){ORDER_DATA,
+                "<transition event='checkout' target='paying'/>\n"
+                "<transition event='item.added' cond='_event.data.price &gt; 0'>"
+                "<assign location='total' expr='total + _event.data.price'/></transition>",
+                ORDER_PAYING});
+    CHECK_EQUAL(run("diff --exit-code order.tai moved-code.scxml"), 0);
+
+    /* a support ticket whose resolved state moves under a new closing state */
+    CHECK(fixture_write("ticket.scxml",
+                        "<scxml " NS " datamodel='ecmascript' name='ticket' initial='open'>\n"
+                        "<state id='open'><transition event='resolve' target='resolved'/></state>\n"
+                        "<state id='resolved'><transition event='reopen' target='open'/></state></scxml>\n"));
+    CHECK(fixture_write("ticket-next.scxml",
+                        "<scxml " NS " datamodel='ecmascript' name='ticket' initial='open'>\n"
+                        "<state id='open'><transition event='resolve' target='resolved'/></state>\n"
+                        "<state id='closing'><state id='resolved'><transition event='reopen' target='open'/>"
+                        "</state></state></scxml>\n"));
+    CHECK_EQUAL(run("diff --breaking --exit-code -f json ticket.scxml ticket-next.scxml"), 1);
+    CHECK(has("output", "\"state\": \"resolved\",\n          \"change\": \"moved\",\n"
+                        "          \"breaking\": true,\n          \"before\": \"atomic in <scxml>\",\n"
+                        "          \"after\": \"atomic in closing\""));
+    /* the stable shape: every list present, empty when nothing is in it */
+    CHECK(has("output", "\"transitions\": []"));
+    CHECK(has("output", "\"actions\": []"));
+    CHECK(has("output", "\"invokes\": []"));
+    CHECK(has("output", "\"summary\": {"));
+    CHECK(has("output", "\"migration\": \"Chart ticket: Actors in resolved (now in closing)"));
+
+    CHECK_EQUAL(run("diff --chart shipment order.tai renamed.scxml"), 2);
     CHECK(has("errors", "no chart 'shipment' in either image"));
 }
 

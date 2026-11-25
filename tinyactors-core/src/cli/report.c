@@ -440,16 +440,22 @@ static void markdown_heading(markdown *document, uint32_t level, ta_string_view 
     markdown_words(document->out, name);
 }
 
-/* A table's cell: a pipe escaped, a line break a space. */
-static void markdown_cell(ta_output *out, ta_string_view text) {
+/* A value in Markdown: '<' outside a code span as "&lt;", so a renderer
+ * shows "<scxml>" instead of taking it for an HTML tag (inside backticks it
+ * is shown as written, and an entity would be too). In a table's cell also
+ * a pipe escaped and a line break a space. */
+static void markdown_text(ta_output *out, ta_string_view text, int cell) {
     report_span span = {text, 0, 0};
+    int code = 0;
     for (uint32_t i = 0; i < text.length; i++) {
         char byte = text.pointer[i];
-        if (byte != '|' && byte != '\n' && byte != '\r') continue;
+        if (byte == '`') code = !code;
+        int escaped = (byte == '<' && !code) || (cell && (byte == '|' || byte == '\n' || byte == '\r'));
+        if (!escaped) continue;
         span.end = i;
         put_span(out, span);
         span.start = i + 1;
-        put_literal(out, byte == '|' ? "\\|" : " ");
+        put_literal(out, byte == '<' ? "&lt;" : byte == '|' ? "\\|" : " ");
     }
     span.end = text.length;
     put_span(out, span);
@@ -460,10 +466,8 @@ static void markdown_value(ta_output *out, const ta_report_node *node, int cell)
         put_number(out, node->number);
     else if (node->kind == REPORT_BOOLEAN)
         put_literal(out, node->number ? "yes" : "no");
-    else if (cell)
-        markdown_cell(out, node->text);
     else
-        put(out, node->text);
+        markdown_text(out, node->text, cell);
 }
 
 /* A fence longer than any run of backticks in the text. */
