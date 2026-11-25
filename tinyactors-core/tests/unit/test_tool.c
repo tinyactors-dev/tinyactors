@@ -631,6 +631,14 @@ static void test_run_schema(void) {
     CHECK(has("errors", "named twice"));
     CHECK_EQUAL(run("run --system 'not a system' < /dev/null"), 1);
     CHECK(has("errors", "the config is refused"));
+    /* a systemID that is not text, or is empty, is core's to refuse, with core's error */
+    CHECK(fixture_write("run-system-number.json", "{\"systemID\":1}"));
+    CHECK_EQUAL(run("run --config run-system-number.json < /dev/null"), 1);
+    CHECK(has("errors", "\"data\":{\"reason\":\"type\",\"path\":\"systemID\"}"));
+    CHECK(fixture_write("run-system-empty.json", "{\"systemID\":\"\"}"));
+    CHECK_EQUAL(run("run --config run-system-empty.json < /dev/null"), 1);
+    CHECK(has("errors", "\"path\":\"systemID\""));
+    CHECK_EQUAL(run("run --config run-system-number.json --system shop < /dev/null"), 2);
     CHECK_EQUAL(run("run missing.scxml < /dev/null"), 3);
     /* nothing to read: the end of input at once */
     CHECK_EQUAL(run("run < /dev/null"), 0);

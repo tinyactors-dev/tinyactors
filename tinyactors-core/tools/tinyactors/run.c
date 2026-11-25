@@ -206,7 +206,7 @@ typedef struct config_build {
     ta_allocator allocator;
     processor *processors;
     uint32_t processor_count;
-    uint32_t pad;
+    uint32_t system_item; /* a systemID that is not text or is empty: its token, for core to refuse; else TA_NIL */
     ta_string_view system; /* the config's systemID, empty when it has none */
 } config_build;
 
@@ -245,8 +245,10 @@ static int config_members(config_build *build, const ta_cbor_document *document)
         uint32_t value = at + 1;
         at = ta_cbor_next(document, value);
         if (tool_equal(key, ta_string("systemID"))) {
-            if (document->tokens[value].kind != TA_CBOR_TEXT) return config_refuse(t, ta_string("systemID is a string"));
-            build->system = ta_cbor_string(document, value);
+            /* one that is not text, or empty, goes to core as it is: core refuses it with its error */
+            ta_string_view text = ta_cbor_string(document, value);
+            if (document->tokens[value].kind == TA_CBOR_TEXT && text.length) build->system = text;
+            else build->system_item = value;
         } else if (tool_equal(key, ta_string("ioProcessors"))) {
             if (document->tokens[value].kind != TA_CBOR_MAP)
                 return config_refuse(t, ta_string("ioProcessors is an object: each type's {\"location\"}"));
@@ -278,6 +280,7 @@ static int config_make(tool *t, ta_bytes *out) {
     config_build build;
     ta_memset(&build, 0, sizeof build);
     build.t = t;
+    build.system_item = TA_NIL;
     build.allocator = ta_growable_arena_allocator(t->arena);
     ta_cbor_writer_init(&build.writer, (ta_buffer){0, 0, 0}, &build.allocator);
     ta_cbor_document document = {{0, 0}, 0, 0, 0};
@@ -339,12 +342,15 @@ static int config_make(tool *t, ta_bytes *out) {
         if (!processor_add(&build, entry)) return 0;
     }
     const ta_cli_value *system = tool_last(t, TOOL_RUN_SYSTEM);
-    if (system && build.system.length && !tool_equal(system->text, build.system)) {
+    if (system && (build.system_item != TA_NIL || (build.system.length && !tool_equal(system->text, build.system)))) {
         usage(t, ta_string("--system names another system than the config's systemID"));
         return 0;
     }
     ta_cbor_write_text(&build.writer, ta_string("systemID"));
-    ta_cbor_write_text(&build.writer, system ? system->text : build.system.length ? build.system : run_system);
+    if (build.system_item != TA_NIL)
+        ta_rpc_write_item(&build.writer, (ta_rpc_item){&document, build.system_item, 0});
+    else
+        ta_cbor_write_text(&build.writer, system ? system->text : build.system.length ? build.system : run_system);
     if (build.processor_count) {
         ta_cbor_write_text(&build.writer, ta_string("ioProcessors"));
         ta_cbor_write_array(&build.writer, build.processor_count);

@@ -721,7 +721,8 @@ Nothing is required: `tinyactors run order.scxml` works.
 The default system id is `tinyactors-run`: core has none, so that two
 systems never share one by accident, and a lone workbench's id appears only
 in its own addresses. A client that connects two servers as each other's
-transport names each with `--system`.
+transport names each with `--system`. A config's `systemID` that is not
+text, or is empty, goes to core as it is, and core refuses it.
 
 The server gives the host the platform's allocator, quickjs with the seed
 and the host's clock (`Date` and `performance.now()` read the simulated
