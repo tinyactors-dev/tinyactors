@@ -16,6 +16,9 @@
 #ifndef TA_TEST_DIAGRAMS
 #define TA_TEST_DIAGRAMS "tests/diagram"
 #endif
+#ifndef TA_TEST_REPOSITORY
+#define TA_TEST_REPOSITORY ".."
+#endif
 
 #define NS "xmlns='http://www.w3.org/2005/07/scxml'"
 
@@ -526,6 +529,192 @@ static void test_lint_and_path(void) {
     CHECK_EQUAL(run("path refund.scxml"), 2);
 }
 
+/* A refund request written by hand: attributes over two lines, elements on one line and
+ * indented every which way, comments, an XML declaration, a script in CDATA, data whose
+ * content is a value, references in attribute values. */
+static const char refund_messy[] =
+    "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"
+    "<!-- a refund, from request to payout -->\n"
+    "<scxml xmlns=\"http://www.w3.org/2005/07/scxml\" version=\"1.0\"\n"
+    "       datamodel=\"ecmascript\" name=\"refund\" initial=\"requested\">\n"
+    "<datamodel>   <data id=\"amount\" expr=\"0\"/>\n"
+    "  <data id=\"reasons\">[ \"damaged\",\n     \"late\" ]</data>\n"
+    "</datamodel>\n"
+    "\n"
+    "        <state id=\"requested\">  <!-- waiting for a decision -->\n"
+    "  <transition event=\"approve\" cond=\"_event.data.amount &gt; 0 &amp;&amp; amount == 0\" target=\"paying\">"
+    "<assign location=\"amount\" expr=\"_event.data.amount\"/>\n"
+    "     <log label='refund' expr=\"'approved: ' + amount\"/></transition>\n"
+    "<transition event=\"reject\" target=\"closed\"></transition>\n"
+    "</state>\n"
+    "<state id=\"paying\"><onentry><script><![CDATA[\n"
+    "  if (amount > 500) { amount = 500; }\n"
+    "]]></script></onentry>\n"
+    "<transition event=\"paid\" target=\"closed\"/></state>\n"
+    "<final id=\"closed\"/>\n"
+    "</scxml>\n"
+    "<!-- end of the refund -->\n";
+
+static const char refund_canonical[] =
+    "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"
+    "<!-- a refund, from request to payout -->\n"
+    "<scxml xmlns=\"http://www.w3.org/2005/07/scxml\" version=\"1.0\" datamodel=\"ecmascript\" name=\"refund\" "
+    "initial=\"requested\">\n"
+    "  <datamodel>\n"
+    "    <data id=\"amount\" expr=\"0\"/>\n"
+    "    <data id=\"reasons\">[ \"damaged\",\n     \"late\" ]</data>\n"
+    "  </datamodel>\n"
+    "  <state id=\"requested\">\n"
+    "    <!-- waiting for a decision -->\n"
+    "    <transition event=\"approve\" cond=\"_event.data.amount &gt; 0 &amp;&amp; amount == 0\" target=\"paying\">\n"
+    "      <assign location=\"amount\" expr=\"_event.data.amount\"/>\n"
+    "      <log label=\"refund\" expr=\"'approved: ' + amount\"/>\n"
+    "    </transition>\n"
+    "    <transition event=\"reject\" target=\"closed\"/>\n"
+    "  </state>\n"
+    "  <state id=\"paying\">\n"
+    "    <onentry>\n"
+    "      <script><![CDATA[\n"
+    "  if (amount > 500) { amount = 500; }\n"
+    "]]></script>\n"
+    "    </onentry>\n"
+    "    <transition event=\"paid\" target=\"closed\"/>\n"
+    "  </state>\n"
+    "  <final id=\"closed\"/>\n"
+    "</scxml>\n"
+    "<!-- end of the refund -->\n";
+
+/* fmt: the canonical text of a messy chart, --check, -w, the image kept, refusals. */
+static void test_canonical(void) {
+    CHECK(fixture_write("refund.scxml", refund_messy));
+    CHECK_EQUAL(run("fmt refund.scxml"), 0);
+    CHECK(strcmp(text_of("output"), refund_canonical) == 0);
+    if (strcmp(text_of("output"), refund_canonical) != 0) fprintf(stderr, "  got:\n%s\n", text_of("output"));
+    /* the same image, lines and columns aside: the hash with the positions stripped */
+    CHECK_EQUAL(run("fmt --check -f json refund.scxml"), 1);
+    CHECK(has("output", "\"file\": \"refund.scxml\",\n      \"changed\": true"));
+    CHECK(has("output", "\"image\": \"same\""));
+    CHECK(has("output", "\"changed\": 1"));
+    /* -w rewrites it whole; formatting it again changes nothing */
+    CHECK_EQUAL(run("fmt -w refund.scxml"), 0);
+    CHECK(strcmp(text_of("refund.scxml"), refund_canonical) == 0);
+    CHECK(has("output", "| refund.scxml | yes | no | same |"));
+    CHECK_EQUAL(run("fmt --check refund.scxml"), 0);
+    CHECK(has("output", "| refund.scxml | no | no | same |"));
+    CHECK_EQUAL(run("fmt -w refund.scxml"), 0);
+    CHECK(strcmp(text_of("refund.scxml"), refund_canonical) == 0);
+    /* the formatted chart behaves as the original: the same states, transitions, expressions */
+    CHECK(fixture_write("refund-messy.scxml", refund_messy));
+    CHECK_EQUAL(run("expressions -f json refund.scxml"), 0);
+    CHECK(has("output", "\"source\": \"_event.data.amount > 0 && amount == 0\""));
+
+    /* a manifest, and several files: --check names those not canonical, -w rewrites them */
+    write_charts();
+    CHECK_EQUAL(run("fmt --check system.xml order.scxml refund.scxml"), 1);
+    CHECK(has("output", "| system.xml | yes | no | same |"));
+    CHECK(has("output", "| order.scxml | yes | no | same |"));
+    CHECK(has("output", "| refund.scxml | no | no | same |"));
+    CHECK_EQUAL(run("fmt -w system.xml order.scxml"), 0);
+    CHECK(strcmp(text_of("system.xml"), "<!-- the shop -->\n<system>\n  <chart name=\"order\" src=\"order.scxml\"/>\n"
+                                        "  <actor name=\"first\" chart=\"order\"/>\n</system>\n") == 0);
+    CHECK_EQUAL(run("fmt --check system.xml order.scxml refund.scxml"), 0);
+
+    /* refusals: several files to standard output, -w with --check, what is no chart, what XML forbids */
+    CHECK_EQUAL(run("fmt order.scxml refund.scxml"), 2);
+    CHECK(has("errors", "fmt writes one file to standard output"));
+    CHECK_EQUAL(run("fmt -w --check order.scxml"), 2);
+    CHECK_EQUAL(run("compile order.scxml -o order.tai"), 0);
+    CHECK_EQUAL(run("fmt --check order.tai"), 1);
+    CHECK(has("output", "an image: fmt takes SCXML charts and system manifests"));
+    CHECK(fixture_write("ticket.scxml", "<scxml " NS "><!-- escalate -- now --><final id='done'/></scxml>"));
+    CHECK_EQUAL(run("fmt -w ticket.scxml"), 1);
+    CHECK(has("output", "| ticket.scxml | no | yes |  |"));
+    CHECK(has("output", "a comment holding '--'"));
+    CHECK(has("ticket.scxml", "<!-- escalate -- now -->")); /* left as it was */
+    CHECK(fixture_write("broken.scxml", "<scxml " NS "><state id='a'></scxml>"));
+    CHECK_EQUAL(run("fmt broken.scxml"), 1);
+    CHECK(has("output", "| broken.scxml | 1 | "));
+    CHECK(has("output", "mismatched end tag"));
+    CHECK_EQUAL(run("fmt missing.scxml"), 3);
+    CHECK(has("errors", "cannot read missing.scxml"));
+}
+
+/* -I: a src beside the file naming it first, then in each directory given, in order. */
+static void test_include_path(void) {
+    char command[1024];
+    snprintf(command, sizeof command,
+             "cd '%s' && mkdir -p shop shared/payments legacy && "
+             "printf '%%s' \"<scxml " NS " name='checkout'><state id='paying'><invoke id='pay' src='payment.scxml'/>"
+             "</state></scxml>\" > shop/checkout.scxml && "
+             "printf '%%s' \"<scxml " NS " name='payment'><final id='settled'/></scxml>\" > shared/payments/payment.scxml && "
+             "printf '%%s' \"<scxml " NS " name='legacy-payment'><final id='settled'/></scxml>\" > legacy/payment.scxml",
+             TA_TEST_TEMPORARY_DIRECTORY);
+    CHECK_EQUAL(system(command) == 0 ? 0 : 1, 0);
+    /* found nowhere: today's diagnostic, at the path beside the chart */
+    CHECK_EQUAL(run("check shop/checkout.scxml"), 1);
+    CHECK(has("output", "| shop/payment.scxml | 0 | 0 | error | cannot read the file |"));
+    /* in a directory of the include path; the diagnostics and the image name the file found */
+    CHECK_EQUAL(run("inspect -I shared/payments shop/checkout.scxml"), 0);
+    CHECK(has("output", "| 1 | payment | shared/payments/payment.scxml |"));
+    CHECK_EQUAL(run("compile --include shared/payments/ shop/checkout.scxml -o checkout.tai"), 0);
+    /* in the order given */
+    CHECK_EQUAL(run("inspect -I legacy -I shared/payments shop/checkout.scxml"), 0);
+    CHECK(has("output", "| 1 | legacy-payment | legacy/payment.scxml |"));
+    CHECK_EQUAL(run("inspect -I shared/payments -I legacy shop/checkout.scxml"), 0);
+    CHECK(has("output", "| 1 | payment | shared/payments/payment.scxml |"));
+    /* beside the chart first */
+    CHECK(fixture_write("shop/payment.scxml", "<scxml " NS " name='shop-payment'><final id='settled'/></scxml>"));
+    CHECK_EQUAL(run("inspect -I shared/payments shop/checkout.scxml"), 0);
+    CHECK(has("output", "| 1 | shop-payment | shop/payment.scxml |"));
+    remove(fixture_path("shop/payment.scxml"));
+    /* found nowhere, with an include path: where it looked, in order */
+    CHECK_EQUAL(run("check -I nowhere -I elsewhere shop/checkout.scxml"), 1);
+    CHECK(has("output", "| shop/payment.scxml | 0 | 0 | error | cannot read the file; looked for it at "
+                        "shop/payment.scxml, nowhere/payment.scxml, elsewhere/payment.scxml |"));
+    /* fmt compiles through it too, to compare the images */
+    CHECK_EQUAL(run("fmt --check -I shared/payments shop/checkout.scxml"), 1);
+    CHECK(has("output", "| shop/checkout.scxml | yes | no | same |"));
+    CHECK_EQUAL(run("help check"), 0);
+    CHECK(has("output", "| -I, --include DIR |"));
+}
+
+/* Every chart of the repository: its canonical text compiles to the image the chart does
+ * (fmt compares them, lines and columns aside), and formatting is idempotent. */
+static void test_canonical_corpus(void) {
+    char command[2048];
+    snprintf(command, sizeof command,
+             "cd '%s' && find . \\( -name .git -o -name node_modules -o -name build -o -name .claude "
+             "-o -name dist \\) -prune -o -name '*.scxml' -type f -print | sort > '%s/corpus.list'",
+             TA_TEST_REPOSITORY, TA_TEST_TEMPORARY_DIRECTORY);
+    CHECK_EQUAL(system(command), 0);
+    int charts = 0;
+    for (const char *at = text_of("corpus.list"); (at = strchr(at, '\n')); at++)
+        charts++;
+    CHECK(charts >= 10);
+    /* in place, writing nothing: no chart's canonical text means something else */
+    snprintf(command, sizeof command,
+             "cd '%s' && xargs '%s/tinyactors' fmt --check -f json < '%s/corpus.list' > '%s/output' 2> '%s/errors'",
+             TA_TEST_REPOSITORY, TA_TEST_PROGRAMS, TA_TEST_TEMPORARY_DIRECTORY, TA_TEST_TEMPORARY_DIRECTORY,
+             TA_TEST_TEMPORARY_DIRECTORY);
+    system(command);
+    CHECK(!strstr(text_of("output"), "\"image\": \"different\""));
+    int same = 0;
+    for (const char *at = text_of("output"); (at = strstr(at, "\"image\": \"same\"")); at++)
+        same++;
+    CHECK(same >= charts * 9 / 10); /* the rest do not compile here: a src elsewhere, a broken upload */
+    fprintf(stderr, "  %d charts, %d compiled to the same image formatted\n", charts, same);
+    /* a copy rewritten, then checked: nothing changes the second time */
+    snprintf(command, sizeof command,
+             "cd '%s' && rm -rf corpus && while read -r chart; do mkdir -p \"corpus/$(dirname \"$chart\")\" && "
+             "cp \"%s/$chart\" \"corpus/$chart\"; done < corpus.list && cd corpus && "
+             "xargs '%s/tinyactors' fmt -w < ../corpus.list > /dev/null 2>&1; "
+             "xargs '%s/tinyactors' fmt --check -f json < ../corpus.list > ../output 2> ../errors",
+             TA_TEST_TEMPORARY_DIRECTORY, TA_TEST_REPOSITORY, TA_TEST_PROGRAMS, TA_TEST_PROGRAMS);
+    system(command);
+    CHECK(!strstr(text_of("output"), "\"changed\": true"));
+    CHECK(!strstr(text_of("output"), "\"image\": \"different\""));
+}
+
 int main(void) {
     RUN(test_compile_and_inspect);
     RUN(test_a_system);
@@ -539,5 +728,8 @@ int main(void) {
     RUN(test_diff);
     RUN(test_lint_and_path);
     RUN(test_help_and_version);
+    RUN(test_canonical);
+    RUN(test_include_path);
+    RUN(test_canonical_corpus);
     TEST_MAIN_END();
 }

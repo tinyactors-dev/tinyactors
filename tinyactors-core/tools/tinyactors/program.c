@@ -23,16 +23,21 @@ static const ta_cli_option program_options[TOOL_PROGRAM_OPTION_COUNT] = {
 #define WARNINGS_AS_ERRORS                                                                         \
     {T("warnings-as-errors"), 'W', TA_CLI_OPTION_FLAG, 0, 0, 0, T(""),                            \
      T("refuse a chart that compiles with a warning")}
+#define INCLUDE                                                                                    \
+    {T("include"), 'I', TA_CLI_OPTION_VALUE, TA_CLI_OPTION_REPEATABLE, 0, 0, T("DIR"),            \
+     T("look for a src here when it is not beside the file naming it; repeat it for more, "      \
+       "searched in order")}
 #define CHART                                                                                      \
     {T("chart"), 'c', TA_CLI_OPTION_VALUE, TA_CLI_OPTION_REPEATABLE, 0, 0, T("NAME"),             \
      T("look at this chart only (by its name); repeat it for more")}
 
-static const ta_cli_option check_options[] = {WARNINGS_AS_ERRORS};
-static const ta_cli_option image_options[] = {WARNINGS_AS_ERRORS, CHART};
+static const ta_cli_option check_options[] = {WARNINGS_AS_ERRORS, INCLUDE};
+static const ta_cli_option image_options[] = {WARNINGS_AS_ERRORS, INCLUDE, CHART};
 
 static const ta_string_view emits[] = {[TOOL_EMIT_IMAGE] = T("image"), [TOOL_EMIT_C] = T("c")};
 static const ta_cli_option compile_options[] = {
     [TOOL_OPTION_WARNINGS_AS_ERRORS] = WARNINGS_AS_ERRORS,
+    [TOOL_OPTION_INCLUDE] = INCLUDE,
     [TOOL_COMPILE_OUTPUT] = {T("output"), 'o', TA_CLI_OPTION_VALUE, TA_CLI_OPTION_REQUIRED, 0, 0,
                              T("FILE"), T("where the image goes (- for standard output)")},
     [TOOL_COMPILE_EMIT] = {T("emit"), 'e', TA_CLI_OPTION_CHOICE, 0, 2, emits, T("KIND"),
@@ -45,13 +50,13 @@ static const ta_string_view expression_kinds[] = {
     T("condition"), T("value"), T("location"), T("script"),
     T("string"),    T("content"), T("item"),   T("global-script")};
 static const ta_cli_option expressions_options[] = {
-    WARNINGS_AS_ERRORS, CHART,
+    WARNINGS_AS_ERRORS, INCLUDE, CHART,
     [TOOL_EXPRESSIONS_KIND] = {T("kind"), 'k', TA_CLI_OPTION_CHOICE, TA_CLI_OPTION_REPEATABLE, 8,
                                expression_kinds, T("KIND"),
                                T("only expressions of this kind; repeat it for more")},
 };
 static const ta_cli_option diff_options[] = {
-    WARNINGS_AS_ERRORS, CHART,
+    WARNINGS_AS_ERRORS, INCLUDE, CHART,
     [TOOL_DIFF_EXIT_CODE] = {T("exit-code"), 0, TA_CLI_OPTION_FLAG, 0, 0, 0, T(""),
                              T("exit with 1 when the two differ (with --breaking: when a change breaks "
                                "running actors), as git diff --exit-code does")},
@@ -61,20 +66,28 @@ static const ta_cli_option diff_options[] = {
                        T("list the charts that did not change too")},
 };
 static const ta_cli_option lint_options[] = {
-    WARNINGS_AS_ERRORS, CHART,
+    WARNINGS_AS_ERRORS, INCLUDE, CHART,
     [TOOL_LINT_DENY] = {T("deny"), 'd', TA_CLI_OPTION_VALUE, TA_CLI_OPTION_REPEATABLE, 0, 0, T("RULE"),
                         T("exit with 1 when this rule finds something (all: any rule); repeat it for more")},
     [TOOL_LINT_ALLOW] = {T("allow"), 'a', TA_CLI_OPTION_VALUE, TA_CLI_OPTION_REPEATABLE, 0, 0, T("RULE"),
                          T("do not report this rule's findings (all: none); repeat it for more")},
 };
 static const ta_cli_option path_options[] = {
-    WARNINGS_AS_ERRORS, CHART,
+    WARNINGS_AS_ERRORS, INCLUDE, CHART,
     [TOOL_PATH_TO] = {T("to"), 't', TA_CLI_OPTION_VALUE, TA_CLI_OPTION_REQUIRED, 0, 0, T("STATE"),
                       T("the state the last configuration holds")},
     [TOOL_PATH_FROM] = {T("from"), 0, TA_CLI_OPTION_VALUE, 0, 0, 0, T("STATE"),
                         T("start in this state, entered with its defaults, instead of the initial configuration")},
     [TOOL_PATH_UNREACHABLE] = {T("unreachable"), 'u', TA_CLI_OPTION_FLAG, 0, 0, 0, T(""),
                                T("succeed when no path exists, and exit with 1 when one does")},
+};
+
+static const ta_cli_option canonical_options[] = {
+    [TOOL_CANONICAL_WRITE] = {T("write"), 'w', TA_CLI_OPTION_FLAG, 0, 0, 0, T(""),
+                              T("rewrite each file in place, whole or not at all")},
+    [TOOL_OPTION_INCLUDE] = INCLUDE,
+    [TOOL_CANONICAL_CHECK] = {T("check"), 0, TA_CLI_OPTION_FLAG, 0, 0, 0, T(""),
+                              T("write nothing; exit with 1 when a file is not in canonical form")},
 };
 
 #define OPTIONS(table) (uint32_t)(sizeof(table) / sizeof(table)[0]), (table)
@@ -110,6 +123,9 @@ static const ta_string_view lint_examples[] = {
 static const ta_string_view path_examples[] = {
     T("path order.scxml --to shipped"), T("path order.scxml --from cancelled --to paid --unreachable"),
     T("path -f json --chart payment shop.tai --to settled")};
+static const ta_string_view canonical_examples[] = {
+    T("fmt order.scxml"), T("fmt -w charts/*.scxml system.xml"),
+    T("fmt --check charts/*.scxml"), T("fmt --check -f json -I shared order.scxml")};
 static const ta_string_view help_examples[] = {T("help"), T("help compile"),
                                                T("help -f json inspect")};
 static const ta_string_view version_examples[] = {T("version"), T("version -f json")};
@@ -128,6 +144,7 @@ typedef enum tool_command_index {
     TOOL_COMMAND_DIFF,
     TOOL_COMMAND_LINT,
     TOOL_COMMAND_PATH,
+    TOOL_COMMAND_CANONICAL,
     TOOL_COMMAND_HELP,
     TOOL_COMMAND_VERSION,
     TOOL_COMMAND_COUNT
@@ -142,7 +159,7 @@ static const ta_cli_command commands[TOOL_COMMAND_COUNT] = {
         {T("compile"), T("compile charts or a system manifest into an image"),
          T("Compiles SCXML charts (the first is the image's default boot chart) or one <system> "
            "manifest into a .tai image, reading each static src relative to the file that names "
-           "it. The answer lists the diagnostics and what the image holds; when the image goes "
+           "it, then in each -I directory. The answer lists the diagnostics and what the image holds; when the image goes "
            "to standard output (-o -), the answer goes to standard error."),
          T("INPUT..."), 1, TA_CLI_UNBOUNDED, OPTIONS(compile_options), EXAMPLES(compile_examples)},
     [TOOL_COMMAND_CHECK] = {T("check"), T("check that charts compile, or that an image verifies"),
@@ -207,6 +224,19 @@ static const ta_cli_command commands[TOOL_COMMAND_COUNT] = {
            "events that take it and the condition it needs. Exits with 1 when no path exists (with "
            "--unreachable: when one does). The chart is the first one, or the one --chart names."),
          T("INPUT..."), 1, TA_CLI_UNBOUNDED, OPTIONS(path_options), EXAMPLES(path_examples)},
+    [TOOL_COMMAND_CANONICAL] =
+        {T("fmt"), T("rewrite charts and manifests in the canonical layout"),
+         T("Writes each chart or system manifest in one canonical layout: two spaces per element "
+           "level, one element, comment or processing instruction per line, attributes in the "
+           "order written. Only the whitespace between elements changes: comments are kept where "
+           "they are, attribute values as written, and the content of <script>, <data>, "
+           "<content>, <assign>, of elements of other namespaces and of mixed content byte for "
+           "byte. Each file's canonical text is compiled and must give the image its original "
+           "gives (lines and columns aside), or the file is refused. One file goes to standard "
+           "output; -w rewrites the files in place, each whole or not at all; --check writes "
+           "nothing and exits with 1 when a file is not canonical. With -w or --check the answer "
+           "lists the files and whether each changed."),
+         T("FILE..."), 1, TA_CLI_UNBOUNDED, OPTIONS(canonical_options), EXAMPLES(canonical_examples)},
     [TOOL_COMMAND_HELP] = {T("help"), T("describe a command, or the program"), T(""),
                            T("[COMMAND]"), 0, 1, 0, 0, EXAMPLES(help_examples)},
     [TOOL_COMMAND_VERSION] = {T("version"), T("the version of the program and its library"), T(""),
@@ -227,7 +257,8 @@ static const tool_run runs[TOOL_COMMAND_COUNT] = {
     [TOOL_COMMAND_DATA] = tool_data,               [TOOL_COMMAND_EXPRESSIONS] = tool_expressions,
     [TOOL_COMMAND_DISASSEMBLE] = tool_disassemble, [TOOL_COMMAND_GRAPH] = tool_graph,
     [TOOL_COMMAND_DIFF] = tool_diff,               [TOOL_COMMAND_LINT] = tool_lint,
-    [TOOL_COMMAND_PATH] = tool_path,               [TOOL_COMMAND_HELP] = tool_help,
+    [TOOL_COMMAND_PATH] = tool_path,               [TOOL_COMMAND_CANONICAL] = tool_canonical,
+    [TOOL_COMMAND_HELP] = tool_help,
     [TOOL_COMMAND_VERSION] = tool_version,
 };
 

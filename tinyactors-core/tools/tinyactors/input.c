@@ -31,7 +31,7 @@ static int is_space(char c) {
 /* An image by its magic; XML by the local name of its root element, past
  * the byte order mark, the declaration, comments and a doctype. TA_NIL: none
  * of them. */
-static uint32_t classify(ta_bytes bytes) {
+uint32_t tool_input_kind_of(ta_bytes bytes) {
     const char *text = (const char *)bytes.pointer;
     if (starts_with(bytes, 0, "TAI1")) return TOOL_INPUT_IMAGE;
     size_t at = starts_with(bytes, 0, "\xEF\xBB\xBF") ? 3 : 0;
@@ -55,30 +55,62 @@ static uint32_t classify(ta_bytes bytes) {
     return TA_NIL;
 }
 
-/* ---- the resolver: a src relative to the file that names it -------------------------- */
+/* ---- the resolver: a src relative to the file that names it, then in each -I directory -- */
+
+/* `directory` and `source` joined into a path in the arena: "directory/source". */
+static ta_string_view joined_path(tool *t, ta_string_view directory, ta_string_view source) {
+    tool_text path;
+    tool_text_init(t, &path);
+    tool_text_append(&path, directory);
+    if (directory.length && directory.pointer[directory.length - 1] != '/')
+        tool_text_append(&path, ta_string("/"));
+    tool_text_append(&path, source);
+    return tool_text_view(&path);
+}
+
+/* The candidate read into out->source when it can be: 1. */
+static int found(tool *t, ta_string_view candidate, ta_resolve_result *out) {
+    tool_read read = {candidate, t->arena};
+    ta_bytes bytes;
+    if (!candidate.pointer || t->platform->read(t->platform->context, &read, &bytes) != TA_OK) return 0;
+    out->source.name = candidate;
+    out->source.text = (ta_string_view){(const char *)bytes.pointer, (uint32_t)bytes.length};
+    return 1;
+}
 
 static ta_status resolve(void *context, const ta_resolve_request *request, ta_resolve_result *out) {
     tool *t = (tool *)context;
-    tool_text path;
-    tool_text_init(t, &path);
     int absolute = request->source.length && request->source.pointer[0] == '/';
-    if (!absolute) {
-        uint32_t directory = request->base.length;
-        while (directory && request->base.pointer[directory - 1] != '/')
-            directory--;
-        tool_text_append(&path, (ta_string_view){request->base.pointer, directory});
+    uint32_t directory = request->base.length;
+    while (!absolute && directory && request->base.pointer[directory - 1] != '/')
+        directory--;
+    tool_text first;
+    tool_text_init(t, &first);
+    tool_text_append(&first, (ta_string_view){request->base.pointer, absolute ? 0 : directory});
+    tool_text_append(&first, request->source);
+    ta_string_view relative = tool_text_view(&first);
+    if (found(t, relative, out)) return TA_OK;
+    /* the include path, in the order given, for a relative src */
+    uint32_t includes = absolute ? 0 : tool_count(t, TOOL_OPTION_INCLUDE);
+    tool_text message;
+    tool_text_init(t, &message);
+    tool_text_append(&message, ta_string("cannot read the file"));
+    if (includes) {
+        tool_text_append(&message, ta_string("; looked for it at "));
+        tool_text_append(&message, relative);
     }
-    tool_text_append(&path, request->source);
-    ta_string_view name = tool_text_view(&path);
-    out->source.name = name;
-    tool_read read = {name, t->arena};
-    ta_bytes bytes;
-    if (!name.pointer || t->platform->read(t->platform->context, &read, &bytes) != TA_OK) {
-        out->error.message = ta_string("cannot read the file");
-        return TA_ERROR_INVALID;
+    for (uint32_t i = 0; i < t->parsed->value_count && includes; i++) {
+        const ta_cli_value *value = &t->parsed->values[i];
+        if (value->option.scope != TA_CLI_SCOPE_COMMAND || value->option.option != TOOL_OPTION_INCLUDE)
+            continue;
+        ta_string_view candidate = joined_path(t, value->text, request->source);
+        if (found(t, candidate, out)) return TA_OK;
+        tool_text_append(&message, ta_string(", "));
+        tool_text_append(&message, candidate);
     }
-    out->source.text = (ta_string_view){(const char *)bytes.pointer, (uint32_t)bytes.length};
-    return TA_OK;
+    out->source.name = relative;
+    out->error.message = tool_text_view(&message);
+    return TA_ERROR_INVALID;
 }
 
 /* ---- loading -------------------------------------------------------------------------- */
@@ -118,6 +150,23 @@ static ta_status keep(tool *t, const ta_compile_result *result, tool_image *out)
     return TA_OK;
 }
 
+ta_status tool_compile_sources(tool *t, const tool_compilation *compilation, tool_image *out) {
+    ta_compile_options options;
+    ta_memset(&options, 0, sizeof options);
+    options.size = sizeof options;
+    options.flags = compilation->flags;
+    options.alloc = ta_growable_arena_allocator(t->arena);
+    options.resolve = resolve;
+    options.resolve_context = t;
+    ta_compile_result *result = 0;
+    out->status = compilation->kind == TOOL_INPUT_MANIFEST
+                      ? ta_compile_system(&options, &compilation->sources.pointer[0], &result)
+                      : ta_compile_charts(&options, compilation->sources, &result);
+    ta_status kept = result ? keep(t, result, out) : TA_ERROR_NO_MEMORY;
+    ta_compile_free(result);
+    return kept;
+}
+
 static void say_cannot_read(tool *t, ta_string_view path) {
     tool_text text;
     tool_text_init(t, &text);
@@ -148,7 +197,7 @@ ta_status tool_load(tool *t, tool_inputs inputs, tool_image *out) {
             t->exit = TOOL_EXIT_FAILURE;
             return TA_ERROR_INVALID;
         }
-        uint32_t this_kind = classify(bytes);
+        uint32_t this_kind = tool_input_kind_of(bytes);
         if (this_kind == TA_NIL || (kind != TA_NIL && (this_kind != kind || kind != TOOL_INPUT_CHART))) {
             tool_text text;
             tool_text_init(t, &text);
@@ -168,19 +217,8 @@ ta_status tool_load(tool *t, tool_inputs inputs, tool_image *out) {
     }
     out->kind = kind;
     if (kind != TOOL_INPUT_IMAGE) {
-        ta_compile_options options;
-        ta_memset(&options, 0, sizeof options);
-        options.size = sizeof options;
-        options.flags = inputs.flags;
-        options.alloc = ta_growable_arena_allocator(t->arena);
-        options.resolve = resolve;
-        options.resolve_context = t;
-        ta_compile_result *result = 0;
-        out->status = kind == TOOL_INPUT_MANIFEST
-                          ? ta_compile_system(&options, &sources[0], &result)
-                          : ta_compile_charts(&options, (ta_source_list){sources, inputs.count}, &result);
-        ta_status kept = result ? keep(t, result, out) : TA_ERROR_NO_MEMORY;
-        ta_compile_free(result);
+        tool_compilation compilation = {kind, inputs.flags, {sources, inputs.count}};
+        ta_status kept = tool_compile_sources(t, &compilation, out);
         if (kept != TA_OK) return t->exit = TOOL_EXIT_FAILURE, kept;
         if (out->status != TA_OK) {
             t->exit = TOOL_EXIT_REFUSED;

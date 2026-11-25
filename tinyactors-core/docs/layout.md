@@ -99,8 +99,9 @@ implementation of that layer). Layer dependency rules are in
 │   ├── compile/               hosted; allocates through ta_allocator
 │   │   ├── compile_internal.h ✅ the compiler's shared state (ta_compiler)
 │   │   ├── compile_support.[ch] ✅ chunk arena, vectors, string map, diagnostics, default allocator
-│   │   ├── xml.[ch]           ✅ minimal non-validating XML parser (namespaces, CDATA, entities)
-│   │   ├── write.c            ✅ ta_xml_writer: XML from calls, for charts a binding builds
+│   │   ├── xml.[ch]           ✅ minimal non-validating XML parser (namespaces, CDATA, entities;
+│   │   │                         every piece of content in order, for fmt, when asked)
+│   │   ├── write.c            ✅ ta_xml_writer: XML from calls, for charts a binding builds and documents fmt writes again
 │   │   ├── scxml.c            ✅ SCXML -> records: states, transitions, domains, bytecode, sends,
 │   │   │                         invokes, data, delays
 │   │   ├── link.c             ✅ string interning, chart queue, event trie, image emission
@@ -152,7 +153,8 @@ implementation of that layer). Layer dependency rules are in
 │   ├── vendor_quickjs.py      ✅ fetch + verify the pinned quickjs-ng release
 │   ├── amalgamate.py          ✅ dist/tinyactors.h + dist/tinyactors.c single-file distribution
 │   ├── tinyactors/            ✅ the tinyactors command (docs/cli.md): git-style commands over
-│   │                             charts, manifests and images, answers in markdown, json or xml;
+│   │                             charts, manifests and images, answers in markdown, json or xml,
+│   │                             fmt (canonical.c) writing charts again in one layout;
 │   │                             platform.c the only file with the C library (tests/unit/test_tool.c)
 │   └── tarun/                 ◻ runner CLI: image + scripted events + simulated time -> trace
 │

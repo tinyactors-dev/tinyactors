@@ -1,8 +1,9 @@
 # The tinyactors command
 
-`tinyactors` compiles charts and system manifests into images, and looks
-into charts, manifests and images: what they hold, how their executable
-content runs, how two versions differ. Every command answers in Markdown
+`tinyactors` compiles charts and system manifests into images, looks
+into charts, manifests and images (what they hold, how their executable
+content runs, how two versions differ), and writes charts and manifests in
+one canonical layout. Every command answers in Markdown
 for people, or in JSON or XML for programs, with the same members in the
 same order.
 
@@ -50,9 +51,21 @@ A command that looks into an image takes, as its arguments:
   first the default boot chart.
 
 The kind is read from the bytes, not the file's name: an image starts with
-`TAI1`, and XML is told by its root element. A chart's static `src` is read
-relative to the file that names it. `-` reads standard input. Compiled
-inputs give their diagnostics with the answer.
+`TAI1`, and XML is told by its root element. `-` reads standard input.
+Compiled inputs give their diagnostics with the answer.
+
+A chart's static `src` (an `<invoke src>`, a `<script src>`, a `<data
+src>`, a manifest's `<chart src>`) is read relative to the file that names
+it, then in each directory given with `-I` / `--include DIR`, in the order
+given; an absolute `src` only where it says. A file found through the
+include path is named by where it was found, in diagnostics and in the
+image (`inspect`'s sources). A `src` found nowhere is refused at the path
+beside the file that names it, as without `-I`, and the message lists
+every path tried:
+
+```sh
+tinyactors compile -I shared/payments -I vendor/charts shop/checkout.scxml -o checkout.tai
+```
 
 ## Output
 
@@ -100,13 +113,16 @@ column.
 | `diff` | OLD NEW | Two versions, each an image, a manifest or a chart, compared chart by chart (matched by name) as statecharts: states, transitions, data, executable content, invokes and the events each state handles, each change marked breaking for actors running the old version or not, and what a migration does to them. `--breaking` lists only the breaking changes, `--all` the unchanged charts too, and `--exit-code` exits with 1 when they differ (with `--breaking`, when a change breaks running actors). See [Diff](#diff). |
 | `lint` | INPUT... | What cannot work as written, found without running the charts: each finding's rule, severity (warning or note), chart, state, transition, event, line (0 when the image has none) and a sentence saying what it means. `--deny RULE` (repeatable, `all` for every rule) exits with 1 when that rule finds something; `--allow RULE` (repeatable, `all`) leaves its findings out. See [Lint](#lint). |
 | `path` | INPUT... | The shortest sequence of transitions from the chart's initial configuration (or `--from STATE`) to a configuration holding `--to STATE`: each step's events (or eventless), condition, source, targets and the atomic states active after it; or that no path exists, or that the search stopped at its limit. `--unreachable` asks the opposite: success when no path exists. `--chart` names the chart (default: the first). See [Path](#path). |
+| `fmt` | FILE... | Writes charts and system manifests in one canonical layout: the canonical text of one file to standard output, `-w` / `--write` rewrites the files in place (each whole or not at all), `--check` writes nothing and exits with 1 when a file is not canonical. With `-w` or `--check` the answer lists the files: whether each changed, whether it was refused, and whether its canonical text compiles to the same image. See [Fmt](#fmt). |
 | `help` | [COMMAND] | The program's commands, or a command's usage, options and examples. |
 | `version` | | The program's version (a development build's names its commit: `0.4.0-dev.<date>.<n>.g<sha>`), its library's version and ABI, and the image format version it reads. |
 
 The commands that take inputs also take `-W` / `--warnings-as-errors` (a
-compiled input with a warning is refused), and all but `compile` and
-`check` take `-c` / `--chart NAME`, repeatable, to look at those charts
-only.
+compiled input with a warning is refused) and `-I` / `--include DIR`,
+repeatable (where a `src` is looked for next, [Inputs](#inputs)), and all
+but `compile` and `check` take `-c` / `--chart NAME`, repeatable, to look at
+those charts only. `fmt` takes `-I` too: it compiles each file to compare
+images.
 
 Program options: `-f` / `--format FORMAT`, `-h` / `--help` (any command:
 describe it), `--version`.
@@ -116,7 +132,7 @@ describe it), `--version`.
 | Status | When |
 |---|---|
 | 0 | the command did what was asked |
-| 1 | an input was refused: a chart did not compile, an image did not verify, a file is none of the three; or `diff --exit-code` found differences (breaking ones, with `--breaking`); or `lint` found something a `--deny` rule names; or `path` found no path (with `--unreachable`: found one), or stopped at its limit |
+| 1 | an input was refused: a chart did not compile, an image did not verify, a file is none of the three; or `diff --exit-code` found differences (breaking ones, with `--breaking`); or `lint` found something a `--deny` rule names; or `path` found no path (with `--unreachable`: found one), or stopped at its limit; or `fmt` refused a file, or `fmt --check` found one not canonical |
 | 2 | the command line was not understood (and `tinyactors` alone, after printing the commands) |
 | 3 | a file could not be read or written, or memory ran out |
 
@@ -132,6 +148,8 @@ tinyactors diff --breaking --exit-code deployed.tai order.scxml   # in CI
 tinyactors lint --deny all --allow unsent-event system.xml        # in CI
 tinyactors path order.scxml --to shipped
 tinyactors compile order.scxml -o - | tinyactors disassemble -
+tinyactors fmt -w charts/*.scxml system.xml
+tinyactors fmt --check charts/*.scxml                               # in CI
 ```
 
 ## Diff
@@ -333,6 +351,68 @@ Since events are free, a path may take an event the chart only gets in a
 later situation (`done.state.approved` before both regions are final):
 read a path as the transitions to take, each of which needs its event and
 its condition.
+
+## Fmt
+
+`tinyactors fmt` writes a chart or a system manifest the way
+`ta_xml_writer` writes XML, so two people's edits of a chart differ only
+where they change it, and a reviewer reads one layout:
+
+- two spaces per element level, one element, comment or processing
+  instruction per line, no blank lines, and the file ending with a line
+  end;
+- attributes in the order written, one space apart, each value byte for
+  byte as written between its quotes (`cond="total &gt; 100"` stays so),
+  quoted with `"` unless the value holds one;
+- comments where they are, each on a line of its own; the XML declaration
+  and processing instructions kept; namespaces and their prefixes kept;
+- the whole content of `<script>`, `<data>`, `<content>` and `<assign>`,
+  of an element of another namespace, and of any element with text or
+  CDATA of its own, byte for byte: a script's CDATA, its indentation and
+  its line ends stay as they are.
+
+So only the whitespace between elements changes. Before it writes
+anything, `fmt` compiles each file and its canonical text, as the file
+(its `src` read as `compile` reads it, `-I` included), with
+`TA_COMPILE_STRIP_DEBUG`: an image records each expression's line and
+column, which a new layout moves, and nothing else. The two images must
+be the same bytes; when they are not, the file is refused and left as it
+is (a fault in `fmt`). A file that does not compile as it is (a `src`
+found nowhere) is formatted without that comparison, and the answer says
+`not compiled`. A file that is not well-formed XML, holds a document type
+declaration, or a comment XML does not allow (`--` inside), is refused.
+
+With one file and neither option, the canonical text is the answer, on
+standard output. Several files need `-w` or `--check` (written one after
+another to standard output, they would be no document). `-w` writes only
+the files that change, each through a temporary file renamed over it.
+
+```sh
+tinyactors fmt order.scxml > order.formatted.scxml
+tinyactors fmt -w charts/*.scxml system.xml
+tinyactors fmt --check charts/*.scxml          # exits with 1, naming the files
+tinyactors fmt --check -f json -I shared charts/*.scxml | jq '.results[] | select(.changed) | .file'
+```
+
+The answer, with `-w` or `--check`:
+
+```markdown
+- **Mode**: check
+- **Files**: 2
+- **Changed**: 1
+- **Refused**: 0
+
+## Results
+
+| File | Changed | Refused | Image |
+| --- | --- | --- | --- |
+| order.scxml | yes | no | same |
+| payment.scxml | no | no | same |
+```
+
+Every chart in the repository is formatted by core's tests
+(`tests/unit/test_tool.c`): its canonical text compiles to the same image,
+and formatting it a second time changes nothing.
 
 ## Graph
 

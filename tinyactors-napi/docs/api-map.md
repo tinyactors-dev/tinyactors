@@ -349,8 +349,11 @@ function decided here for the API review is marked so; its decision is in
   `ta_host_snapshot_segments` (`Host.restore` reads the images from the
   pack) (log `l-p0-inventory-segments`).
 - **The XML writer** (`compile.h`): `ta_xml_writer_new`,
-  `ta_xml_writer_open`, `ta_xml_writer_attribute`, `ta_xml_writer_text`,
-  `ta_xml_writer_close`, `ta_xml_writer_finish`, `ta_xml_writer_free`.
+  `ta_xml_writer_open`, `ta_xml_writer_attribute`,
+  `ta_xml_writer_attribute_markup`, `ta_xml_writer_text`,
+  `ta_xml_writer_markup`, `ta_xml_writer_comment`,
+  `ta_xml_writer_instruction`, `ta_xml_writer_close`,
+  `ta_xml_writer_finish`, `ta_xml_writer_free`.
   The chart builder that would use it is the convenience layer's, after
   M1 and when the maintainer picks it; the direct layer gains an item
   over it in the same change (log `l-p0-inventory-xml-writer`).

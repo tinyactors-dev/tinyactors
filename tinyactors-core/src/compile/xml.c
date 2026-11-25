@@ -22,6 +22,9 @@ typedef struct xml_parser {
     const char *default_namespace;
     ta_vector namespace_bindings; /* nsbind */
     ta_string_map namespace_map;  /* prefix -> namespace_bindings index */
+    /* the content, when the request asks for it: where the document's next
+     * piece goes (NULL: the content is not kept) */
+    ta_xml_content **document_tail;
 } xml_parser;
 
 typedef struct namespace_binding {
@@ -36,6 +39,8 @@ typedef struct xml_frame {
     uint32_t text_start;
     uint32_t namespace_mark;       /* namespace_bindings.length when the element opened */
     const char *default_namespace; /* default namespace outside the element */
+    ta_xml_content **tail;         /* where the element's next piece of content goes */
+    ta_xml_content *piece;         /* the element in its parent's content */
 } xml_frame;
 
 static void loc(xml_parser *parser, uint32_t offset, uint32_t *line, uint32_t *col) {
@@ -72,6 +77,28 @@ static int stop(xml_parser *parser, uint32_t i) {
     parser->failed = 1;
     *parser->aborted = 1;
     return 1;
+}
+
+/* The piece of content from `start` to the parser's position, at the end of
+ * the open element's content (or of the document's), when the request asks
+ * for content; NULL otherwise. */
+static ta_xml_content *keep(xml_parser *parser, uint32_t kind, uint32_t start) {
+    if (!parser->document_tail) return NULL;
+    ta_xml_content *piece =
+        (ta_xml_content *)ta_compile_alloc(parser->arena, sizeof *piece, parser->out_of_memory);
+    if (!piece) {
+        parser->failed = 1;
+        return NULL;
+    }
+    piece->kind = kind;
+    piece->markup = (ta_string_view){parser->source + start, parser->position - start};
+    ta_xml_content ***tail =
+        parser->stack.length
+            ? &TA_VECTOR_AT(&parser->stack, xml_frame, parser->stack.length - 1).tail
+            : &parser->document_tail;
+    **tail = piece;
+    *tail = &piece->next;
+    return piece;
 }
 
 static int starts(xml_parser *parser, const char *lit) {
@@ -338,6 +365,7 @@ static void open_tag(xml_parser *parser) {
         uint32_t vl;
         attribute->value = finish_vector_string(parser, &(vector_string_request){&parser->text, start, &vl});
         attribute->value_length = vl;
+        attribute->markup = (ta_string_view){parser->source + vs, ve - vs};
         if (!attribute->name || !attribute->value) {
             parser->failed = 1;
             return;
@@ -375,10 +403,14 @@ static void open_tag(xml_parser *parser) {
         parser->position++;
         node->inner_start = node->inner_end = parser->position;
         node->text = ta_compile_copy(parser->arena, (ta_string_view){"", (uint32_t)(0)}, parser->out_of_memory);
+        ta_xml_content *piece = keep(parser, TA_XML_CONTENT_ELEMENT, tag_offset);
+        if (piece) piece->element = node;
         return;
     }
     parser->position++; /* '>' */
     node->inner_start = parser->position;
+    ta_xml_content *piece = keep(parser, TA_XML_CONTENT_ELEMENT, tag_offset);
+    if (piece) piece->element = node;
     xml_frame *f = (xml_frame *)ta_vector_push(&parser->stack);
     if (!f) {
         parser->failed = 1;
@@ -388,6 +420,8 @@ static void open_tag(xml_parser *parser) {
     f->text_start = parser->text.length;
     f->namespace_mark = mark;
     f->default_namespace = outer_default_namespace;
+    f->tail = &node->content;
+    f->piece = piece;
 }
 
 static ta_xml_node *close_tag(xml_parser *parser) {
@@ -420,6 +454,8 @@ static ta_xml_node *close_tag(xml_parser *parser) {
         return NULL;
     }
     node->inner_end = offset;
+    if (f->piece) /* its markup ends with its end tag */
+        f->piece->markup.length = parser->position - (uint32_t)(f->piece->markup.pointer - parser->source);
     node->text = finish_vector_string(parser, &(vector_string_request){&parser->text, f->text_start, &node->text_length});
     unscope_ns(parser, f->namespace_mark, f->default_namespace);
     parser->stack.length--;
@@ -445,6 +481,10 @@ ta_xml_node *ta_xml_parse(ta_growable_arena *arena, const ta_xml_parse_request *
     ta_vector_init(&parser.stack, request->allocator, sizeof(xml_frame));
     ta_vector_init(&parser.namespace_bindings, request->allocator, sizeof(namespace_binding));
     ta_string_map_init(&parser.namespace_map, request->allocator);
+    if (request->document) {
+        *request->document = NULL;
+        parser.document_tail = request->document;
+    }
     if (length >= 3 && (unsigned char)source[0] == 0xEF && (unsigned char)source[1] == 0xBB &&
         (unsigned char)source[2] == 0xBF)
         parser.position = 3;
@@ -454,6 +494,7 @@ ta_xml_node *ta_xml_parse(ta_growable_arena *arena, const ta_xml_parse_request *
             uint32_t at = parser.position;
             if (starts(&parser, "<!--")) {
                 if (!find(&parser, "-->")) error_at(&parser, at, "unterminated comment");
+                else keep(&parser, TA_XML_CONTENT_COMMENT, at);
             } else if (starts(&parser, "<![CDATA[")) {
                 parser.position += 9;
                 uint32_t cs = parser.position;
@@ -467,9 +508,12 @@ ta_xml_node *ta_xml_parse(ta_growable_arena *arena, const ta_xml_parse_request *
                 }
                 char *dst = (char *)ta_vector_push_many(&parser.text, parser.position - 3 - cs);
                 if (dst) memcpy(dst, parser.source + cs, parser.position - 3 - cs);
+                keep(&parser, TA_XML_CONTENT_CDATA, at);
             } else if (starts(&parser, "<?")) {
                 if (!find(&parser, "?>"))
                     error_at(&parser, at, "unterminated processing instruction");
+                else
+                    keep(&parser, TA_XML_CONTENT_INSTRUCTION, at);
             } else if (starts(&parser, "<!")) {
                 int depth = 0;
                 while (parser.position < parser.length) {
@@ -478,6 +522,7 @@ ta_xml_node *ta_xml_parse(ta_growable_arena *arena, const ta_xml_parse_request *
                     if (c == ']') depth--;
                     if (c == '>' && depth <= 0) break;
                 }
+                keep(&parser, TA_XML_CONTENT_DECLARATION, at);
             } else if (starts(&parser, "</")) {
                 close_tag(&parser);
             } else {
@@ -489,6 +534,7 @@ ta_xml_node *ta_xml_parse(ta_growable_arena *arena, const ta_xml_parse_request *
                 parser.position++;
             if (parser.stack.length) {
                 unescape(&parser, &parser.text, ts, parser.position);
+                keep(&parser, TA_XML_CONTENT_TEXT, ts);
             } else {
                 for (uint32_t i = ts; i < parser.position; i++)
                     if (!is_space(parser.source[i])) {

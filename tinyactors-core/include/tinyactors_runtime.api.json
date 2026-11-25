@@ -720,12 +720,50 @@
       "implemented": true
     },
     {
+      "name": "ta_xml_writer_attribute_markup",
+      "returns": "ta_status",
+      "params": [
+        {
+          "name": "writer",
+          "type": "ta_xml_writer *"
+        },
+        {
+          "name": "name",
+          "type": "ta_string_view"
+        },
+        {
+          "name": "markup",
+          "type": "ta_string_view"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
       "name": "ta_xml_writer_close",
       "returns": "ta_status",
       "params": [
         {
           "name": "writer",
           "type": "ta_xml_writer *"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "ta_xml_writer_comment",
+      "returns": "ta_status",
+      "params": [
+        {
+          "name": "writer",
+          "type": "ta_xml_writer *"
+        },
+        {
+          "name": "text",
+          "type": "ta_string_view"
         }
       ],
       "public": true,
@@ -756,6 +794,44 @@
         {
           "name": "writer",
           "type": "ta_xml_writer *"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "ta_xml_writer_instruction",
+      "returns": "ta_status",
+      "params": [
+        {
+          "name": "writer",
+          "type": "ta_xml_writer *"
+        },
+        {
+          "name": "target",
+          "type": "ta_string_view"
+        },
+        {
+          "name": "content",
+          "type": "ta_string_view"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "ta_xml_writer_markup",
+      "returns": "ta_status",
+      "params": [
+        {
+          "name": "writer",
+          "type": "ta_xml_writer *"
+        },
+        {
+          "name": "markup",
+          "type": "ta_string_view"
         }
       ],
       "public": true,

@@ -157,6 +157,21 @@ typedef struct tool_inputs {
  * the report for diagnostics) and t->exit set. */
 ta_status tool_load(tool *t, tool_inputs inputs, tool_image *out);
 
+/* What the bytes are: a tool_input_kind, TA_NIL when none. */
+uint32_t tool_input_kind_of(ta_bytes bytes);
+
+/* Sources to compile, already read: charts, or one manifest. */
+typedef struct tool_compilation {
+    uint32_t kind;  /* TOOL_INPUT_CHART or TOOL_INPUT_MANIFEST */
+    uint32_t flags; /* TA_COMPILE_* */
+    ta_source_list sources;
+} tool_compilation;
+/* Compile through the command's resolver (a src relative to the file naming
+ * it, then in each -I directory), into out->bytes and out->diagnostics, both
+ * in the arena; out->status is the compile's. TA_ERROR_NO_MEMORY: what it
+ * made could not be kept. Nothing is told. */
+ta_status tool_compile_sources(tool *t, const tool_compilation *compilation, tool_image *out);
+
 /* The inputs' diagnostics as a list member "diagnostics" of the report's
  * open object. */
 void tool_report_diagnostics(tool *t, const tool_image *image);
@@ -182,29 +197,35 @@ ta_status tool_select_charts(tool *t, tool_selection selection, tool_charts *out
  * those after them in each command's table (program.c). */
 typedef enum tool_input_option {
     TOOL_OPTION_WARNINGS_AS_ERRORS = 0, /* -W: a compiled input's warnings refuse it */
-    TOOL_OPTION_CHART = 1               /* --chart NAME, repeatable (not check, not compile) */
+    TOOL_OPTION_INCLUDE = 1,            /* -I DIR, repeatable: where a src is looked for next */
+    TOOL_OPTION_CHART = 2               /* --chart NAME, repeatable (not check, not compile) */
 } tool_input_option;
 typedef enum tool_compile_option {
-    TOOL_COMPILE_OUTPUT = 1, /* -o FILE */
-    TOOL_COMPILE_EMIT = 2,   /* --emit image|c */
-    TOOL_COMPILE_SYMBOL = 3  /* --symbol NAME: the C array's name */
+    TOOL_COMPILE_OUTPUT = 2, /* -o FILE */
+    TOOL_COMPILE_EMIT = 3,   /* --emit image|c */
+    TOOL_COMPILE_SYMBOL = 4  /* --symbol NAME: the C array's name */
 } tool_compile_option;
 typedef enum tool_emit { TOOL_EMIT_IMAGE = 0, TOOL_EMIT_C = 1 } tool_emit;
-typedef enum tool_expressions_option { TOOL_EXPRESSIONS_KIND = 2 } tool_expressions_option;
+typedef enum tool_expressions_option { TOOL_EXPRESSIONS_KIND = 3 } tool_expressions_option;
 typedef enum tool_diff_option {
-    TOOL_DIFF_EXIT_CODE = 2, /* --exit-code: 1 when they differ (only breaking ones with --breaking) */
-    TOOL_DIFF_BREAKING = 3,  /* --breaking: only the differences that break running actors */
-    TOOL_DIFF_ALL = 4        /* --all: unchanged charts too */
+    TOOL_DIFF_EXIT_CODE = 3, /* --exit-code: 1 when they differ (only breaking ones with --breaking) */
+    TOOL_DIFF_BREAKING = 4,  /* --breaking: only the differences that break running actors */
+    TOOL_DIFF_ALL = 5        /* --all: unchanged charts too */
 } tool_diff_option;
+/* fmt's: -I at TOOL_OPTION_INCLUDE, as every command that reads charts */
+typedef enum tool_canonical_option {
+    TOOL_CANONICAL_WRITE = 0, /* -w: rewrite the files in place */
+    TOOL_CANONICAL_CHECK = 2  /* --check: write nothing; 1 when a file is not canonical */
+} tool_canonical_option;
 
 typedef enum tool_lint_option {
-    TOOL_LINT_DENY = 2, /* --deny RULE, repeatable ("all"): its findings exit 1 */
-    TOOL_LINT_ALLOW = 3 /* --allow RULE, repeatable ("all"): its findings are not reported */
+    TOOL_LINT_DENY = 3, /* --deny RULE, repeatable ("all"): its findings exit 1 */
+    TOOL_LINT_ALLOW = 4 /* --allow RULE, repeatable ("all"): its findings are not reported */
 } tool_lint_option;
 typedef enum tool_path_option {
-    TOOL_PATH_TO = 2,         /* --to STATE (required) */
-    TOOL_PATH_FROM = 3,       /* --from STATE */
-    TOOL_PATH_UNREACHABLE = 4 /* --unreachable: succeed when no path exists */
+    TOOL_PATH_TO = 3,         /* --to STATE (required) */
+    TOOL_PATH_FROM = 4,       /* --from STATE */
+    TOOL_PATH_UNREACHABLE = 5 /* --unreachable: succeed when no path exists */
 } tool_path_option;
 
 /* What a command that looks into an image starts with: its arguments as
@@ -245,5 +266,6 @@ void tool_graph(tool *t);
 void tool_diff(tool *t);
 void tool_lint(tool *t);
 void tool_path(tool *t);
+void tool_canonical(tool *t);
 
 #endif /* TINYACTORS_TOOL_H */

@@ -133,8 +133,12 @@ static uint32_t intern_expression(chart_builder *builder, const expression_input
     if (!expression) return 0;
     expression->kind = kind;
     expression->source = ta_compiler_string(builder->compiler, source, length);
-    expression->line = at ? at->line : 0;
-    expression->column = at ? at->column : 0;
+    /* TA_COMPILE_STRIP_DEBUG: no position, so a text laid out again
+     * compiles to the same image */
+    const ta_compile_options *options = builder->compiler->options;
+    int strip = options && (options->flags & TA_COMPILE_STRIP_DEBUG);
+    expression->line = at && !strip ? at->line : 0;
+    expression->column = at && !strip ? at->column : 0;
     uint32_t id = builder->compiler->expressions.length - 1 - builder->first_expression;
     ta_string_map_put(&builder->expression_map, key, key_length, id);
     return id;
@@ -1211,7 +1215,7 @@ void ta_compiler_compile_chart(ta_compiler *compiler, uint32_t index) {
         pending->root =
             ta_xml_parse(&compiler->arena, &(ta_xml_parse_request){
                 {pending->text, pending->length}, &compiler->diagnostics, compiler->allocator,
-                pending->name, compiler->abort_flag, &compiler->aborted, &compiler->out_of_memory});
+                pending->name, compiler->abort_flag, &compiler->aborted, &compiler->out_of_memory, NULL});
     ta_xml_node *root = pending->root;
     if (!root) goto done;
     if (!el(root, "scxml")) {

@@ -112,7 +112,7 @@ static void test_xml_arena_refusal(void) {
         const char *text = "<root attribute='value'/>";
         CHECK(ta_xml_parse(&arena, &(ta_xml_parse_request){
             {text, (uint32_t)strlen(text)}, &diagnostics, &vector_allocator,
-            "test.xml", NULL, &aborted, &failed}) == NULL);
+            "test.xml", NULL, &aborted, &failed, NULL}) == NULL);
         CHECK_EQUAL(failed, 1);
         CHECK_EQUAL(memory.allocations, allowed[i]);
         ta_vector_free(&diagnostics.list);
@@ -1059,6 +1059,189 @@ static void test_xml_writer(void) {
     CHECK_EQUAL(ta_xml_writer_finish(writer, &text), TA_ERROR_STATE);
     ta_xml_writer_free(writer);
 }
+/* What a document written again needs: comments and the XML declaration in
+ * their places, attribute values and content kept as written, and every
+ * refusal. */
+static void test_xml_writer_keeps_markup(void) {
+    ta_xml_writer *writer;
+    CHECK_EQUAL(ta_xml_writer_new(NULL, &writer), TA_OK);
+    CHECK_EQUAL(ta_xml_writer_instruction(writer, view_of("xml"), view_of("version=\"1.0\"")), TA_OK);
+    CHECK_EQUAL(ta_xml_writer_comment(writer, view_of(" a payment ")), TA_OK);
+    CHECK_EQUAL(ta_xml_writer_open(writer, view_of("scxml")), TA_OK);
+    CHECK_EQUAL(ta_xml_writer_attribute_markup(writer, view_of("name"), view_of("payment")), TA_OK);
+    CHECK_EQUAL(ta_xml_writer_comment(writer, view_of(" authorized, then captured ")), TA_OK);
+    CHECK_EQUAL(ta_xml_writer_open(writer, view_of("state")), TA_OK);
+    CHECK_EQUAL(ta_xml_writer_attribute_markup(writer, view_of("id"), view_of("authorizing")), TA_OK);
+    CHECK_EQUAL(ta_xml_writer_open(writer, view_of("transition")), TA_OK);
+    CHECK_EQUAL(ta_xml_writer_attribute_markup(writer, view_of("cond"), view_of("amount &gt; 0 && x")),
+                TA_ERROR_INVALID); /* '&' starts no reference */
+    ta_xml_writer_free(writer);
+
+    CHECK_EQUAL(ta_xml_writer_new(NULL, &writer), TA_OK);
+    CHECK_EQUAL(ta_xml_writer_instruction(writer, view_of("xml"), view_of("version=\"1.0\"")), TA_OK);
+    CHECK_EQUAL(ta_xml_writer_comment(writer, view_of(" a payment ")), TA_OK);
+    CHECK_EQUAL(ta_xml_writer_open(writer, view_of("scxml")), TA_OK);
+    CHECK_EQUAL(ta_xml_writer_comment(writer, view_of(" authorized, then captured ")), TA_OK);
+    CHECK_EQUAL(ta_xml_writer_open(writer, view_of("state")), TA_OK);
+    CHECK_EQUAL(ta_xml_writer_attribute_markup(writer, view_of("id"), view_of("authorizing")), TA_OK);
+    CHECK_EQUAL(ta_xml_writer_open(writer, view_of("transition")), TA_OK);
+    CHECK_EQUAL(ta_xml_writer_attribute_markup(writer, view_of("cond"),
+                                               view_of("amount &gt; 0 &amp;&amp; currency == \"EUR\"")),
+                TA_OK);
+    CHECK_EQUAL(ta_xml_writer_close(writer), TA_OK);
+    CHECK_EQUAL(ta_xml_writer_open(writer, view_of("onentry")), TA_OK);
+    CHECK_EQUAL(ta_xml_writer_open(writer, view_of("script")), TA_OK);
+    CHECK_EQUAL(ta_xml_writer_markup(writer, view_of("<![CDATA[\n  if (amount < 0) refund();\n]]>")), TA_OK);
+    CHECK_EQUAL(ta_xml_writer_close(writer), TA_OK);
+    CHECK_EQUAL(ta_xml_writer_instruction(writer, view_of("audit"), view_of("")), TA_OK);
+    CHECK_EQUAL(ta_xml_writer_close(writer), TA_OK);
+    CHECK_EQUAL(ta_xml_writer_close(writer), TA_OK);
+    CHECK_EQUAL(ta_xml_writer_close(writer), TA_OK);
+    CHECK_EQUAL(ta_xml_writer_comment(writer, view_of(" end ")), TA_OK);
+    ta_string_view text;
+    CHECK_EQUAL(ta_xml_writer_finish(writer, &text), TA_OK);
+    CHECK(text_is(text, "<?xml version=\"1.0\"?>\n"
+                        "<!-- a payment -->\n"
+                        "<scxml>\n"
+                        "  <!-- authorized, then captured -->\n"
+                        "  <state id=\"authorizing\">\n"
+                        "    <transition cond='amount &gt; 0 &amp;&amp; currency == \"EUR\"'/>\n"
+                        "    <onentry>\n"
+                        "      <script><![CDATA[\n  if (amount < 0) refund();\n]]></script>\n"
+                        "      <?audit?>\n"
+                        "    </onentry>\n"
+                        "  </state>\n"
+                        "</scxml>\n"
+                        "<!-- end -->"));
+    ta_xml_writer_free(writer);
+
+    /* refusals */
+    static const char *const bad_markup[] = {"<a>", "</b>", "a < b", "a & b", "&nbsp;", "x\001"};
+    for (size_t i = 0; i < sizeof bad_markup / sizeof bad_markup[0]; i++) {
+        CHECK_EQUAL(ta_xml_writer_new(NULL, &writer), TA_OK);
+        CHECK_EQUAL(ta_xml_writer_open(writer, view_of("data")), TA_OK);
+        CHECK_EQUAL(ta_xml_writer_markup(writer, view_of(bad_markup[i])), TA_ERROR_INVALID);
+        ta_xml_writer_free(writer);
+    }
+    static const char *const bad_values[] = {"a < b", "a & b", "&#;", "'\"", "\001"};
+    for (size_t i = 0; i < sizeof bad_values / sizeof bad_values[0]; i++) {
+        CHECK_EQUAL(ta_xml_writer_new(NULL, &writer), TA_OK);
+        CHECK_EQUAL(ta_xml_writer_open(writer, view_of("log")), TA_OK);
+        CHECK_EQUAL(ta_xml_writer_attribute_markup(writer, view_of("expr"), view_of(bad_values[i])),
+                    TA_ERROR_INVALID);
+        ta_xml_writer_free(writer);
+    }
+    static const char *const bad_comments[] = {"a -- b", "ends with -", "\001"};
+    for (size_t i = 0; i < sizeof bad_comments / sizeof bad_comments[0]; i++) {
+        CHECK_EQUAL(ta_xml_writer_new(NULL, &writer), TA_OK);
+        CHECK_EQUAL(ta_xml_writer_comment(writer, view_of(bad_comments[i])), TA_ERROR_INVALID);
+        ta_xml_writer_free(writer);
+    }
+    CHECK_EQUAL(ta_xml_writer_new(NULL, &writer), TA_OK);
+    CHECK_EQUAL(ta_xml_writer_instruction(writer, view_of("audit"), view_of("a ?> b")), TA_ERROR_INVALID);
+    ta_xml_writer_free(writer);
+    CHECK_EQUAL(ta_xml_writer_new(NULL, &writer), TA_OK);
+    CHECK_EQUAL(ta_xml_writer_comment(writer, view_of(" first ")), TA_OK);
+    CHECK_EQUAL(ta_xml_writer_instruction(writer, view_of("XML"), view_of("version=\"1.0\"")), TA_ERROR_STATE);
+    ta_xml_writer_free(writer);
+    CHECK_EQUAL(ta_xml_writer_new(NULL, &writer), TA_OK);
+    CHECK_EQUAL(ta_xml_writer_markup(writer, view_of("text")), TA_ERROR_STATE); /* no open element */
+    ta_xml_writer_free(writer);
+    CHECK_EQUAL(ta_xml_writer_new(NULL, &writer), TA_OK);
+    CHECK_EQUAL(ta_xml_writer_open(writer, view_of("a")), TA_OK);
+    CHECK_EQUAL(ta_xml_writer_markup(writer, view_of("t")), TA_OK);
+    CHECK_EQUAL(ta_xml_writer_attribute_markup(writer, view_of("x"), view_of("1")), TA_ERROR_STATE);
+    ta_xml_writer_free(writer);
+}
+
+/* The parser's content, when asked for: every piece in document order, as
+ * written, the document's own pieces around the root. */
+static void test_xml_content(void) {
+    ta_allocator allocator = ta_compile_default_allocator();
+    ta_growable_arena arena;
+    ta_growable_arena_init(&arena, &(ta_growable_arena_config){sizeof(ta_growable_arena_config), 0, 0,
+                                                               &allocator});
+    ta_diagnostics diagnostics = {0};
+    diagnostics.arena = &arena;
+    ta_vector_init(&diagnostics.list, &allocator, sizeof(ta_diagnostic));
+    int failed = 0, aborted = 0;
+    const char *text = "<?xml version='1.0'?>\n<!-- a ticket -->\n"
+                       "<scxml a='x &gt; 1'> <!-- open --><state id='open'/>"
+                       "<script><![CDATA[go()]]></script>t&amp;</scxml>\n<?after?>";
+    ta_xml_content *document = NULL;
+    ta_xml_node *root = ta_xml_parse(&arena, &(ta_xml_parse_request){
+        {text, (uint32_t)strlen(text)}, &diagnostics, &allocator, "ticket.scxml", NULL, &aborted,
+        &failed, &document});
+    CHECK(root != NULL);
+    static const uint32_t document_kinds[] = {TA_XML_CONTENT_INSTRUCTION, TA_XML_CONTENT_COMMENT,
+                                              TA_XML_CONTENT_ELEMENT, TA_XML_CONTENT_INSTRUCTION};
+    const ta_xml_content *piece = document;
+    for (size_t i = 0; i < sizeof document_kinds / sizeof document_kinds[0]; i++, piece = piece->next) {
+        CHECK(piece != NULL);
+        if (!piece) break;
+        CHECK_EQUAL(piece->kind, document_kinds[i]);
+    }
+    CHECK(piece == NULL);
+    CHECK(text_is(document->next->markup, "<!-- a ticket -->"));
+    CHECK(document->next->next->element == root);
+    CHECK(text_is(document->next->next->markup, "<scxml a='x &gt; 1'> <!-- open --><state id='open'/>"
+                                                "<script><![CDATA[go()]]></script>t&amp;</scxml>"));
+    CHECK(text_is(root->attributes->markup, "x &gt; 1"));
+    static const uint32_t root_kinds[] = {TA_XML_CONTENT_TEXT, TA_XML_CONTENT_COMMENT, TA_XML_CONTENT_ELEMENT,
+                                          TA_XML_CONTENT_ELEMENT, TA_XML_CONTENT_TEXT};
+    piece = root->content;
+    for (size_t i = 0; i < sizeof root_kinds / sizeof root_kinds[0]; i++, piece = piece->next) {
+        CHECK(piece != NULL);
+        if (!piece) break;
+        CHECK_EQUAL(piece->kind, root_kinds[i]);
+    }
+    CHECK(piece == NULL);
+    const ta_xml_content *script = root->content->next->next->next;
+    CHECK(text_is(script->markup, "<script><![CDATA[go()]]></script>"));
+    CHECK_EQUAL(script->element->content->kind, (uint32_t)TA_XML_CONTENT_CDATA);
+    CHECK(text_is(script->element->content->markup, "<![CDATA[go()]]>"));
+    CHECK(text_is(script->next->markup, "t&amp;"));
+    ta_vector_free(&diagnostics.list);
+    ta_growable_arena_free(&arena);
+}
+
+/* TA_COMPILE_STRIP_DEBUG: a chart laid out again compiles to the same image;
+ * without it, the expressions' positions differ. */
+static void test_strip_debug(void) {
+    static const char tight[] =
+        "<scxml xmlns='http://www.w3.org/2005/07/scxml' datamodel='ecmascript' name='refund'>"
+        "<state id='open'><transition event='refund' cond='amount &gt; 0' target='done'/></state>"
+        "<final id='done'/></scxml>";
+    static const char loose[] =
+        "<scxml xmlns='http://www.w3.org/2005/07/scxml' datamodel='ecmascript' name='refund'>\n"
+        "  <state id='open'>\n"
+        "    <transition event='refund' cond='amount &gt; 0' target='done'/>\n"
+        "  </state>\n"
+        "  <final id='done'/>\n"
+        "</scxml>\n";
+    const char *texts[] = {tight, loose};
+    ta_string_view images[2][2];
+    ta_compile_result *results[2][2];
+    for (uint32_t strip = 0; strip < 2; strip++)
+        for (uint32_t i = 0; i < 2; i++) {
+            ta_compile_options options;
+            memset(&options, 0, sizeof options);
+            options.size = sizeof options;
+            options.flags = strip ? TA_COMPILE_STRIP_DEBUG : 0;
+            ta_source source = {{"refund.scxml", 12}, {texts[i], (uint32_t)strlen(texts[i])}};
+            results[strip][i] = NULL;
+            CHECK_EQUAL(ta_compile_charts(&options, (ta_source_list){&source, 1}, &results[strip][i]), TA_OK);
+            images[strip][i] = ta_compile_image(results[strip][i]);
+        }
+    CHECK(!(images[0][0].length == images[0][1].length &&
+            memcmp(images[0][0].pointer, images[0][1].pointer, images[0][0].length) == 0));
+    CHECK(images[1][0].length == images[1][1].length &&
+          memcmp(images[1][0].pointer, images[1][1].pointer, images[1][0].length) == 0);
+    for (uint32_t strip = 0; strip < 2; strip++)
+        for (uint32_t i = 0; i < 2; i++)
+            ta_compile_free(results[strip][i]);
+}
+
 int main(void) {
     RUN(test_resolver_scratch);
     RUN(test_resolver_errors);
@@ -1080,5 +1263,8 @@ int main(void) {
     RUN(test_generated_ids);
     RUN(test_abort);
     RUN(test_xml_writer);
+    RUN(test_xml_writer_keeps_markup);
+    RUN(test_xml_content);
+    RUN(test_strip_debug);
     TEST_MAIN_END();
 }

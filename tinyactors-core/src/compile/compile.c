@@ -231,7 +231,7 @@ ta_status ta_compile_system(const ta_compile_options *options, const ta_source *
         ta_compile_copy(&compiler.arena, (ta_string_view){manifest->text.pointer, (uint32_t)(manifest->text.length)}, &compiler.out_of_memory);
     ta_xml_node *root = file && text ? ta_xml_parse(&compiler.arena, &(ta_xml_parse_request){
         {text, manifest->text.length}, &compiler.diagnostics, compiler.allocator,
-        file, compiler.abort_flag, &compiler.aborted, &compiler.out_of_memory})
+        file, compiler.abort_flag, &compiler.aborted, &compiler.out_of_memory, NULL})
                                      : NULL;
     ta_string_map alias;
     ta_string_map_init(&alias, compiler.allocator);

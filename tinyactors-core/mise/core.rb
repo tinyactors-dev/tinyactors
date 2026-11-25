@@ -71,7 +71,7 @@ module Core
     # The tinyactors command's commands (tools/tinyactors): the C library only
     # in its platform file, which the program adds (TOOLS below).
     Layer.new(name: 'tool', uses: %w[cli svg analysis compile image], freestanding: :headers,
-              sources: %w[program input compile_command inspect disassemble graph diff lint path]
+              sources: %w[program input compile_command inspect disassemble graph diff lint path canonical]
                 .map { |s| "tools/tinyactors/#{s}.c" }),
     # The BasicHTTP Event I/O Processor's codec; the transport stays with the host.
     Layer.new(name: 'basic_http', uses: %w[base], freestanding: true, sources: %w[src/basic_http/basic_http.c]),
@@ -215,7 +215,8 @@ module Core
     # Runs the tinyactors program the build made beside it.
     unit('test_tool', 'runtime', 'compile', defines: { 'TA_TEST_TEMPORARY_DIRECTORY' => :scratch,
                                                        'TA_TEST_PROGRAMS' => :programs,
-                                                       'TA_TEST_DIAGRAMS' => :diagrams }),
+                                                       'TA_TEST_DIAGRAMS' => :diagrams,
+                                                       'TA_TEST_REPOSITORY' => :repository }),
     unit('test_compile_scale', 'compile', alone: true), # compile times at n and 8n
     unit('test_core', 'core', 'compile', 'test_datamodel', *ECMASCRIPT),
     unit('test_system', 'system', 'compile', 'test_datamodel'),
@@ -381,7 +382,8 @@ module Core
     target = target(variant_name)
     scratch = directory(variant_name).join('scratch', program.name)
     places = { scratch: -> { scratch }, programs: -> { directory(variant_name).join('bin') },
-               version: -> { development_version }, diagrams: -> { ROOT.join('tests', 'diagram') } }
+               version: -> { development_version }, diagrams: -> { ROOT.join('tests', 'diagram') },
+               repository: -> { ROOT.join('..') } }
     defines = (program.defines || {}).transform_values { |value| places.key?(value) ? places[value].call : value }
     command = compile_command(variant_name, cxx: program.cxx, defines: defines)
     objects = program.sources.map do |source|

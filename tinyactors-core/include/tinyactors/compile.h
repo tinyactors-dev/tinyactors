@@ -57,6 +57,9 @@ typedef struct ta_resolve_result {
 typedef ta_status (*ta_resolve_function)(void *context, const ta_resolve_request *request,
                                          ta_resolve_result *out);
 
+/* TA_COMPILE_STRIP_DEBUG: expressions carry no line and column (both 0), so
+ * two texts that differ only in their layout compile to the same image.
+ * TA_COMPILE_WERROR: a warning refuses the compile, as an error does. */
 enum { TA_COMPILE_STRIP_DEBUG = 1u << 0, TA_COMPILE_WERROR = 1u << 1 };
 #define TA_COMPILE_MAX_CONTENT_NESTING 64u
 
@@ -110,14 +113,18 @@ TA_API uint32_t ta_compile_diagnostics(const ta_compile_result *r, const ta_diag
 TA_API void ta_compile_free(ta_compile_result *r);
 
 /* XML from calls, for charts and manifests a binding builds instead of
- * writing XML text itself: it escapes, indents two spaces per element level
- * and checks nesting, and knows no SCXML. Give the text to
+ * writing XML text itself, and for a document written again in its
+ * canonical layout (tinyactors fmt): it escapes, indents two spaces per
+ * element level and checks nesting, and knows no SCXML. Give the text to
  * ta_compile_charts / ta_compile_system, which validate it; their
  * diagnostics' lines and columns point into it. After an error, every later
  * call returns the same error.
  *
- * An attribute is quoted with ", or with ' when its value holds " and no ';
- * text is written where it is given, without indentation. */
+ * An element, a comment and a processing instruction each start a line,
+ * indented under the open element (at the top level, before or after the
+ * root: unindented). An attribute is quoted with ", or with ' when its value
+ * holds " and no '; text and markup are written where they are given,
+ * without indentation. The document has no line end after its last line. */
 typedef struct ta_xml_writer ta_xml_writer;
 
 /* allocator NULL: the C library's malloc, as for ta_compile_options. */
@@ -128,8 +135,34 @@ TA_API ta_status ta_xml_writer_open(ta_xml_writer *writer, ta_string_view name);
  * TA_ERROR_INVALID: not an XML name, or a control character in the value. */
 TA_API ta_status ta_xml_writer_attribute(ta_xml_writer *writer, ta_string_view name,
                                          ta_string_view value);
+/* An attribute whose value is given as written between its quotes, its
+ * references kept (`x &gt; 1`), so a document written again keeps its
+ * values byte for byte. Quoted with ", or with ' when the markup holds ".
+ * TA_ERROR_STATE: as ta_xml_writer_attribute. TA_ERROR_INVALID: not an XML
+ * name; or markup with a '<', a '&' that starts no reference (one of the
+ * five entities or &#...;), both quote characters, or a control character. */
+TA_API ta_status ta_xml_writer_attribute_markup(ta_xml_writer *writer, ta_string_view name,
+                                                ta_string_view markup);
 /* TA_ERROR_STATE: no open element. TA_ERROR_INVALID: a control character. */
 TA_API ta_status ta_xml_writer_text(ta_xml_writer *writer, ta_string_view text);
+/* Content already written as XML (text with its references, CDATA sections,
+ * comments, elements), written as it is: the content of a <script> or a
+ * <data> kept byte for byte. TA_ERROR_STATE: no open element.
+ * TA_ERROR_INVALID: not well-formed content (an element left open or closed
+ * that is not open, a '<' or '&' that starts nothing XML knows, a control
+ * character). */
+TA_API ta_status ta_xml_writer_markup(ta_xml_writer *writer, ta_string_view markup);
+/* <!--text-->, in the open element or before or after the root.
+ * TA_ERROR_INVALID: "--" in the text, a text ending with '-', or a control
+ * character. */
+TA_API ta_status ta_xml_writer_comment(ta_xml_writer *writer, ta_string_view text);
+/* <?target content?>, in the open element or before or after the root; the
+ * XML declaration is the instruction with the target xml (content
+ * `version="1.0" encoding="UTF-8"`). TA_ERROR_INVALID: a target that is not
+ * an XML name, "?>" in the content, or a control character. TA_ERROR_STATE:
+ * the target xml (in any case) anywhere but first in the document. */
+TA_API ta_status ta_xml_writer_instruction(ta_xml_writer *writer, ta_string_view target,
+                                           ta_string_view content);
 /* TA_ERROR_STATE: no open element. */
 TA_API ta_status ta_xml_writer_close(ta_xml_writer *writer);
 /* The document, valid until ta_xml_writer_free.

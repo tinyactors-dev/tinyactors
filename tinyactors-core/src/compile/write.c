@@ -3,6 +3,7 @@
  * (the compiler validates the text). Every byte it writes is one that
  * compile/xml.c reads back as written. */
 #include "compile/compile_support.h"
+#include "compile/xml.h"
 
 #include <string.h>
 
@@ -101,6 +102,96 @@ static void start_content(ta_xml_writer *writer, open_element *element) {
     element->started = 1;
 }
 
+/* What stands on a line of its own (an element, a comment, a processing
+ * instruction) starts one: indented under the open element, or at the top
+ * level after what is written there. */
+static void own_line(ta_xml_writer *writer) {
+    open_element *parent = top(writer);
+    if (parent) {
+        start_content(writer, parent);
+        line(writer, writer->stack.length);
+        parent->last_was_element = 1;
+    } else if (writer->output.length) {
+        line(writer, 0);
+    }
+}
+
+static int contains(ta_string_view text, const char *needle) {
+    size_t length = strlen(needle);
+    for (uint32_t i = 0; i + length <= text.length; i++)
+        if (memcmp(text.pointer + i, needle, length) == 0) return 1;
+    return 0;
+}
+
+/* A reference as XML 1.0 reads one at text[at] ('&'): one of the five
+ * entities or a character reference, up to its ';'. Its length, 0 when it is
+ * none. */
+static uint32_t reference_length(ta_string_view text, uint32_t at) {
+    static const char *const entities[] = {"&lt;", "&gt;", "&amp;", "&quot;", "&apos;"};
+    for (size_t i = 0; i < sizeof entities / sizeof entities[0]; i++) {
+        size_t length = strlen(entities[i]);
+        if (text.length - at >= length && memcmp(text.pointer + at, entities[i], length) == 0)
+            return (uint32_t)length;
+    }
+    uint32_t i = at + 1;
+    if (i >= text.length || text.pointer[i] != '#') return 0;
+    i++;
+    int hexadecimal = i < text.length && text.pointer[i] == 'x';
+    if (hexadecimal) i++;
+    uint32_t digits = 0;
+    for (; i < text.length && text.pointer[i] != ';'; i++, digits++) {
+        unsigned char c = (unsigned char)text.pointer[i];
+        int digit = (c - '0') < 10u || (hexadecimal && ((c | 32) - 'a') < 6u);
+        if (!digit) return 0;
+    }
+    return digits && i < text.length ? i + 1 - at : 0;
+}
+
+/* An attribute's value as written between its quotes: no '<', a reference
+ * at every '&', and not both quote characters. */
+static int is_attribute_markup(ta_string_view markup) {
+    if (!is_character_data(markup)) return 0;
+    int double_quote = 0, single_quote = 0;
+    for (uint32_t i = 0; i < markup.length; i++) {
+        char c = markup.pointer[i];
+        if (c == '<' || (c == '&' && !reference_length(markup, i))) return 0;
+        double_quote |= c == '"';
+        single_quote |= c == '\'';
+    }
+    return !(double_quote && single_quote);
+}
+
+/* Content as written in a document: what the parser compile reads takes it
+ * whole inside an element. TA_ERROR_INVALID: it does not; TA_ERROR_NO_MEMORY. */
+static ta_status check_content(ta_xml_writer *writer, ta_string_view markup) {
+    static const char open[] = "<m>", close[] = "</m>";
+    if (!is_character_data(markup)) return TA_ERROR_INVALID;
+    ta_vector text;
+    ta_vector_init(&text, &writer->allocator, 1);
+    uint32_t length = (uint32_t)(sizeof open - 1) + markup.length + (uint32_t)(sizeof close - 1);
+    char *document = (char *)ta_vector_push_many(&text, length);
+    if (!document) return TA_ERROR_NO_MEMORY;
+    memcpy(document, open, sizeof open - 1);
+    memcpy(document + sizeof open - 1, markup.pointer, markup.length);
+    memcpy(document + sizeof open - 1 + markup.length, close, sizeof close - 1);
+    ta_growable_arena arena;
+    ta_growable_arena_init(&arena, &(ta_growable_arena_config){sizeof(ta_growable_arena_config), 0, 0,
+                                                               &writer->allocator});
+    ta_diagnostics diagnostics;
+    memset(&diagnostics, 0, sizeof diagnostics);
+    ta_vector_init(&diagnostics.list, &writer->allocator, sizeof(ta_diagnostic));
+    diagnostics.arena = &arena;
+    int aborted = 0, out_of_memory = 0;
+    const ta_xml_node *root = ta_xml_parse(
+        &arena, &(ta_xml_parse_request){{document, length}, &diagnostics, &writer->allocator, "markup",
+                                        NULL, &aborted, &out_of_memory, NULL});
+    out_of_memory |= diagnostics.out_of_memory || diagnostics.list.out_of_memory;
+    ta_vector_free(&diagnostics.list);
+    ta_growable_arena_free(&arena);
+    ta_vector_free(&text);
+    return root ? TA_OK : out_of_memory ? TA_ERROR_NO_MEMORY : TA_ERROR_INVALID;
+}
+
 ta_status ta_xml_writer_new(const ta_allocator *allocator, ta_xml_writer **out) {
     ta_allocator chosen = allocator && allocator->alloc && allocator->free
                               ? *allocator
@@ -119,13 +210,8 @@ ta_status ta_xml_writer_new(const ta_allocator *allocator, ta_xml_writer **out) 
 ta_status ta_xml_writer_open(ta_xml_writer *writer, ta_string_view name) {
     if (writer->status) return writer->status;
     if (!is_name(name)) return fail(writer, TA_ERROR_INVALID);
-    open_element *parent = top(writer);
-    if (!parent && writer->root_done) return fail(writer, TA_ERROR_STATE); /* one root */
-    if (parent) {
-        start_content(writer, parent);
-        line(writer, writer->stack.length);
-        parent->last_was_element = 1;
-    }
+    if (!top(writer) && writer->root_done) return fail(writer, TA_ERROR_STATE); /* one root */
+    own_line(writer);
     put(writer, "<", 1);
     uint32_t at = writer->output.length;
     put(writer, name.pointer, name.length);
@@ -165,6 +251,66 @@ ta_status ta_xml_writer_text(ta_xml_writer *writer, ta_string_view text) {
     start_content(writer, element);
     escaped(writer, text, 0);
     element->last_was_element = 0;
+    return writer->status;
+}
+
+ta_status ta_xml_writer_attribute_markup(ta_xml_writer *writer, ta_string_view name,
+                                         ta_string_view markup) {
+    if (writer->status) return writer->status;
+    open_element *element = top(writer);
+    if (!element || element->started) return fail(writer, TA_ERROR_STATE);
+    if (!is_name(name) || !is_attribute_markup(markup)) return fail(writer, TA_ERROR_INVALID);
+    char quote = markup.length && memchr(markup.pointer, '"', markup.length) ? '\'' : '"';
+    put(writer, " ", 1);
+    put(writer, name.pointer, name.length);
+    put(writer, "=", 1);
+    put(writer, &quote, 1);
+    put(writer, markup.pointer, markup.length);
+    put(writer, &quote, 1);
+    return writer->status;
+}
+
+ta_status ta_xml_writer_markup(ta_xml_writer *writer, ta_string_view markup) {
+    if (writer->status) return writer->status;
+    open_element *element = top(writer);
+    if (!element) return fail(writer, TA_ERROR_STATE);
+    if (!markup.length) return TA_OK;
+    ta_status checked = check_content(writer, markup);
+    if (checked != TA_OK) return fail(writer, checked);
+    start_content(writer, element);
+    put(writer, markup.pointer, markup.length);
+    element->last_was_element = 0;
+    return writer->status;
+}
+
+ta_status ta_xml_writer_comment(ta_xml_writer *writer, ta_string_view text) {
+    if (writer->status) return writer->status;
+    int ends_with_dash = text.length && text.pointer[text.length - 1] == '-';
+    if (!is_character_data(text) || contains(text, "--") || ends_with_dash)
+        return fail(writer, TA_ERROR_INVALID);
+    own_line(writer);
+    put_c_string(writer, "<!--");
+    put(writer, text.pointer, text.length);
+    put_c_string(writer, "-->");
+    return writer->status;
+}
+
+ta_status ta_xml_writer_instruction(ta_xml_writer *writer, ta_string_view target,
+                                    ta_string_view content) {
+    if (writer->status) return writer->status;
+    if (!is_name(target) || !is_character_data(content) || contains(content, "?>"))
+        return fail(writer, TA_ERROR_INVALID);
+    int declaration = target.length == 3 && (target.pointer[0] | 32) == 'x' &&
+                      (target.pointer[1] | 32) == 'm' && (target.pointer[2] | 32) == 'l';
+    if (declaration && writer->output.length) return fail(writer, TA_ERROR_STATE); /* first only */
+    own_line(writer);
+    put_c_string(writer, "<?");
+    put(writer, target.pointer, target.length);
+    if (content.length) {
+        put(writer, " ", 1);
+        put(writer, content.pointer, content.length);
+    }
+    put_c_string(writer, "?>");
     return writer->status;
 }
 
