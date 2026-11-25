@@ -15,19 +15,34 @@
  * offset from the start of the struct that holds it), "index:<pool>" (a
  * slot of that pool, TA_NIL for none), "handle:<pool>" (the slot + 1 in the
  * low 24 bits and its generation in the high 8, 0 for none), "pointer" (a
- * host pointer, zero in a snapshot). An anonymous union is described by its
+ * host pointer, zero in a snapshot), "string" (a string reference, which
+ * the description's "strings" says how to read: a slab string of the
+ * region or a string of the segment's image) or "event-name" (an index of
+ * the image's event names). A member whose kind holds only for some records
+ * has `when`: {"member": the record's member, "values": the values of it
+ * for which the kind holds}. An anonymous union is described by its
  * members, each at the union's offset. */
 #include <stddef.h>
 
 #include <tinyactors/cbor.h>
 
+#include "base/memory.h"
+#include "image/records.h"
 #include "system/system_internal.h"
+
+/* A kind that holds only when the record's `member` is one of `values`. */
+typedef struct layout_condition {
+    const char *member;
+    const uint32_t *values;
+    uint32_t count;
+} layout_condition;
 
 typedef struct layout_member {
     const char *name;
     uint32_t offset, size, count;
     const char *type;
-    const char *kind; /* NULL: none */
+    const char *kind;             /* NULL: none */
+    const layout_condition *when; /* NULL: always */
 } layout_member;
 
 typedef struct layout_type {
@@ -39,10 +54,21 @@ typedef struct layout_type {
 
 /* Only the preprocessor can name a member for offsetof and sizeof. */
 #define MEMBER(record, member, type, kind)                                                         \
-    {#member, offsetof(record, member), sizeof(((record *)0)->member), 1, type, kind}
+    {#member, offsetof(record, member), sizeof(((record *)0)->member), 1, type, kind, 0}
+#define MEMBER_WHEN(record, member, type, kind, when)                                              \
+    {#member, offsetof(record, member), sizeof(((record *)0)->member), 1, type, kind, when}
 #define ARRAY(record, member, type, kind)                                                          \
     {#member, offsetof(record, member), sizeof(((record *)0)->member),                             \
-     sizeof(((record *)0)->member) / sizeof(((record *)0)->member[0]), type, kind}
+     sizeof(((record *)0)->member) / sizeof(((record *)0)->member[0]), type, kind, 0}
+
+/* A request's source is a chart index in a pending spawn, its type and next
+ * share a word (route.c). */
+static const uint32_t request_named_kinds[] = {REQUEST_EXTERNAL_INVOKE, REQUEST_RESOLVE_SOURCE};
+static const uint32_t request_external_kinds[] = {REQUEST_EXTERNAL_INVOKE};
+static const uint32_t request_spawn_kinds[] = {REQUEST_PENDING_SPAWN};
+static const layout_condition request_named = {"kind", request_named_kinds, 2};
+static const layout_condition request_external = {"kind", request_external_kinds, 1};
+static const layout_condition request_spawn = {"kind", request_spawn_kinds, 1};
 
 static const layout_member system_members[] = {
     MEMBER(ta_system, magic, "u32", 0),
@@ -123,7 +149,7 @@ static const layout_member actor_members[] = {
     MEMBER(ta_actor, parent, "u32", "handle:actors"),
     MEMBER(ta_actor, parent_slot, "u32", 0),
     MEMBER(ta_actor, timers, "u32", "index:timers"),
-    MEMBER(ta_actor, name, "u32", 0),
+    MEMBER(ta_actor, name, "u32", "string"),
     MEMBER(ta_actor, serial, "u64", 0),
 };
 static const layout_member actor_links_members[] = {
@@ -138,16 +164,16 @@ static const layout_member event_members[] = {
     MEMBER(ta_event, refs, "u16", 0),
     MEMBER(ta_event, type, "u8", 0),
     MEMBER(ta_event, datamodel, "u8", 0),
-    MEMBER(ta_event, name_id, "u32", 0),
-    MEMBER(ta_event, name, "u32", 0),
-    MEMBER(ta_event, sendid, "u32", 0),
+    MEMBER(ta_event, name_id, "u32", "event-name"),
+    MEMBER(ta_event, name, "u32", "string"),
+    MEMBER(ta_event, sendid, "u32", "string"),
     MEMBER(ta_event, origin, "u32", "handle:actors"),
-    MEMBER(ta_event, origin_string, "u32", 0),
-    MEMBER(ta_event, origintype, "u32", 0),
-    MEMBER(ta_event, invokeid, "u32", 0),
+    MEMBER(ta_event, origin_string, "u32", "string"),
+    MEMBER(ta_event, origintype, "u32", "string"),
+    MEMBER(ta_event, invokeid, "u32", "string"),
     MEMBER(ta_event, invoke_slot, "u16", 0),
     MEMBER(ta_event, flags, "u16", 0),
-    MEMBER(ta_event, raw, "u32", 0),
+    MEMBER(ta_event, raw, "u32", "string"),
     MEMBER(ta_event, trace, "u32", "index:contexts"),
     MEMBER(ta_event, payload, "u64", 0),
 };
@@ -166,7 +192,7 @@ static const layout_member timer_members[] = {
     MEMBER(ta_timer, event, "u32", "index:events"),
     MEMBER(ta_timer, route, "u32", 0),
     MEMBER(ta_timer, arg, "u32", 0),
-    MEMBER(ta_timer, target, "u32", 0),
+    MEMBER(ta_timer, target, "u32", "string"),
 };
 static const layout_member heap_node_members[] = {
     MEMBER(ta_heap_node, due, "u64", 0),
@@ -177,12 +203,12 @@ static const layout_member request_members[] = {
     MEMBER(ta_request, kind, "u32", 0),
     MEMBER(ta_request, actor, "u32", 0),
     MEMBER(ta_request, slot, "u32", 0),
-    MEMBER(ta_request, invokeid, "u32", 0),
-    MEMBER(ta_request, source, "u32", 0),
+    MEMBER(ta_request, invokeid, "u32", "string"),
+    MEMBER_WHEN(ta_request, source, "u32", "string", &request_named),
     MEMBER(ta_request, pad, "u32", 0),
     MEMBER(ta_request, payload, "u64", 0),
-    MEMBER(ta_request, type, "u32", 0),
-    MEMBER(ta_request, next, "u32", "index:requests"),
+    MEMBER_WHEN(ta_request, type, "u32", "string", &request_external),
+    MEMBER_WHEN(ta_request, next, "u32", "index:requests", &request_spawn),
     MEMBER(ta_request, ended, "u32", 0),
 };
 static const layout_member effect_record_members[] = {
@@ -191,10 +217,10 @@ static const layout_member effect_record_members[] = {
     MEMBER(ta_effect_record, token, "u32", 0),
     MEMBER(ta_effect_record, io_processor, "u32", 0),
     MEMBER(ta_effect_record, flags, "u32", 0),
-    MEMBER(ta_effect_record, target, "u32", 0),
-    MEMBER(ta_effect_record, event_name, "u32", 0),
-    MEMBER(ta_effect_record, sendid, "u32", 0),
-    MEMBER(ta_effect_record, auxiliary, "u32", 0),
+    MEMBER(ta_effect_record, target, "u32", "string"),
+    MEMBER(ta_effect_record, event_name, "u32", "string"),
+    MEMBER(ta_effect_record, sendid, "u32", "string"),
+    MEMBER(ta_effect_record, auxiliary, "u32", "string"),
     MEMBER(ta_effect_record, event, "u32", "index:events"),
     MEMBER(ta_effect_record, datamodel, "u32", 0),
     MEMBER(ta_effect_record, pad, "u32", 0),
@@ -230,8 +256,8 @@ static const layout_member trace_rule_compiled_members[] = {
     MEMBER(ta_trace_rule_compiled, chart, "u32", 0),
     MEMBER(ta_trace_rule_compiled, event_first, "u32", 0),
     MEMBER(ta_trace_rule_compiled, event_end, "u32", 0),
-    MEMBER(ta_trace_rule_compiled, event_text, "u32", 0),
-    MEMBER(ta_trace_rule_compiled, actor, "u32", 0),
+    MEMBER(ta_trace_rule_compiled, event_text, "u32", "string"),
+    MEMBER(ta_trace_rule_compiled, actor, "u32", "string"),
     MEMBER(ta_trace_rule_compiled, actor_prefix, "u32", 0),
     MEMBER(ta_trace_rule_compiled, per_second, "u32", 0),
     MEMBER(ta_trace_rule_compiled, burst, "u32", 0),
@@ -461,6 +487,32 @@ static const layout_member core_out_members[] = {
     MEMBER(ta_core_out, final_state, "u32", 0),
     MEMBER(ta_core_out, fault, "u32", 0),
 };
+static const layout_member shared_string_members[] = {
+    MEMBER(ta_shared_string, refs, "u32", 0),
+    MEMBER(ta_shared_string, length, "u32", 0),
+};
+static const layout_member header_record_members[] = {
+    MEMBER(ta_header_record, magic, "u32", 0),
+    MEMBER(ta_header_record, version, "u32", 0),
+    MEMBER(ta_header_record, total_size, "u32", 0),
+    MEMBER(ta_header_record, section_count, "u32", 0),
+    MEMBER(ta_header_record, hash, "u64", 0),
+    MEMBER(ta_header_record, flags, "u32", 0),
+    MEMBER(ta_header_record, chart_count, "u32", 0),
+    ARRAY(ta_header_record, reserved, "u32", 0),
+};
+static const layout_member section_record_members[] = {
+    MEMBER(ta_section_record, kind, "u32", 0),
+    MEMBER(ta_section_record, offset, "u32", 0),
+    MEMBER(ta_section_record, size, "u32", 0),
+    MEMBER(ta_section_record, count, "u32", 0),
+};
+static const layout_member event_node_record_members[] = {
+    MEMBER(ta_event_node_record, end, "u32", 0),
+    MEMBER(ta_event_node_record, parent, "u32", 0),
+    MEMBER(ta_event_node_record, token, "u32", 0),
+    MEMBER(ta_event_node_record, name, "u32", 0),
+};
 static const layout_type types[] = {
     {"ta_system", sizeof(ta_system), system_members, sizeof system_members / sizeof system_members[0]},
     {"ta_actor", sizeof(ta_actor), actor_members, sizeof actor_members / sizeof actor_members[0]},
@@ -490,9 +542,14 @@ static const layout_type types[] = {
     {"ta_string_view", sizeof(ta_string_view), string_view_members, sizeof string_view_members / sizeof string_view_members[0]},
     {"ta_image_view", sizeof(ta_image_view), image_view_members, sizeof image_view_members / sizeof image_view_members[0]},
     {"ta_core_out", sizeof(ta_core_out), core_out_members, sizeof core_out_members / sizeof core_out_members[0]},
+    {"ta_shared_string", sizeof(ta_shared_string), shared_string_members, sizeof shared_string_members / sizeof shared_string_members[0]},
+    {"ta_header_record", sizeof(ta_header_record), header_record_members, sizeof header_record_members / sizeof header_record_members[0]},
+    {"ta_section_record", sizeof(ta_section_record), section_record_members, sizeof section_record_members / sizeof section_record_members[0]},
+    {"ta_event_node_record", sizeof(ta_event_node_record), event_node_record_members, sizeof event_node_record_members / sizeof event_node_record_members[0]},
 };
 
 #undef MEMBER
+#undef MEMBER_WHEN
 #undef ARRAY
 
 /* Each pool of ta_system (its member) and the type of its slots. */
@@ -567,24 +624,63 @@ static void write_type(ta_cbor_writer *writer, const layout_type *type) {
     ta_cbor_write_array(writer, type->count);
     for (uint32_t i = 0; i < type->count; i++) {
         const layout_member *member = &type->members[i];
-        ta_cbor_write_map(writer, member->kind ? 6 : 5);
+        ta_cbor_write_map(writer, 5u + (member->kind ? 1u : 0u) + (member->when ? 1u : 0u));
         write_pair(writer, "name", member->name);
         write_number(writer, "offset", member->offset);
         write_number(writer, "size", member->size);
         write_number(writer, "count", member->count);
         write_pair(writer, "type", member->type);
         if (member->kind) write_pair(writer, "kind", member->kind);
+        if (member->when) {
+            ta_cbor_write_text(writer, text_of("when"));
+            ta_cbor_write_map(writer, 2);
+            write_pair(writer, "member", member->when->member);
+            ta_cbor_write_text(writer, text_of("values"));
+            ta_cbor_write_array(writer, member->when->count);
+            for (uint32_t k = 0; k < member->when->count; k++)
+                ta_cbor_write_uint(writer, member->when->values[k]);
+        }
     }
 }
 
-static uint64_t fnv1a64(ta_bytes bytes) {
-    const unsigned char *in = (const unsigned char *)bytes.pointer;
-    uint64_t hash = 1469598103934665603ull;
-    for (size_t i = 0; i < bytes.length; i++) {
-        hash ^= in[i];
-        hash *= 1099511628211ull;
-    }
-    return hash;
+/* How a "string" or "event-name" member reads as text (core_internal.h,
+ * "tagged string references"; image/records.h). A string reference other
+ * than `none` with `slabBit` set is a slab string: (reference & ~slabBit) <<
+ * slabShift is its offset in the pages of ta_system's `slab` (whose
+ * `pages` member is relative to it), where a `header` lies and its `length`
+ * bytes follow it. Any other is a string id of the segment's image: the
+ * offset in the image's strings section (`image.strings`, a section kind)
+ * of a u32 length and the bytes. An event name is an index of the image's
+ * event names section (`image.eventNames`): an `eventName` record whose
+ * `name` is a string id. The image's integers are little-endian whatever
+ * the region's are; its `header` is followed by its `sectionCount`
+ * `section` records, each of a `kind`, an `offset` from the image's start,
+ * a `size` in bytes and a `count` of records. */
+static void write_strings(ta_cbor_writer *writer) {
+    ta_cbor_write_text(writer, text_of("strings"));
+    ta_cbor_write_map(writer, 8);
+    write_number(writer, "none", TA_NIL);
+    write_number(writer, "slabBit", TA_STRING_REF_SLAB);
+    write_number(writer, "slabShift", TA_STRING_REF_SHIFT);
+    write_pair(writer, "slab", "slab");
+    write_pair(writer, "pages", "pages_relative");
+    write_pair(writer, "header", "ta_shared_string");
+    write_pair(writer, "length", "length");
+    ta_cbor_write_text(writer, text_of("image"));
+    ta_cbor_write_map(writer, 13);
+    write_pair(writer, "byteOrder", "little");
+    write_pair(writer, "header", "ta_header_record");
+    write_pair(writer, "sectionCount", "section_count");
+    write_pair(writer, "section", "ta_section_record");
+    write_pair(writer, "kind", "kind");
+    write_pair(writer, "offset", "offset");
+    write_pair(writer, "size", "size");
+    write_pair(writer, "count", "count");
+    write_number(writer, "strings", TA_SECTION_STRINGS);
+    write_pair(writer, "length", "u32");
+    write_number(writer, "eventNames", TA_SECTION_EVENT_NODES);
+    write_pair(writer, "eventName", "ta_event_node_record");
+    write_pair(writer, "name", "name");
 }
 
 ta_status ta_system_layout_description(ta_buffer *out, uint64_t *id) {
@@ -592,7 +688,7 @@ ta_status ta_system_layout_description(ta_buffer *out, uint64_t *id) {
     ta_cbor_writer_init(&writer, *out, (const ta_allocator *)0);
     char library[40];
     const uint16_t order = 1;
-    ta_cbor_write_map(&writer, 8);
+    ta_cbor_write_map(&writer, 9);
     ta_cbor_write_text(&writer, text_of("library"));
     ta_cbor_write_text(&writer, library_text(library));
     write_pair(&writer, "byteOrder", *(const unsigned char *)&order ? "little" : "big");
@@ -620,10 +716,11 @@ ta_status ta_system_layout_description(ta_buffer *out, uint64_t *id) {
         write_pair(&writer, "element", arrays[i].element);
         if (arrays[i].count) write_pair(&writer, "count", arrays[i].count);
     }
+    write_strings(&writer);
     ta_bytes bytes;
     ta_status status = ta_cbor_writer_bytes(&writer, &bytes);
     out->length = writer.length; /* what the description needs, written or not */
     if (status != TA_OK) return status;
-    if (id) *id = fnv1a64(bytes);
+    if (id) *id = ta_fnv1a64(bytes);
     return TA_OK;
 }

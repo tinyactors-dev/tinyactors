@@ -13,10 +13,17 @@
 #include "base/slab.h"
 
 /* ---- tagged string references ------------------------------------------------
- * < 0x80000000: image string id; TA_STRING_REF_SLAB|(offset>>3): refcounted slab string;
- * TA_NIL: none. Slab string layout: {u32 refs; u32 length; char data[length+1]}. */
+ * < 0x80000000: image string id; TA_STRING_REF_SLAB|(offset>>TA_STRING_REF_SHIFT):
+ * refcounted slab string at that offset of the slab's pages; TA_NIL: none. A
+ * slab string is a ta_shared_string followed by its bytes and a terminator.
+ * The region's description names all of this (src/system/region_layout.c). */
 #define TA_STRING_REF_SLAB       0x80000000u
 #define TA_STRING_REF_IS_SLAB(r) ((r) != TA_NIL && ((r) & TA_STRING_REF_SLAB))
+enum { TA_STRING_REF_SHIFT = 3 }; /* slab objects are 8-aligned */
+
+typedef struct ta_shared_string {
+    uint32_t refs, length; /* then char data[length + 1] */
+} ta_shared_string;
 
 /* ---- events ------------------------------------------------------------------ */
 enum {

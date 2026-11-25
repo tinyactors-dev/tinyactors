@@ -5,43 +5,42 @@
 
 /* ---- strings ----------------------------------------------------------------- */
 
-typedef struct sstr {
-    uint32_t refs, length;
-} sstr;
-
-static sstr *sstr_at(const ta_core *core, uint32_t string_ref) {
-    return (sstr *)ta_slab_pointer(core->slab, (string_ref & ~TA_STRING_REF_SLAB) << 3);
+static ta_shared_string *shared_string_at(const ta_core *core, uint32_t string_ref) {
+    return (ta_shared_string *)ta_slab_pointer(core->slab, (string_ref & ~TA_STRING_REF_SLAB)
+                                                               << TA_STRING_REF_SHIFT);
 }
 
 /* the longest string is one slab object: its header, its bytes and a terminator */
-TA_STATIC_ASSERT(TA_SYSTEM_MAX_STRING + sizeof(sstr) + 1 == TA_SLAB_PAGE, max_string_is_a_page);
+TA_STATIC_ASSERT(TA_SYSTEM_MAX_STRING + sizeof(ta_shared_string) + 1 == TA_SLAB_PAGE,
+                 max_string_is_a_page);
 
 uint32_t ta_shared_string_new(ta_core *core, const char *p, uint32_t length) {
     if (length > TA_SYSTEM_MAX_STRING) return TA_NIL;
-    uint32_t offset = ta_slab_alloc(core->slab, (uint32_t)sizeof(sstr) + length + 1);
+    uint32_t offset = ta_slab_alloc(core->slab, (uint32_t)sizeof(ta_shared_string) + length + 1);
     if (offset == TA_NIL) return TA_NIL;
-    sstr *s = (sstr *)ta_slab_pointer(core->slab, offset);
+    ta_shared_string *s = (ta_shared_string *)ta_slab_pointer(core->slab, offset);
     s->refs = 1;
     s->length = length;
     char *d = (char *)(s + 1);
     if (length) ta_memcpy(d, p, length);
     d[length] = 0;
-    return TA_STRING_REF_SLAB | (offset >> 3);
+    return TA_STRING_REF_SLAB | (offset >> TA_STRING_REF_SHIFT);
 }
 
 void ta_shared_string_retain_slab(ta_core *core, uint32_t string_ref) {
-    sstr_at(core, string_ref)->refs++;
+    shared_string_at(core, string_ref)->refs++;
 }
 
 void ta_shared_string_release_slab(ta_core *core, uint32_t string_ref) {
-    sstr *s = sstr_at(core, string_ref);
+    ta_shared_string *s = shared_string_at(core, string_ref);
     TA_ASSERT(s->refs > 0);
-    if (--s->refs == 0) ta_slab_free(core->slab, (string_ref & ~TA_STRING_REF_SLAB) << 3);
+    if (--s->refs == 0)
+        ta_slab_free(core->slab, (string_ref & ~TA_STRING_REF_SLAB) << TA_STRING_REF_SHIFT);
 }
 
 ta_string_view ta_shared_string_get(const ta_core *core, uint32_t string_ref) {
     if (TA_STRING_REF_IS_SLAB(string_ref)) {
-        sstr *s = sstr_at(core, string_ref);
+        ta_shared_string *s = shared_string_at(core, string_ref);
         ta_string_view r = {(const char *)(s + 1), s->length};
         return r;
     }

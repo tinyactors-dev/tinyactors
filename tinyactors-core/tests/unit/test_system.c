@@ -487,6 +487,16 @@ static void test_layout_description(void) {
     CHECK(system != TA_NIL);
     ta_string_view name = ta_cbor_string(&document, system);
     CHECK(name.length == 9 && memcmp(name.pointer, "ta_system", 9) == 0);
+    /* and how a string member reads: the slab's tag and the image's sections */
+    uint32_t strings = ta_cbor_member(&document, 0, ta_string("strings"));
+    CHECK(strings != TA_NIL);
+    uint32_t slab_bit = ta_cbor_member(&document, strings, ta_string("slabBit"));
+    CHECK(slab_bit != TA_NIL && all[slab_bit].value == TA_STRING_REF_SLAB);
+    uint32_t image = ta_cbor_member(&document, strings, ta_string("image"));
+    uint32_t section = ta_cbor_member(&document, image, ta_string("strings"));
+    CHECK(section != TA_NIL && all[section].value == TA_SECTION_STRINGS);
+    section = ta_cbor_member(&document, image, ta_string("eventNames"));
+    CHECK(section != TA_NIL && all[section].value == TA_SECTION_EVENT_NODES);
     free(all);
 
     test_system t;

@@ -3139,6 +3139,9 @@ ta_status ta_host_snapshot_unpack(ta_bytes pack, ta_host_snapshot_contents *out)
         if (!pack_part(length, &at, unpack_u64(in + PACK_FIXED + 8u * i), &image))
             return TA_ERROR_INVALID;
     }
+    /* the header's layout id names the layout part: a pack whose two differ was damaged */
+    if (ta_fnv1a64((ta_bytes){in + layout, (size_t)layout_length}) != unpack_u64(in + 72))
+        return TA_ERROR_INVALID;
     uint32_t size = out->size < sizeof *out ? out->size : (uint32_t)sizeof *out;
     ta_host_snapshot_contents contents;
     ta_memset(&contents, 0, sizeof contents);

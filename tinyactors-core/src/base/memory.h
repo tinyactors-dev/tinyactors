@@ -53,4 +53,15 @@ TA_INLINE void ta__memmove(void *d, const void *s, size_t n) {
 #define ta_memset(d, c, n) ta__memset((d), (c), (n))
 #endif
 
+/* FNV-1a 64 of the bytes: a region layout's id (ta_system_layout_description). */
+TA_INLINE uint64_t ta_fnv1a64(ta_bytes bytes) {
+    const unsigned char *in = (const unsigned char *)bytes.pointer;
+    uint64_t hash = 1469598103934665603ull;
+    for (size_t i = 0; i < bytes.length; i++) {
+        hash ^= in[i];
+        hash *= 1099511628211ull;
+    }
+    return hash;
+}
+
 #endif /* TINYACTORS_BASE_MEMORY_H */

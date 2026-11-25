@@ -517,8 +517,9 @@ typedef struct ta_host_snapshot_contents {
     uint64_t layout_id;
 } ta_host_snapshot_contents;
 /* The parts of a blob of ta_host_snapshot_pack (views into it). Set
- * out->size first. TA_ERROR_INVALID when it is not one, or one of another
- * format (an earlier build's). */
+ * out->size first. TA_ERROR_INVALID when it is not one, one of another
+ * format (an earlier build's), or one whose layout id is not the FNV-1a 64
+ * of its layout. */
 TA_API ta_status ta_host_snapshot_unpack(ta_bytes pack, ta_host_snapshot_contents *out);
 /* Segment i's image in the blob; empty for a retired one. */
 TA_API ta_bytes ta_host_snapshot_image(ta_bytes pack, uint32_t i);

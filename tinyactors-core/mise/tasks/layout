@@ -47,7 +47,8 @@ out = json ? StringIO.new : $stdout
 layers = %w[base trace core system host]
 Core.build_layers('debuginfo', (layers + %w[image compile]).uniq)
 Core.build_program('debuginfo', Core::TOOLS.find { |tool| tool.name == 'ta-layout' })
-dwarf = Dwarf.read(layers.map { |layer| Core.archive_path('debuginfo', layer) })
+# image too: the description names its records to read the image's strings
+dwarf = Dwarf.read((layers + %w[image]).map { |layer| Core.archive_path('debuginfo', layer) })
 
 align = dwarf.macro('TA_ALIGN_MAX')
 page = dwarf.macro('TA_SLAB_PAGE')

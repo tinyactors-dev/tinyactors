@@ -143,12 +143,35 @@ that layout (`ta_system_layout_description`, `src/system/region_layout.c`): as
 CBOR, the library's version, the byte order, the size of a pointer, `TA_NIL`,
 and every type a region holds (`ta_system`, what it embeds, and the records
 of its pools and arrays), each member with its name, offset, size, count,
-type and, for a link or an offset, its kind (`relative`, `index:<pool>`,
-`handle:<pool>`, `pointer`); then the pools and the arrays `ta_system`
-points to, with the member that holds each one's count. Every number in it
-comes from `offsetof` and `sizeof`, and `mise run layout` checks the table
-against the debug information: every member of every type is there, at the
-compiler's offset and size.
+type and, for a link, an offset or a string, its kind (`relative`,
+`index:<pool>`, `handle:<pool>`, `pointer`, `string`, `event-name`), with a
+`when` (a member of the record and the values of it) where the kind holds
+only for some records (a request's `source`, `type` and `next`); then the
+pools and the arrays `ta_system` points to, with the member that holds each
+one's count; then `strings`, how a string member reads as text. Every
+number in it comes from `offsetof`, `sizeof` or the constants the code
+uses, and `mise run layout` checks the table against the debug
+information: every member of every type is there, at the compiler's offset
+and size.
+
+A `string` member holds a string reference: `strings.none` (`TA_NIL`) for
+none; with `strings.slabBit` set, a slab string of the region, whose offset
+in the slab's pages is the rest shifted left by `strings.slabShift` (the
+pages lie at `ta_system`'s member `strings.slab` plus that member's
+`strings.pages`), where a `strings.header` (`ta_shared_string`) lies and its
+`strings.length` bytes follow; otherwise a string id of the segment's image
+(a pack holds segment *i*'s image as its image *i*): the offset, in the
+image's strings section, of a u32 length and the bytes. An `event-name`
+member is an index of the image's event names section, a record whose
+`name` is such a string id. `strings.image` says how to find the sections:
+the image's integers are little-endian, its `header` (`ta_header_record`)
+is followed by its `sectionCount` `section` records (`ta_section_record`),
+each a `kind`, an `offset` from the image's start, a `size` and a `count`;
+`strings.image.strings` and `strings.image.eventNames` are the kinds of the
+two sections, `eventName` the type of an event name's record and `name` its
+member. So a reader resolves an actor's name, an event's name, sendid,
+origin, origin type, invoke id and raw message, a delayed send's target and
+an effect's strings from the snapshot alone.
 
 The FNV-1a 64 of those bytes is the **layout id**. `ta_system_init` writes it
 at offset 8 of the region, after the magic, and `ta_system_restore` refuses a
@@ -158,7 +181,8 @@ to bump by hand. A pack (`ta_host_snapshot_pack`, format 4) carries the
 description itself and its id, so a reader that is not this build (the
 website's inspector) can decode the regions without the build's headers, and
 `tinyactors inspect` says whether a snapshot is of this build's layout.
-`ta_host_snapshot_unpack` refuses a pack of an earlier format.
+`ta_host_snapshot_unpack` refuses a pack of an earlier format, and one whose
+layout id is not the FNV-1a 64 of its layout part.
 
 - **hibernation**: header (its writer's identity
   among its fields) | instance words | invoke ids as text | datamodel bytes.

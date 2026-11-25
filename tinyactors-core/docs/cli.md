@@ -255,7 +255,7 @@ $ tinyactors inspect shop.snapshot
 - **Format**: 4
 - **Host format**: 4
 - **Library**: 0.3.0
-- **Layout ID**: cec775464fa664e2
+- **Layout ID**: fb87ca7efbf61d87
 - **This layout**: yes
 - **System ID**: shop
 - **Time**: 0

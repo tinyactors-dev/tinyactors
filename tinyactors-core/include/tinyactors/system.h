@@ -538,8 +538,10 @@ TA_API ta_status ta_system_set_next_serial(ta_system *system, uint64_t serial);
  * version, the byte order, the size of a pointer, TA_NIL, and every type a
  * snapshot holds (ta_system, what it embeds, and the records of its pools
  * and arrays) with each member's name, offset, size, count, type and, for
- * a link or an offset, its kind; then the pools and the arrays ta_system
- * points to (docs/durability.md, "Snapshots name their layout"). Written
+ * a link, an offset or a string, its kind; then the pools and the arrays
+ * ta_system points to, and how a string member reads as text from the
+ * region and the segment's image (docs/durability.md, "Snapshots name
+ * their layout"). Written
  * into `out` (ta_buffer: TA_ERROR_NO_MEMORY with out->length the bytes it
  * needs, so a probe with capacity 0 sizes it); on TA_OK, *id (when not NULL)
  * is the layout id: the FNV-1a 64 of exactly those bytes. A system's region

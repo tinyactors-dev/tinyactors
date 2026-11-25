@@ -1221,6 +1221,14 @@ static void test_snapshot_pack(void) {
     CHECK_EQUAL(ta_host_snapshot_unpack((ta_bytes){contents.host, contents.host_length}, &contents),
                 TA_ERROR_INVALID);
     ta_host_snapshot_unpack((ta_bytes){pack, length}, &contents);
+    /* one byte of the layout part changed: its id no longer names it */
+    size_t layout_at =
+        (size_t)((const unsigned char *)contents.layout.pointer - (const unsigned char *)pack);
+    unsigned char *layout_byte = (unsigned char *)pack + layout_at + contents.layout.length / 2;
+    *layout_byte ^= 1u;
+    CHECK_EQUAL(ta_host_snapshot_unpack((ta_bytes){pack, length}, &contents), TA_ERROR_INVALID);
+    *layout_byte ^= 1u;
+    CHECK_EQUAL(ta_host_snapshot_unpack((ta_bytes){pack, length}, &contents), TA_OK);
     /* restored from its parts: the datamodel's own snapshot is the caller's */
     size_t dl = 0;
     ta_buffer written = {NULL, 0, 0};
