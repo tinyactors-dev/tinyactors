@@ -62,7 +62,7 @@
 
   <section id="layers">
     <heading>Each C layer calls only the layers below</heading>
-    <problem>A tech lead reviewing the dependency needs to run the same statechart engine inside Node.js, Python, and WebAssembly without rewriting core rules per runtime. Tying the engine to libc, file handles or one host language would block embedding it in the others.</problem>
+    <problem>A team needs the same statechart engine inside Node.js, Python, and WebAssembly without rewriting core rules per runtime. Tying the engine to libc, file handles or one host language would block embedding it in the others.</problem>
     <passage>The modules base, image, trace, core, and system form the freestanding core, which never calls the C standard library. Core never allocates memory after its initial creation and never performs I/O. Instead, core reports side effects upward and calls back only into a datamodel evaluator and an allocator.</passage>
     <passage>Above core sits the host layer, which coordinates multiple segments and allocates memory only through the allocator it is given. Above the host sit the SCXML compiler, datamodel engines such as quickjs for ECMAScript or a binding's own language, and bindings. Those bindings expose the host to Node.js, Bun, Python, WebAssembly, or C, while your application controls storage and policy. With core isolated from I/O, the next question is how your application drives the host during execution.</passage>
     <table>
@@ -192,7 +192,7 @@
 
   <section id="atlas">
     <heading>Atlas shows every type and call of core</heading>
-    <problem>A tech lead auditing a C dependency cannot rely on hand-drawn architecture diagrams when compiler padding and inlining alter the real binary. Without inspecting the optimized build itself, struct sizes and hidden call paths remain guesswork.</problem>
+    <problem>Hand-drawn architecture diagrams of a C library cannot be trusted when compiler padding and inlining alter the real binary. Without inspecting the optimized build itself, struct sizes and hidden call paths remain guesswork.</problem>
     <passage>Compiler optimizations change the binary by inserting struct padding and inlining functions across translation units. To reflect the actual compiled code, the mise run atlas task extracts DWARF debug information from an optimized build of core.</passage>
     <passage>Atlas renders every core struct across 64-byte cache lines, starting with the 48-byte ta_actor record, with padding bytes shown. Selecting any function displays its callers, its callees, and the calls inlined by the compiler, grouped by C layer. Each dataset names the commit its data came from, letting you inspect core directly below.</passage>
     <playground src="../../examples/atlas/page.mjs">
