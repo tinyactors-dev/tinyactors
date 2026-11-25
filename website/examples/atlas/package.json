@@ -1,0 +1,7 @@
+{
+  "name": "tinyactors-website-example-atlas",
+  "private": true,
+  "type": "module",
+  "main": "main.mjs",
+  "description": "Atlas: the core's types, their byte layouts and its call graph, from atlas.json. atlas.mjs indexes the data; main.mjs prints a summary (test/examples runs it against output.txt) and page.mjs draws it in the browser."
+}

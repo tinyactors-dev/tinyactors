@@ -1,0 +1,60 @@
+sample.snapshot: format 4, 319872 bytes
+system tinyactors-run, datamodel tinyactors-run, library 0.3.0, layout cec775464fa664e2, time 4000000000
+segment 0: 287442 bytes, 51 actors
+  pool actors: 51 used of 64, high water 53, 48 bytes a slot
+  pool events: 68 used of 256, high water 79, 56 bytes a slot
+  pool timers: 28 used of 64, high water 29, 24 bytes a slot
+  pool workspaces: 0 used of 4, high water 1, 328 bytes a slot
+  pool requests: 0 used of 16, high water 0, 40 bytes a slot
+  pool contexts: 68 used of 256, high water 79, 48 bytes a slot
+  actor 3 (slot 2): idle, 0 queued
+  actor 4 (slot 3): idle, 0 queued
+  actor 5 (slot 4): idle, 0 queued
+  actor 6 (slot 5): idle, 0 queued
+  actor 7 (slot 6): idle, 0 queued
+  actor 8 (slot 7): idle, 0 queued
+  actor 9 (slot 8): idle, 0 queued, 1 timers
+  actor 10 (slot 9): idle, 0 queued, 1 timers
+  actor 11 (slot 10): idle, 0 queued, 1 timers
+  actor 12 (slot 11): idle, 0 queued, 1 timers
+  actor 13 (slot 12): idle, 0 queued, 1 timers
+  actor 14 (slot 13): idle, 0 queued, 1 timers
+  actor 15 (slot 14): idle, 0 queued, 1 timers
+  actor 16 (slot 15): idle, 0 queued, 1 timers
+  actor 17 (slot 16): idle, 0 queued, 1 timers
+  actor 18 (slot 17): idle, 0 queued, 1 timers
+  actor 19 (slot 18): idle, 0 queued, 1 timers
+  actor 20 (slot 19): idle, 0 queued, 1 timers
+  actor 21 (slot 20): idle, 0 queued, 1 timers
+  actor 22 (slot 21): idle, 0 queued, 1 timers
+  actor 24 (slot 23): runnable, 1 queued
+  actor 25 (slot 24): runnable, 1 queued
+  actor 26 (slot 25): runnable, 1 queued
+  actor 27 (slot 26): runnable, 1 queued
+  actor 28 (slot 27): runnable, 1 queued
+  actor 29 (slot 28): runnable, 1 queued
+  actor 30 (slot 29): runnable, 1 queued
+  actor 31 (slot 30): runnable, 1 queued
+  actor 32 (slot 31): idle, 0 queued
+  actor 33 (slot 32): idle, 0 queued
+  actor 34 (slot 33): idle, 0 queued
+  actor 35 (slot 34): idle, 0 queued
+  actor 36 (slot 35): hibernated, 0 queued
+  actor 37 (slot 36): hibernated, 0 queued
+  actor 38 (slot 37): hibernated, 0 queued
+  actor 39 (slot 38): hibernated, 0 queued
+  actor 40 (slot 39): hibernated, 0 queued
+  actor 49 (slot 1): idle, 0 queued, 1 timers
+  actor 50 (slot 0): idle, 0 queued, 1 timers
+  actor 51 (slot 47): idle, 0 queued, 1 timers
+  actor 52 (slot 46): idle, 0 queued, 1 timers
+  actor 53 (slot 45): idle, 0 queued, 1 timers
+  actor 54 (slot 44): idle, 0 queued, 1 timers
+  actor 55 (slot 43): idle, 0 queued, 1 timers
+  actor 56 (slot 42): idle, 0 queued, 1 timers
+  actor 57 (slot 41): idle, 0 queued, 1 timers
+  actor 58 (slot 40): idle, 0 queued, 1 timers
+  actor 59 (slot 48): idle, 0 queued, 1 timers
+  actor 60 (slot 49): idle, 0 queued, 1 timers
+  actor 61 (slot 50): idle, 0 queued, 1 timers
+  actor 62 (slot 51): idle, 0 queued, 1 timers

@@ -1,0 +1,966 @@
+{
+  "snapshot": "sample.snapshot",
+  "systemID": "tinyactors-run",
+  "time": 4000000000,
+  "actors": [
+    {
+      "session": 50,
+      "name": "payment",
+      "chart": "payment",
+      "segment": 0,
+      "state": "idle",
+      "parent": 10,
+      "invocations": 0,
+      "queued": 0,
+      "configuration": [
+        "authorizing"
+      ],
+      "mailbox": [],
+      "delayed": [
+        {
+          "event": "authorized",
+          "sendid": "",
+          "due": 5000000000,
+          "in": "1s"
+        }
+      ]
+    },
+    {
+      "session": 49,
+      "name": "payment",
+      "chart": "payment",
+      "segment": 0,
+      "state": "idle",
+      "parent": 9,
+      "invocations": 0,
+      "queued": 0,
+      "configuration": [
+        "authorizing"
+      ],
+      "mailbox": [],
+      "delayed": [
+        {
+          "event": "authorized",
+          "sendid": "",
+          "due": 5000000000,
+          "in": "1s"
+        }
+      ]
+    },
+    {
+      "session": 3,
+      "name": "order-1003",
+      "chart": "order",
+      "segment": 0,
+      "state": "idle",
+      "invocations": 0,
+      "queued": 0,
+      "configuration": [
+        "shipped"
+      ],
+      "mailbox": [],
+      "delayed": []
+    },
+    {
+      "session": 4,
+      "name": "order-1004",
+      "chart": "order",
+      "segment": 0,
+      "state": "idle",
+      "invocations": 0,
+      "queued": 0,
+      "configuration": [
+        "shipped"
+      ],
+      "mailbox": [],
+      "delayed": []
+    },
+    {
+      "session": 5,
+      "name": "order-1005",
+      "chart": "order",
+      "segment": 0,
+      "state": "idle",
+      "invocations": 0,
+      "queued": 0,
+      "configuration": [
+        "shipped"
+      ],
+      "mailbox": [],
+      "delayed": []
+    },
+    {
+      "session": 6,
+      "name": "order-1006",
+      "chart": "order",
+      "segment": 0,
+      "state": "idle",
+      "invocations": 0,
+      "queued": 0,
+      "configuration": [
+        "shipped"
+      ],
+      "mailbox": [],
+      "delayed": []
+    },
+    {
+      "session": 7,
+      "name": "order-1007",
+      "chart": "order",
+      "segment": 0,
+      "state": "idle",
+      "invocations": 0,
+      "queued": 0,
+      "configuration": [
+        "shipped"
+      ],
+      "mailbox": [],
+      "delayed": []
+    },
+    {
+      "session": 8,
+      "name": "order-1008",
+      "chart": "order",
+      "segment": 0,
+      "state": "idle",
+      "invocations": 0,
+      "queued": 0,
+      "configuration": [
+        "shipped"
+      ],
+      "mailbox": [],
+      "delayed": []
+    },
+    {
+      "session": 9,
+      "name": "order-1009",
+      "chart": "order",
+      "segment": 0,
+      "state": "idle",
+      "invocations": 1,
+      "queued": 0,
+      "configuration": [
+        "paying"
+      ],
+      "mailbox": [],
+      "delayed": [
+        {
+          "event": "payment.reminder",
+          "sendid": "reminder",
+          "due": 903000000000,
+          "in": "899s"
+        }
+      ]
+    },
+    {
+      "session": 10,
+      "name": "order-1010",
+      "chart": "order",
+      "segment": 0,
+      "state": "idle",
+      "invocations": 1,
+      "queued": 0,
+      "configuration": [
+        "paying"
+      ],
+      "mailbox": [],
+      "delayed": [
+        {
+          "event": "payment.reminder",
+          "sendid": "reminder",
+          "due": 903000000000,
+          "in": "899s"
+        }
+      ]
+    },
+    {
+      "session": 11,
+      "name": "order-1011",
+      "chart": "order",
+      "segment": 0,
+      "state": "idle",
+      "invocations": 1,
+      "queued": 0,
+      "configuration": [
+        "paying"
+      ],
+      "mailbox": [],
+      "delayed": [
+        {
+          "event": "payment.reminder",
+          "sendid": "reminder",
+          "due": 903000000000,
+          "in": "899s"
+        }
+      ]
+    },
+    {
+      "session": 12,
+      "name": "order-1012",
+      "chart": "order",
+      "segment": 0,
+      "state": "idle",
+      "invocations": 1,
+      "queued": 0,
+      "configuration": [
+        "paying"
+      ],
+      "mailbox": [],
+      "delayed": [
+        {
+          "event": "payment.reminder",
+          "sendid": "reminder",
+          "due": 903000000000,
+          "in": "899s"
+        }
+      ]
+    },
+    {
+      "session": 13,
+      "name": "order-1013",
+      "chart": "order",
+      "segment": 0,
+      "state": "idle",
+      "invocations": 1,
+      "queued": 0,
+      "configuration": [
+        "paying"
+      ],
+      "mailbox": [],
+      "delayed": [
+        {
+          "event": "payment.reminder",
+          "sendid": "reminder",
+          "due": 903000000000,
+          "in": "899s"
+        }
+      ]
+    },
+    {
+      "session": 14,
+      "name": "order-1014",
+      "chart": "order",
+      "segment": 0,
+      "state": "idle",
+      "invocations": 1,
+      "queued": 0,
+      "configuration": [
+        "paying"
+      ],
+      "mailbox": [],
+      "delayed": [
+        {
+          "event": "payment.reminder",
+          "sendid": "reminder",
+          "due": 903000000000,
+          "in": "899s"
+        }
+      ]
+    },
+    {
+      "session": 15,
+      "name": "order-1015",
+      "chart": "order",
+      "segment": 0,
+      "state": "idle",
+      "invocations": 1,
+      "queued": 0,
+      "configuration": [
+        "paying"
+      ],
+      "mailbox": [],
+      "delayed": [
+        {
+          "event": "payment.reminder",
+          "sendid": "reminder",
+          "due": 903000000000,
+          "in": "899s"
+        }
+      ]
+    },
+    {
+      "session": 16,
+      "name": "order-1016",
+      "chart": "order",
+      "segment": 0,
+      "state": "idle",
+      "invocations": 1,
+      "queued": 0,
+      "configuration": [
+        "paying"
+      ],
+      "mailbox": [],
+      "delayed": [
+        {
+          "event": "payment.reminder",
+          "sendid": "reminder",
+          "due": 903000000000,
+          "in": "899s"
+        }
+      ]
+    },
+    {
+      "session": 17,
+      "name": "order-1017",
+      "chart": "order",
+      "segment": 0,
+      "state": "idle",
+      "invocations": 1,
+      "queued": 0,
+      "configuration": [
+        "paying"
+      ],
+      "mailbox": [],
+      "delayed": [
+        {
+          "event": "payment.reminder",
+          "sendid": "reminder",
+          "due": 904000000000,
+          "in": "900s"
+        }
+      ]
+    },
+    {
+      "session": 18,
+      "name": "order-1018",
+      "chart": "order",
+      "segment": 0,
+      "state": "idle",
+      "invocations": 1,
+      "queued": 0,
+      "configuration": [
+        "paying"
+      ],
+      "mailbox": [],
+      "delayed": [
+        {
+          "event": "payment.reminder",
+          "sendid": "reminder",
+          "due": 904000000000,
+          "in": "900s"
+        }
+      ]
+    },
+    {
+      "session": 19,
+      "name": "order-1019",
+      "chart": "order",
+      "segment": 0,
+      "state": "idle",
+      "invocations": 1,
+      "queued": 0,
+      "configuration": [
+        "paying"
+      ],
+      "mailbox": [],
+      "delayed": [
+        {
+          "event": "payment.reminder",
+          "sendid": "reminder",
+          "due": 904000000000,
+          "in": "900s"
+        }
+      ]
+    },
+    {
+      "session": 20,
+      "name": "order-1020",
+      "chart": "order",
+      "segment": 0,
+      "state": "idle",
+      "invocations": 1,
+      "queued": 0,
+      "configuration": [
+        "paying"
+      ],
+      "mailbox": [],
+      "delayed": [
+        {
+          "event": "payment.reminder",
+          "sendid": "reminder",
+          "due": 904000000000,
+          "in": "900s"
+        }
+      ]
+    },
+    {
+      "session": 21,
+      "name": "order-1021",
+      "chart": "order",
+      "segment": 0,
+      "state": "idle",
+      "invocations": 1,
+      "queued": 0,
+      "configuration": [
+        "paying"
+      ],
+      "mailbox": [],
+      "delayed": [
+        {
+          "event": "payment.reminder",
+          "sendid": "reminder",
+          "due": 904000000000,
+          "in": "900s"
+        }
+      ]
+    },
+    {
+      "session": 22,
+      "name": "order-1022",
+      "chart": "order",
+      "segment": 0,
+      "state": "idle",
+      "invocations": 1,
+      "queued": 0,
+      "configuration": [
+        "paying"
+      ],
+      "mailbox": [],
+      "delayed": [
+        {
+          "event": "payment.reminder",
+          "sendid": "reminder",
+          "due": 904000000000,
+          "in": "900s"
+        }
+      ]
+    },
+    {
+      "session": 24,
+      "name": "order-1024",
+      "chart": "order",
+      "segment": 0,
+      "state": "runnable",
+      "invocations": 0,
+      "queued": 1,
+      "configuration": [
+        "cart"
+      ],
+      "mailbox": [
+        {
+          "event": "item.added",
+          "sendid": ""
+        }
+      ],
+      "delayed": []
+    },
+    {
+      "session": 25,
+      "name": "order-1025",
+      "chart": "order",
+      "segment": 0,
+      "state": "runnable",
+      "invocations": 0,
+      "queued": 1,
+      "configuration": [
+        "cart"
+      ],
+      "mailbox": [
+        {
+          "event": "item.added",
+          "sendid": ""
+        }
+      ],
+      "delayed": []
+    },
+    {
+      "session": 26,
+      "name": "order-1026",
+      "chart": "order",
+      "segment": 0,
+      "state": "runnable",
+      "invocations": 0,
+      "queued": 1,
+      "configuration": [
+        "cart"
+      ],
+      "mailbox": [
+        {
+          "event": "item.added",
+          "sendid": ""
+        }
+      ],
+      "delayed": []
+    },
+    {
+      "session": 27,
+      "name": "order-1027",
+      "chart": "order",
+      "segment": 0,
+      "state": "runnable",
+      "invocations": 0,
+      "queued": 1,
+      "configuration": [
+        "cart"
+      ],
+      "mailbox": [
+        {
+          "event": "item.added",
+          "sendid": ""
+        }
+      ],
+      "delayed": []
+    },
+    {
+      "session": 28,
+      "name": "order-1028",
+      "chart": "order",
+      "segment": 0,
+      "state": "runnable",
+      "invocations": 0,
+      "queued": 1,
+      "configuration": [
+        "cart"
+      ],
+      "mailbox": [
+        {
+          "event": "item.added",
+          "sendid": ""
+        }
+      ],
+      "delayed": []
+    },
+    {
+      "session": 29,
+      "name": "order-1029",
+      "chart": "order",
+      "segment": 0,
+      "state": "runnable",
+      "invocations": 0,
+      "queued": 1,
+      "configuration": [
+        "cart"
+      ],
+      "mailbox": [
+        {
+          "event": "item.added",
+          "sendid": ""
+        }
+      ],
+      "delayed": []
+    },
+    {
+      "session": 30,
+      "name": "order-1030",
+      "chart": "order",
+      "segment": 0,
+      "state": "runnable",
+      "invocations": 0,
+      "queued": 1,
+      "configuration": [
+        "cart"
+      ],
+      "mailbox": [
+        {
+          "event": "checkout",
+          "sendid": ""
+        }
+      ],
+      "delayed": []
+    },
+    {
+      "session": 31,
+      "name": "order-1031",
+      "chart": "order",
+      "segment": 0,
+      "state": "runnable",
+      "invocations": 0,
+      "queued": 1,
+      "configuration": [
+        "cart"
+      ],
+      "mailbox": [
+        {
+          "event": "checkout",
+          "sendid": ""
+        }
+      ],
+      "delayed": []
+    },
+    {
+      "session": 32,
+      "name": "order-1032",
+      "chart": "order",
+      "segment": 0,
+      "state": "idle",
+      "invocations": 0,
+      "queued": 0,
+      "configuration": [
+        "cart"
+      ],
+      "mailbox": [],
+      "delayed": []
+    },
+    {
+      "session": 33,
+      "name": "order-1033",
+      "chart": "order",
+      "segment": 0,
+      "state": "idle",
+      "invocations": 0,
+      "queued": 0,
+      "configuration": [
+        "cart"
+      ],
+      "mailbox": [],
+      "delayed": []
+    },
+    {
+      "session": 34,
+      "name": "order-1034",
+      "chart": "order",
+      "segment": 0,
+      "state": "idle",
+      "invocations": 0,
+      "queued": 0,
+      "configuration": [
+        "cart"
+      ],
+      "mailbox": [],
+      "delayed": []
+    },
+    {
+      "session": 35,
+      "name": "order-1035",
+      "chart": "order",
+      "segment": 0,
+      "state": "idle",
+      "invocations": 0,
+      "queued": 0,
+      "configuration": [
+        "cart"
+      ],
+      "mailbox": [],
+      "delayed": []
+    },
+    {
+      "session": 36,
+      "name": "order-1036",
+      "chart": "order",
+      "segment": 0,
+      "state": "hibernated",
+      "invocations": 0,
+      "queued": 0,
+      "note": "hibernated: its configuration and datamodel are in its blob, in the host's store (tinyactors inspect BLOB SNAPSHOT reads it)",
+      "configuration": [],
+      "mailbox": [],
+      "delayed": []
+    },
+    {
+      "session": 37,
+      "name": "order-1037",
+      "chart": "order",
+      "segment": 0,
+      "state": "hibernated",
+      "invocations": 0,
+      "queued": 0,
+      "note": "hibernated: its configuration and datamodel are in its blob, in the host's store (tinyactors inspect BLOB SNAPSHOT reads it)",
+      "configuration": [],
+      "mailbox": [],
+      "delayed": []
+    },
+    {
+      "session": 38,
+      "name": "order-1038",
+      "chart": "order",
+      "segment": 0,
+      "state": "hibernated",
+      "invocations": 0,
+      "queued": 0,
+      "note": "hibernated: its configuration and datamodel are in its blob, in the host's store (tinyactors inspect BLOB SNAPSHOT reads it)",
+      "configuration": [],
+      "mailbox": [],
+      "delayed": []
+    },
+    {
+      "session": 39,
+      "name": "order-1039",
+      "chart": "order",
+      "segment": 0,
+      "state": "hibernated",
+      "invocations": 0,
+      "queued": 0,
+      "note": "hibernated: its configuration and datamodel are in its blob, in the host's store (tinyactors inspect BLOB SNAPSHOT reads it)",
+      "configuration": [],
+      "mailbox": [],
+      "delayed": []
+    },
+    {
+      "session": 40,
+      "name": "order-1040",
+      "chart": "order",
+      "segment": 0,
+      "state": "hibernated",
+      "invocations": 0,
+      "queued": 0,
+      "note": "hibernated: its configuration and datamodel are in its blob, in the host's store (tinyactors inspect BLOB SNAPSHOT reads it)",
+      "configuration": [],
+      "mailbox": [],
+      "delayed": []
+    },
+    {
+      "session": 58,
+      "name": "payment",
+      "chart": "payment",
+      "segment": 0,
+      "state": "idle",
+      "parent": 18,
+      "invocations": 0,
+      "queued": 0,
+      "configuration": [
+        "authorizing"
+      ],
+      "mailbox": [],
+      "delayed": [
+        {
+          "event": "authorized",
+          "sendid": "",
+          "due": 6000000000,
+          "in": "2s"
+        }
+      ]
+    },
+    {
+      "session": 57,
+      "name": "payment",
+      "chart": "payment",
+      "segment": 0,
+      "state": "idle",
+      "parent": 17,
+      "invocations": 0,
+      "queued": 0,
+      "configuration": [
+        "authorizing"
+      ],
+      "mailbox": [],
+      "delayed": [
+        {
+          "event": "authorized",
+          "sendid": "",
+          "due": 6000000000,
+          "in": "2s"
+        }
+      ]
+    },
+    {
+      "session": 56,
+      "name": "payment",
+      "chart": "payment",
+      "segment": 0,
+      "state": "idle",
+      "parent": 16,
+      "invocations": 0,
+      "queued": 0,
+      "configuration": [
+        "authorizing"
+      ],
+      "mailbox": [],
+      "delayed": [
+        {
+          "event": "authorized",
+          "sendid": "",
+          "due": 5000000000,
+          "in": "1s"
+        }
+      ]
+    },
+    {
+      "session": 55,
+      "name": "payment",
+      "chart": "payment",
+      "segment": 0,
+      "state": "idle",
+      "parent": 15,
+      "invocations": 0,
+      "queued": 0,
+      "configuration": [
+        "authorizing"
+      ],
+      "mailbox": [],
+      "delayed": [
+        {
+          "event": "authorized",
+          "sendid": "",
+          "due": 5000000000,
+          "in": "1s"
+        }
+      ]
+    },
+    {
+      "session": 54,
+      "name": "payment",
+      "chart": "payment",
+      "segment": 0,
+      "state": "idle",
+      "parent": 14,
+      "invocations": 0,
+      "queued": 0,
+      "configuration": [
+        "authorizing"
+      ],
+      "mailbox": [],
+      "delayed": [
+        {
+          "event": "authorized",
+          "sendid": "",
+          "due": 5000000000,
+          "in": "1s"
+        }
+      ]
+    },
+    {
+      "session": 53,
+      "name": "payment",
+      "chart": "payment",
+      "segment": 0,
+      "state": "idle",
+      "parent": 13,
+      "invocations": 0,
+      "queued": 0,
+      "configuration": [
+        "authorizing"
+      ],
+      "mailbox": [],
+      "delayed": [
+        {
+          "event": "authorized",
+          "sendid": "",
+          "due": 5000000000,
+          "in": "1s"
+        }
+      ]
+    },
+    {
+      "session": 52,
+      "name": "payment",
+      "chart": "payment",
+      "segment": 0,
+      "state": "idle",
+      "parent": 12,
+      "invocations": 0,
+      "queued": 0,
+      "configuration": [
+        "authorizing"
+      ],
+      "mailbox": [],
+      "delayed": [
+        {
+          "event": "authorized",
+          "sendid": "",
+          "due": 5000000000,
+          "in": "1s"
+        }
+      ]
+    },
+    {
+      "session": 51,
+      "name": "payment",
+      "chart": "payment",
+      "segment": 0,
+      "state": "idle",
+      "parent": 11,
+      "invocations": 0,
+      "queued": 0,
+      "configuration": [
+        "authorizing"
+      ],
+      "mailbox": [],
+      "delayed": [
+        {
+          "event": "authorized",
+          "sendid": "",
+          "due": 5000000000,
+          "in": "1s"
+        }
+      ]
+    },
+    {
+      "session": 59,
+      "name": "payment",
+      "chart": "payment",
+      "segment": 0,
+      "state": "idle",
+      "parent": 19,
+      "invocations": 0,
+      "queued": 0,
+      "configuration": [
+        "authorizing"
+      ],
+      "mailbox": [],
+      "delayed": [
+        {
+          "event": "authorized",
+          "sendid": "",
+          "due": 6000000000,
+          "in": "2s"
+        }
+      ]
+    },
+    {
+      "session": 60,
+      "name": "payment",
+      "chart": "payment",
+      "segment": 0,
+      "state": "idle",
+      "parent": 20,
+      "invocations": 0,
+      "queued": 0,
+      "configuration": [
+        "authorizing"
+      ],
+      "mailbox": [],
+      "delayed": [
+        {
+          "event": "authorized",
+          "sendid": "",
+          "due": 6000000000,
+          "in": "2s"
+        }
+      ]
+    },
+    {
+      "session": 61,
+      "name": "payment",
+      "chart": "payment",
+      "segment": 0,
+      "state": "idle",
+      "parent": 21,
+      "invocations": 0,
+      "queued": 0,
+      "configuration": [
+        "authorizing"
+      ],
+      "mailbox": [],
+      "delayed": [
+        {
+          "event": "authorized",
+          "sendid": "",
+          "due": 6000000000,
+          "in": "2s"
+        }
+      ]
+    },
+    {
+      "session": 62,
+      "name": "payment",
+      "chart": "payment",
+      "segment": 0,
+      "state": "idle",
+      "parent": 22,
+      "invocations": 0,
+      "queued": 0,
+      "configuration": [
+        "authorizing"
+      ],
+      "mailbox": [],
+      "delayed": [
+        {
+          "event": "authorized",
+          "sendid": "",
+          "due": 6000000000,
+          "in": "2s"
+        }
+      ]
+    }
+  ]
+}

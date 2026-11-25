@@ -1,0 +1,7 @@
+{
+  "name": "tinyactors-website-example-inspector",
+  "private": true,
+  "type": "module",
+  "main": "main.mjs",
+  "description": "The snapshot inspector: decode.mjs reads a snapshot pack through the region layout it describes; main.mjs prints sample.snapshot's segments, pools and actors (test/examples runs it against output.txt) and page.mjs draws them in the browser."
+}

@@ -1,0 +1,21 @@
+{
+  "commit": "0000000", "date": "2026-11-25", "build": "fixture",
+  "layers": ["base", "trace", "image", "core", "system", "host", "compile"],
+  "files": ["src/base/pool.h", "src/system/system_internal.h", "src/core/core_internal.h", "src/host/host.c", "src/system/schedule.c", "src/base/pool.c", "src/compile/compile.c"],
+  "types": [
+    {"name": "ta_pool", "size": 40, "layer": "base", "file": 0, "line": 22, "padding": 0, "members": [["slots_relative", 0, 8, "int64_t"], ["generations_relative", 8, 8, "int64_t"], ["stride", 16, 4, "uint32_t"], ["capacity", 20, 4, "uint32_t"], ["free_head", 24, 4, "uint32_t"], ["high_water_mark", 28, 4, "uint32_t"], ["used", 32, 4, "uint32_t"], ["refused", 36, 4, "uint32_t"]]},
+    {"name": "ta_actor", "size": 48, "layer": "system", "file": 1, "line": 44, "padding": 0, "members": [["next", 0, 4, "uint32_t"], ["state", 4, 1, "uint8_t"], ["flags", 5, 1, "uint8_t"], ["trace_names", 6, 2, "uint16_t"], ["instance", 8, 4, "uint32_t"], ["mailbox_head", 12, 4, "uint32_t"], ["mailbox_tail", 16, 4, "uint32_t"], ["mailbox_length", 20, 4, "uint32_t"], ["parent", 24, 4, "uint32_t"], ["parent_slot", 28, 4, "uint32_t"], ["timers", 32, 4, "uint32_t"], ["name", 36, 4, "uint32_t"], ["serial", 40, 8, "uint64_t"]]},
+    {"name": "ta_event", "size": 56, "layer": "core", "file": 2, "line": 32, "padding": 4, "members": [["next", 0, 4, "uint32_t"], ["refs", 4, 2, "uint16_t"], ["type", 6, 1, "uint8_t"], ["datamodel", 7, 1, "uint8_t"], ["name_id", 8, 4, "uint32_t"], ["name", 12, 4, "uint32_t"], ["sendid", 16, 4, "uint32_t"], ["origin", 20, 4, "uint32_t"], ["origin_string", 24, 4, "uint32_t"], ["origintype", 28, 4, "uint32_t"], ["invokeid", 32, 4, "uint32_t"], ["raw", 36, 4, "uint32_t"], ["trace", 40, 4, "uint32_t"], ["payload", 48, 8, "uint64_t"]]},
+    {"name": "ta_system", "size": 296, "layer": "system", "file": 1, "line": 120, "padding": 4, "members": [["region_size", 0, 8, "uint64_t"], ["actors", 8, 40, "ta_pool"], ["events", 48, 40, "ta_pool"], ["timers", 88, 40, "ta_pool"], ["workspaces", 128, 40, "ta_pool"], ["requests", 168, 40, "ta_pool"], ["now", 208, 8, "uint64_t"], ["next_serial", 216, 8, "uint64_t"], ["flags", 224, 4, "uint32_t"], ["effects_relative", 232, 8, "int64_t"], ["names", 240, 56, "ta_actor[1]"]]}
+  ],
+  "functions": [
+    {"name": "ta_host_run", "layer": "host", "file": 3, "line": 1200, "size": 612, "external": true, "calls": [1, 2, 3], "inlines": [4]},
+    {"name": "ta_system_run", "layer": "system", "file": 4, "line": 80, "size": 940, "external": true, "calls": [2, 4, 5], "inlines": []},
+    {"name": "ta_pool_alloc", "layer": "base", "file": 5, "line": 30, "size": 120, "external": false, "calls": [], "inlines": []},
+    {"name": "host_drain", "layer": "host", "file": 3, "line": 900, "size": 200, "external": false, "calls": [], "inlines": []},
+    {"name": "mailbox_pop", "layer": "system", "file": 4, "line": 38, "size": 44, "external": false, "calls": [], "inlines": []},
+    {"name": "ta_host_post", "layer": "host", "file": 3, "line": 1500, "size": 300, "external": true, "calls": [], "inlines": []},
+    {"name": "ta_compile_charts", "layer": "compile", "file": 6, "line": 10, "size": 2000, "external": true, "calls": [2], "inlines": []}
+  ],
+  "costs": {"actor": [["ta_actor", 48], ["ta_actor_links", 16], ["session index", 8]], "message": [["ta_event", 56]], "delayed send": [["ta_timer", 24], ["ta_event", 56]]}
+}

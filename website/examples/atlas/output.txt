@@ -1,0 +1,59 @@
+232 types, 995 functions
+  base: 31 types, 190 functions
+  trace: 9 types, 34 functions
+  core: 41 types, 141 functions
+  system: 41 types, 202 functions
+  host: 58 types, 247 functions
+  image: 15 types, 35 functions
+  compile: 37 types, 146 functions
+ta_actor: 48 bytes, 0 of padding
+  line 0: next@0+4 state@4+1 flags@5+1 trace_names@6+2 instance@8+4 mailbox_head@12+4 mailbox_tail@16+4 mailbox_length@20+4 parent@24+4 parent_slot@28+4 timers@32+4 name@36+4 serial@40+8
+  an actor: 81 bytes (record 48, links 16, session index 8, name index 8, generation 1)
+ta_host_run: 8751 bytes, 0 callers, 46 callees
+  → announce_invocations (host, inlined)
+  → candidate (host)
+  → clocks_sync (host, inlined)
+  → drain (host, inlined)
+  → effect_copy (host)
+  → errors_deliver (host, inlined)
+  → host_address_session (host)
+  → host_communication_error (host)
+  → host_effects_reserve (host)
+  → host_send_to (host)
+  → migrate_one (host)
+  → migration_free (host, inlined)
+  → migration_settle (host)
+  → migration_step (host, inlined)
+  → retire (host, inlined)
+  → retired_entry (host)
+  → segment_clock (host, inlined)
+  → segment_grow (host)
+  → segment_of (host, inlined)
+  → session_map_free (host)
+  → session_map_get (host)
+  → session_map_next (host)
+  → session_map_put (host)
+  → session_map_reserve (host)
+  → ta_address_format (base)
+  → ta_address_parse (base)
+  → ta_core_payload_convert (core)
+  → ta_image_chart_name (image)
+  → ta_image_chart_source (image)
+  → ta_image_get_info (image)
+  → ta_index_queue_empty (base, inlined)
+  → ta_system_actor_by_session (system)
+  → ta_system_actors (system)
+  → ta_system_chart_stats_get (system)
+  → ta_system_deinit (system)
+  → ta_system_effects (system)
+  → ta_system_effects_release (system)
+  → ta_system_exhausted (system)
+  → ta_system_external_invocation (system)
+  → ta_system_resolve_actor (system)
+  → ta_system_run (system)
+  → ta_system_sender_resume (system)
+  → ta_system_stats_get (system)
+  → ta_system_trace (system)
+  → ta_system_trace_clock (system)
+  → ta_traceparent_format (trace)
+calls up a layer: none

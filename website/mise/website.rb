@@ -260,13 +260,17 @@ module Website
       dir = EXAMPLES.join(name)
       run('npm', 'ci', '--no-audit', '--no-fund', chdir: dir) unless dir.join('node_modules/.package-lock.json').file?
       FileUtils.mkdir_p(SITE.join('examples', name))
-      # its modules and charts, and those under a charts/ beside them (the live chat's)
-      dir.glob('{*,charts/**/*}.{mjs,scxml}').each do |file|
+      # its modules and charts, and those under a charts/ beside them (the live chat's),
+      # and the data a page fetches beside its module (atlas.json, sample.snapshot)
+      files = dir.glob('{*,charts/**/*}.{mjs,scxml}') + dir.glob('*.{json,snapshot}').reject { |file| file.basename.to_s.start_with?('package') }
+      files.each do |file|
         target = SITE.join('examples', name, file.relative_path_from(dir))
         FileUtils.mkdir_p(target.dirname)
         FileUtils.cp(file, target)
       end
       package = dir.join('node_modules/@tinyactors/wasm')
+      next unless package.directory? # a program that runs no actors (atlas, inspector)
+
       version = package.join('package.json').read[/"version":\s*"([^"]+)"/, 1]
       fail!("examples/#{name} uses @tinyactors/wasm #{version}, another example #{vendored}") if vendored && vendored != version
       next if vendored

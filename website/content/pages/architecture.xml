@@ -8,8 +8,8 @@
     <headline>One host runs a segment per image</headline>
     <lede>A host runs each image you add as a segment, and each segment keeps its actors in one block of memory. An actor's record there takes <link to="architecture" section="costs">81 bytes</link>.</lede>
     <actions>
-      <action to="guide-inspection">Inspect a running host</action>
-      <action to="guide-snapshots">Take a snapshot</action>
+      <action to="architecture" section="atlas">Explore core's source</action>
+      <action to="inspector">Open a snapshot</action>
     </actions>
   </hero>
 
@@ -70,6 +70,23 @@
     </claims>
   </section>
 
+  <section id="atlas">
+    <heading>Explore every type and call of core</heading>
+    <p>Core's C hides its costs: padding, struct sizes and inlined calls exist only after the compiler runs. Atlas reads them from the debug information of an optimized build.</p>
+    <p>Pick a struct to see its bytes on cache lines, or a function to see its callers and callees.</p>
+    <playground src="../../examples/atlas/page.mjs">
+      <description>Atlas draws each struct of tinyactors' C core to scale on 64-byte cache lines, padding included, starting with the 48-byte actor record. Each function lists its callers, its callees and the calls the compiler inlined, grouped by layer.</description>
+    </playground>
+    <claims>
+      <claim>
+        <statement>Atlas reads the build's own debug information</statement>
+        <p>The <code>mise run atlas</code> task reads each function, call site and struct from the DWARF of core's optimized build.</p>
+        <p>Atlas names the commit its data was built from.</p>
+        <source href="https://github.com/tinyactors-dev/tinyactors/blob/main/tinyactors-core/mise/tasks/atlas">tinyactors, <code>tinyactors-core/mise/tasks/atlas</code></source>
+      </claim>
+    </claims>
+  </section>
+
   <section id="region">
     <heading>A system keeps its actors in one region</heading>
     <p>A system carves its region once into pools of actors, events and timers. The region holds offsets instead of pointers, so its bytes can move.</p>
@@ -124,12 +141,18 @@
 
   <section id="snapshots">
     <heading>A snapshot is the regions as bytes</heading>
-    <p>A snapshot holds every segment's region, the images, the system id and the host's time. It restores only on the same build of the library.</p>
+    <p>A snapshot holds every segment's region, the images, the system id and the host's time. It also describes its own memory layout, so a reader needs no matching build.</p>
     <claims>
       <claim>
         <statement>Snapshots are raw region memory</statement>
-        <p>Snapshots are region bytes plus the datamodel's own state, valid for the same build of the library only.</p>
+        <p>Snapshots are region bytes plus the datamodel's own state, and restore only on a build with the same layout.</p>
         <p>Hibernation blobs stay with your store and are not part of a snapshot.</p>
+        <source href="https://github.com/tinyactors-dev/tinyactors/blob/main/tinyactors-core/docs/durability.md">tinyactors, <code>tinyactors-core/docs/durability.md</code></source>
+      </claim>
+      <claim>
+        <statement>Restores refuse a snapshot of another layout</statement>
+        <p>Each snapshot describes every type, member, offset and size in its regions, with a layout id hashed from that description.</p>
+        <p>A restore compares that id with its own build's and refuses a different layout instead of misreading the bytes.</p>
         <source href="https://github.com/tinyactors-dev/tinyactors/blob/main/tinyactors-core/docs/durability.md">tinyactors, <code>tinyactors-core/docs/durability.md</code></source>
       </claim>
       <claim>
@@ -139,8 +162,8 @@
       </claim>
     </claims>
     <actions>
+      <action to="inspector">Open a snapshot</action>
       <action to="guide-snapshots">Take a snapshot</action>
-      <action to="guide-inspection">Inspect a running host</action>
     </actions>
   </section>
 </page>
