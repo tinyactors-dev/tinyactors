@@ -13,23 +13,57 @@ python main.py --datamodel ecmascript
 python main.py --chart my-chart.scxml --data '{"text": "a longer message"}'
 ```
 
-The table below predates the accounted columns: it comes from the
-earlier version of this program, whose columns were memory, Python heap
-(`tracemalloc`), core reserves and blob. It will be replaced at the next
-sweep of the published numbers (the root `AGENTS.md`, "Published
-numbers"). Its memory column is today's process, and its core reserves
-today's core reserved.
+One run of it at a million of each (2026-11-25; Intel Xeon @ 2.10GHz,
+4 CPUs, 16 GiB, Linux; CPython 3.13.18 with the GIL), on both datamodels:
 
 ```
 python 3.13.18, datamodel python, tracing on, 1000000 of each
 
-                                memory  Python heap  core reserves    blob
-per actor, started               408 B         90 B          196 B
-per actor, after an event        714 B        386 B          196 B
-per actor, hibernated             85 B          0 B           82 B   145 B
-per message waiting              325 B        209 B          106 B
-per delayed send pending         371 B        209 B          151 B
+                              core reserved  core used  host other  quickjs  accounted  process  blob
+per actor, started                    196 B      179 B         0 B               196 B    408 B
+per actor, after an event             196 B      179 B         0 B               196 B    714 B
+per actor, hibernated                  82 B       81 B         0 B                82 B     85 B 145 B
+per message waiting                   106 B      106 B         0 B               106 B    325 B
+per delayed send pending              151 B      151 B         0 B               151 B    370 B
+
+core's records: actor 81 B, event 106 B, timer 45 B
 ```
+
+```
+python 3.13.18, datamodel ecmascript, tracing on, 1000000 of each
+
+                              core reserved  core used  host other  quickjs  accounted  process  blob
+per actor, started                    196 B      179 B         0 B    600 B      796 B   1023 B
+per actor, after an event     failed: InvalidError: TA_ERROR_INVALID
+per actor, hibernated                  82 B       81 B         0 B      0 B       82 B     85 B 147 B
+per message waiting                   106 B      106 B         0 B    178 B      284 B    305 B
+per delayed send pending              151 B      151 B         0 B    178 B      329 B    354 B
+
+core's records: actor 81 B, event 106 B, timer 45 B
+```
+
+The process column by population, from the same run (bytes per thing):
+
+| datamodel, row | 10,000 | 100,000 | 1,000,000 | 2,000,000 | 4,000,000 |
+|---|---|---|---|---|---|
+| python, actor, started | 315 B | 349 B | 408 B | 408 B | 408 B |
+| python, actor, after an event | 621 B | 655 B | 714 B | 714 B | 714 B |
+| python, actor, hibernated | 100 B | 82 B | 85 B | 83 B | 83 B |
+| python, message waiting | 338 B | 358 B | 325 B | 325 B | 325 B |
+| python, delayed send pending | 402 B | 405 B | 370 B | 370 B | 370 B |
+| ecmascript, actor, started | 867 B | 919 B | 1023 B | failed | failed |
+| ecmascript, actor, after an event | 1474 B | 1521 B | failed | failed | failed |
+| ecmascript, actor, hibernated | 176 B | 90 B | 85 B | 84 B | 83 B |
+| ecmascript, message waiting | 256 B | 303 B | 305 B | 305 B | 305 B |
+| ecmascript, delayed send pending | 303 B | 350 B | 354 B | 354 B | 354 B |
+
+The rows marked failed are quickjs's heap, limited to 1 GiB: a million
+started actors use 600 MB of it, and the events after them did not fit
+(`InvalidError: TA_ERROR_INVALID`, as the program printed it). At two
+and four million the spawns did not fit: the program printed `failed:
+exit 1`, the job's `MemoryError` at `host.spawn`, which has no message
+for it to quote. The other columns are the same at every count from
+100,000 up, within a byte.
 
 ## What the columns mean
 
@@ -75,11 +109,11 @@ column: the package has no API for them. Its tests count them.
   event. It keeps that event as `_event` until the next one.
 - **per actor, hibernated:** an actor in a population that keeps at most
   1000 actors in memory and the rest in a store, measured once the last
-  1000 are hibernated too. It uses its core records, 81 B (89 B is only
-  the reservation's bound when an index doubles), and its blob is in the
-  store; its instance went back to the slab, and a name it was spawned
-  with would stay in the string slab (the default config reserves 16 B
-  of strings per actor).
+  1000 are hibernated too. It uses 81 B of records (the reservation is
+  81 B to 83 B, its share of the region's indexes included), and its
+  blob is in the store; its instance went back to the slab, and a name
+  it was spawned with would stay in the string slab (the default config
+  reserves 16 B of strings per actor).
 - **per message waiting:** an event in an actor's mailbox, before the
   actor handles it.
 - **per delayed send pending:** a `<send delay>` that has not fallen due.
@@ -127,25 +161,28 @@ The process column varies between runs; the others do not.
 
 ## The data
 
-[`results/2026-11-20.csv`](results/2026-11-20.csv) holds one run: both
-datamodels at 10,000, 100,000, 1,000,000, 2,000,000 and 4,000,000 of
-each thing, on one machine (2026-11-20; Intel Xeon @ 2.10GHz, 4 CPUs,
-16 GiB, Linux; CPython 3.13.18). It came from:
+[`results/2026-11-25.csv`](results/2026-11-25.csv) holds the run the
+tables above come from: both datamodels at 10,000, 100,000, 1,000,000,
+2,000,000 and 4,000,000 of each thing, on one machine with nothing else
+running (2026-11-25; Intel Xeon @ 2.10GHz, 4 CPUs, 16 GiB, Linux;
+CPython 3.13.18). It came from:
 
 ```sh
 for datamodel in python ecmascript; do
   python main.py --counts 10000,100000,1000000,2000000,4000000 \
-    --datamodel $datamodel --csv results/2026-11-20.csv
+    --datamodel $datamodel --csv results/2026-11-25.csv
 done
 ```
 
 Each line is one row at one count: `runtime`, `datamodel`, `tracing`,
-`count`, `row`, `memory`, `heap`, `core_reserves`, `blob` (bytes),
-`failed` (what stopped a row that failed), `machine` and `date`. Plot
-`memory` against `count` for each `row`. That file predates the
-accounted columns; a run of this program writes `core_reserved`,
-`core_used`, `host_other`, `quickjs`, `accounted`, `process` and `blob`
-instead, and the next sweep will add such a file.
+`count`, `row`, `core_reserved`, `core_used`, `host_other`, `quickjs`,
+`accounted`, `process`, `blob` (bytes), `failed` (what stopped a row
+that failed), `machine` and `date`. Plot `process` against `count` for
+each `row`.
+
+[`results/2026-11-20.csv`](results/2026-11-20.csv) is an earlier run of
+the program before it accounted each part: its columns are `memory`,
+`heap` (`tracemalloc`), `core_reserves` and `blob`.
 
 A new run goes into a new file under `results/`, named by its date; the
 earlier files stay. The root `AGENTS.md` ("Published numbers") says when

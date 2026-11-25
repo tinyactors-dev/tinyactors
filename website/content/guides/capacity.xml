@@ -117,20 +117,25 @@ host.close();
 
   <section id="what-an-actor-costs" answers="agent-platform.memory">
     <heading>Measure what one actor costs</heading>
-    <p>The <link href="https://github.com/tinyactors-dev/tinyactors/tree/main/tinyactors-napi/examples/memory">memory program</link> measures the resident memory that one more actor, message or delayed send adds to a process. Run it with your chart, on your runtime and datamodel, the engine chart code runs in: native or quickjs.</p>
+    <p>The <link href="https://github.com/tinyactors-dev/tinyactors/tree/main/tinyactors-napi/examples/memory">memory program</link> measures what one more actor, message or delayed send adds to a process, part by part. Run it with your chart, on your runtime and datamodel, the engine chart code runs in: native or quickjs.</p>
     <code language="shell">node examples/memory/main.mjs --counts 1000000 --datamodel native</code>
     <table src="../../../tinyactors-napi/docs/guide/capacity.md" section="What an actor costs" index="1">
-      <caption>A million actors. Measured 2026-11-20 on an Intel Xeon at 2.10 GHz, 4 CPUs, 16 GiB, Linux; Node.js 22.23.5 and Bun 1.4.1. A counter chart with one <code>&lt;data&gt;</code>, messages of <code>{"text": "hello"}</code>, tracing on; the hibernated column keeps at most 1000 actors resident and the rest in a store.</caption>
+      <caption>What the process holds more for each thing, at a million. Measured 2026-11-25 on an Intel Xeon at 2.10 GHz, 4 CPUs, 16 GiB, Linux; Node.js 22.23.5 and Bun 1.4.1. A counter chart with one <code>&lt;data&gt;</code>, messages of <code>{"text": "hello"}</code>, tracing on; the hibernated column keeps at most 1000 actors resident and the rest in a store.</caption>
     </table>
-    <p>On Node.js a started actor takes 531 B at a million, and a hibernated one 124 B. The host's and the engine's fixed costs spread over the population, so an actor costs less in a larger one.</p>
+    <p>On Node.js a started actor takes 532 B of the process at a million, and a hibernated one 118 B.</p>
+    <p>The core's region and quickjs's heap account for part of it, the same on Node.js and Bun. On the native datamodel most of the rest is the JavaScript engine's heap.</p>
     <table src="../../../tinyactors-napi/docs/guide/capacity.md" section="What an actor costs" index="2">
-      <caption>Per actor at each population, Node.js on the native datamodel, the same run.</caption>
+      <caption>What the core's reservation, the host's other allocations and quickjs's heap account for, at a million, the same run.</caption>
     </table>
-    <p><link href="https://github.com/tinyactors-dev/tinyactors/blob/main/tinyactors-napi/examples/memory/results/2026-11-20.csv">The run's CSV</link> holds every row at every population and on every runtime, to compare with your own chart's.</p>
+    <p>The host's and the engine's fixed costs spread over the population, so an actor costs less in a larger one.</p>
+    <table src="../../../tinyactors-napi/docs/guide/capacity.md" section="What an actor costs" index="3">
+      <caption>The process's bytes per thing at each population, Node.js on the native datamodel, the same run.</caption>
+    </table>
+    <p><link href="https://github.com/tinyactors-dev/tinyactors/blob/main/tinyactors-napi/examples/memory/results/2026-11-25.csv">The run's CSV</link> holds every part of every row, at every population and on every runtime.</p>
     <list>
-      <item><term>A started actor</term><text>holds its variables in the datamodel and its records in the region: 196 B for this chart at a million (81 B, its instance and its strings).</text></item>
-      <item><term>After an event</term><text>an actor keeps that event as <code>_event</code> until the next one.</text></item>
-      <item><term>A hibernated actor</term><text>keeps only its records in the region, 81 B to 89 B, and its blob is in your store: 145 B on the native datamodel and 147 B on quickjs, for this chart.</text></item>
+      <item><term>A started actor</term><text>holds its variables in the datamodel and its records in the region: 196 B reserved for this chart at a million (81 B, its instance and its strings), 179 B of it used.</text></item>
+      <item><term>After an event</term><text>an actor keeps that event as <code>_event</code> until the next one. On quickjs the event's record, 106 B, stays in the region too.</text></item>
+      <item><term>A hibernated actor</term><text>uses 81 B of records in the region, and its blob is in your store: 145 B on the native datamodel and 147 B on quickjs, for this chart.</text></item>
       <item><term>A message</term><text>costs 106 B in the region (57 B with tracing off) and its data in the datamodel.</text></item>
       <item><term>A delayed send</term><text>holds its message until it falls due: 151 B in the region (102 B with tracing off).</text></item>
       <item><term>On quickjs</term><text>the engine keeps every actor's variables in its own heap, bounded by <code>quickjs.memoryLimit</code>, 1 GiB unless the host sets another. A million resident actors after an event need about 1.2 GB of it, so the run above sets 8 GiB (<link to="guide-quickjs" section="the-limits">the quickjs sandbox</link>).</text></item>

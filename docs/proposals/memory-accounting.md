@@ -565,3 +565,19 @@ recorded here.
   accounted columns. The root `AGENTS.md`'s "Published numbers" row
   names the columns, the website's capacity guide and the `ta-layout`
   check.
+- **The tables (step 7), done 2026-11-25.** The sweep of root
+  `AGENTS.md` "Published numbers" ran on one machine with nothing else
+  running (Intel Xeon @ 2.10GHz, 4 CPUs, 16 GiB, Linux; node 22.23.5,
+  bun 1.4.1, CPython 3.13.18): `main.mjs` under node and bun on both
+  datamodels (quickjs at an 8 GiB heap) and `main.py` on both, at 10,000
+  to 4,000,000, into `results/2026-11-25.csv` beside the 2026-11-20
+  files. Every Node row completed. On Python's quickjs, limited to 1 GiB,
+  the actors after an event failed at a million (`TA_ERROR_INVALID`) and
+  both actor rows at two and four million; the latter print `exit 1`,
+  since the job's bare `MemoryError` has no message for `main.py`'s
+  pattern (`\w*Error: .*`) to match, and the README says so. The
+  capacity guide holds three tables (the process at a million, what the
+  parts account for at a million, the process by population), which the
+  website's capacity guide and performance page transclude. A hibernated
+  actor is said to use 81 B of records; 81 B to 83 B is the
+  reservation's, its share of the indexes included.

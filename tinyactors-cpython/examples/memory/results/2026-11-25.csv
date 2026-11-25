@@ -1,0 +1,51 @@
+runtime,datamodel,tracing,count,row,core_reserved,core_used,host_other,quickjs,accounted,process,blob,failed,machine,date
+python 3.13.18,python,on,10000,"per actor, started",199,179,0,,199,315,,,"Intel(R) Xeon(R) Processor @ 2.10GHz, 4 CPUs, 16 GiB, linux x86_64",2026-11-25
+python 3.13.18,python,on,10000,"per actor, after an event",199,179,0,,199,621,,,"Intel(R) Xeon(R) Processor @ 2.10GHz, 4 CPUs, 16 GiB, linux x86_64",2026-11-25
+python 3.13.18,python,on,10000,"per actor, hibernated",83,81,0,,83,100,145,,"Intel(R) Xeon(R) Processor @ 2.10GHz, 4 CPUs, 16 GiB, linux x86_64",2026-11-25
+python 3.13.18,python,on,10000,"per message waiting",106,106,0,,106,338,,,"Intel(R) Xeon(R) Processor @ 2.10GHz, 4 CPUs, 16 GiB, linux x86_64",2026-11-25
+python 3.13.18,python,on,10000,"per delayed send pending",151,151,0,,151,402,,,"Intel(R) Xeon(R) Processor @ 2.10GHz, 4 CPUs, 16 GiB, linux x86_64",2026-11-25
+python 3.13.18,python,on,100000,"per actor, started",195,179,0,,195,349,,,"Intel(R) Xeon(R) Processor @ 2.10GHz, 4 CPUs, 16 GiB, linux x86_64",2026-11-25
+python 3.13.18,python,on,100000,"per actor, after an event",195,179,0,,195,655,,,"Intel(R) Xeon(R) Processor @ 2.10GHz, 4 CPUs, 16 GiB, linux x86_64",2026-11-25
+python 3.13.18,python,on,100000,"per actor, hibernated",81,81,0,,81,82,145,,"Intel(R) Xeon(R) Processor @ 2.10GHz, 4 CPUs, 16 GiB, linux x86_64",2026-11-25
+python 3.13.18,python,on,100000,"per message waiting",106,106,0,,106,358,,,"Intel(R) Xeon(R) Processor @ 2.10GHz, 4 CPUs, 16 GiB, linux x86_64",2026-11-25
+python 3.13.18,python,on,100000,"per delayed send pending",151,151,0,,151,405,,,"Intel(R) Xeon(R) Processor @ 2.10GHz, 4 CPUs, 16 GiB, linux x86_64",2026-11-25
+python 3.13.18,python,on,1000000,"per actor, started",196,179,0,,196,408,,,"Intel(R) Xeon(R) Processor @ 2.10GHz, 4 CPUs, 16 GiB, linux x86_64",2026-11-25
+python 3.13.18,python,on,1000000,"per actor, after an event",196,179,0,,196,714,,,"Intel(R) Xeon(R) Processor @ 2.10GHz, 4 CPUs, 16 GiB, linux x86_64",2026-11-25
+python 3.13.18,python,on,1000000,"per actor, hibernated",82,81,0,,82,85,145,,"Intel(R) Xeon(R) Processor @ 2.10GHz, 4 CPUs, 16 GiB, linux x86_64",2026-11-25
+python 3.13.18,python,on,1000000,"per message waiting",106,106,0,,106,325,,,"Intel(R) Xeon(R) Processor @ 2.10GHz, 4 CPUs, 16 GiB, linux x86_64",2026-11-25
+python 3.13.18,python,on,1000000,"per delayed send pending",151,151,0,,151,370,,,"Intel(R) Xeon(R) Processor @ 2.10GHz, 4 CPUs, 16 GiB, linux x86_64",2026-11-25
+python 3.13.18,python,on,2000000,"per actor, started",196,179,0,,196,408,,,"Intel(R) Xeon(R) Processor @ 2.10GHz, 4 CPUs, 16 GiB, linux x86_64",2026-11-25
+python 3.13.18,python,on,2000000,"per actor, after an event",196,179,0,,196,714,,,"Intel(R) Xeon(R) Processor @ 2.10GHz, 4 CPUs, 16 GiB, linux x86_64",2026-11-25
+python 3.13.18,python,on,2000000,"per actor, hibernated",82,81,0,,82,83,145,,"Intel(R) Xeon(R) Processor @ 2.10GHz, 4 CPUs, 16 GiB, linux x86_64",2026-11-25
+python 3.13.18,python,on,2000000,"per message waiting",106,106,0,,106,325,,,"Intel(R) Xeon(R) Processor @ 2.10GHz, 4 CPUs, 16 GiB, linux x86_64",2026-11-25
+python 3.13.18,python,on,2000000,"per delayed send pending",151,151,0,,151,370,,,"Intel(R) Xeon(R) Processor @ 2.10GHz, 4 CPUs, 16 GiB, linux x86_64",2026-11-25
+python 3.13.18,python,on,4000000,"per actor, started",196,179,0,,196,408,,,"Intel(R) Xeon(R) Processor @ 2.10GHz, 4 CPUs, 16 GiB, linux x86_64",2026-11-25
+python 3.13.18,python,on,4000000,"per actor, after an event",196,179,0,,196,714,,,"Intel(R) Xeon(R) Processor @ 2.10GHz, 4 CPUs, 16 GiB, linux x86_64",2026-11-25
+python 3.13.18,python,on,4000000,"per actor, hibernated",82,81,0,,82,83,145,,"Intel(R) Xeon(R) Processor @ 2.10GHz, 4 CPUs, 16 GiB, linux x86_64",2026-11-25
+python 3.13.18,python,on,4000000,"per message waiting",106,106,0,,106,325,,,"Intel(R) Xeon(R) Processor @ 2.10GHz, 4 CPUs, 16 GiB, linux x86_64",2026-11-25
+python 3.13.18,python,on,4000000,"per delayed send pending",151,151,0,,151,370,,,"Intel(R) Xeon(R) Processor @ 2.10GHz, 4 CPUs, 16 GiB, linux x86_64",2026-11-25
+python 3.13.18,ecmascript,on,10000,"per actor, started",199,179,0,608,807,867,,,"Intel(R) Xeon(R) Processor @ 2.10GHz, 4 CPUs, 16 GiB, linux x86_64",2026-11-25
+python 3.13.18,ecmascript,on,10000,"per actor, after an event",199,285,0,1185,1384,1474,,,"Intel(R) Xeon(R) Processor @ 2.10GHz, 4 CPUs, 16 GiB, linux x86_64",2026-11-25
+python 3.13.18,ecmascript,on,10000,"per actor, hibernated",83,81,0,10,93,176,147,,"Intel(R) Xeon(R) Processor @ 2.10GHz, 4 CPUs, 16 GiB, linux x86_64",2026-11-25
+python 3.13.18,ecmascript,on,10000,"per message waiting",106,106,0,178,284,256,,,"Intel(R) Xeon(R) Processor @ 2.10GHz, 4 CPUs, 16 GiB, linux x86_64",2026-11-25
+python 3.13.18,ecmascript,on,10000,"per delayed send pending",151,151,0,179,330,303,,,"Intel(R) Xeon(R) Processor @ 2.10GHz, 4 CPUs, 16 GiB, linux x86_64",2026-11-25
+python 3.13.18,ecmascript,on,100000,"per actor, started",195,179,0,601,796,919,,,"Intel(R) Xeon(R) Processor @ 2.10GHz, 4 CPUs, 16 GiB, linux x86_64",2026-11-25
+python 3.13.18,ecmascript,on,100000,"per actor, after an event",195,285,0,1177,1372,1521,,,"Intel(R) Xeon(R) Processor @ 2.10GHz, 4 CPUs, 16 GiB, linux x86_64",2026-11-25
+python 3.13.18,ecmascript,on,100000,"per actor, hibernated",81,81,0,1,82,90,147,,"Intel(R) Xeon(R) Processor @ 2.10GHz, 4 CPUs, 16 GiB, linux x86_64",2026-11-25
+python 3.13.18,ecmascript,on,100000,"per message waiting",106,106,0,178,284,303,,,"Intel(R) Xeon(R) Processor @ 2.10GHz, 4 CPUs, 16 GiB, linux x86_64",2026-11-25
+python 3.13.18,ecmascript,on,100000,"per delayed send pending",151,151,0,179,330,350,,,"Intel(R) Xeon(R) Processor @ 2.10GHz, 4 CPUs, 16 GiB, linux x86_64",2026-11-25
+python 3.13.18,ecmascript,on,1000000,"per actor, started",196,179,0,600,796,1023,,,"Intel(R) Xeon(R) Processor @ 2.10GHz, 4 CPUs, 16 GiB, linux x86_64",2026-11-25
+python 3.13.18,ecmascript,on,1000000,"per actor, after an event",,,,,,,,"InvalidError: TA_ERROR_INVALID","Intel(R) Xeon(R) Processor @ 2.10GHz, 4 CPUs, 16 GiB, linux x86_64",2026-11-25
+python 3.13.18,ecmascript,on,1000000,"per actor, hibernated",82,81,0,0,82,85,147,,"Intel(R) Xeon(R) Processor @ 2.10GHz, 4 CPUs, 16 GiB, linux x86_64",2026-11-25
+python 3.13.18,ecmascript,on,1000000,"per message waiting",106,106,0,178,284,305,,,"Intel(R) Xeon(R) Processor @ 2.10GHz, 4 CPUs, 16 GiB, linux x86_64",2026-11-25
+python 3.13.18,ecmascript,on,1000000,"per delayed send pending",151,151,0,178,329,354,,,"Intel(R) Xeon(R) Processor @ 2.10GHz, 4 CPUs, 16 GiB, linux x86_64",2026-11-25
+python 3.13.18,ecmascript,on,2000000,"per actor, started",,,,,,,,"exit 1","Intel(R) Xeon(R) Processor @ 2.10GHz, 4 CPUs, 16 GiB, linux x86_64",2026-11-25
+python 3.13.18,ecmascript,on,2000000,"per actor, after an event",,,,,,,,"exit 1","Intel(R) Xeon(R) Processor @ 2.10GHz, 4 CPUs, 16 GiB, linux x86_64",2026-11-25
+python 3.13.18,ecmascript,on,2000000,"per actor, hibernated",82,81,0,0,82,84,147,,"Intel(R) Xeon(R) Processor @ 2.10GHz, 4 CPUs, 16 GiB, linux x86_64",2026-11-25
+python 3.13.18,ecmascript,on,2000000,"per message waiting",106,106,0,178,284,305,,,"Intel(R) Xeon(R) Processor @ 2.10GHz, 4 CPUs, 16 GiB, linux x86_64",2026-11-25
+python 3.13.18,ecmascript,on,2000000,"per delayed send pending",151,151,0,178,329,354,,,"Intel(R) Xeon(R) Processor @ 2.10GHz, 4 CPUs, 16 GiB, linux x86_64",2026-11-25
+python 3.13.18,ecmascript,on,4000000,"per actor, started",,,,,,,,"exit 1","Intel(R) Xeon(R) Processor @ 2.10GHz, 4 CPUs, 16 GiB, linux x86_64",2026-11-25
+python 3.13.18,ecmascript,on,4000000,"per actor, after an event",,,,,,,,"exit 1","Intel(R) Xeon(R) Processor @ 2.10GHz, 4 CPUs, 16 GiB, linux x86_64",2026-11-25
+python 3.13.18,ecmascript,on,4000000,"per actor, hibernated",82,81,0,0,82,83,147,,"Intel(R) Xeon(R) Processor @ 2.10GHz, 4 CPUs, 16 GiB, linux x86_64",2026-11-25
+python 3.13.18,ecmascript,on,4000000,"per message waiting",106,106,0,178,284,305,,,"Intel(R) Xeon(R) Processor @ 2.10GHz, 4 CPUs, 16 GiB, linux x86_64",2026-11-25
+python 3.13.18,ecmascript,on,4000000,"per delayed send pending",151,151,0,178,329,354,,,"Intel(R) Xeon(R) Processor @ 2.10GHz, 4 CPUs, 16 GiB, linux x86_64",2026-11-25

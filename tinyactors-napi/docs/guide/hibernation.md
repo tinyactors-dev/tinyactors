@@ -170,8 +170,8 @@ and come back with the chart, not the blob. On quickjs the engine writes its
 own values, so a `Date`, a `Map`, a `Set` or a typed array is stored too
 ([The quickjs sandbox](quickjs.md#what-differs-from-the-native-datamodel)).
 
-What stays in the host: a hibernated actor keeps its core records, 81 B
-to 89 B ([Capacity and memory](capacity.md#what-an-actor-costs)), and the data of its pending delayed sends and of
+What stays in the host: a hibernated actor uses 81 B of core records
+([Capacity and memory](capacity.md#what-an-actor-costs)), and the data of its pending delayed sends and of
 the events waiting in its queue stays too. A pending delayed send wakes
 the actor when it falls due.
 

@@ -188,7 +188,7 @@ variable 'seen' cannot be stored: only plain objects, arrays and Uint8Arrays are
 
   <section id="size-the-host">
     <heading>Count hibernated actors when you size a host</heading>
-    <p>A hibernated actor still counts toward <code>system.maxActors</code>. It keeps 81 B to 89 B of records in the host (<link to="guide-capacity" section="what-an-actor-costs">what an actor costs</link>).</p>
+    <p>A hibernated actor still counts toward <code>system.maxActors</code>. It uses 81 B of records in the host (<link to="guide-capacity" section="what-an-actor-costs">what an actor costs</link>).</p>
     <p>The data of its pending delayed sends and of the events waiting in its queue stays in the host too. A pending delayed send wakes the actor when it falls due.</p>
     <p>The <link to="guide-capacity">capacity guide</link> says how many actors a host holds and how much memory it needs.</p>
   </section>

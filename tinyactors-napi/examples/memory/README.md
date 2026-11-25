@@ -12,39 +12,63 @@ node examples/memory/main.mjs --datamodel quickjs --quickjs-memory-limit 8589934
 node examples/memory/main.mjs --chart my-chart.scxml --data '{"text": "a longer message"}'
 ```
 
-The table below predates the accounted columns: it comes from the
-earlier version of this program, whose columns were memory, heap, core
-reserves and blob. It will be replaced at the next sweep of the
-published numbers (the root `AGENTS.md`, "Published numbers"). Its
-memory column is today's process, and its core reserves today's core
-reserved.
+One run of it at a million of each (2026-11-25; Intel Xeon @ 2.10GHz,
+4 CPUs, 16 GiB, Linux; node 22.23.5), on the native datamodel and on
+quickjs with an 8 GiB heap:
 
 ```output
 node 22.23.5, datamodel native, tracing on, 1000000 of each
 
-                                memory      heap  core reserves    blob
-per actor, started               531 B     138 B          196 B
-per actor, after an event        671 B     274 B          196 B
-per actor, hibernated            124 B       0 B           82 B   145 B
-per message waiting              315 B      56 B          106 B
-per delayed send pending         357 B      55 B          151 B
-```
-
-Today it prints, for 5000 of each on quickjs (one run on a machine that
-was not quiet, so the process column is only an example):
-
-```output
-bun 1.4.4, datamodel quickjs, tracing on, 5000 of each
-
                               core reserved  core used  host other  quickjs  accounted  process  blob
-per actor, started                    198 B      179 B         0 B    617 B      815 B   1253 B
-per actor, after an event             198 B      285 B         0 B   1194 B     1392 B   1996 B
-per actor, hibernated                  81 B       81 B         0 B     20 B      101 B    975 B 147 B
-per message waiting                   106 B      106 B         0 B    178 B      284 B    700 B
-per delayed send pending              151 B      151 B         0 B    180 B      331 B    667 B
+per actor, started                    196 B      179 B         0 B               196 B    532 B
+per actor, after an event             196 B      179 B         0 B               196 B    673 B
+per actor, hibernated                  82 B       81 B         0 B                82 B    118 B 145 B
+per message waiting                   106 B      106 B         0 B               106 B    309 B
+per delayed send pending              151 B      151 B         0 B               151 B    353 B
 
 core's records: actor 81 B, event 106 B, timer 45 B
 ```
+
+```output
+node 22.23.5, datamodel quickjs, tracing on, 1000000 of each
+
+                              core reserved  core used  host other  quickjs  accounted  process  blob
+per actor, started                    196 B      179 B         0 B    600 B      796 B   1036 B
+per actor, after an event             196 B      285 B         0 B   1176 B     1372 B   1634 B
+per actor, hibernated                  82 B       81 B         0 B      0 B       82 B     92 B 147 B
+per message waiting                   106 B      106 B         0 B    178 B      284 B    309 B
+per delayed send pending              151 B      151 B         0 B    178 B      329 B    358 B
+
+core's records: actor 81 B, event 106 B, timer 45 B
+```
+
+The process column by population, from the same run (bytes per thing):
+
+| runtime, datamodel, row | 10,000 | 100,000 | 1,000,000 | 2,000,000 | 4,000,000 |
+|---|---|---|---|---|---|
+| node, native, actor, started | 803 B | 720 B | 532 B | 510 B | 495 B |
+| node, native, actor, after an event | 1446 B | 870 B | 673 B | 654 B | 639 B |
+| node, native, actor, hibernated | 637 B | 269 B | 118 B | 100 B | 91 B |
+| node, native, message waiting | 602 B | 392 B | 309 B | 293 B | 285 B |
+| node, native, delayed send pending | 737 B | 489 B | 353 B | 338 B | 331 B |
+| node, quickjs, actor, started | 1141 B | 958 B | 1036 B | 1034 B | 1033 B |
+| node, quickjs, actor, after an event | 1833 B | 1566 B | 1634 B | 1632 B | 1631 B |
+| node, quickjs, actor, hibernated | 741 B | 159 B | 92 B | 88 B | 85 B |
+| node, quickjs, message waiting | 563 B | 336 B | 309 B | 307 B | 306 B |
+| node, quickjs, delayed send pending | 629 B | 382 B | 358 B | 356 B | 355 B |
+| bun, native, actor, started | 1081 B | 661 B | 601 B | 589 B | 589 B |
+| bun, native, actor, after an event | 1677 B | 887 B | 781 B | 746 B | 748 B |
+| bun, native, actor, hibernated | 802 B | 155 B | 93 B | 87 B | 84 B |
+| bun, native, message waiting | 760 B | 473 B | 386 B | 372 B | 373 B |
+| bun, native, delayed send pending | 1275 B | 557 B | 448 B | 434 B | 433 B |
+| bun, quickjs, actor, started | 1153 B | 965 B | 1041 B | 1045 B | 1034 B |
+| bun, quickjs, actor, after an event | 1773 B | 1573 B | 1645 B | 1638 B | 1635 B |
+| bun, quickjs, actor, hibernated | 571 B | 135 B | 90 B | 86 B | 84 B |
+| bun, quickjs, message waiting | 511 B | 339 B | 313 B | 308 B | 306 B |
+| bun, quickjs, delayed send pending | 550 B | 371 B | 356 B | 355 B | 355 B |
+
+Every count of the run completed. The other columns are the same on
+node and bun, and vary by at most a byte between counts from 100,000 up.
 
 ## What the columns mean
 
@@ -89,11 +113,11 @@ column: the package has no API for them. Its tests count them.
   event. It keeps that event as `_event` until the next one.
 - **per actor, hibernated:** an actor in a population that keeps at most
   1000 actors in memory and the rest in a store, measured once the last
-  1000 are hibernated too. It uses its core records, 81 B (89 B is only
-  the reservation's bound when an index doubles), and its blob is in the
-  store; its instance went back to the slab, and a name it was spawned
-  with would stay in the string slab (the default config reserves 16 B
-  of strings per actor).
+  1000 are hibernated too. It uses 81 B of records (the reservation is
+  81 B to 83 B, its share of the region's indexes included), and
+  its blob is in the store; its instance went back to the slab, and a
+  name it was spawned with would stay in the string slab (the default
+  config reserves 16 B of strings per actor).
 - **per message waiting:** an event in an actor's mailbox, before the
   actor handles it.
 - **per delayed send pending:** a `<send delay>` that has not fallen due.
@@ -142,32 +166,31 @@ more in the process column. The other columns do not vary between runs.
 
 ## The data
 
-[`results/2026-11-20.csv`](results/2026-11-20.csv) holds one run: node and bun, each datamodel, at
-10,000, 100,000, 1,000,000, 2,000,000 and 4,000,000 of each thing, on one
-machine (2026-11-20; Intel Xeon @ 2.10GHz, 4 CPUs, 16 GiB, Linux). It
-came from:
+[`results/2026-11-25.csv`](results/2026-11-25.csv) holds the run the
+tables above come from: node and bun, each datamodel, at 10,000,
+100,000, 1,000,000, 2,000,000 and 4,000,000 of each thing, on one
+machine with nothing else running (2026-11-25; Intel Xeon @ 2.10GHz,
+4 CPUs, 16 GiB, Linux; node 22.23.5, bun 1.4.1). It came from:
 
 ```sh
 for runtime in node bun; do
   $runtime examples/memory/main.mjs --counts 10000,100000,1000000,2000000,4000000 \
-    --datamodel native --csv examples/memory/results/2026-11-20.csv
+    --datamodel native --csv examples/memory/results/2026-11-25.csv
   $runtime examples/memory/main.mjs --counts 10000,100000,1000000,2000000,4000000 \
-    --datamodel quickjs --quickjs-memory-limit 8589934592 --csv examples/memory/results/2026-11-20.csv
+    --datamodel quickjs --quickjs-memory-limit 8589934592 --csv examples/memory/results/2026-11-25.csv
 done
 ```
 
 Each line is one row at one count: `runtime`, `datamodel`, `tracing`,
-`count`, `row`, `memory`, `heap`, `core_reserves`, `blob` (bytes),
-`failed` (what stopped a row that failed), `machine` and `date`. Plot
-`memory` against `count` for each `row` to see the fixed costs spread.
-That file predates the accounted columns; a run of this program writes
-`core_reserved`, `core_used`, `host_other`, `quickjs`, `accounted`,
-`process` and `blob` instead, and the next sweep will add such a file.
+`count`, `row`, `core_reserved`, `core_used`, `host_other`, `quickjs`,
+`accounted`, `process`, `blob` (bytes), `failed` (what stopped a row
+that failed), `machine` and `date`. Plot `process` against `count` for
+each `row` to see the fixed costs spread.
 
-That run took memory as the whole resident set, which also counts the
-code of the runtime paged in during a measurement, about 5 MB on node:
-some 550 B a thing at 10,000 and 55 B at 100,000, and under 12 B from
-1,000,000 up, where the table above comes from.
+[`results/2026-11-20.csv`](results/2026-11-20.csv) is an earlier run of
+the program before it accounted each part: its columns are `memory` (the
+whole resident set, which also counted the runtime's code paged in),
+`heap`, `core_reserves` and `blob`.
 
 A new run goes into a new file under `results/`, named by its date; the
 earlier files stay. The root `AGENTS.md` ("Published numbers") says when

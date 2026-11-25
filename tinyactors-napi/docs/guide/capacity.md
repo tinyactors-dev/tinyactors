@@ -144,47 +144,53 @@ datamodel, chart and data:
 node examples/memory/main.mjs --counts 1000000 --datamodel native
 ```
 
-The tables below show the process's memory only: they come from a run
-of an earlier version of the program, before it accounted each part, and
-will be replaced at the next sweep of the published numbers. One run of
-it (2026-11-20; Intel Xeon @ 2.10GHz, 4 CPUs, 16 GiB, Linux;
+One run of it (2026-11-25; Intel Xeon @ 2.10GHz, 4 CPUs, 16 GiB, Linux;
 node 22.23.5, bun 1.4.1; a counter chart with one `<data>`, messages of
-`{"text": "hello"}`, tracing on). The hibernated row keeps at most 1000
-actors resident and the rest in a store.
+`{"text": "hello"}`, tracing on, quickjs's heap set to 8 GiB). The
+hibernated row keeps at most 1000 actors resident and the rest in a
+store. What the process holds more for each thing, at a million:
 
 | runtime, datamodel | actor, started | actor, after an event | actor, hibernated | message waiting | delayed send pending |
 |---|---|---|---|---|---|
-| node, native | 531 B | 671 B | 124 B | 315 B | 357 B |
-| bun, native | 618 B | 800 B | 101 B | 386 B | 456 B |
-| node, quickjs | 1041 B | 1639 B | 97 B | 312 B | 364 B |
-| bun, quickjs | 1049 B | 1653 B | 99 B | 318 B | 364 B |
+| node, native | 532 B | 673 B | 118 B | 309 B | 353 B |
+| bun, native | 601 B | 781 B | 93 B | 386 B | 448 B |
+| node, quickjs | 1036 B | 1634 B | 92 B | 309 B | 358 B |
+| bun, quickjs | 1041 B | 1645 B | 90 B | 313 B | 356 B |
+
+What the parts account for, at a million, the same on node and bun: the
+core's reservation, what the host allocates beside it (0 B per thing in
+a host sized up front) and, on quickjs, its heap. On the native
+datamodel an actor's variables and a message's data are in your
+engine's heap, which only the process column sees.
+
+| datamodel | actor, started | actor, after an event | actor, hibernated | message waiting | delayed send pending |
+|---|---|---|---|---|---|
+| native | 196 B | 196 B | 82 B | 106 B | 151 B |
+| quickjs | 796 B | 1372 B | 82 B | 284 B | 329 B |
 
 The fixed costs of a host and of the engine spread over the population,
-so an actor costs less in a larger one. Node on the native datamodel:
+so an actor costs less of the process in a larger one. Node on the
+native datamodel:
 
 | | 10,000 | 100,000 | 1,000,000 | 2,000,000 | 4,000,000 |
 |---|---|---|---|---|---|
-| per actor, started | 1327 B | 774 B | 531 B | 519 B | 501 B |
-| per actor, after an event | 1956 B | 920 B | 671 B | 665 B | 644 B |
-| per actor, hibernated | 1147 B | 326 B | 124 B | 103 B | 92 B |
-| per message waiting | 1146 B | 444 B | 315 B | 296 B | 286 B |
-| per delayed send pending | 1296 B | 544 B | 357 B | 341 B | 332 B |
+| per actor, started | 803 B | 720 B | 532 B | 510 B | 495 B |
+| per actor, after an event | 1446 B | 870 B | 673 B | 654 B | 639 B |
+| per actor, hibernated | 637 B | 269 B | 118 B | 100 B | 91 B |
+| per message waiting | 602 B | 392 B | 309 B | 293 B | 285 B |
+| per delayed send pending | 737 B | 489 B | 353 B | 338 B | 331 B |
 
-That run counted the whole resident set, which also holds the runtime's
-code paged in while it measured, about 5 MB on node: in the 10,000 and
-100,000 columns some 550 B and 55 B of each figure, under 12 B from a
-million up.
-
-Each row's data, at every population and on every runtime, is in
-[the run's CSV](https://github.com/tinyactors-dev/tinyactors/blob/main/tinyactors-napi/examples/memory/results/2026-11-20.csv), for a chart of your own.
+Each row's data, at every population and on every runtime, with every
+part, is in
+[the run's CSV](https://github.com/tinyactors-dev/tinyactors/blob/main/tinyactors-napi/examples/memory/results/2026-11-25.csv), for a chart of your own.
 
 - **A started actor** holds its variables in the datamodel and its
-  records in the core: 196 B for this chart at a million (81 B, its
-  instance and its strings).
+  records in the core: 196 B reserved for this chart at a million (81 B,
+  its instance and its strings), 179 B of it used.
 - **After an event** an actor keeps that event as `_event` until the
-  next one.
-- **A hibernated actor** keeps its core records only, 81 B to 89 B, and
-  its blob is in your store (145 B on the native datamodel, 147 B on
+  next one. On quickjs the event's record, 106 B, stays in the core too.
+- **A hibernated actor** uses 81 B of core records (the reservation is
+  81 B to 83 B), and its blob is in your store (145 B on the native datamodel, 147 B on
   quickjs, for this chart).
 - **A message** costs 106 B in the core (57 B with tracing off) and its
   data in the datamodel. **A delayed send** holds its message until it
