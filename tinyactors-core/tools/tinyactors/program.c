@@ -13,7 +13,7 @@ static const ta_string_view formats[] = {T("markdown"), T("json"), T("xml"), T("
 
 static const ta_cli_option program_options[TOOL_PROGRAM_OPTION_COUNT] = {
     [TOOL_OPTION_FORMAT] = {T("format"), 'f', TA_CLI_OPTION_CHOICE, 0, 4, formats, T("FORMAT"),
-                            T("write the answer as markdown (the default), json or xml")},
+                            T("write the answer as markdown (the default), json or xml; graph also as svg")},
     [TOOL_OPTION_HELP] = {T("help"), 'h', TA_CLI_OPTION_FLAG, TA_CLI_OPTION_ANSWERS, 0, 0, T(""),
                           T("describe the command, or the program")},
     [TOOL_OPTION_VERSION] = {T("version"), 0, TA_CLI_OPTION_FLAG, TA_CLI_OPTION_ANSWERS, 0, 0,
@@ -140,7 +140,7 @@ static const ta_cli_command commands[TOOL_COMMAND_COUNT] = {
                              T("every event name, and the transitions, raises and sends using it"),
                              INPUTS, T("INPUT..."), 1, TA_CLI_UNBOUNDED, OPTIONS(image_options),
                              EXAMPLES(events_examples)},
-    [TOOL_COMMAND_DATA] = {T("data"), T("each chart's <data> declarations"), INPUTS, T("INPUT..."),
+    [TOOL_COMMAND_DATA] = {T("data"), T("each chart's data declarations: id, state, expression, line"), INPUTS, T("INPUT..."),
                            1, TA_CLI_UNBOUNDED, OPTIONS(image_options), EXAMPLES(data_examples)},
     [TOOL_COMMAND_EXPRESSIONS] = {T("expressions"),
                                   T("each chart's expressions and scripts, with where they are"),
