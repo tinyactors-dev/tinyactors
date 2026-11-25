@@ -32,7 +32,7 @@
 | resumePoint | deep history | active | history | 273 | 351 | 26 | 26 |
 | escalated | atomic | inFlight | atomic | 2412 | 216 | 248 | 58 |
 | archiving | atomic | inFlight | atomic | 2412 | 292 | 92 | 34 |
-| archiveRetry | atomic | inFlight | atomic | 2850 | 292 | 115 | 34 |
+| archiveRetry | atomic | inFlight | atomic | 2850 | 296 | 115 | 34 |
 | approved | final | /scxml | final | 3155 | 179 | 85 | 34 |
 | rejected | final | /scxml | final | 3155 | 231 | 85 | 34 |
 | withdrawn | final | /scxml | final | 3155 | 297 | 92 | 34 |
@@ -62,8 +62,8 @@
 | resumePoint | review |  |  | forward | 298,368 683,368 |
 | escalated | resumePoint | resume |  | back | 2412,254 2402,254 2402,445 305,445 305,360 298,360 |
 | archiving | approved | archived |  | forward | 2504,300 2510,300 2510,459 3135,459 3135,196 3155,196 |
-| archiving | archiveRetry | error.communication |  | forward | 2504,309 2830,309 2830,304 2850,304 |
-| archiveRetry | archiving | archive.retry |  | back | 2850,316 2840,316 2840,317 2504,317 |
+| archiving | archiveRetry | error.communication |  | forward | 2504,309 2850,309 |
+| archiveRetry | archiving | archive.retry |  | back | 2850,319 2830,319 2830,317 2504,317 |
 
 #### Inside
 

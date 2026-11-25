@@ -31,23 +31,23 @@
 | shopping | checkingOut | checkout | Object.keys(lines).length > 0 && Object.values(lines).every(function (line) { return line.status === 'held'; }) | forward | 362,274 754,274 |
 | shopping | compensating | cancel |  | forward | 362,247 684,247 684,238 1240,238 1240,184 1340,184 |
 | checkingOut | checkingOut | confirmed | lines[_event.data.sku] !== undefined && lines[_event.data.sku].reservation === _event.data.reservation && lines[_event.data.sku].status === 'confirming' | self | 928,338 944,338 944,364 928,364 |
-| checkingOut | compensating | confirm.refused | lines[_event.data.sku] !== undefined && lines[_event.data.sku].reservation === _event.data.reservation | forward | 928,288 1250,288 1250,192 1340,192 |
-| checkingOut | compensating | error.communication |  | forward | 928,298 1260,298 1260,200 1340,200 |
-| checkingOut | compensating | checkout.timeout |  | forward | 928,308 1270,308 1270,208 1340,208 |
-| checkingOut | compensating | cancel |  | forward | 928,318 1280,318 1280,216 1340,216 |
+| checkingOut | compensating | confirm.refused | lines[_event.data.sku] !== undefined && lines[_event.data.sku].reservation === _event.data.reservation | forward | 928,263 1250,263 1250,192 1340,192 |
+| checkingOut | compensating | error.communication |  | forward | 928,273 1260,273 1260,200 1340,200 |
+| checkingOut | compensating | checkout.timeout |  | forward | 928,283 1270,283 1270,208 1340,208 |
+| checkingOut | compensating | cancel |  | forward | 928,293 1280,293 1280,216 1340,216 |
 | checkingOut | placed |  | Object.values(lines).every(function (line) { return line.status === 'confirmed'; }) | forward | 928,328 2554,328 2554,244 2564,244 |
 | compensating | releaseBackoff | error.communication release.timeout |  | forward | 1622,189 1940,189 |
-| compensating | cancelled |  | Object.values(lines).every(function (line) { return line.status === 'released'; }) && cancelled | forward | 1622,244 2534,244 2534,342 2565,342 |
-| compensating | retrying |  | `Object.values(lines).every(function (line) { return line.status === 'released'; }) && retry && attempt < maxAttempts` | forward | 1622,218 1900,218 1900,260 1940,260 |
-| compensating | failed |  | Object.values(lines).every(function (line) { return line.status === 'released'; }) | forward | 1622,230 1628,230 1628,143 2544,143 2544,296 2564,296 |
+| compensating | cancelled |  | Object.values(lines).every(function (line) { return line.status === 'released'; }) && cancelled | forward | 1622,247 2534,247 2534,345 2564,345 |
+| compensating | retrying |  | `Object.values(lines).every(function (line) { return line.status === 'released'; }) && retry && attempt < maxAttempts` | forward | 1622,227 1900,227 1900,260 1940,260 |
+| compensating | failed |  | Object.values(lines).every(function (line) { return line.status === 'released'; }) | forward | 1622,237 2544,237 2544,296 2564,296 |
 | releaseBackoff | compensating | release.again |  | back | 1940,203 1622,203 |
-| retrying | reserving | retry |  | back | 1940,274 1930,274 1930,311 1330,311 1330,462 734,462 734,427 362,427 |
-| retrying | cancelled | cancel |  | forward | 2025,267 2524,267 2524,353 2565,353 |
-| reserving | compensating | reserve.refused | lines[_event.data.sku] !== undefined && lines[_event.data.sku].reservation === _event.data.reservation | forward | 362,349 694,349 694,432 1290,432 1290,225 1340,225 |
-| reserving | compensating | error.communication |  | forward | 362,369 704,369 704,432 1300,432 1300,233 1340,233 |
-| reserving | compensating | reserving.timeout |  | forward | 362,388 714,388 714,432 1310,432 1310,241 1340,241 |
-| reserving | compensating | cancel |  | forward | 362,407 724,407 724,432 1320,432 1320,249 1340,249 |
-| reserving | checkingOut |  | Object.values(lines).every(function (line) { return line.status === 'held'; }) | forward | 362,442 744,442 744,389 754,389 |
+| retrying | reserving | retry |  | back | 1940,274 1930,274 1930,311 1330,311 1330,462 734,462 734,380 362,380 |
+| retrying | cancelled | cancel |  | forward | 2025,267 2524,267 2524,350 2564,350 |
+| reserving | compensating | reserve.refused | lines[_event.data.sku] !== undefined && lines[_event.data.sku].reservation === _event.data.reservation | forward | 362,340 694,340 694,432 1290,432 1290,225 1340,225 |
+| reserving | compensating | error.communication |  | forward | 362,350 704,350 704,432 1300,432 1300,233 1340,233 |
+| reserving | compensating | reserving.timeout |  | forward | 362,360 714,360 714,432 1310,432 1310,241 1340,241 |
+| reserving | compensating | cancel |  | forward | 362,370 724,370 724,432 1320,432 1320,249 1340,249 |
+| reserving | checkingOut |  | Object.values(lines).every(function (line) { return line.status === 'held'; }) | forward | 362,390 754,390 |
 
 #### Inside
 

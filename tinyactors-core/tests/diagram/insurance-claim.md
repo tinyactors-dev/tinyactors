@@ -29,13 +29,13 @@
 | Source | Target | Events | Condition | Drawn as | Route |
 | --- | --- | --- | --- | --- | --- |
 | filed | assessing | assess |  | forward | 104,122 195,122 |
-| assessing | closed | withdraw |  | forward | 826,156 921,156 921,179 963,179 |
+| assessing | closed | withdraw |  | forward | 826,170 921,170 921,187 961,187 |
 | collecting | checking | complete |  | forward | 598,129 713,129 |
 | checking | collecting | missing |  | back | 713,141 598,141 |
 | checking | paid | settle |  | forward | 798,141 951,141 951,135 961,135 |
 | checking | appeal | appeal |  | forward | 798,129 941,129 941,89 961,89 |
 | interview | documents | cleared |  | forward | 341,135 458,135 |
-| appeal | assessing | upheld |  | back | 961,79 931,79 931,88 826,88 |
+| appeal | assessing | upheld |  | back | 961,79 826,79 |
 
 #### Inside
 
@@ -45,6 +45,4 @@
 
 #### Problems
 
-| Kind | Subject | Touches |
-| --- | --- | --- |
-| notCentred | assessing → closed on withdraw | closed |
+_none_

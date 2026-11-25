@@ -544,14 +544,14 @@ static void draw_box(svg *g, const ta_diagram_box *box) {
 }
 
 /* An orthogonal path through `count` points of the layout, with an arrow at its end: its data
- * ("M x,y L x,y ...") made in the arena, above a mark released once it is written. */
+ * ("M x,y L x,y ...") made in the arena and kept there. The writer may grow in the same arena
+ * while the path is written; a mark released after it would free the writer's new buffer. */
 typedef struct path_place {
     const char *class_name, *marker;
     uint32_t first, count;
 } path_place;
 static void path(svg *g, path_place at) {
     const ta_diagram_point *p = &g->d->layout->points[at.first];
-    ta_growable_arena_mark mark = ta_growable_arena_position(g->d->arena);
     ta_allocator allocator = ta_growable_arena_allocator(g->d->arena);
     ta_output data = ta_output_over((ta_buffer){0, 0, 0}, &allocator);
     for (uint32_t i = 0; i < at.count; i++) {
@@ -570,7 +570,6 @@ static void path(svg *g, path_place at) {
         g->status = TA_ERROR_NO_MEMORY;
     attribute(g->writer, "marker-end", at.marker);
     ta_xml_writer_close(g->writer);
-    ta_growable_arena_release(g->d->arena, mark);
 }
 
 ta_status ta_diagram_svg(ta_xml_writer *writer, const ta_diagram_drawing *d) {

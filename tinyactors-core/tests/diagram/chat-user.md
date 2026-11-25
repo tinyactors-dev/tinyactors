@@ -6,14 +6,14 @@
 
 - **Name**: user
 - **Width**: 926
-- **Height**: 202
+- **Height**: 203
 
 #### Boxes
 
 | State | Kind | Parent | Drawn as | X | Y | Width | Height |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| /scxml | compound |  | root | 0 | 0 | 926 | 202 |
-| offline | atomic | /scxml | atomic | 277 | 114 | 77 | 34 |
+| /scxml | compound |  | root | 0 | 0 | 926 | 203 |
+| offline | atomic | /scxml | atomic | 277 | 111 | 77 | 34 |
 | online | compound | /scxml | compound | 536 | 14 | 376 | 160 |
 | active | atomic | online | atomic | 620 | 102 | 99 | 58 |
 | away | atomic | online | atomic | 834 | 114 | 64 | 34 |
@@ -24,15 +24,15 @@
 
 | Source | Target | Events | Condition | Drawn as | Route |
 | --- | --- | --- | --- | --- | --- |
-| offline | online | connect |  | forward | 354,125 516,125 516,121 536,121 |
-| online | offline | disconnect |  | back | 536,137 354,137 |
-| online | reconnecting | connection.lost |  | back | 536,164 506,164 506,176 237,176 237,121 129,121 |
+| offline | online | connect |  | forward | 354,121 536,121 |
+| online | offline | disconnect |  | back | 536,134 354,134 |
+| online | reconnecting | connection.lost |  | back | 536,164 516,164 516,176 247,176 247,114 129,114 |
 | active | away | idle |  | forward | 719,124 834,124 |
 | away | active | activity |  | back | 834,138 719,138 |
 | resume | active |  |  | forward | 576,131 620,131 |
-| reconnecting | resume | connect |  | forward | 129,138 247,138 247,176 526,176 526,131 550,131 |
-| reconnecting | offline | disconnect |  | forward | 129,151 257,151 257,127 277,127 |
-| reconnecting | offline | grace.over |  | forward | 129,168 267,168 267,138 277,138 |
+| reconnecting | resume | connect |  | forward | 129,171 267,171 267,176 526,176 526,131 550,131 |
+| reconnecting | offline | disconnect |  | forward | 129,124 277,124 |
+| reconnecting | offline | grace.over |  | forward | 129,135 277,135 |
 
 #### Inside
 

@@ -1136,11 +1136,112 @@ static void classify(router *r) {
     }
 }
 
+/* How far a port may slide along its side: between its neighbours, as far apart as their rooms
+ * need, and inside its group's span. A port alone on a leaf's side and a history circle's stay
+ * where they are: at the side's middle, and on the circle. */
+typedef struct range {
+    double lo, hi;
+} range;
+
+static range port_range(const router *r, uint32_t index) {
+    const layout *l = r->l;
+    const attachment *a = &r->attachments[index];
+    uint32_t g = r->group_of[a->box * SIDES + a->side], count = r->group_count[g];
+    const uint32_t *list = &r->group_list[r->group_first[g]];
+    if (is_history(l, a->box) || (count == 1 && l->containers[a->box].kind == CONTAINER_NONE)) return (range){a->at, a->at};
+    uint32_t i = 0;
+    while (list[i] != index)
+        i++;
+    double inset = state_of(l, a->box)->kind == TA_DIAGRAM_STATE_FINAL ? 0 : l->sp.edge;
+    range out = {r->group_start[g] + inset, r->group_start[g] + r->group_span[g] - inset};
+    if (i > 0) {
+        const attachment *before = &r->attachments[list[i - 1]];
+        out.lo = ta_diagram_max(out.lo, before->at + ta_diagram_max(l->sp.edge, (before->room + a->room) / 2));
+    }
+    if (i + 1 < count) {
+        const attachment *after = &r->attachments[list[i + 1]];
+        out.hi = ta_diagram_min(out.hi, after->at - ta_diagram_max(l->sp.edge, (after->room + a->room) / 2));
+    }
+    if (out.lo > out.hi) return (range){a->at, a->at}; /* no room: it stays */
+    return out;
+}
+
+static double within_range(range allowed, double value) {
+    return ta_diagram_min(allowed.hi, ta_diagram_max(allowed.lo, value));
+}
+
+/* how far apart two neighbouring ports keep */
+static double separation(const router *r, uint32_t a, uint32_t b) {
+    return ta_diagram_max(r->l->sp.edge, (r->attachments[a].room + r->attachments[b].room) / 2);
+}
+
+/* 1 when a port must not be pushed: a self loop's (its label sits on it), or one an edge already
+ * runs straight into or out of. */
+static int pinned(const router *r, uint32_t index) {
+    const attachment *a = &r->attachments[index];
+    if (a->loop) return 1;
+    for (uint32_t k = 0; k < r->attachment_count; k++) {
+        const attachment *b = &r->attachments[k];
+        if (b->arrives != 2 || (k != index && b->arrive_from != index)) continue;
+        if (ta_diagram_abs(b->at - r->attachments[b->arrive_from].at) <= 0.5) return 1;
+    }
+    return 0;
+}
+
+/* Slides a port towards `value`, pushing its neighbours along its side as far as they can go. */
+static void slide(router *r, uint32_t index, double value) {
+    attachment *a = &r->attachments[index];
+    uint32_t g = r->group_of[a->box * SIDES + a->side], count = r->group_count[g];
+    if (is_history(r->l, a->box) || (count == 1 && r->l->containers[a->box].kind == CONTAINER_NONE)) return; /* it stays */
+    const uint32_t *list = &r->group_list[r->group_first[g]];
+    double inset = state_of(r->l, a->box)->kind == TA_DIAGRAM_STATE_FINAL ? 0 : r->l->sp.edge;
+    uint32_t i = 0;
+    while (list[i] != index)
+        i++;
+    /* as far as the side's ends, or a port that stays */
+    range pushed = {r->group_start[g] + inset, r->group_start[g] + r->group_span[g] - inset};
+    double gone = 0;
+    for (uint32_t k = i; k > 0; k--) {
+        gone += separation(r, list[k - 1], list[k]);
+        if (pinned(r, list[k - 1])) {
+            pushed.lo = r->attachments[list[k - 1]].at;
+            break;
+        }
+    }
+    pushed.lo += gone;
+    gone = 0;
+    for (uint32_t k = i + 1; k < count; k++) {
+        gone += separation(r, list[k - 1], list[k]);
+        if (pinned(r, list[k])) {
+            pushed.hi = r->attachments[list[k]].at;
+            break;
+        }
+    }
+    pushed.hi -= gone;
+    if (pushed.lo > pushed.hi) return;
+    a->at = within_range(pushed, value);
+    for (uint32_t k = i + 1; k < count; k++) {
+        attachment *next = &r->attachments[list[k]];
+        double least = r->attachments[list[k - 1]].at + separation(r, list[k - 1], list[k]);
+        if (next->at >= least) break;
+        next->at = least;
+    }
+    for (uint32_t k = i; k > 0; k--) {
+        attachment *before = &r->attachments[list[k - 1]];
+        double most = r->attachments[list[k]].at - separation(r, list[k - 1], list[k]);
+        if (before->at <= most) break;
+        before->at = most;
+    }
+}
+
 /* ── 2. ports: attachments per box side, spread evenly, ordered by where the other end is ── */
 static void ports(router *r) {
     layout *l = r->l;
     const ta_diagram_spacing *sp = &l->sp;
     int down = l->down;
+    r->attachment_count = r->group_total = 0; /* made again after boxes moved (2b) */
+    for (uint32_t i = 0; i < r->pending_count; i++)
+        r->group_count[2 * i] = r->group_count[2 * i + 1] = 0;
     for (uint32_t i = 0; i < r->pending_count; i++) {
         pending *p = &r->pendings[i];
         switch (p->route) {
@@ -1232,6 +1333,13 @@ static void ports(router *r) {
         double across = has_info && !down ? info->header : 0, along = has_info && down ? info->header : 0;
         double span = ta_diagram_max(0, side == SIDE_BOTTOM ? rr.w - along : rr.h - across);
         double start = side == SIDE_BOTTOM ? rr.x + along : rr.y + across;
+        if (side != SIDE_BOTTOM && state_of(l, box)->kind == TA_DIAGRAM_STATE_FINAL) {
+            /* a final's pill: its ports where an edge meets the outline head on, so the arrow runs
+             * into it: the straight part of a side, or the middle of a round end */
+            double inset = rr.w >= rr.h ? rr.h / 4 : rr.w / 2;
+            start += inset;
+            span = ta_diagram_max(0, span - 2 * inset);
+        }
         double total = 0, loops = 0;
         uint32_t others = 0;
         int any_room = 0;
@@ -1267,31 +1375,120 @@ static void ports(router *r) {
         r->group_start[g] = start;
         r->group_span[g] = span;
     }
-    /* the last mile: a port where its edge arrives moves to meet it, so the edge runs straight in
-     * (between its neighbours, and offset a final's rounded ends; a history circle keeps its ports) */
+    /* the last mile: an edge between sibling boxes runs straight in. A port alone on a leaf's
+     * side stays at its middle, and the port the edge leaves from moves to meet it; otherwise the
+     * port where it arrives moves to meet the edge (between its neighbours), and the one it leaves
+     * from makes up the rest, pushing its neighbours along (a history circle keeps its ports) */
     for (uint32_t g = 0; g < r->group_total; g++) {
         uint32_t box = r->group_box[g];
         if (r->group_side[g] != SIDE_NEAR || is_history(l, box)) continue;
-        rect rr = canonical(l, box);
-        double start = r->group_start[g], span = r->group_span[g];
-        double inset = state_of(l, box)->kind == TA_DIAGRAM_STATE_FINAL ? (down ? rr.w / 2 : rr.h / 4) : sp->edge;
         uint32_t *list = &r->group_list[r->group_first[g]];
-        uint32_t count = r->group_count[g];
-        for (uint32_t i = 0; i < count; i++) {
+        for (uint32_t i = 0; i < r->group_count[g]; i++) {
             attachment *a = &r->attachments[list[i]];
             if (!a->arrives) continue;
-            double want = a->arrives == 1 ? a->arrive_at : r->attachments[a->arrive_from].at;
-            double lo = ta_diagram_max(start + inset, i > 0 ? r->attachments[list[i - 1]].at + sp->edge : -big);
-            double hi = ta_diagram_min(start + span - inset, i + 1 < count ? r->attachments[list[i + 1]].at - sp->edge : big);
-            if (lo <= hi) a->at = ta_diagram_min(hi, ta_diagram_max(lo, want));
-            /* still short: the port it leaves from slides within its slot to meet it */
-            if (a->arrives == 2 && ta_diagram_abs(a->at - want) > 0.5 && !is_history(l, r->attachments[a->arrive_from].box)) {
-                attachment *from = &r->attachments[a->arrive_from];
-                double half = ta_diagram_max(0, (from->slot - sp->edge) / 2);
-                from->at = ta_diagram_min(from->at + half, ta_diagram_max(from->at - half, a->at));
-            }
+            attachment *from = a->arrives == 2 ? &r->attachments[a->arrive_from] : 0;
+            double want = from ? from->at : a->arrive_at;
+            a->at = within_range(port_range(r, list[i]), want);
+            if (from && ta_diagram_abs(a->at - want) > 0.5) slide(r, a->arrive_from, a->at);
         }
     }
+}
+
+/* ── 2b. boxes meet their edges: a port alone on a leaf's side stays at its middle, so where an
+ * edge between sibling boxes still bends on its last mile, the leaf it enters moves across its
+ * layer to meet the port it leaves from (layer by layer, so a box meets ports that have stopped
+ * moving), or else the leaf it leaves, as far as their neighbours' gaps and their container
+ * allow (settle's rules). The ports are made again after each move, which is kept only when
+ * fewer edges bend; 1 when a box moved ── */
+
+/* Moves a leaf `s` across its layer by `delta` (canonical), as far as it may go; how far it went. */
+static double shift_leaf(layout *l, uint32_t s, double delta) {
+    uint32_t c = parent_of(l, s);
+    container *info = &l->containers[c];
+    lnode *node = &info->nodes[l->slot[s]];
+    const uint32_t *list = layer_nodes(info, node->layer);
+    uint32_t count = info->layer_count[node->layer], i = 0;
+    while (list[i] != l->slot[s])
+        i++;
+    double lo = 0, hi = info->canon_h - node->h;
+    if (i > 0) {
+        const lnode *before = &info->nodes[list[i - 1]];
+        lo = before->y + before->h + (before->state == TA_NIL ? l->sp.edge : l->sp.node);
+    }
+    if (i + 1 < count) hi = ta_diagram_min(hi, info->nodes[list[i + 1]].y - l->sp.node - node->h);
+    double y = ta_diagram_min(hi, ta_diagram_max(lo, node->y + delta));
+    if (lo > hi || ta_diagram_abs(y - node->y) < 0.01) return 0;
+    double moved = y - node->y;
+    node->y = y;
+    rect at = canonical(l, s);
+    at.y += moved;
+    l->abs[s] = tr(at, l->down);
+    l->local[s] = tr((rect){node->x, node->y, node->w, node->h}, l->down);
+    return moved;
+}
+
+/* The attachment where an edge between sibling boxes arrives on the later box, or NULL. */
+static attachment *arrival(router *r, const pending *p) {
+    if (p->route != ROUTE_FORWARD && p->route != ROUTE_REVERSED) return 0;
+    attachment *a = &r->attachments[p->route == ROUTE_FORWARD ? p->end : p->start];
+    return a->arrives ? a : 0;
+}
+
+static int straight(const router *r, const attachment *a) {
+    double want = a->arrives == 2 ? r->attachments[a->arrive_from].at : a->arrive_at;
+    return ta_diagram_abs(a->at - want) <= 0.5;
+}
+
+/* How many edges between sibling boxes bend on their last mile. */
+static uint32_t bent(router *r) {
+    uint32_t count = 0;
+    for (uint32_t i = 0; i < r->pending_count; i++) {
+        const attachment *a = arrival(r, &r->pendings[i]);
+        count += a && !straight(r, a);
+    }
+    return count;
+}
+
+/* Moves a leaf by `delta`, makes the ports again, and keeps the move only when fewer edges bend
+ * than `*best`; 1 when it kept it. */
+static int try_move(router *r, uint32_t box, double delta, uint32_t *best) {
+    layout *l = r->l;
+    if (is_history(l, box) || l->containers[box].kind != CONTAINER_NONE) return 0;
+    double shift = shift_leaf(l, box, delta);
+    if (shift == 0) return 0;
+    ports(r);
+    uint32_t now = bent(r);
+    if (now < *best) {
+        *best = now;
+        return 1;
+    }
+    shift_leaf(l, box, -shift);
+    ports(r);
+    return 0;
+}
+
+static int align_boxes(router *r) {
+    layout *l = r->l;
+    int moved = 0;
+    uint32_t layers = 0, best = bent(r);
+    for (uint32_t c = 0; c < l->n; c++)
+        layers = l->containers[c].layer_total > layers ? l->containers[c].layer_total : layers;
+    /* the box an edge enters, layer by layer */
+    for (uint32_t layer = 1; layer < layers && best; layer++)
+        for (uint32_t i = 0; i < r->pending_count && best; i++) {
+            const pending *p = &r->pendings[i];
+            const attachment *a = arrival(r, p);
+            if (!a || a->arrives != 2 || layer_of(l, p->container, a->box) != layer || straight(r, a))
+                continue;
+            moved |= try_move(r, a->box, r->attachments[a->arrive_from].at - a->at, &best);
+        }
+    /* then, where that box could not go far enough, the box it leaves */
+    for (uint32_t i = 0; i < r->pending_count && best; i++) {
+        const attachment *a = arrival(r, &r->pendings[i]);
+        if (!a || a->arrives != 2 || straight(r, a)) continue;
+        moved |= try_move(r, r->attachments[a->arrive_from].box, a->at - r->attachments[a->arrive_from].at, &best);
+    }
+    return moved;
 }
 
 /* ── 3. bend channels per gap (in order of the source port) and lanes per parallel state ── */
@@ -1790,7 +1987,7 @@ static uint32_t segment_order(const labeller *b, const label_route *route) {
 /* Where along a segment a label slides to, the `i`th try from 1: its middle, then in twentieths
  * either side of it, the side nearer the segment's start first. */
 enum { slides = 19 };
-static double slide(uint32_t i) {
+static double slide_fraction(uint32_t i) {
     double away = (double)(i / 2) * 0.05;
     return i % 2 ? 0.5 + away : 0.5 - away;
 }
@@ -1812,7 +2009,7 @@ static int place_at_tier(const labeller *b, const label_route *route, rect *chos
         int past_port = order[k] == 0 && horizontal &&
                         (route->kind == TA_DIAGRAM_EDGE_FORWARD || route->kind == TA_DIAGRAM_EDGE_BACK);
         for (uint32_t i = past_port ? 0 : 1; i <= slides; i++) {
-            double t = i == 0 ? (s.w / 2 + 2 * b->sp->label) / segment_length(a, z) : slide(i);
+            double t = i == 0 ? (s.w / 2 + 2 * b->sp->label) / segment_length(a, z) : slide_fraction(i);
             rect r = rect_at(s, a.x + (z.x - a.x) * t, a.y + (z.y - a.y) * t);
             /* keep the label inside the segment's extent */
             if (horizontal ? r.x < ta_diagram_min(a.x, z.x) || r.x + r.w > ta_diagram_max(a.x, z.x)
@@ -1832,7 +2029,7 @@ static int place_at_tier(const labeller *b, const label_route *route, rect *chos
         if (room < 0) continue;
         double offset = (horizontal ? s.h : s.w) / 2 + 4;
         for (uint32_t i = 1; i <= slides; i++) {
-            double mx = a.x + (z.x - a.x) * slide(i), my = a.y + (z.y - a.y) * slide(i);
+            double mx = a.x + (z.x - a.x) * slide_fraction(i), my = a.y + (z.y - a.y) * slide_fraction(i);
             for (int side = 1; side >= -1; side -= 2) {
                 rect r = horizontal ? rect_at(s, mx, my + side * offset) : rect_at(s, mx + side * offset, my);
                 if (is_free(b, r)) {
@@ -1857,7 +2054,7 @@ static int place_at_tier(const labeller *b, const label_route *route, rect *chos
             double across = (step < 0 ? -1 : 1) * (beside + (step < 0 ? -step : step) * unit);
             /* along it; then, for a segment shorter than the label, just past either end */
             for (uint32_t j = 1; j <= slides + 2; j++) {
-                double t = j <= slides ? slide(j) : j == slides + 1 ? 1 + beyond : -beyond;
+                double t = j <= slides ? slide_fraction(j) : j == slides + 1 ? 1 + beyond : -beyond;
                 double mx = a.x + (z.x - a.x) * t, my = a.y + (z.y - a.y) * t;
                 rect r = horizontal ? rect_at(s, mx, my + across) : rect_at(s, mx + across, my);
                 if (is_free(b, r)) {
@@ -2031,6 +2228,10 @@ static void route(layout *l, ta_diagram_layout *out, ta_diagram_box *boxes) {
     if (l->failed) return;
     classify(&r);
     ports(&r);
+    if (align_boxes(&r)) {
+        for (uint32_t i = 0; i < l->n; i++)
+            boxes[i].rect = l->abs[boxes[i].state];
+    }
     channels(&r);
     if (l->failed) return;
 

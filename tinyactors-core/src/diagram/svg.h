@@ -36,7 +36,7 @@ typedef struct ta_diagram_drawing {
     const uint8_t *portals;
     ta_string_view title; /* above the chart; empty for none */
     double top;
-    ta_growable_arena *arena; /* for each path's data while it is written */
+    ta_growable_arena *arena; /* for each path's data, kept until the arena goes */
 } ta_diagram_drawing;
 
 /* The page: <svg> of that size, its stylesheet, its markers, its ground. */
