@@ -675,29 +675,26 @@
 
   <xs:element name="diagram">
     <xs:annotation><xs:documentation>
-      How the diagram of a program's chart (`chart`, its file) behaves when
-      a reader runs it, so it runs as the programs do: an `event`'s `data`
-      (a JSON object) is what clicking a transition's label for that event
-      sends, and an `answer` is what the stand-in for an I/O processor
-      (`type`) sends back when the chart sends it `event`: the event `with`,
-      as the programs' processors answer. Without them a label sends no data
-      and the reader answers each processor by clicking the label of its
-      reply.
+      How the diagram of a program's chart (`chart`, its file) is run by a
+      reader. An `event` is one the reader may send, with its `data` (a JSON
+      object): the first `event` of a name is what clicking that event's
+      transition label sends, and an `event` with words is also a button
+      under the diagram, its words the button's (an action: 2 to 4 words),
+      so a reader sends specific data ("Add a pen"). The reader plays each
+      I/O processor the chart sends to by clicking the label of its reply.
     </xs:documentation></xs:annotation>
     <xs:complexType>
       <xs:sequence>
-        <xs:element name="event" minOccurs="0" maxOccurs="unbounded">
+        <xs:element name="event" maxOccurs="unbounded">
           <xs:complexType>
-            <xs:attribute name="name" type="xs:token" use="required"/>
-            <xs:attribute name="data" type="xs:string" use="required"/>
-            <xs:assert test="(: data is a JSON object :) parse-json(@data) instance of map(*)"/>
-          </xs:complexType>
-        </xs:element>
-        <xs:element name="answer" minOccurs="0" maxOccurs="unbounded">
-          <xs:complexType>
-            <xs:attribute name="type" type="xs:token" use="required"/>
-            <xs:attribute name="event" type="xs:token" use="required"/>
-            <xs:attribute name="with" type="xs:token" use="required"/>
+            <xs:simpleContent>
+              <xs:extension base="xs:string">
+                <xs:attribute name="name" type="xs:token" use="required"/>
+                <xs:attribute name="data" type="xs:string" use="required"/>
+                <xs:assert test="(: data is a JSON object :) parse-json(@data) instance of map(*)"/>
+                <xs:assert test="(: a button's words are an action :) normalize-space(.) = '' or count(tokenize(normalize-space(.))) = (2 to 4)"/>
+              </xs:extension>
+            </xs:simpleContent>
           </xs:complexType>
         </xs:element>
       </xs:sequence>

@@ -311,7 +311,12 @@ ta-tabs { display: block; }
 .processor__data { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; color: var(--fg-2) !important; }
 .processor__at { font: var(--type-code); color: var(--fg-3); min-width: 3.2em; font-variant-numeric: tabular-nums; }
 .processor__empty { color: var(--fg-3); }
-.chart__controls { background: var(--surface-1); border-top: 1px solid var(--border-1); margin: 0; padding: var(--space-3) var(--space-4); display: flex; align-items: center; }
+.variables[hidden] { display: none; }
+.variables__list { margin: 0; display: grid; grid-template-columns: auto minmax(0, 1fr); gap: var(--space-1) var(--space-3); font: var(--type-body-sm); }
+.variables__list dt code { font: var(--type-code); color: var(--fg-1); }
+.variables__list dd { margin: 0; min-width: 0; }
+.variables__list dd code { display: block; white-space: normal; overflow-wrap: anywhere; }
+.chart__controls { background: var(--surface-1); border-top: 1px solid var(--border-1); margin: 0; padding: var(--space-3) var(--space-4); display: flex; flex-wrap: wrap; gap: var(--space-2); align-items: center; }
 
 /* syntax: the design system's text-safe colours, which follow its theme */
 .hljs-comment, .hljs-meta { color: var(--fg-3); font-style: italic; }

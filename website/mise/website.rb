@@ -70,15 +70,17 @@ module Website
     dir
   end
 
-  # An example's main.c, built against c_release with the pinned clang
-  # (warnings are errors) into build/c/programs/<name>.
+  # An example's C program, its main.c and the other .c files beside it,
+  # built against c_release with the pinned clang (warnings are errors)
+  # into build/c/programs/<name>.
   def c_program(dir, name)
     release = c_release
     flags = ['-std=c11', '-Wall', '-Wextra', '-Werror', '-Wconversion', '-Wshadow',
              *C_LIBRARIES.map { |library| "-I#{release.join(library, 'include')}" }]
     libraries = C_LIBRARIES.map { |library| release.join(library, 'lib', "lib#{library}.a").to_s }
     into = BUILD.join('c', 'programs', name)
-    Toolchain::Target.host.program([dir.join('main.c').to_s, *libraries, '-lm'], into: into.to_s, flags: flags)
+    sources = dir.glob('*.c').sort.map(&:to_s)
+    Toolchain::Target.host.program([*sources, *libraries, '-lm'], into: into.to_s, flags: flags)
     into
   end
 

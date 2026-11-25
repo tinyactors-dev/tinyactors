@@ -604,10 +604,10 @@
             <xsl:variable name="diagram" select="?chart/../../s:diagram[@chart = current()?chart/@file]"/>
             <div role="tabpanel" id="{?id}-panel" aria-labelledby="{?id}-tab" class="chart__diagram" data-src="{f:url(?chart/@src)}" hidden="hidden">
               <xsl:if test="$diagram/s:event">
-                <xsl:attribute name="data-event-data" select="serialize(map:merge($diagram/s:event ! map { string(@name): parse-json(@data) }), map { 'method': 'json' })"/>
+                <xsl:attribute name="data-event-data" select="serialize(map:merge($diagram/s:event ! map { string(@name): parse-json(@data) }, map { 'duplicates': 'use-first' }), map { 'method': 'json' })"/>
               </xsl:if>
-              <xsl:if test="$diagram/s:answer">
-                <xsl:attribute name="data-replies" select="serialize(array { $diagram/s:answer ! map { 'type': string(@type), 'event': string(@event), 'with': string(@with) } }, map { 'method': 'json' })"/>
+              <xsl:if test="$diagram/s:event[normalize-space()]">
+                <xsl:attribute name="data-events" select="serialize(array { $diagram/s:event[normalize-space()] ! map { 'name': string(@name), 'data': parse-json(@data), 'label': normalize-space() } }, map { 'method': 'json' })"/>
               </xsl:if>
             </div>
           </xsl:when>

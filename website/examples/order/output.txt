@@ -1,2 +1,4 @@
-charge 42
+charge {"amount":42,"items":["notebook","pen"]}
+log payment failed: the payment service could not be reached
+charge {"amount":42,"items":["notebook","pen"]}
 paid 42

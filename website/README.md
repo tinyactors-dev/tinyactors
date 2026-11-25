@@ -91,10 +91,12 @@ A page is a hero and sections. Each section has a heading and blocks:
   file; `main.py` with uv, against its `uv.lock`; and `main.c`, built with
   the pinned clang against tinyactors-core's newest release libraries
   (downloaded once into `build/c/`, checked against the release's
-  `SHA256SUMS`). Each must print `output.txt`. A `<diagram chart>` makes
-  the chart's diagram run as the programs do: an `<event name data>` is
-  what clicking that event's label sends, and an `<answer type event
-  with>` is how the stand-in for an I/O processor replies.
+  `SHA256SUMS`). Each must print `output.txt`. A `<diagram chart>` says
+  how a reader runs the chart's diagram: an `<event name data>` is what
+  clicking that event's label sends, and one with words is also a button
+  under the diagram that sends it ("Add a pen"). The reader plays each
+  I/O processor by clicking its reply's label, and the diagram lists the
+  chart's variables after each step.
 - **A live example runs in the browser.** `<live src call>` names an
   export of a module under `examples/`, run by a button whose `<label>` is
   the content's. The build serves the module with `@tinyactors/wasm` at

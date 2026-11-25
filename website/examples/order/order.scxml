@@ -1,19 +1,46 @@
 <scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0"
        datamodel="ecmascript" name="order" initial="cart">
-  <datamodel><data id="total" expr="0"/></datamodel>
+  <datamodel>
+    <data id="lines" expr="[]"/>
+    <data id="total" expr="0"/>
+    <data id="problem" expr="null"/>
+  </datamodel>
+
+  <!-- The customer fills the cart: each add is a line with its item and price.
+       Checkout needs at least one line. -->
   <state id="cart">
     <transition event="add">
+      <assign location="lines" expr="lines.concat([{item: _event.data.item, price: _event.data.price}])"/>
       <assign location="total" expr="total + _event.data.price"/>
     </transition>
-    <transition event="checkout" target="paying"/>
+    <transition event="checkout" cond="lines.length &gt; 0" target="paying">
+      <assign location="problem" expr="null"/>
+    </transition>
   </state>
+
+  <!-- The order asks the payment service to charge the total, and waits.
+       A declined card, or a service that cannot be reached, sends it back
+       to the cart with the problem noted, to check out again. -->
   <state id="paying">
     <onentry>
-      <send type="payments" event="charge"><param name="amount" expr="total"/></send>
+      <send type="payments" event="charge">
+        <param name="amount" expr="total"/>
+        <param name="items" expr="lines.map((line) => line.item)"/>
+      </send>
     </onentry>
     <transition event="charged" target="paid"/>
+    <transition event="declined" target="cart">
+      <assign location="problem" expr="_event.data.reason"/>
+      <log label="order" expr="'payment failed: ' + problem"/>
+    </transition>
+    <transition event="error.communication" target="cart">
+      <assign location="problem" expr="'the payment service could not be reached'"/>
+      <log label="order" expr="'payment failed: ' + problem"/>
+    </transition>
   </state>
+
+  <!-- The order is paid: its total is what it hands back as it ends. -->
   <final id="paid">
-    <donedata><param name="total" expr="total"/></donedata>
+    <donedata><content expr="total"/></donedata>
   </final>
 </scxml>

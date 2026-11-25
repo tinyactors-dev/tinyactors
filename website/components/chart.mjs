@@ -11,11 +11,13 @@
 // type a chart sends to gets a stand-in, which keeps what it receives and
 // shows it under the diagram: the reader sees what the payment service was
 // asked, and plays the service by clicking the answer's label (charged).
+// The chart's variables are listed beside them, after each step.
+//
 // A program's diagram may say more (its <diagram> in the content): the
 // panel's data-event-data is what a label's click sends for each event
-// ({"add": {"price": 12}}), and data-replies what each stand-in answers,
-// as the programs' processors do ([{type, event, with}]): it delivers
-// `with` to the chart once the send's step is over.
+// ({"add": {"item": "pen", "price": 12}}), and data-events the buttons
+// under the diagram that send an event with its data ([{name, data,
+// label}]: "Add a pen").
 
 const SCXML = new Set(['scxml', 'http://www.w3.org/TR/scxml/#SCXMLEventProcessor']);
 const KEEP = 20; // the newest messages a stand-in lists
@@ -26,8 +28,8 @@ function sendTypes(text) {
   return [...new Set(types)].filter((type) => !SCXML.has(type));
 }
 
-/** A stand-in for the processor of `type`, and the panel that shows what it received; `answers` are its replies. */
-function standIn(type, answers = []) {
+/** A stand-in for the processor of `type`, and the panel that shows what it received. */
+function standIn(type) {
   const received = [];
   let started = performance.now();
   const count = el('span', { class: 'processor__count' });
@@ -56,12 +58,33 @@ function standIn(type, answers = []) {
     processor: {
       type,
       location: (session) => `${type}#${session.sessionId}`,
-      send(message, session) {
+      send(message) {
         received.push({ at: performance.now() - started, event: message.event, target: message.target, data: message.data });
         render();
-        const answer = answers.find((candidate) => candidate.event === message.event);
-        if (answer) setTimeout(() => session.deliver(answer.with), 0);
       },
+    },
+  };
+}
+
+/** The chart's variables, listed after each step of the session it watches. */
+function variables() {
+  const list = el('dl', { class: 'variables__list', 'aria-live': 'polite' });
+  const panel = el('section', { class: 'processor variables', 'aria-label': 'Variables' },
+    el('p', { class: 'processor__head' }, el('span', {}, 'Variables')), list);
+  let session = null;
+  const render = () => {
+    const entries = Object.entries(session?.snapshot() ?? {});
+    list.replaceChildren(...entries.flatMap(([name, value]) => [
+      el('dt', {}, el('code', {}, name)), el('dd', {}, el('code', { class: 'processor__data' }, JSON.stringify(value) ?? 'undefined'))]));
+    panel.hidden = entries.length === 0;
+  };
+  return {
+    panel,
+    /** Lists `next`'s variables from now on, after each of its macrosteps. */
+    watch(next) {
+      session = next;
+      session.addEventListener('macrostep', render);
+      render();
     },
   };
 }
@@ -92,10 +115,15 @@ async function mount(panel) {
   const [text] = await Promise.all([fetch(src).then((response) => response.text()), import('@tinyactors/scxmljs/view')]);
   if (panel.querySelector('scxml-view')) return;
   const view = document.createElement('scxml-view');
-  const answers = JSON.parse(panel.dataset.replies ?? '[]');
-  const standIns = sendTypes(text).map((type) => standIn(type, answers.filter((answer) => answer.type === type)));
+  const standIns = sendTypes(text).map(standIn);
+  const data = variables();
+  let session = null;
   view.options = { ioprocessors: standIns.map((stand) => stand.processor) };
-  view.addEventListener('scxml-load', () => standIns.forEach((stand) => stand.restart()));
+  view.addEventListener('scxml-load', (event) => {
+    session = event.detail.session;
+    standIns.forEach((stand) => stand.restart());
+    data.watch(session);
+  });
   view.setAttribute('src', src);
   view.setAttribute('fit', '');
   view.setAttribute('warnings', 'off');
@@ -104,8 +132,13 @@ async function mount(panel) {
   panel.append(view);
   const again = el('button', { type: 'button', class: 'ta-btn ta-btn--secondary ta-btn--sm' }, 'Run again');
   again.addEventListener('click', () => view.reload());
-  if (standIns.length) panel.append(el('div', { class: 'processors' }, ...standIns.map((stand) => stand.panel)));
-  panel.append(el('p', { class: 'chart__controls' }, again));
+  const sends = JSON.parse(panel.dataset.events ?? '[]').map(({ name, data: payload, label }) => {
+    const button = el('button', { type: 'button', class: 'ta-btn ta-btn--secondary ta-btn--sm' }, label);
+    button.addEventListener('click', () => session?.send(name, payload));
+    return button;
+  });
+  panel.append(el('div', { class: 'processors' }, data.panel, ...standIns.map((stand) => stand.panel)));
+  panel.append(el('p', { class: 'chart__controls' }, ...sends, again));
 }
 
 // The view draws a chart at its natural size: a small chart is a few

@@ -22,7 +22,7 @@
 
   <section id="start" answers="agent-platform.code-first">
     <heading>Run an actor from your code</heading>
-    <p>Your program compiles a chart, spawns an order actor and sends it events. It answers the payment the order asks for:</p>
+    <p>Your program compiles a chart, spawns an order actor and sends it events. It answers the order's payment, which fails the first time:</p>
     <program>
       <in package="node">
         <code src="../../examples/order/main.mjs" language="javascript" file="main.mjs"/>
@@ -38,11 +38,14 @@
       </in>
       <in package="c">
         <code src="../../examples/order/main.c" language="c" file="main.c"/>
+        <code src="../../examples/order/host.h" language="c" file="host.h"/>
+        <code src="../../examples/order/host.c" language="c" file="host.c"/>
         <code src="../../examples/order/order.scxml" language="scxml" file="order.scxml"/>
       </in>
       <diagram chart="order.scxml">
-        <event name="add" data='{"price": 12}'/>
-        <answer type="payments" event="charge" with="charged"/>
+        <event name="add" data='{"item": "notebook", "price": 30}'>Add a notebook</event>
+        <event name="add" data='{"item": "pen", "price": 12}'>Add a pen</event>
+        <event name="declined" data='{"reason": "the card was declined"}'/>
       </diagram>
       <code src="../../examples/order/output.txt" language="text" role="output"/>
     </program>
