@@ -52,10 +52,10 @@ static const ta_cli_option refund_options[] = {
 };
 
 static const ta_cli_command commands[] = {
-    {TA_CLI_TEXT("check"), {0}, {0}, TA_CLI_TEXT("ORDER..."), 1, TA_CLI_UNBOUNDED, 5, check_options, 0, NULL},
-    {TA_CLI_TEXT("status"), {0}, {0}, {0}, 0, 0, 1, status_options, 0, NULL},
-    {TA_CLI_TEXT("export"), {0}, {0}, TA_CLI_TEXT("ORDER [FILE]"), 1, 2, 1, export_options, 0, NULL},
-    {TA_CLI_TEXT("refund"), {0}, {0}, TA_CLI_TEXT("ORDER"), 1, 1, 1, refund_options, 0, NULL},
+    {TA_CLI_TEXT("check"), {0}, {0}, TA_CLI_TEXT("ORDER..."), 1, TA_CLI_UNBOUNDED, 5, check_options, 0, NULL, 0, NULL},
+    {TA_CLI_TEXT("status"), {0}, {0}, {0}, 0, 0, 1, status_options, 0, NULL, 0, NULL},
+    {TA_CLI_TEXT("export"), {0}, {0}, TA_CLI_TEXT("ORDER [FILE]"), 1, 2, 1, export_options, 0, NULL, 0, NULL},
+    {TA_CLI_TEXT("refund"), {0}, {0}, TA_CLI_TEXT("ORDER"), 1, 1, 1, refund_options, 0, NULL, 0, NULL},
 };
 
 static const ta_cli_program program = {

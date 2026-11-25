@@ -13,34 +13,36 @@ static const ta_string_view formats[] = {T("markdown"), T("json"), T("xml"), T("
 
 static const ta_cli_option program_options[TOOL_PROGRAM_OPTION_COUNT] = {
     [TOOL_OPTION_FORMAT] = {T("format"), 'f', TA_CLI_OPTION_CHOICE, 0, 4, formats, T("FORMAT"),
-                            T("write the answer as markdown (the default), json or xml; graph also as svg")},
+                            T("Write the answer in FORMAT; only graph answers in svg. Default: markdown.")},
     [TOOL_OPTION_HELP] = {T("help"), 'h', TA_CLI_OPTION_FLAG, TA_CLI_OPTION_ANSWERS, 0, 0, T(""),
-                          T("describe the command, or the program")},
+                          T("Describe the command or the program.")},
     [TOOL_OPTION_VERSION] = {T("version"), 0, TA_CLI_OPTION_FLAG, TA_CLI_OPTION_ANSWERS, 0, 0,
-                             T(""), T("print the version, as the version command does")},
+                             T(""), T("Print the version as the version command does.")},
 };
 
 #define WARNINGS_AS_ERRORS                                                                         \
     {T("warnings-as-errors"), 'W', TA_CLI_OPTION_FLAG, 0, 0, 0, T(""),                            \
-     T("refuse a chart that compiles with a warning")}
+     T("Refuse a chart that compiles with a warning.")}
 #define INCLUDE                                                                                    \
     {T("include"), 'I', TA_CLI_OPTION_VALUE, TA_CLI_OPTION_REPEATABLE, 0, 0, T("DIR"),            \
-     T("look for a src here when it is not beside the file naming it; repeat it for more, "      \
-       "searched in order")}
+     T("Search DIR for a src that is not beside the file naming it, in the order given. "        \
+       "Repeatable.")}
 #define CHART                                                                                      \
     {T("chart"), 'c', TA_CLI_OPTION_VALUE, TA_CLI_OPTION_REPEATABLE, 0, 0, T("NAME"),             \
-     T("look at this chart only (by its name); repeat it for more")}
+     T("Look at the chart named NAME only. Repeatable.")}
 
 #define SEGMENT                                                                                    \
     {T("segment"), 's', TA_CLI_OPTION_VALUE, 0, 0, 0, T("N"),                                     \
-     T("of a snapshot, read the image segment N runs (default: the newest)")}
+     T("Read the image that segment N of a snapshot runs. Default: the newest live segment.")}
 
 static const ta_cli_option check_options[] = {WARNINGS_AS_ERRORS, INCLUDE};
 static const ta_cli_option image_options[] = {WARNINGS_AS_ERRORS, INCLUDE, CHART, SEGMENT};
 static const ta_cli_option actors_options[] = {
-    WARNINGS_AS_ERRORS, INCLUDE, CHART, SEGMENT,
+    WARNINGS_AS_ERRORS, INCLUDE, CHART,
+    [TOOL_OPTION_SEGMENT] = {T("segment"), 's', TA_CLI_OPTION_VALUE, 0, 0, 0, T("N"),
+                             T("List the actors of segment N only. Default: every live segment.")},
     [TOOL_ACTORS_SESSION] = {T("session"), 0, TA_CLI_OPTION_VALUE, TA_CLI_OPTION_REPEATABLE, 0, 0,
-                             T("ID"), T("this session only; repeat it for more")},
+                             T("ID"), T("Look at session ID only. Repeatable.")},
 };
 
 static const ta_string_view emits[] = {[TOOL_EMIT_IMAGE] = T("image"), [TOOL_EMIT_C] = T("c")};
@@ -48,11 +50,13 @@ static const ta_cli_option compile_options[] = {
     [TOOL_OPTION_WARNINGS_AS_ERRORS] = WARNINGS_AS_ERRORS,
     [TOOL_OPTION_INCLUDE] = INCLUDE,
     [TOOL_COMPILE_OUTPUT] = {T("output"), 'o', TA_CLI_OPTION_VALUE, TA_CLI_OPTION_REQUIRED, 0, 0,
-                             T("FILE"), T("where the image goes (- for standard output)")},
+                             T("FILE"), T("Write the image to FILE, or to standard output when FILE is -.")},
     [TOOL_COMPILE_EMIT] = {T("emit"), 'e', TA_CLI_OPTION_CHOICE, 0, 2, emits, T("KIND"),
-                           T("write the image's bytes (image, the default) or a C array (c)")},
+                           T("Write the image as KIND. Values: image (the image's bytes) or c (an 8-aligned "
+                             "C array). Default: image.")},
     [TOOL_COMPILE_SYMBOL] = {T("symbol"), 's', TA_CLI_OPTION_VALUE, 0, 0, 0, T("NAME"),
-                             T("the C array's name with --emit c (default: tinyactors_image)")},
+                             T("Name the C array NAME with --emit c; NAME is a C identifier. "
+                               "Default: tinyactors_image.")},
 };
 
 static const ta_string_view expression_kinds[] = {
@@ -62,33 +66,33 @@ static const ta_cli_option expressions_options[] = {
     WARNINGS_AS_ERRORS, INCLUDE, CHART, SEGMENT,
     [TOOL_EXPRESSIONS_KIND] = {T("kind"), 'k', TA_CLI_OPTION_CHOICE, TA_CLI_OPTION_REPEATABLE, 8,
                                expression_kinds, T("KIND"),
-                               T("only expressions of this kind; repeat it for more")},
+                               T("Keep only the expressions of KIND. Repeatable.")},
 };
 static const ta_cli_option diff_options[] = {
     WARNINGS_AS_ERRORS, INCLUDE, CHART, SEGMENT,
     [TOOL_DIFF_EXIT_CODE] = {T("exit-code"), 0, TA_CLI_OPTION_FLAG, 0, 0, 0, T(""),
-                             T("exit with 1 when the two differ (with --breaking: when a change breaks "
-                               "running actors), as git diff --exit-code does")},
+                             T("Exit with 1 when the two differ, as git diff --exit-code does; with "
+                               "--breaking, when a change breaks running actors.")},
     [TOOL_DIFF_BREAKING] = {T("breaking"), 0, TA_CLI_OPTION_FLAG, 0, 0, 0, T(""),
-                            T("list only the changes that break actors running the old version")},
+                            T("List only the changes that break actors running the old version.")},
     [TOOL_DIFF_ALL] = {T("all"), 0, TA_CLI_OPTION_FLAG, 0, 0, 0, T(""),
-                       T("list the charts that did not change too")},
+                       T("List the charts that did not change too.")},
 };
 static const ta_cli_option lint_options[] = {
     WARNINGS_AS_ERRORS, INCLUDE, CHART, SEGMENT,
     [TOOL_LINT_DENY] = {T("deny"), 'd', TA_CLI_OPTION_VALUE, TA_CLI_OPTION_REPEATABLE, 0, 0, T("RULE"),
-                        T("exit with 1 when this rule finds something (all: any rule); repeat it for more")},
+                        T("Exit with 1 when RULE finds something; all names every rule. Repeatable.")},
     [TOOL_LINT_ALLOW] = {T("allow"), 'a', TA_CLI_OPTION_VALUE, TA_CLI_OPTION_REPEATABLE, 0, 0, T("RULE"),
-                         T("do not report this rule's findings (all: none); repeat it for more")},
+                         T("Leave out the findings of RULE; all leaves out every rule's. Repeatable.")},
 };
 static const ta_cli_option path_options[] = {
     WARNINGS_AS_ERRORS, INCLUDE, CHART, SEGMENT,
     [TOOL_PATH_TO] = {T("to"), 't', TA_CLI_OPTION_VALUE, TA_CLI_OPTION_REQUIRED, 0, 0, T("STATE"),
-                      T("the state the last configuration holds")},
+                      T("Search for a configuration that holds STATE.")},
     [TOOL_PATH_FROM] = {T("from"), 0, TA_CLI_OPTION_VALUE, 0, 0, 0, T("STATE"),
-                        T("start in this state, entered with its defaults, instead of the initial configuration")},
+                        T("Start in STATE, entered with its defaults. Default: the initial configuration.")},
     [TOOL_PATH_UNREACHABLE] = {T("unreachable"), 'u', TA_CLI_OPTION_FLAG, 0, 0, 0, T(""),
-                               T("succeed when no path exists, and exit with 1 when one does")},
+                               T("Succeed only when no path exists, and exit with 1 otherwise.")},
 };
 
 static const ta_string_view directions[] = {[TOOL_GRAPH_DOWN] = T("down"), [TOOL_GRAPH_RIGHT] = T("right")};
@@ -97,110 +101,184 @@ static const ta_string_view themes[] = {[TOOL_GRAPH_THEME_AUTO] = T("auto"), [TO
 static const ta_cli_option graph_options[] = {
     WARNINGS_AS_ERRORS, INCLUDE, CHART, SEGMENT,
     [TOOL_GRAPH_DIRECTION] = {T("direction"), 0, TA_CLI_OPTION_CHOICE, 0, 2, directions, T("DIRECTION"),
-                              T("lay the states out top to bottom (down, the default) or left to right (right)")},
+                              T("Lay the states out in DIRECTION. Values: down (top to bottom) or right "
+                                "(left to right). Default: down.")},
     [TOOL_GRAPH_THEME] = {T("theme"), 0, TA_CLI_OPTION_CHOICE, 0, 3, themes, T("THEME"),
-                          T("-f svg: the colours, light, dark, or auto (the default): the reader's preference")},
+                          T("Draw the colours of THEME with -f svg. Values: auto (the reader's preference), "
+                            "light or dark. Default: auto.")},
     [TOOL_GRAPH_HIGHLIGHT] = {T("highlight"), 0, TA_CLI_OPTION_VALUE, TA_CLI_OPTION_REPEATABLE, 0, 0, T("STATE"),
-                              T("mark this state's box; repeat it for more")},
+                              T("Mark the box of STATE. Repeatable.")},
     [TOOL_GRAPH_PATH] = {T("path"), 0, TA_CLI_OPTION_FLAG, 0, 0, 0, T(""),
-                         T("mark the path the path command finds to --to (from --from), its steps numbered")},
-    [TOOL_GRAPH_TO] = {T("to"), 't', TA_CLI_OPTION_VALUE, 0, 0, 0, T("STATE"), T("with --path: where the path goes")},
+                         T("Mark the path the path command finds to --to from --from, its steps numbered.")},
+    [TOOL_GRAPH_TO] = {T("to"), 't', TA_CLI_OPTION_VALUE, 0, 0, 0, T("STATE"),
+                       T("End the path of --path at STATE.")},
     [TOOL_GRAPH_FROM] = {T("from"), 0, TA_CLI_OPTION_VALUE, 0, 0, 0, T("STATE"),
-                         T("with --path: where it starts (default: the initial configuration)")},
+                         T("Start the path of --path at STATE. Default: the initial configuration.")},
     [TOOL_GRAPH_DEPTH] = {T("depth"), 'd', TA_CLI_OPTION_VALUE, 0, 0, 0, T("N"),
-                          T("fold every compound or parallel state nested deeper than N levels into one box")},
+                          T("Fold every compound or parallel state nested deeper than N levels into one box.")},
     [TOOL_GRAPH_FOLD] = {T("fold"), 0, TA_CLI_OPTION_VALUE, TA_CLI_OPTION_REPEATABLE, 0, 0, T("STATE"),
-                         T("fold this compound or parallel state into one box; repeat it for more")},
+                         T("Fold the compound or parallel state STATE into one box. Repeatable.")},
 };
 
 static const ta_cli_option canonical_options[] = {
     [TOOL_CANONICAL_WRITE] = {T("write"), 'w', TA_CLI_OPTION_FLAG, 0, 0, 0, T(""),
-                              T("rewrite each file in place, whole or not at all")},
+                              T("Rewrite each file in place, whole or not at all.")},
     [TOOL_OPTION_INCLUDE] = INCLUDE,
     [TOOL_CANONICAL_CHECK] = {T("check"), 0, TA_CLI_OPTION_FLAG, 0, 0, 0, T(""),
-                              T("write nothing; exit with 1 when a file is not in canonical form")},
+                              T("Write nothing, and exit with 1 when a file is not in canonical form.")},
 };
 
 static const ta_string_view realms[] = {T("auto"), T("isolated")};
 static const ta_cli_option run_options[] = {
     WARNINGS_AS_ERRORS, INCLUDE,
     [TOOL_RUN_CONFIG] = {T("config"), 0, TA_CLI_OPTION_VALUE, 0, 0, 0, T("FILE"),
-                         T("the host config as JSON (docs/host-config.md), its ioProcessors a map of type to "
-                           "{location}; default: every key core's")},
+                         T("Read the host config from FILE as JSON (docs/host-config.md), its ioProcessors a "
+                           "map of type to {location}. Default: every key core's.")},
     [TOOL_RUN_SYSTEM] = {T("system"), 0, TA_CLI_OPTION_VALUE, 0, 0, 0, T("ID"),
-                         T("the config's systemID (default: tinyactors-run)")},
+                         T("Set the config's systemID to ID. Default: tinyactors-run.")},
     [TOOL_RUN_IO_PROCESSOR] = {T("io-processor"), 0, TA_CLI_OPTION_VALUE, TA_CLI_OPTION_REPEATABLE, 0, 0,
                                T("TYPE[=LOCATION]"),
-                               T("an I/O processor the client serves, after the config's; repeat it for more")},
+                               T("Add an I/O processor of TYPE, at LOCATION when given, that the client "
+                                 "serves after the config's. Repeatable.")},
     [TOOL_RUN_BOOT] = {T("boot"), 0, TA_CLI_OPTION_FLAG, 0, 0, 0, T(""),
-                       T("spawn the boot actors of the inputs' manifest before the first message")},
+                       T("Spawn the boot actors of the inputs' system manifest before the first message.")},
     [TOOL_RUN_WALL_START] = {T("wall-start"), 0, TA_CLI_OPTION_VALUE, 0, 0, 0, T("NS"),
-                             T("the wall clock's start, nanoseconds since the Unix epoch (default: 0)")},
+                             T("Start the wall clock at NS nanoseconds since the Unix epoch. Default: 0.")},
     [TOOL_RUN_SEED] = {T("seed"), 0, TA_CLI_OPTION_VALUE, 0, 0, 0, T("N"),
-                       T("Math.random's seed (default: 1; 0: the engine's own, different on every run)")},
+                       T("Seed Math.random with N; 0 takes the engine's own seed, new on every run. "
+                         "Default: 1.")},
     [TOOL_RUN_MAX_OPS] = {T("max-ops"), 0, TA_CLI_OPTION_VALUE, 0, 0, 0, T("N"),
-                          T("quickjs's interrupt checks per evaluation (default: quickjs's)")},
+                          T("Allow quickjs N interrupt checks per evaluation. Default: quickjs's.")},
     [TOOL_RUN_MEMORY_LIMIT] = {T("memory-limit"), 0, TA_CLI_OPTION_VALUE, 0, 0, 0, T("BYTES"),
-                               T("quickjs's heap (default: quickjs's)")},
+                               T("Limit quickjs's heap to BYTES. Default: quickjs's.")},
     [TOOL_RUN_REALM] = {T("realm"), 0, TA_CLI_OPTION_CHOICE, 0, 2, realms, T("REALM"),
-                        T("charts share one realm unless they declare globals (auto, the default), or each "
-                          "session has its own (isolated)")},
+                        T("Set how the charts share quickjs realms to REALM. Values: auto (shared unless "
+                          "globals are declared) or isolated (one per session). Default: auto.")},
     [TOOL_RUN_MAX_MESSAGE] = {T("max-message"), 0, TA_CLI_OPTION_VALUE, 0, 0, 0, T("BYTES"),
-                              T("the longest line taken (default: 64 MiB)")},
+                              T("Take input lines of at most BYTES. Default: 64 MiB.")},
     [TOOL_RUN_SCHEMA] = {T("schema"), 0, TA_CLI_OPTION_FLAG, 0, 0, 0, T(""),
-                         T("write the protocol's JSON Schema and exit")},
+                         T("Write the protocol's JSON Schema and exit.")},
 };
 
 #define OPTIONS(table) (uint32_t)(sizeof(table) / sizeof(table)[0]), (table)
 #define EXAMPLES(table) (uint32_t)(sizeof(table) / sizeof(table)[0]), (table)
+#define EXITS(table) (uint32_t)(sizeof(table) / sizeof(table)[0]), (table)
 
-static const ta_string_view compile_examples[] = {
-    T("compile order.scxml payment.scxml -o order.tai"),
-    T("compile system.xml -o system.tai"),
-    T("compile order.scxml --emit c --symbol order_image -o order_image.c"),
-    T("compile order.scxml -o - | tinyactors inspect -")};
-static const ta_string_view check_examples[] = {T("check charts/*.scxml"),
-                                                T("check -W --format json order.scxml")};
-static const ta_string_view inspect_examples[] = {
-    T("inspect order.tai"), T("inspect system.xml"), T("inspect --format json order.scxml"),
-    T("inspect shop.snapshot"), T("inspect order-17.blob shop.snapshot")};
-static const ta_string_view states_examples[] = {T("states order.scxml"),
-                                                 T("states --chart payment system.tai"),
-                                                 T("states --segment 1 shop.snapshot")};
-static const ta_string_view actors_examples[] = {T("actors shop.snapshot"),
-                                                 T("actors --chart order --session 17 shop.snapshot"),
-                                                 T("actors -f json shop.snapshot")};
-static const ta_string_view transitions_examples[] = {T("transitions order.scxml"),
-                                                      T("transitions -f json order.tai")};
-static const ta_string_view events_examples[] = {T("events system.xml")};
-static const ta_string_view data_examples[] = {T("data order.scxml")};
-static const ta_string_view expressions_examples[] = {
-    T("expressions --kind condition order.scxml"), T("expressions -f xml order.tai")};
-static const ta_string_view disassemble_examples[] = {T("disassemble --chart order order.tai")};
-static const ta_string_view graph_examples[] = {
-    T("graph -f svg order.scxml > order.svg"), T("graph -f svg --chart payment shop.tai > payment.svg"),
-    T("graph -f svg --direction right --theme dark order.scxml > order.svg"),
-    T("graph -f svg --path --to shipped --highlight cancelled order.scxml > shipping.svg"),
-    T("graph -f svg --depth 1 --fold checkout shop.scxml > overview.svg"), T("graph -f json order.tai")};
-static const ta_string_view diff_examples[] = {
-    T("diff order-v1.tai order-v2.scxml"), T("diff --breaking --exit-code deployed.tai order.scxml"),
-    T("diff -f json --chart order old.tai new.tai")};
-static const ta_string_view lint_examples[] = {
-    T("lint order.scxml"), T("lint --deny all --allow unsent-event system.xml"),
-    T("lint -f json --chart payment shop.tai")};
-static const ta_string_view path_examples[] = {
-    T("path order.scxml --to shipped"), T("path order.scxml --from cancelled --to paid --unreachable"),
-    T("path -f json --chart payment shop.tai --to settled")};
-static const ta_string_view canonical_examples[] = {
-    T("fmt order.scxml"), T("fmt -w charts/*.scxml system.xml"),
-    T("fmt --check charts/*.scxml"), T("fmt --check -f json -I shared order.scxml")};
-static const ta_string_view run_examples[] = {
-    T("run order.scxml"), T("run --config shop.json order.scxml payment.scxml"),
-    T("run --io-processor payments --system shop order.scxml < requests.jsonl"),
-    T("run --schema > run.schema.json")};
-static const ta_string_view help_examples[] = {T("help"), T("help compile"),
-                                               T("help -f json inspect")};
-static const ta_string_view version_examples[] = {T("version"), T("version -f json")};
+static const ta_cli_example compile_examples[] = {
+    {T("Compile two charts into one image:"), T("compile order.scxml payment.scxml -o order.tai")},
+    {T("Compile a system manifest into an image:"), T("compile system.xml -o system.tai")},
+    {T("Write the image as a C array named order_image:"),
+     T("compile order.scxml --emit c --symbol order_image -o order_image.c")},
+    {T("Compile to standard output and inspect the image:"), T("compile order.scxml -o - | tinyactors inspect -")}};
+static const ta_cli_example check_examples[] = {
+    {T("Check that every chart in a directory compiles:"), T("check charts/*.scxml")},
+    {T("Refuse a chart with a warning and answer in JSON:"), T("check -W --format json order.scxml")}};
+static const ta_cli_example inspect_examples[] = {
+    {T("Show what an image holds:"), T("inspect order.tai")},
+    {T("Compile a system manifest and show its image:"), T("inspect system.xml")},
+    {T("Compile a chart and show its image as JSON:"), T("inspect --format json order.scxml")},
+    {T("Show what a snapshot holds:"), T("inspect shop.snapshot")},
+    {T("Show a blob with its chart and configuration from a snapshot:"), T("inspect order-17.blob shop.snapshot")}};
+static const ta_cli_example states_examples[] = {
+    {T("List the states of a chart:"), T("states order.scxml")},
+    {T("List the states of one chart of an image:"), T("states --chart payment system.tai")},
+    {T("List the states in the image of a snapshot's segment 1:"), T("states --segment 1 shop.snapshot")}};
+static const ta_cli_example actors_examples[] = {
+    {T("List every actor of a snapshot:"), T("actors shop.snapshot")},
+    {T("Show session 17 if it runs the order chart:"), T("actors --chart order --session 17 shop.snapshot")},
+    {T("List every actor of a snapshot as JSON:"), T("actors -f json shop.snapshot")}};
+static const ta_cli_example transitions_examples[] = {
+    {T("List the transitions of a chart:"), T("transitions order.scxml")},
+    {T("List the transitions of an image as JSON:"), T("transitions -f json order.tai")}};
+static const ta_cli_example events_examples[] = {
+    {T("List the events of a system manifest's charts:"), T("events system.xml")}};
+static const ta_cli_example data_examples[] = {
+    {T("List the data declarations of a chart:"), T("data order.scxml")}};
+static const ta_cli_example expressions_examples[] = {
+    {T("List the conditions of a chart:"), T("expressions --kind condition order.scxml")},
+    {T("List the expressions of an image as XML:"), T("expressions -f xml order.tai")}};
+static const ta_cli_example disassemble_examples[] = {
+    {T("Disassemble one chart of an image:"), T("disassemble --chart order order.tai")}};
+static const ta_cli_example graph_examples[] = {
+    {T("Draw a chart as SVG:"), T("graph -f svg order.scxml > order.svg")},
+    {T("Draw one chart of an image:"), T("graph -f svg --chart payment shop.tai > payment.svg")},
+    {T("Draw a chart left to right in dark colours:"),
+     T("graph -f svg --direction right --theme dark order.scxml > order.svg")},
+    {T("Mark the path to shipped and highlight cancelled:"),
+     T("graph -f svg --path --to shipped --highlight cancelled order.scxml > shipping.svg")},
+    {T("Fold states nested deeper than one level, and checkout:"),
+     T("graph -f svg --depth 1 --fold checkout shop.scxml > overview.svg")},
+    {T("List the boxes and edges of an image's charts as JSON:"), T("graph -f json order.tai")}};
+static const ta_cli_example diff_examples[] = {
+    {T("Compare an image with a newer version of its chart:"), T("diff order-v1.tai order-v2.scxml")},
+    {T("Fail if a change breaks running actors:"), T("diff --breaking --exit-code deployed.tai order.scxml")},
+    {T("Compare one chart of two images as JSON:"), T("diff -f json --chart order old.tai new.tai")}};
+static const ta_cli_example lint_examples[] = {
+    {T("Lint a chart:"), T("lint order.scxml")},
+    {T("Fail on a finding of every rule but unsent-event:"),
+     T("lint --deny all --allow unsent-event system.xml")},
+    {T("Lint one chart of an image as JSON:"), T("lint -f json --chart payment shop.tai")}};
+static const ta_cli_example path_examples[] = {
+    {T("Find the shortest path to shipped:"), T("path order.scxml --to shipped")},
+    {T("Fail if paid can be reached from cancelled:"),
+     T("path order.scxml --from cancelled --to paid --unreachable")},
+    {T("Find a path in one chart of an image as JSON:"), T("path -f json --chart payment shop.tai --to settled")}};
+static const ta_cli_example canonical_examples[] = {
+    {T("Write a chart's canonical text to standard output:"), T("fmt order.scxml")},
+    {T("Rewrite charts and a system manifest in place:"), T("fmt -w charts/*.scxml system.xml")},
+    {T("Fail if a chart is not in canonical form:"), T("fmt --check charts/*.scxml")},
+    {T("Check a chart that includes files from shared, in JSON:"), T("fmt --check -f json -I shared order.scxml")}};
+static const ta_cli_example run_examples[] = {
+    {T("Serve a host running one chart:"), T("run order.scxml")},
+    {T("Serve two charts with a host config:"), T("run --config shop.json order.scxml payment.scxml")},
+    {T("Serve system shop with a payments I/O processor, requests from a file:"),
+     T("run --io-processor payments --system shop order.scxml < requests.jsonl")},
+    {T("Write the protocol's JSON Schema to a file:"), T("run --schema > run.schema.json")}};
+static const ta_cli_example help_examples[] = {
+    {T("List the commands:"), T("help")},
+    {T("Describe the compile command:"), T("help compile")},
+    {T("Describe the inspect command in JSON:"), T("help -f json inspect")}};
+static const ta_cli_example version_examples[] = {
+    {T("Print the versions:"), T("version")},
+    {T("Print the versions as JSON:"), T("version -f json")}};
+
+/* Exit statuses beyond a usage error's (2), as the commands set them (tool.h, TOOL_EXIT_*). */
+#define INPUT_REFUSED                                                                              \
+    {1, T("An input is refused: it does not compile or verify, or it is damaged or of an "        \
+          "unknown format.")}
+#define CANNOT_READ                                                                                \
+    {3, T("A file cannot be read or written, or memory runs out.")}
+
+static const ta_cli_exit_status input_exits[] = {INPUT_REFUSED, CANNOT_READ};
+static const ta_cli_exit_status compile_exits[] = {
+    {1, T("An input is refused: it does not compile, or it is of an unknown format.")},
+    {3, T("An input cannot be read, the image cannot be written or memory runs out.")}};
+static const ta_cli_exit_status graph_exits[] = {
+    INPUT_REFUSED, {1, T("With --path, no path reaches the --to state in any chart drawn.")}, CANNOT_READ};
+static const ta_cli_exit_status diff_exits[] = {
+    INPUT_REFUSED,
+    {1, T("With --exit-code, the two versions differ; with --breaking too, a change breaks running "
+          "actors.")},
+    CANNOT_READ};
+static const ta_cli_exit_status lint_exits[] = {
+    INPUT_REFUSED, {1, T("A rule given to --deny finds something.")}, CANNOT_READ};
+static const ta_cli_exit_status path_exits[] = {
+    INPUT_REFUSED,
+    {1, T("Without --unreachable, no path exists or the search stops at its limit.")},
+    {1, T("With --unreachable, a path exists, or the search stops at its limit.")},
+    CANNOT_READ};
+static const ta_cli_exit_status canonical_exits[] = {
+    {1, T("A file is refused: it is no XML fmt can rewrite, or its canonical text gives another "
+          "image.")},
+    {1, T("With --check, a file is not in canonical form.")},
+    CANNOT_READ};
+static const ta_cli_exit_status actors_exits[] = {
+    {1, T("The snapshot cannot be restored: it is damaged or of another format.")}, CANNOT_READ};
+static const ta_cli_exit_status run_exits[] = {
+    {0, T("Standard input ends, or --schema has written the schema.")},
+    {1, T("An input or the config is refused at startup.")},
+    {3, T("An input or standard input cannot be read, standard output cannot be written or memory "
+          "runs out.")}};
 
 typedef enum tool_command_index {
     TOOL_COMMAND_COMPILE = 0,
@@ -224,131 +302,157 @@ typedef enum tool_command_index {
     TOOL_COMMAND_COUNT
 } tool_command_index;
 
+/* What the commands that look into an image read, after their own first sentence. */
 #define INPUTS                                                                                     \
-    T("Its inputs are one compiled image (.tai), one snapshot (ta_host_snapshot_pack's; "        \
-      "--segment picks its image), one system manifest (<system>), or SCXML charts (<scxml>), "   \
-      "which are compiled together into one image first; - reads standard input.")
+    " Reads one image (.tai), one snapshot, one system manifest or SCXML charts, compiled "       \
+    "together into one image first. --segment picks a snapshot's image, and - reads standard "    \
+    "input."
 
 static const ta_cli_command commands[TOOL_COMMAND_COUNT] = {
     [TOOL_COMMAND_COMPILE] =
-        {T("compile"), T("compile charts or a system manifest into an image"),
-         T("Compiles SCXML charts (the first is the image's default boot chart) or one <system> "
-           "manifest into a .tai image, reading each static src relative to the file that names "
-           "it, then in each -I directory. The answer lists the diagnostics and what the image holds; when the image goes "
-           "to standard output (-o -), the answer goes to standard error."),
-         T("INPUT..."), 1, TA_CLI_UNBOUNDED, OPTIONS(compile_options), EXAMPLES(compile_examples)},
-    [TOOL_COMMAND_CHECK] = {T("check"), T("check that charts compile, or that an image verifies"),
-                            T("Compiles the inputs, or verifies an image, and writes nothing but "
-                              "the diagnostics. " "Exits with 1 when an input is refused."),
+        {T("compile"), T("Compile charts or a system manifest into an image"),
+         T("Compiles SCXML charts or one system manifest into a .tai image. The first chart is the "
+           "image's default boot chart. Each static src is read relative to the file that names it, "
+           "then in each -I directory. The answer lists the diagnostics and what the image holds. "
+           "With -o -, the image goes to standard output and the answer to standard error."),
+         T("INPUT..."), 1, TA_CLI_UNBOUNDED, OPTIONS(compile_options), EXAMPLES(compile_examples),
+         EXITS(compile_exits)},
+    [TOOL_COMMAND_CHECK] = {T("check"), T("Check that charts compile or that an image verifies"),
+                            T("Compiles the inputs, or verifies an image or every image of a snapshot. "
+                              "Writes nothing but whether they are valid and the diagnostics."),
                             T("INPUT..."), 1, TA_CLI_UNBOUNDED, OPTIONS(check_options),
-                            EXAMPLES(check_examples)},
+                            EXAMPLES(check_examples), EXITS(input_exits)},
     [TOOL_COMMAND_INSPECT] =
-        {T("inspect"), T("what an image, a snapshot or a blob holds"),
-         T("Of an image (its inputs as the other commands take them): its sections, charts and "
-           "boot actors. Of a snapshot (ta_host_snapshot_pack's): its format, system, time, "
-           "segments with their images, actors, and the datamodels' state, decoded when it is "
-           "CBOR. Of a hibernation or export blob: the session it holds, the image it was written "
-           "with and who can wake it, its datamodel's state, and, given the image it was written "
-           "with after it (an image, charts or a snapshot), its chart and configuration."),
-         T("INPUT..."), 1, TA_CLI_UNBOUNDED, OPTIONS(image_options), EXAMPLES(inspect_examples)},
-    [TOOL_COMMAND_STATES] = {T("states"), T("each chart's states, as a tree in document order"),
-                             INPUTS, T("INPUT..."), 1, TA_CLI_UNBOUNDED, OPTIONS(image_options),
-                             EXAMPLES(states_examples)},
+        {T("inspect"), T("Show what an image, a snapshot or a blob holds"),
+         T("Shows an image's sections, charts and boot actors; it reads its inputs as the other "
+           "commands do. Shows a snapshot's format, system, time, segments with their images and "
+           "actors. Shows the datamodels' state of a snapshot too, decoded when it is CBOR. Shows "
+           "the session a hibernation or export blob holds, the image it was written with and who "
+           "can wake it. Shows a blob's datamodel state, and its chart and configuration when the "
+           "image follows it: an image, charts or a snapshot."),
+         T("INPUT..."), 1, TA_CLI_UNBOUNDED, OPTIONS(image_options), EXAMPLES(inspect_examples),
+         EXITS(input_exits)},
+    [TOOL_COMMAND_STATES] = {T("states"), T("List each chart's states as a tree in document order"),
+                             T("Lists each chart's states as a tree in document order: id, kind, parent, "
+                               "depth and initial targets. Counts each state's transitions, invokes and "
+                               "data." INPUTS),
+                             T("INPUT..."), 1, TA_CLI_UNBOUNDED, OPTIONS(image_options),
+                             EXAMPLES(states_examples), EXITS(input_exits)},
     [TOOL_COMMAND_TRANSITIONS] = {T("transitions"),
-                                  T("each chart's transitions: events, condition, targets"), INPUTS,
+                                  T("List each chart's transitions with events, conditions and targets"),
+                                  T("Lists each chart's transitions: kind, source, events, condition, "
+                                    "targets, type and whether each has actions." INPUTS),
                                   T("INPUT..."), 1, TA_CLI_UNBOUNDED, OPTIONS(image_options),
-                                  EXAMPLES(transitions_examples)},
+                                  EXAMPLES(transitions_examples), EXITS(input_exits)},
     [TOOL_COMMAND_EVENTS] = {T("events"),
-                             T("every event name, and the transitions, raises and sends using it"),
-                             INPUTS, T("INPUT..."), 1, TA_CLI_UNBOUNDED, OPTIONS(image_options),
-                             EXAMPLES(events_examples)},
-    [TOOL_COMMAND_DATA] = {T("data"), T("each chart's data declarations: id, state, expression, line"), INPUTS, T("INPUT..."),
-                           1, TA_CLI_UNBOUNDED, OPTIONS(image_options), EXAMPLES(data_examples)},
+                             T("List every event name and the transitions, raises and sends using it"),
+                             T("Lists every event name the charts use. Counts the transitions that handle "
+                               "each one and the raises and sends that make it by name." INPUTS),
+                             T("INPUT..."), 1, TA_CLI_UNBOUNDED, OPTIONS(image_options),
+                             EXAMPLES(events_examples), EXITS(input_exits)},
+    [TOOL_COMMAND_DATA] = {T("data"), T("List each chart's data declarations"),
+                           T("Lists each chart's data declarations: id, the state declaring it, its "
+                             "expression and its line." INPUTS),
+                           T("INPUT..."), 1, TA_CLI_UNBOUNDED, OPTIONS(image_options),
+                           EXAMPLES(data_examples), EXITS(input_exits)},
     [TOOL_COMMAND_EXPRESSIONS] = {T("expressions"),
-                                  T("each chart's expressions and scripts, with where they are"),
-                                  INPUTS, T("INPUT..."), 1, TA_CLI_UNBOUNDED,
-                                  OPTIONS(expressions_options), EXAMPLES(expressions_examples)},
+                                  T("List each chart's expressions and scripts with where they are"),
+                                  T("Lists each chart's expressions and scripts: kind, line, column and "
+                                    "text." INPUTS),
+                                  T("INPUT..."), 1, TA_CLI_UNBOUNDED, OPTIONS(expressions_options),
+                                  EXAMPLES(expressions_examples), EXITS(input_exits)},
     [TOOL_COMMAND_DISASSEMBLE] = {T("disassemble"),
-                                  T("each chart's executable content, instruction by instruction"),
-                                  INPUTS, T("INPUT..."), 1, TA_CLI_UNBOUNDED, OPTIONS(image_options),
-                                  EXAMPLES(disassemble_examples)},
-    [TOOL_COMMAND_GRAPH] = {T("graph"),
-                            T("each chart as a diagram: -f svg draws it; the others list its boxes and edges"),
-                            INPUTS, T("INPUT..."), 1, TA_CLI_UNBOUNDED, OPTIONS(graph_options),
-                            EXAMPLES(graph_examples)},
+                                  T("List each chart's executable content instruction by instruction"),
+                                  T("Lists each chart's executable content as instructions: their place, "
+                                    "the entry points starting there and their operands." INPUTS),
+                                  T("INPUT..."), 1, TA_CLI_UNBOUNDED, OPTIONS(image_options),
+                                  EXAMPLES(disassemble_examples), EXITS(input_exits)},
+    [TOOL_COMMAND_GRAPH] = {T("graph"), T("Draw each chart, or list its boxes and edges"),
+                            T("Lays each chart out as nested boxes for its states and orthogonal routes "
+                              "for its transitions. With -f svg it writes the picture; the other formats "
+                              "list each box and edge." INPUTS),
+                            T("INPUT..."), 1, TA_CLI_UNBOUNDED, OPTIONS(graph_options),
+                            EXAMPLES(graph_examples), EXITS(graph_exits)},
     [TOOL_COMMAND_DIFF] =
-        {T("diff"), T("what changed between two versions, and what it does to running actors"),
-         T("Compares two images (each given as an image, a manifest or one chart) chart by chart, "
-           "matched by name, as statecharts: states by id, transitions by source and events, "
-           "data by id, invokes, executable content as decoded instructions, and the events each "
-           "state handles. Each change is breaking for actors running the old version (a state "
-           "removed, moved or of another kind, data removed, another datamodel, an event a state "
-           "no longer handles) or a change of behaviour, and the answer says what a migration "
-           "does to running actors. --breaking --exit-code fails a build that would break them."),
-         T("OLD NEW"), 2, 2, OPTIONS(diff_options), EXAMPLES(diff_examples)},
+        {T("diff"), T("Compare two versions and show what changes for running actors"),
+         T("Compares two images chart by chart, matching charts by name. Each version is an image, a "
+           "system manifest or one chart. Compares data by id, states by id and transitions by source and "
+           "events. Compares invokes, executable content as decoded instructions and the events "
+           "each state handles. Marks each change as breaking for actors running the old version, or "
+           "as a change of behaviour. A state removed, moved or of another kind is breaking. So are "
+           "data removed, another datamodel and an event a state no longer handles. The answer says "
+           "what a migration does to running actors."),
+         T("OLD NEW"), 2, 2, OPTIONS(diff_options), EXAMPLES(diff_examples), EXITS(diff_exits)},
     [TOOL_COMMAND_LINT] =
-        {T("lint"), T("what cannot work as written: unreachable states, dead ends, shadowed transitions, ..."),
-         T("Reads the charts' states, transitions, raises and sends, without running them, and reports what "
-           "cannot do what it is written for. Rules: unreachable (a state no path enters), dead-end (a state "
-           "an actor never leaves), never-ends (no final state reachable from it), shadowed (a transition an "
-           "earlier one always takes first), eventless-loop (an eventless transition taken without end), "
-           "unhandled-event (raised or sent to a chart of the image that handles it nowhere), unsent-event "
-           "(with several charts: handled, but sent by nothing in the image), unknown-events (a computed "
-           "event may arrive, so the last is not checked), send-target (a static target no send can reach), "
-           "search-limit. Exits with 1 when a rule given to --deny finds something."),
-         T("INPUT..."), 1, TA_CLI_UNBOUNDED, OPTIONS(lint_options), EXAMPLES(lint_examples)},
+        {T("lint"), T("Find what cannot work as written in charts"),
+         T("Reads the charts' states, transitions, raises and sends without running them. Reports what "
+           "cannot do what it is written for, by rule. unreachable: a state no path enters. dead-end: a "
+           "state an actor never leaves. never-ends: a state from which no final state is reachable. "
+           "shadowed: a transition an earlier one always takes first. eventless-loop: an eventless "
+           "transition taken without end. unhandled-event: raised or sent to a chart of the image that "
+           "handles it nowhere. unsent-event: with several charts, handled but sent by nothing in the "
+           "image. unknown-events: a computed event may arrive, so unsent-event is not checked. "
+           "send-target: a static target no send can reach. search-limit: the search stopped at its "
+           "limit, so never-ends is not checked."),
+         T("INPUT..."), 1, TA_CLI_UNBOUNDED, OPTIONS(lint_options), EXAMPLES(lint_examples),
+         EXITS(lint_exits)},
     [TOOL_COMMAND_PATH] =
-        {T("path"), T("the shortest way to a state: events, conditions, transitions"),
-         T("Searches the chart's configurations breadth first, from its initial configuration (or a state "
-           "given with --from) to one holding the state given with --to, taking any transition whose "
-           "source is active: events may come in any order and conditions may hold, so each step lists the "
-           "events that take it and the condition it needs. Exits with 1 when no path exists (with "
-           "--unreachable: when one does). The chart is the first one, or the one --chart names."),
-         T("INPUT..."), 1, TA_CLI_UNBOUNDED, OPTIONS(path_options), EXAMPLES(path_examples)},
+        {T("path"), T("Find the shortest path to a state: events, conditions and transitions"),
+         T("Searches a chart's configurations breadth first for one holding the --to state. It starts "
+           "from the initial configuration, or from the --from state. Any transition whose source is "
+           "active may be taken: events come in any order and conditions may hold. So each step lists "
+           "the events that take it and the condition it needs. The chart is the first one, or the one "
+           "--chart names."),
+         T("INPUT..."), 1, TA_CLI_UNBOUNDED, OPTIONS(path_options), EXAMPLES(path_examples),
+         EXITS(path_exits)},
     [TOOL_COMMAND_CANONICAL] =
-        {T("fmt"), T("rewrite charts and manifests in the canonical layout"),
-         T("Writes each chart or system manifest in one canonical layout: two spaces per element "
-           "level, one element, comment or processing instruction per line, attributes in the "
-           "order written. Only the whitespace between elements changes: comments are kept where "
-           "they are, attribute values as written, and the content of <script>, <data>, "
-           "<content>, <assign>, of elements of other namespaces and of mixed content byte for "
-           "byte. Each file's canonical text is compiled and must give the image its original "
-           "gives (lines and columns aside), or the file is refused. One file goes to standard "
-           "output; -w rewrites the files in place, each whole or not at all; --check writes "
-           "nothing and exits with 1 when a file is not canonical. With -w or --check the answer "
-           "lists the files and whether each changed."),
-         T("FILE..."), 1, TA_CLI_UNBOUNDED, OPTIONS(canonical_options), EXAMPLES(canonical_examples)},
+        {T("fmt"), T("Rewrite charts and system manifests in the canonical layout"),
+         T("Writes each chart or system manifest in one canonical layout. It indents two spaces per "
+           "element level and writes one element, comment or processing instruction per line. "
+           "Attributes stay in the order written. Only the whitespace between elements changes: "
+           "comments stay where they are and attribute values as written. Script, data, content and "
+           "assign elements keep their content byte for byte. So do elements of other namespaces and "
+           "mixed content. Each file's canonical text must compile to the image its original gives, "
+           "lines and columns aside, or the file is refused. One file goes to standard output. -w "
+           "rewrites the files in place, each whole or not at all. --check writes nothing. With -w or "
+           "--check the answer lists the files and whether each changed."),
+         T("FILE..."), 1, TA_CLI_UNBOUNDED, OPTIONS(canonical_options), EXAMPLES(canonical_examples),
+         EXITS(canonical_exits)},
     [TOOL_COMMAND_ACTORS] =
-        {T("actors"), T("every actor of a snapshot: chart, configuration, queued events, delayed sends"),
-         T("Restores the snapshot (ta_host_snapshot_pack's) in memory, without its datamodels and "
-           "running nothing, and lists each actor of each live segment: its session, name, chart, "
-           "segment and state, its parent and running invocations, its configuration (the active "
-           "states, in document order; a hibernated actor's is in its blob), the events queued in "
-           "its mailbox, and its pending delayed sends with when they are due. --chart, --segment "
-           "and --session narrow the list."),
-         T("SNAPSHOT"), 1, 1, OPTIONS(actors_options), EXAMPLES(actors_examples)},
+        {T("actors"), T("List every actor of a snapshot with its state and queues"),
+         T("Restores the snapshot in memory, without its datamodels, and runs nothing. Lists each actor "
+           "of each live segment: its session, name, chart, segment and state. Lists its parent, its "
+           "running invocations and its configuration, the active states in document order. A "
+           "hibernated actor's configuration is in its blob. Lists the events queued in its mailbox and "
+           "its pending delayed sends with when they are due. --chart, --segment and --session narrow "
+           "the list."),
+         T("SNAPSHOT"), 1, 1, OPTIONS(actors_options), EXAMPLES(actors_examples), EXITS(actors_exits)},
     [TOOL_COMMAND_RUN] =
-        {T("run"), T("run charts: one host served over JSON-RPC 2.0 on standard input and output"),
-         T("Experimental: the protocol may change in any release until a second client uses it. "
-           "Makes one host with quickjs, adds the inputs' image (charts, a manifest or an image, read "
-           "as every command reads them; none: the client adds images), and answers JSON-RPC 2.0 "
-           "messages, one per line, on standard input: run.* methods are the host's calls "
-           "(run.spawn, run.send, run.advanceTime, run.turn, run.addImage, ...), every other method "
-           "is core's control plane (actor.state, host.stats, ...). What actors do comes back as "
-           "effect.* notifications, written before the response to the request that caused them. "
-           "The clock is simulated: it moves only with run.advanceTime. The end of input ends the "
-           "server; the protocol's JSON Schema is run --schema's answer (docs/cli.md, \"Run\")."),
-         T("[INPUT...]"), 0, TA_CLI_UNBOUNDED, OPTIONS(run_options), EXAMPLES(run_examples)},
-    [TOOL_COMMAND_HELP] = {T("help"), T("describe a command, or the program"), T(""),
-                           T("[COMMAND]"), 0, 1, 0, 0, EXAMPLES(help_examples)},
-    [TOOL_COMMAND_VERSION] = {T("version"), T("the version of the program and its library"), T(""),
-                              T(""), 0, 0, 0, 0, EXAMPLES(version_examples)},
+        {T("run"), T("Serve one host over JSON-RPC 2.0 on standard input and output"),
+         T("Experimental: the protocol may change in any release until a second client uses it. Makes "
+           "one host with quickjs and adds the inputs' image: charts, a system manifest or an image. "
+           "Without inputs, the client adds images. Reads JSON-RPC 2.0 messages, one per line, from "
+           "standard input and answers on standard output. run.* methods are the host's calls (run.spawn, run.send, run.advanceTime, "
+           "run.turn, run.addImage, ...). Every other method is core's control plane (actor.state, "
+           "host.stats, ...). What actors do comes back as effect.* notifications. Each is written "
+           "before the response to the request that caused it. The clock is simulated: it moves only "
+           "with run.advanceTime. The end of input ends the server. run --schema writes the protocol's "
+           "JSON Schema (docs/cli.md, Run)."),
+         T("[INPUT...]"), 0, TA_CLI_UNBOUNDED, OPTIONS(run_options), EXAMPLES(run_examples),
+         EXITS(run_exits)},
+    [TOOL_COMMAND_HELP] = {T("help"), T("Describe a command or the program"),
+                           T("Describes the program and its commands, or one command: its usage, "
+                             "options, examples and exit status."),
+                           T("[COMMAND]"), 0, 1, 0, 0, EXAMPLES(help_examples), 0, 0},
+    [TOOL_COMMAND_VERSION] = {T("version"), T("Print the versions of the program and its library"),
+                              T("Prints the program's version and its library's version, ABI and image "
+                                "format version."),
+                              T(""), 0, 0, 0, 0, EXAMPLES(version_examples), 0, 0},
 };
 
 static const ta_cli_program program = {
     T("tinyactors"),
-    T("compile, check, run and look into tinyactors charts, systems and images, and the snapshots "
-      "and blobs a host writes"),
+    T("Compile, check, run and inspect charts, images, snapshots and blobs"),
     TOOL_PROGRAM_OPTION_COUNT, program_options, TOOL_COMMAND_COUNT, commands};
 
 static void tool_help(tool *t);
@@ -611,10 +715,23 @@ static void tool_help(tool *t) {
             tool_text_init(t, &text);
             tool_text_append(&text, program.name);
             tool_text_append(&text, ta_string(" "));
-            tool_text_append(&text, command->examples[i]);
-            ta_report_text(report, ta_string(""), tool_text_view(&text));
+            tool_text_append(&text, command->examples[i].command);
+            ta_report_object(report, ta_string(""));
+            ta_report_text(report, ta_string("caption"), command->examples[i].caption);
+            ta_report_text(report, ta_string("command"), tool_text_view(&text));
+            ta_report_end(report);
         }
         ta_report_end(report);
+        if (command->exit_status_count) {
+            ta_report_list(report, (ta_report_list_names){ta_string("exitStatus"), ta_string("status")});
+            for (uint32_t i = 0; i < command->exit_status_count; i++) {
+                ta_report_object(report, ta_string(""));
+                ta_report_number(report, ta_string("code"), command->exit_statuses[i].code);
+                ta_report_text(report, ta_string("meaning"), command->exit_statuses[i].meaning);
+                ta_report_end(report);
+            }
+            ta_report_end(report);
+        }
     } else {
         ta_report_text(report, ta_string("more"),
                        ta_string("tinyactors help <command> describes a command"));

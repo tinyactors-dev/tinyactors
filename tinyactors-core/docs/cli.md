@@ -153,7 +153,7 @@ with their length.
 | `fmt` | FILE... | Writes charts and system manifests in one canonical layout: the canonical text of one file to standard output, `-w` / `--write` rewrites the files in place (each whole or not at all), `--check` writes nothing and exits with 1 when a file is not canonical. With `-w` or `--check` the answer lists the files: whether each changed, whether it was refused, and whether its canonical text compiles to the same image. See [Fmt](#fmt). |
 | `actors` | SNAPSHOT | Every actor of a snapshot: its session, name, chart, segment and state, its parent and running invocations, its configuration, the events queued in its mailbox and its pending delayed sends. `--chart`, `--segment N` and `--session ID` (repeatable) narrow the list. See [Snapshots and blobs](#snapshots-and-blobs). |
 | `run` | [INPUT...] | One host, with quickjs, serving JSON-RPC 2.0 on standard input and output, one message per line: `run.*` methods are the host's calls, every other method its control plane; what actors do comes back as `effect.*` notifications. Experimental. See [Run](#run). |
-| `help` | [COMMAND] | The program's commands, or a command's usage, options and examples. |
+| `help` | [COMMAND] | The program's commands, or a command's usage, description, options, examples (each a caption and a command line) and exit statuses. |
 | `version` | | The program's version (a development build's names its commit: `0.4.0-dev.<date>.<n>.g<sha>`), its library's version and ABI, and the image format version it reads. |
 
 The commands that take inputs also take `-W` / `--warnings-as-errors` (a
@@ -168,16 +168,24 @@ not XML. `fmt` takes `-I` too: it compiles each file to compare images.
 Program options: `-f` / `--format FORMAT`, `-h` / `--help` (any command:
 describe it), `--version`.
 
+The help's words follow one voice: each summary an imperative phrase
+(`Compile charts or a system manifest into an image`), each description in
+the third person, each option one imperative sentence with its `Values:`,
+`Default:` and `Repeatable.` after it, and each example a caption ending
+with a colon above its command line.
+
 ## Exit status
 
 | Status | When |
 |---|---|
 | 0 | the command did what was asked |
-| 1 | an input was refused: a chart did not compile, an image did not verify, a file is none of the kinds above, a snapshot or blob is of another format or damaged; or `diff --exit-code` found differences (breaking ones, with `--breaking`); or `lint` found something a `--deny` rule names; or `path` found no path (with `--unreachable`: found one), or stopped at its limit; or `fmt` refused a file, or `fmt --check` found one not canonical |
+| 1 | an input was refused: a chart did not compile, an image did not verify, a file is none of the kinds above, a snapshot or blob is of another format or damaged; or `diff --exit-code` found differences (breaking ones, with `--breaking`); or `lint` found something a `--deny` rule names; or `path` found no path (with `--unreachable`: found one), or stopped at its limit; or `graph --path` found no path in any chart drawn; or `fmt` refused a file, or `fmt --check` found one not canonical |
 | 2 | the command line was not understood (and `tinyactors` alone, after printing the commands) |
 | 3 | a file could not be read or written, or memory ran out |
 
-`run` has its own: [Run, Exit status](#exit-status-1).
+`run` has its own: [Run, Exit status](#exit-status-1). `tinyactors help
+<command>` lists the statuses of that command but 2, under "Exit status"
+(`exitStatus` in JSON and XML: each status's `code` and `meaning`).
 
 ## Examples
 
@@ -1074,7 +1082,7 @@ The layers, from the bottom:
 
 - **`src/cli`**, freestanding like `src/base`: `arguments.h` reads a
   command line against a program's description (its commands, their
-  options and arguments), and `report.h` builds an answer as one tree and
+  options and arguments, and for help their examples and exit statuses), and `report.h` builds an answer as one tree and
   writes it in the three formats; `json.h` reads JSON text into CBOR and
   writes it back (RFC 8949, sections 6.1 and 6.2), its numbers read by
   `decimal.h`, a port of Go's `strconv`; `rpc.h` cuts standard input into

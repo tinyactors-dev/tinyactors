@@ -63,6 +63,18 @@ typedef enum ta_cli_arity {
     TA_CLI_UNBOUNDED = 0x7FFFFFFF /* a command's maximum: any number of arguments */
 } ta_cli_arity;
 
+/* An example for help: what it does, then the command line. */
+typedef struct ta_cli_example {
+    ta_string_view caption; /* one line, ending with a colon */
+    ta_string_view command; /* the command line, without the program's name */
+} ta_cli_example;
+
+/* A status a command exits with, and when. */
+typedef struct ta_cli_exit_status {
+    uint32_t code;
+    ta_string_view meaning; /* one sentence */
+} ta_cli_exit_status;
+
 typedef struct ta_cli_command {
     ta_string_view name;
     ta_string_view summary;     /* one line */
@@ -72,7 +84,9 @@ typedef struct ta_cli_command {
     uint32_t option_count;
     const ta_cli_option *options;
     uint32_t example_count;
-    const ta_string_view *examples; /* command lines, without the program's name */
+    const ta_cli_example *examples;
+    uint32_t exit_status_count; /* the statuses beyond a usage error's, for help */
+    const ta_cli_exit_status *exit_statuses;
 } ta_cli_command;
 
 typedef struct ta_cli_program {

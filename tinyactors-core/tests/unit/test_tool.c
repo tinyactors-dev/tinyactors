@@ -175,15 +175,32 @@ static void test_the_command_line(void) {
     CHECK_EQUAL(run("diff order.tai"), 2);
     CHECK(has("errors", "'diff' needs OLD NEW"));
     CHECK_EQUAL(run(""), 2); /* no command: what there is, and a usage error */
-    CHECK(has("output", "| compile | compile charts or a system manifest into an image |"));
+    CHECK(has("output", "| compile | Compile charts or a system manifest into an image |"));
 }
 
 static void test_help_and_version(void) {
     CHECK_EQUAL(run("help compile"), 0);
-    CHECK(has("output", "| -o, --output FILE | where the image goes (- for standard output) |"));
-    CHECK(has("output", "tinyactors compile order.scxml payment.scxml -o order.tai"));
+    CHECK(has("output", "| -o, --output FILE | Write the image to FILE, or to standard output when FILE is -. |"));
+    /* each example a caption and its command line; the statuses beyond a usage error's */
+    CHECK(has("output", "| Compile two charts into one image: | tinyactors compile order.scxml payment.scxml "
+                        "-o order.tai |"));
+    CHECK(has("output", "## Exit status"));
+    CHECK(has("output", "| 1 | An input is refused: it does not compile, or it is of an unknown format. |"));
+    /* no literal markup in a description, so Markdown writes none of it as code */
+    CHECK(!has("output", "- **Description**: `"));
+    CHECK_EQUAL(run("help graph"), 0);
+    CHECK(has("output", "- **Description**: Lays each chart out"));
     CHECK_EQUAL(run("compile --help"), 0); /* --help answers: no -o needed */
     CHECK(has("output", "- **Usage**: tinyactors compile [options] INPUT..."));
+    CHECK_EQUAL(run("help -f json diff"), 0);
+    CHECK(has("output", "\"caption\": \"Fail if a change breaks running actors:\""));
+    CHECK(has("output", "\"command\": \"tinyactors diff --breaking --exit-code deployed.tai order.scxml\""));
+    CHECK(has("output", "\"exitStatus\": ["));
+    CHECK_EQUAL(run("help -f xml path"), 0);
+    CHECK(has("output", "<status code=\"1\" meaning=\"With --unreachable, a path exists, or the search stops "
+                        "at its limit.\"/>"));
+    CHECK_EQUAL(run("help -f json version"), 0);
+    CHECK(!has("output", "exitStatus")); /* nothing beyond a usage error */
     CHECK_EQUAL(run("help -f json"), 0);
     CHECK(has("output", "\"command\": \"disassemble\""));
     CHECK_EQUAL(run("help frobnicate"), 2);

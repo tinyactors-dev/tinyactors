@@ -103,7 +103,7 @@ end
 # The binary's own examples (help <command>): each command line of one
 # names a command and options the binary has.
 examples = commands.sum do |command|
-  (help(binary, command)['examples'] || []).each do |example|
+  (help(binary, command)['examples'] || []).map { |example| example['command'] }.each do |example|
     example.split(/\s*\|\s*/).each do |segment|
       used = segment[/\Atinyactors\s+(?:-\S+\s+)*([a-z]+)/, 1] or next
       next failures << "help #{command}'s example #{example.inspect}: no command #{used}" unless commands.include?(used)
