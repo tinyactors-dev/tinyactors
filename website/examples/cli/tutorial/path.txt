@@ -1,0 +1,18 @@
+# Path
+
+- **Chart**: order
+- **From**: 
+- **To**: shipped
+- **Result**: found
+- **Meaning**: the steps below reach it, if their events come and their conditions hold
+- **Transitions**: 3
+- **Explored**: 5
+- **Start**: open
+
+## Steps
+
+| Step | Events | Eventless | Condition | Source | Targets | Active |
+| --- | --- | --- | --- | --- | --- | --- |
+| 1 | checkout | no | total > 0 | open | paying | paying |
+| 2 | charge.ok | no |  | paying | paid | paid |
+| 3 | shipped | no |  | paid | shipped | shipped |

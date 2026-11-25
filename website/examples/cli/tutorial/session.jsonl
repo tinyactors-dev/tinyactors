@@ -1,0 +1,9 @@
+{"jsonrpc":"2.0","id":1,"method":"run.spawn","params":{"chart":"order","name":"order-1"}}
+{"jsonrpc":"2.0","id":2,"method":"run.send","params":{"target":1,"event":"item.added","data":{"sku":"pen","price":1200}}}
+{"jsonrpc":"2.0","id":3,"method":"run.send","params":{"target":1,"event":"checkout"}}
+{"jsonrpc":"2.0","id":4,"method":"run.turn"}
+{"jsonrpc":"2.0","id":5,"method":"run.advanceTime","params":{"by":"30s"}}
+{"jsonrpc":"2.0","id":6,"method":"run.turn"}
+{"jsonrpc":"2.0","id":7,"method":"run.send","params":{"target":1,"event":"charge.ok","sendid":"pay","origintype":"payments","data":{"charge":"ch_81"}}}
+{"jsonrpc":"2.0","id":8,"method":"run.turn"}
+{"jsonrpc":"2.0","id":9,"method":"actor.state","params":{"session":1}}

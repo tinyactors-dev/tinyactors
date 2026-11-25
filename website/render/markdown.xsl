@@ -371,7 +371,7 @@
 
   <!-- A picture a command drew: the image, named by the command. -->
   <xsl:template match="s:drawing" mode="md" as="xs:string">
-    <xsl:sequence select="'![' || @alt || '](' || $origin || @href || ')'"/>
+    <xsl:sequence select="'![' || @alt || '](' || $origin || (@href, @src ! f:url(.))[1] || ')'"/>
   </xsl:template>
 
   <xsl:template match="*" mode="md">

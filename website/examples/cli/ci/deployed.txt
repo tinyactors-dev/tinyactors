@@ -1,0 +1,13 @@
+# Compile
+
+- **Compiled**: yes
+- **Output**: deployed.tai
+- **Emit**: image
+- **Bytes**: 2720
+- **Hash**: 5e66ab57693504aa
+- **Charts**: 1
+- **Boot actors**: 1
+
+## Diagnostics
+
+_none_

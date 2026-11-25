@@ -1,0 +1,11 @@
+# Lint
+
+- **Warnings**: 1
+- **Notes**: 0
+- **Denied**: 0
+
+## Findings
+
+| Rule | Severity | Chart | State | Transition | Event | Line | Message |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| unhandled-event | warning | order | paying |  | payment.timeout | 0 | the event is sent to the chart itself, and no transition there handles it |

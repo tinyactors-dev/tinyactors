@@ -1,0 +1,13 @@
+# Compile
+
+- **Compiled**: yes
+- **Output**: order.tai
+- **Emit**: image
+- **Bytes**: 2776
+- **Hash**: c4c69c91aae0ba21
+- **Charts**: 1
+- **Boot actors**: 1
+
+## Diagnostics
+
+_none_

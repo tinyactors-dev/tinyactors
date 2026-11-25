@@ -1,0 +1,15 @@
+# Check
+
+## Inputs
+
+- order.scxml
+
+- **Valid**: yes
+- **Bytes**: 2720
+- **Hash**: 20a8e7019c80b057
+- **Charts**: 1
+- **Boot actors**: 1
+
+## Diagnostics
+
+_none_

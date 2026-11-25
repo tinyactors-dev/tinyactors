@@ -1,0 +1,35 @@
+# Inspect
+
+- **From**: hibernation blob
+- **Bytes**: 290
+- **Format**: 4
+- **Readable**: yes
+- **Session**: 17
+- **Image hash**: 1c8ca2cc7138f14e
+- **Image matches**: yes
+- **Identity**: 000000007952af3e
+- **Wakes**: only in the host that hibernated it, or a host restored from its snapshot: one of this identity, running this image
+- **Wakes in that snapshot**: yes
+
+## Sessions
+
+### Session 1: order
+
+- **Session**: 17
+- **Chart index**: 0
+- **Chart**: order
+- **Macrosteps**: 2
+
+#### Configuration
+
+- open
+
+#### Delayed
+
+_none_
+
+#### Datamodel
+
+- **Bytes**: 166
+- **Encoding**: opaque
+- **Note**: not one CBOR item: the datamodel's own encoding (the ECMAScript datamodel's is quickjs's), which only that datamodel reads

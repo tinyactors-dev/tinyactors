@@ -6,20 +6,20 @@
 
   <hero>
     <headline>Drive a host from a script</headline>
-    <lede><code>tinyactors run</code> reads one JSON-RPC request a line and writes what the actors did before each answer. Your script plays the payment service and the clock.</lede>
+    <lede><code>tinyactors run</code> serves one host over JSON-RPC 2.0 on standard input and output. Your script spawns orders, answers their payment requests and moves a simulated clock.</lede>
   </hero>
 
   <section id="start">
     <heading>Start a host on your charts</heading>
-    <p>The command compiles the charts into one host, and <code>--io-processor payments</code> names the service your script answers for. The end of standard input ends it.</p>
+    <p>Start one host with <code>--io-processor payments</code> so <code>tinyactors run</code> routes external payment requests back to your script. Closing standard input stops the host.</p>
     <code language="shell">tinyactors run --io-processor payments --system shop order.scxml &lt; requests.jsonl</code>
-    <p>The order chart asks <code>payments</code> for a charge, retries after 30 seconds of silence, and gives up after three attempts.</p>
+    <p>This order chart asks <code>payments</code> for a charge, retries after 30 seconds of silence and gives up after three attempts.</p>
     <code src="../../examples/cli/order.scxml" language="scxml" file="order.scxml"/>
   </section>
 
   <section id="session">
     <heading>Answer each send the actor makes</heading>
-    <p>A <code>run.*</code> method is one of the host's calls, and any other method, such as <code>actor.state</code>, asks the host. Your script answers each <code>effect.send</code> with <code>run.send</code>.</p>
+    <p>Send <code>run.*</code> requests to control the host and forwarded methods such as <code>actor.state</code> to query actors. Reply to each <code>effect.send</code> notification with <code>run.send</code>.</p>
     <example>
       <code src="../../examples/cli/requests.jsonl" language="text" file="requests.jsonl"/>
       <code src="../../examples/cli/requests.txt" language="text" role="output"/>
@@ -29,13 +29,13 @@
 
   <section id="hold">
     <heading>Answer a send before its sender moves on</heading>
-    <p>With <code>"hold": true</code>, the turn stops at a send whose sender waits, and answers <code>held</code>. The order stays in <code>paying</code> until request 5 answers and request 6 turns again.</p>
-    <p>Without it, the sender goes on at once, and a later answer arrives as an ordinary event.</p>
+    <p>Pass <code>"hold": true</code> to <code>run.turn</code> to keep an actor waiting after a send marked <code>"waiting": true</code>. Above, the order stays in <code>paying</code> until your script answers in request 5 and turns in request 6.</p>
+    <p>Without <code>hold</code>, the sender continues immediately and any reply arrives later as an ordinary event.</p>
   </section>
 
   <section id="clock" answers="workflow-tester.simulated-clock">
     <heading>Move the clock yourself</heading>
-    <p>The host's clock moves only with <code>run.advanceTime</code>. Request 14 moves it 30 seconds, and the next turn fires the second order's timeout at once.</p>
+    <p>Advance the host's simulated clock with <code>run.advanceTime</code> instead of waiting in real time. Request 14 skips 30 seconds forward so the next turn fires the second order's timeout immediately.</p>
     <claims>
       <claim>
         <statement>A session repeats byte for byte</statement>
@@ -47,7 +47,7 @@
 
   <section id="schema">
     <heading>Generate a client from the schema</heading>
-    <p><code>tinyactors run --schema</code> prints the protocol's JSON Schema, every message in both directions. The <link to="cli-run" section="see">run command's page</link> serves this release's.</p>
+    <p>Run <code>tinyactors run --schema</code> to print the JSON Schema for every request, response and notification. You can also download it from the <link to="cli-run" section="see">run command's page</link>.</p>
     <claims>
       <claim>
         <statement>The protocol is experimental</statement>
@@ -57,3 +57,4 @@
     </claims>
   </section>
 </page>
+

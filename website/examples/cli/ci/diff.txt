@@ -1,0 +1,69 @@
+# Diff
+
+## Old
+
+- **Path**: deployed.tai
+- **Hash**: 5e66ab57693504aa
+- **Charts**: 1
+
+## New
+
+- **Path**: order.scxml
+- **Hash**: 20a8e7019c80b057
+- **Charts**: 1
+
+- **Identical**: no
+
+## Summary
+
+- **Charts added**: 0
+- **Charts removed**: 0
+- **Charts changed**: 1
+- **Charts unchanged**: 0
+- **Differences**: 9
+- **Breaking**: 1
+
+## Charts
+
+### Chart 1: order
+
+- **Name**: order
+- **Change**: changed
+- **Datamodel**: ecmascript
+- **Binding**: early
+
+#### States
+
+| State | Change | Breaking | Before | After |
+| --- | --- | --- | --- | --- |
+| paying | removed | yes | atomic in /scxml |  |
+
+#### Transitions
+
+_none_
+
+#### Data
+
+_none_
+
+#### Actions
+
+_none_
+
+#### Invokes
+
+_none_
+
+#### Events
+
+_none_
+
+## Events added
+
+_none_
+
+## Events removed
+
+_none_
+
+- **Migration**: Chart order: Actors in removed states are completed to a legal configuration of the new version, the nearest kept ancestor entering its initial state, and no onentry runs: paying → open.

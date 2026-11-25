@@ -18,7 +18,7 @@ require 'open3'
 # For development, before a release exists or to preview the working tree's
 # command, TINYACTORS_CLI names another binary (tinyactors-core's
 # build/dev/bin/tinyactors), which the build and the tests then use
-# instead of the pin's; the pages then say that binary's version. Until the
+# instead of the pin's. Until the
 # pinned release is published, mise cannot install it and stops every task
 # here; run them with MISE_TASK_RUN_AUTO_INSTALL=false and TINYACTORS_CLI
 # set.
@@ -54,7 +54,44 @@ module Website
     # beside them in examples/cli/, and the command line that prints it,
     # which the page shows too. `mise run test` runs each in the fixture
     # and compares.
-    TRANSCRIPTS = { 'requests.txt' => 'tinyactors run --io-processor payments --system shop order.scxml < requests.jsonl' }.freeze
+    TRANSCRIPTS = {
+      'requests.txt' => 'tinyactors run --io-processor payments --system shop order.scxml < requests.jsonl',
+      'actor-6.txt' => 'tinyactors actors --session 6 shop.snapshot',
+      'blob-17.txt' => 'tinyactors inspect order-17.blob shop.snapshot'
+    }.freeze
+    # Walkthroughs: pages that show a session at the shell step by step
+    # (the tutorial, checking charts in CI). Each is a directory of
+    # examples/cli/ and the page that shows it; its steps run in order in
+    # one copy of the directory, each a command line the page shows and the
+    # file it printed to (or, with a redirect, wrote), committed there and
+    # compared by `mise run test`, with the exit status it must give.
+    # `chart` puts that file of the directory in place as order.scxml
+    # before the step runs: the tutorial's draft with a misspelt event,
+    # then the chart with it fixed; the deployed version, then the next.
+    WALKTHROUGHS = {
+      'tutorial' => {
+        page: 'cli-tutorial.xml',
+        steps: [
+          { chart: 'draft.scxml', line: 'tinyactors compile order.scxml -o order.tai', output: 'compile.txt' },
+          { line: 'tinyactors lint order.scxml', output: 'lint.txt' },
+          { chart: 'order.scxml', line: 'tinyactors check -W order.scxml', output: 'check.txt' },
+          { line: 'tinyactors lint --deny all order.scxml', output: 'lint-fixed.txt' },
+          { line: 'tinyactors path order.scxml --to shipped', output: 'path.txt' },
+          { line: 'tinyactors graph -f svg order.scxml > order.svg', output: 'order.svg' },
+          { line: 'tinyactors run --io-processor payments order.scxml < session.jsonl', output: 'run.txt' }
+        ]
+      },
+      'ci' => {
+        page: 'cli-ci.xml',
+        steps: [
+          { chart: 'deployed.scxml', line: 'tinyactors compile order.scxml -o deployed.tai', output: 'deployed.txt' },
+          { chart: 'next.scxml', line: 'tinyactors check -W order.scxml', output: 'check.txt' },
+          { line: 'tinyactors lint --deny all order.scxml', output: 'lint.txt' },
+          { line: 'tinyactors fmt --check order.scxml', output: 'fmt.txt' },
+          { line: 'tinyactors diff --breaking --exit-code deployed.tai order.scxml', output: 'diff.txt', status: 1 }
+        ]
+      }
+    }.freeze
     SNAPSHOT = { arguments: %w[run --config shop.json --system shop system.xml], input: 'shop.jsonl', blob: 17,
                  blob_file: 'order-17.blob' }.freeze
 
@@ -152,6 +189,16 @@ module Website
       { line: line, status: status.exitstatus, output: (out + err).force_encoding('UTF-8').scrub, svgs: svgs }
     end
 
+    # An example of the help: its command line, and its caption when the
+    # help gives one. A bare string is a command line; an object holds the
+    # line (command, line or example) and its caption.
+    def example_parts(example)
+      return [example, nil] if example.is_a?(String)
+
+      [example.values_at('command', 'line', 'example').compact.first || Website.fail!("help: an example with no command: #{example}"),
+       example['caption']]
+    end
+
     # The files the CLI page serves from the binary (`<artifact arguments
     # file>`: `run --schema` as run.schema.json), into site/.
     def artifacts!
@@ -179,11 +226,13 @@ module Website
       runs = 0
       parts = names.map do |command|
         examples = JSON.parse(help(command))['examples'] || []
-        results = examples.each_with_index.map do |line, i|
+        results = examples.each_with_index.map do |example, i|
           runs += 1
+          line, caption = example_parts(example)
           result = example!(fixture, path, command, i + 1, line)
           files = result[:svgs].map { |name, href| %(<svg file="#{xml_attribute(name)}" href="#{xml_attribute(href)}"/>) }.join
-          %(<example line="#{xml_attribute(line)}" status="#{result[:status]}"><output>#{xml_text(result[:output])}</output>#{files}</example>)
+          %(<example line="#{xml_attribute(line)}" caption="#{xml_attribute(caption.to_s)}" status="#{result[:status]}">) +
+            %(<output>#{xml_text(result[:output])}</output>#{files}</example>)
         end
         %(<command name="#{command}">#{document_element(help(command, format: 'xml'))}<runs>#{results.join("\n")}</runs></command>)
       end
@@ -213,6 +262,28 @@ module Website
       env = { 'PATH' => "#{DIR.join('bin')}:#{ENV.fetch('PATH')}", 'LC_ALL' => 'C' }
       out, err, status = Open3.capture3(env, 'sh', '-c', line, chdir: dir.to_s, binmode: true)
       [(out + err).force_encoding('UTF-8').scrub, status.exitstatus]
+    end
+
+    # A walkthrough's steps, run in order: for each, its line and what it
+    # printed (or wrote, for a redirect) with its exit status. With write:
+    # true, the outputs are written into its directory (after a deliberate
+    # change: `ruby -r ./mise/website -e 'Website::CLI.walkthrough!("ci",
+    # write: true)'` with TINYACTORS_CLI set, then read the diff).
+    def walkthrough!(name, write: false)
+      source = FIXTURE.join(name)
+      dir = DIR.join('runs', name)
+      FileUtils.rm_rf(dir)
+      FileUtils.mkdir_p(dir)
+      source.children.select(&:file?).each { |file| FileUtils.cp(file, dir) }
+      env = { 'PATH' => "#{bin}:#{ENV.fetch('PATH')}", 'LC_ALL' => 'C' }
+      WALKTHROUGHS.fetch(name)[:steps].map do |step|
+        FileUtils.cp(source.join(step[:chart]), dir.join('order.scxml')) if step[:chart]
+        out, err, status = Open3.capture3(env, 'sh', '-c', step[:line], chdir: dir.to_s, binmode: true)
+        redirect = step[:line][/>\s*(\S+)\z/, 1]
+        printed = redirect ? dir.join(redirect).binread : out + err
+        source.join(step[:output]).binwrite(printed) if write
+        step.merge(printed: printed.force_encoding('UTF-8').scrub, exited: status.exitstatus)
+      end
     end
 
     # The served files, into the built site's /cli/.

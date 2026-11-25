@@ -1,0 +1,11 @@
+{"jsonrpc":"2.0","id":1,"result":{"session":1,"address":"tinyactors://tinyactors-run/#_scxml_1"}}
+{"jsonrpc":"2.0","id":2,"result":{}}
+{"jsonrpc":"2.0","id":3,"result":{}}
+{"jsonrpc":"2.0","method":"effect.send","params":{"batch":1,"index":0,"session":1,"type":"payments","target":"charges","event":"charge","sendid":"pay","data":{"amount":1200},"traceparent":"00-bba5ad4a1f842e59ffef8375d9ebcaca-94e8a8f3181c87c4-03","waiting":true}}
+{"jsonrpc":"2.0","id":4,"result":{"status":"idle","runs":2,"fuel":22,"time":0,"nextDeadline":30000000000}}
+{"jsonrpc":"2.0","id":5,"result":{"time":30000000000,"wallNs":30000000000}}
+{"jsonrpc":"2.0","method":"effect.send","params":{"batch":2,"index":0,"session":1,"type":"payments","target":"charges","event":"charge","sendid":"pay","data":{"amount":1200},"traceparent":"00-bba5ad4a1f842e59ffef8375d9ebcaca-14c089f1b8c1eac4-03","waiting":true}}
+{"jsonrpc":"2.0","id":6,"result":{"status":"idle","runs":2,"fuel":14,"time":30000000000,"nextDeadline":60000000000}}
+{"jsonrpc":"2.0","id":7,"result":{}}
+{"jsonrpc":"2.0","id":8,"result":{"status":"idle","runs":1,"fuel":12,"time":30000000000,"nextDeadline":null}}
+{"jsonrpc":"2.0","id":9,"result":{"value":"paid","history":{}}}

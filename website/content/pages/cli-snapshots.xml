@@ -1,36 +1,49 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <page xmlns="https://www.tinyactors.dev/ns/site" id="cli-snapshots" path="/cli/snapshots/">
   <title>Read a snapshot without restoring it</title>
-  <description>tinyactors inspect and tinyactors actors read the snapshots and hibernation blobs a host writes: every actor's chart, state, queued events and delayed sends.</description>
+  <description>tinyactors actors and tinyactors inspect read the snapshots and hibernation blobs a host writes: each actor's chart, state, queued events and delayed sends, with no host running.</description>
   <purpose kind="how-to" for="agent-platform workflow-tester"/>
 
   <hero>
-    <headline>Read a snapshot without restoring it</headline>
-    <lede>A snapshot holds every actor of a host, and a hibernation blob holds one. <code>tinyactors actors</code> lists where each actor is, from the file alone.</lede>
+    <headline>Find where each order is</headline>
+    <lede>A snapshot file holds the actors of a host and their pending timeouts. <code>tinyactors actors</code> reads from it which state each order is in, without starting a host.</lede>
   </hero>
 
   <section id="write">
-    <heading>Snapshot a host of orders</heading>
-    <p>This session spawns 20 orders and pays and ships some. Then it adds the chart's next version, hibernates order 17 and snapshots the host.</p>
+    <heading>1. Take a snapshot of the host</heading>
+    <p>Your application writes a snapshot through the library, and <code>tinyactors run</code> writes one with <code>run.snapshot</code>. This session spawns 20 orders, pays some, adds the next version, hibernates order 17, then snapshots.</p>
     <code language="shell">tinyactors run --config shop.json --system shop system.xml &lt; shop.jsonl</code>
     <code src="../../examples/cli/shop.jsonl" language="text" file="shop.jsonl"/>
-    <p>The site's build runs it with the release, and the command pages below read the file it writes, <code>shop.snapshot</code>.</p>
   </section>
 
   <section id="read">
-    <heading>Ask the file where each order is</heading>
-    <list>
-      <item><term><link to="cli-actors"><code>tinyactors actors</code></link></term><text>Every actor: its chart, version, state, the events in its mailbox and its delayed sends, such as a payment timeout.</text></item>
-      <item><term><link to="cli-inspect"><code>tinyactors inspect</code></link></term><text>What the snapshot holds: its segments, images and time, and for a blob, the session it is and whether it wakes in that snapshot.</text></item>
-      <item><term><link to="cli-states"><code>tinyactors states</code></link></term><text>The states of the chart a segment runs, with <code>--segment</code> for a version other than the newest.</text></item>
-    </list>
+    <heading>2. Ask the file about one order</heading>
+    <p>Order 6 is in <code>paying</code>, waiting for its charge. Its <code>payment.timeout</code> fires 20 seconds after the snapshot's time.</p>
+    <example>
+      <code language="shell">tinyactors actors --session 6 shop.snapshot</code>
+      <code src="../../examples/cli/actor-6.txt" language="text" role="output"/>
+    </example>
+    <p>Without <code>--session</code>, <code>actors</code> lists every actor, and <code>--chart order</code> keeps one chart's.</p>
   </section>
 
-  <section id="formats">
-    <heading>The command reads its own release's formats</heading>
+  <section id="blob">
+    <heading>3. Check a stored blob before waking it</heading>
+    <p>Order 17 was hibernated: its state is in a blob in your store, which wakes only in its own host. <code>inspect</code> reads the blob and checks that this snapshot's host can wake it.</p>
+    <example>
+      <code language="shell">tinyactors inspect order-17.blob shop.snapshot</code>
+      <code src="../../examples/cli/blob-17.txt" language="text" role="output"/>
+    </example>
+  </section>
+
+  <section id="more">
+    <heading>4. Inspect the snapshot's segments and states</heading>
+    <list>
+      <item><term><link to="cli-inspect"><code>tinyactors inspect shop.snapshot</code></link></term><text>The snapshot's time and its segments, one per image the host added, with how many actors each holds.</text></item>
+      <item><term><link to="cli-states"><code>tinyactors states</code></link></term><text>The states of the chart a segment runs, with <code>--segment</code> for an older version.</text></item>
+    </list>
     <claims>
       <claim>
-        <statement>A snapshot is one build's memory</statement>
+        <statement>Each release reads its own formats</statement>
         <p>Snapshots and blobs are raw memory of one build of the library, each format with a version. The command reads its own library's formats, and names any other.</p>
         <source href="https://github.com/tinyactors-dev/tinyactors/blob/main/tinyactors-core/docs/cli.md#inputs">tinyactors-core, <code>docs/cli.md</code></source>
       </claim>

@@ -83,8 +83,9 @@
       <link to="guide-browser">In the browser</link>
     </group>
     <group label="CLI">
-      <link to="cli">All commands</link>
-      <link to="cli-run">Run charts</link>
+      <link to="cli">The tinyactors command</link>
+      <link to="cli-tutorial">Your first session</link>
+      <link to="cli-ci">Check charts in CI</link>
       <link to="cli-protocol">Drive a host from a script</link>
       <link to="cli-snapshots">Read a snapshot</link>
     </group>
@@ -123,6 +124,8 @@
     <page src="guides/telemetry.xml"/>
     <page src="guides/testing.xml"/>
     <page src="pages/cli.xml"/>
+    <page src="pages/cli-tutorial.xml"/>
+    <page src="pages/cli-ci.xml"/>
     <page src="pages/cli-protocol.xml"/>
     <page src="pages/cli-snapshots.xml"/>
     <page src="pages/changelog.xml"/>

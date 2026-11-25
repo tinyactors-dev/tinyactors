@@ -1,0 +1,105 @@
+<svg xmlns="http://www.w3.org/2000/svg" class="tinyactors-diagram" width="844.5" height="498" viewBox="0 0 844.5 498" role="img">
+  <style>
+.tinyactors-diagram { --ta-fg1: #1c1c21; --ta-fg2: #484852; --ta-fg3: #6a6a75; --ta-fg4: #85858f; --ta-bg: #f6f6f8; --ta-s1: #ffffff; --ta-s2: #f0f0f3; --ta-b2: #d3d3da; --ta-strong: #8b8b96; --ta-wait: #a8560a; --ta-done: #48566b; --ta-error: #c2332f; --ta-path: #1f6feb; --ta-path-soft: #e3edfd; --ta-on-path: #ffffff; --ta-highlight: #c26a00; --ta-highlight-soft: #fdf1dc; --ta-sans: system-ui, -apple-system, Roboto, sans-serif; --ta-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+@media (prefers-color-scheme: dark) { .tinyactors-diagram { --ta-fg1: #ececf1; --ta-fg2: #bcbcc6; --ta-fg3: #90909b; --ta-fg4: #777781; --ta-bg: #141417; --ta-s1: #1c1c20; --ta-s2: #242429; --ta-b2: #393940; --ta-strong: #6c6c77; --ta-wait: #ffb46b; --ta-done: #a7b5c9; --ta-error: #ff8a84; --ta-path: #58a6ff; --ta-path-soft: #14243b; --ta-on-path: #0d1117; --ta-highlight: #f5b03d; --ta-highlight-soft: #33260d; --ta-sans: system-ui, -apple-system, Roboto, sans-serif; --ta-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; } }
+.tinyactors-diagram text { font-family: var(--ta-sans); fill: var(--ta-fg1); }
+.tinyactors-diagram .ta-page { fill: var(--ta-bg); }
+.tinyactors-diagram .ta-title { font-size: 15px; font-weight: 600; }
+.tinyactors-diagram .ta-container { fill: var(--ta-s2); fill-opacity: .55; stroke: var(--ta-b2); }
+.tinyactors-diagram .ta-container.ta-even { fill: var(--ta-s1); fill-opacity: .7; }
+.tinyactors-diagram .ta-region { fill: none; stroke: var(--ta-b2); stroke-dasharray: 4 3; }
+.tinyactors-diagram .ta-leaf, .tinyactors-diagram .ta-history { fill: var(--ta-s1); stroke: var(--ta-strong); }
+.tinyactors-diagram .ta-name { font-size: 13px; font-weight: 600; }
+.tinyactors-diagram .ta-kind { font-size: 14px; font-weight: 600; fill: var(--ta-fg3); }
+.tinyactors-diagram .ta-mark { font-family: var(--ta-mono); font-size: 11px; font-weight: 600; fill: var(--ta-fg2); }
+.tinyactors-diagram .ta-pill { fill: var(--ta-bg); stroke: var(--ta-b2); }
+.tinyactors-diagram .ta-pill.ta-done { stroke: var(--ta-done); }
+.tinyactors-diagram .ta-pill.ta-error { stroke: var(--ta-error); }
+.tinyactors-diagram .ta-event { font-family: var(--ta-mono); font-size: 11px; font-weight: 500; fill: var(--ta-fg2); }
+.tinyactors-diagram .ta-event .ta-done { fill: var(--ta-done); }
+.tinyactors-diagram .ta-event .ta-error { fill: var(--ta-error); }
+.tinyactors-diagram .ta-event .ta-condition { fill: var(--ta-wait); font-weight: 400; }
+.tinyactors-diagram .ta-event .ta-to { fill: var(--ta-fg3); font-weight: 400; }
+.tinyactors-diagram .ta-edge { fill: none; stroke: var(--ta-fg4); stroke-width: 1.25; stroke-linejoin: round; }
+.tinyactors-diagram .ta-initial-line { fill: none; stroke: var(--ta-fg1); stroke-width: 1.25; }
+.tinyactors-diagram .ta-arrow { fill: var(--ta-fg4); }
+.tinyactors-diagram .ta-arrow.ta-initial, .tinyactors-diagram .ta-dot { fill: var(--ta-fg1); }
+.tinyactors-diagram .ta-folded-stack { fill: var(--ta-s2); stroke: var(--ta-b2); }
+.tinyactors-diagram .ta-badge { font-family: var(--ta-mono); font-size: 11px; font-weight: 500; fill: var(--ta-fg3); }
+.tinyactors-diagram .ta-highlight { fill: var(--ta-highlight-soft); fill-opacity: 1; stroke: var(--ta-highlight); stroke-width: 2; }
+.tinyactors-diagram .ta-path { stroke: var(--ta-path); stroke-width: 2; }
+.tinyactors-diagram .ta-leaf.ta-path, .tinyactors-diagram .ta-history.ta-path { fill: var(--ta-path-soft); }
+.tinyactors-diagram .ta-arrow.ta-path, .tinyactors-diagram .ta-step { fill: var(--ta-path); }
+.tinyactors-diagram .ta-step-number { font-family: var(--ta-mono); font-size: 10px; font-weight: 700; fill: var(--ta-on-path); }
+</style>
+  <defs>
+    <marker id="tinyactors-arrow" viewBox="0 0 10 7" refX="9.5" refY="3.5" markerWidth="10" markerHeight="7" markerUnits="userSpaceOnUse" orient="auto">
+      <path class="ta-arrow" d="M0 0 L10 3.5 L0 7 z"/>
+    </marker>
+    <marker id="tinyactors-arrow-initial" viewBox="0 0 10 7" refX="9.5" refY="3.5" markerWidth="10" markerHeight="7" markerUnits="userSpaceOnUse" orient="auto">
+      <path class="ta-arrow ta-initial" d="M0 0 L10 3.5 L0 7 z"/>
+    </marker>
+    <marker id="tinyactors-arrow-path" viewBox="0 0 10 7" refX="9.5" refY="3.5" markerWidth="10" markerHeight="7" markerUnits="userSpaceOnUse" orient="auto">
+      <path class="ta-arrow ta-path" d="M0 0 L10 3.5 L0 7 z"/>
+    </marker>
+  </defs>
+  <rect class="ta-page" width="844.5" height="498"/>
+  <g>
+    <text class="ta-title" x="12" y="32">order</text>
+    <rect class="ta-leaf" x="520" y="82" width="276" height="58" rx="7"/>
+    <text class="ta-name" x="531" y="102">open</text>
+    <rect class="ta-pill" x="531" y="111" width="250" height="20" rx="10"/>
+    <text class="ta-event" x="539" y="125">
+      <tspan>item.added</tspan>
+      <tspan class="ta-condition">[_event.data.price > 0]</tspan>
+    </text>
+    <rect class="ta-leaf" x="290" y="202" width="480" height="34" rx="7"/>
+    <text class="ta-name" x="301" y="222">paying</text>
+    <rect class="ta-leaf" x="425.3" y="340" width="78" height="34" rx="7"/>
+    <text class="ta-name" x="436.3" y="360">paid</text>
+    <rect class="ta-leaf" x="425.7" y="426" width="77.2" height="34" rx="17"/>
+    <rect class="ta-leaf" x="428.2" y="428.5" width="72.2" height="29" rx="14.5"/>
+    <text class="ta-name" x="464.3" y="446" text-anchor="middle">shipped</text>
+    <rect class="ta-leaf" x="604.1" y="340" width="92.4" height="34" rx="17"/>
+    <rect class="ta-leaf" x="606.6" y="342.5" width="87.4" height="29" rx="14.5"/>
+    <text class="ta-name" x="650.3" y="360" text-anchor="middle">cancelled</text>
+    <path class="ta-edge" d="M530,140 L530,202" marker-end="url(#tinyactors-arrow)"/>
+    <path class="ta-edge" d="M738,140 L738,192 L793,192 L793,330 L679.5,330 L679.5,340" marker-end="url(#tinyactors-arrow)"/>
+    <path class="ta-edge" d="M410,236 L410,320 L464.3,320 L464.3,340" marker-end="url(#tinyactors-arrow)"/>
+    <path class="ta-edge" d="M475,236 L475,252 L585,252 L585,236" marker-end="url(#tinyactors-arrow)"/>
+    <path class="ta-edge" d="M650,236 L650,340" marker-end="url(#tinyactors-arrow)"/>
+    <path class="ta-edge" d="M464.3,374 L464.3,426" marker-end="url(#tinyactors-arrow)"/>
+    <path class="ta-initial-line" d="M536,66 L536,82" marker-end="url(#tinyactors-arrow-initial)"/>
+    <circle class="ta-dot" cx="536" cy="61" r="4.5"/>
+    <rect class="ta-pill" x="453" y="152" width="154" height="20" rx="10"/>
+    <text class="ta-event" x="461" y="166">
+      <tspan>checkout</tspan>
+      <tspan class="ta-condition">[total > 0]</tspan>
+    </text>
+    <rect class="ta-pill" x="708.5" y="152" width="59" height="20" rx="10"/>
+    <text class="ta-event" x="716.5" y="166">
+      <tspan>cancel</tspan>
+    </text>
+    <rect class="ta-pill" x="370" y="280.6" width="80" height="20" rx="10"/>
+    <text class="ta-event" x="378" y="294.6">
+      <tspan>charge.ok</tspan>
+    </text>
+    <rect class="ta-pill" x="12" y="256" width="467" height="20" rx="10"/>
+    <text class="ta-event" x="20" y="270">
+      <tspan>charge.declined</tspan>
+      <tspan class="ta-error">error.communication</tspan>
+      <tspan>payment.timeout</tspan>
+      <tspan class="ta-condition">[attempts &lt; 3]</tspan>
+    </text>
+    <rect class="ta-pill" x="467.5" y="278" width="365" height="20" rx="10"/>
+    <text class="ta-event" x="475.5" y="292">
+      <tspan>charge.declined</tspan>
+      <tspan class="ta-error">error.communication</tspan>
+      <tspan>payment.timeout</tspan>
+    </text>
+    <rect class="ta-pill" x="431.3" y="386" width="66" height="20" rx="10"/>
+    <text class="ta-event" x="439.3" y="400">
+      <tspan>shipped</tspan>
+    </text>
+  </g>
+</svg>

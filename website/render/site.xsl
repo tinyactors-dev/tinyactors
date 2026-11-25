@@ -713,12 +713,13 @@
     <xsl:apply-templates select="f:commands-blocks()"/>
   </xsl:template>
 
-  <!-- A picture a command drew (an example's SVG, from the capture),
-       served beside its page; the command that drew it is its name. -->
+  <!-- A picture a command drew: a help example's SVG, from the capture (href),
+       or one under examples/ (src), such as the tutorial's graph;
+       alt says what it shows. -->
   <xsl:template match="s:drawing">
     <figure class="figure drawing">
       <div class="figure__scroll" tabindex="0">
-        <img src="{@href}" alt="{@alt}"/>
+        <img src="{(@href, @src ! f:url(.))[1]}" alt="{@alt}"/>
       </div>
     </figure>
   </xsl:template>
@@ -1148,31 +1149,49 @@
           <s:heading>{normalize-space($commands/s:usage)}</s:heading>
           <s:code language="shell">{$help/@usage}</s:code>
           <xsl:if test="normalize-space($help/@description)"><s:p>{$help/@description}</s:p></xsl:if>
-          <s:p>{f:fill($commands/s:from, 'version', $cli-doc/@version)}</s:p>
         </s:section>
         <xsl:if test="$help/options/option">
           <s:section id="options">
             <s:heading>{normalize-space($commands/s:options)}</s:heading>
-            <xsl:sequence select="f:options-table($help/options/option)"/>
+            <xsl:sequence select="f:options-list($help/options/option)"/>
           </s:section>
         </xsl:if>
         <s:section id="program-options">
           <s:heading>{normalize-space($commands/s:program-options)}</s:heading>
-          <xsl:sequence select="f:options-table($help/programOptions/option)"/>
+          <xsl:sequence select="f:options-list($help/programOptions/option)"/>
         </s:section>
         <xsl:if test="runs/example">
           <s:section id="examples">
             <s:heading>{normalize-space($commands/s:examples)}</s:heading>
             <xsl:for-each select="runs/example">
+              <xsl:variable name="caption" select="string-join((
+                  if (normalize-space(@caption)) then f:sentence(replace(normalize-space(@caption), ':$', '')) else (),
+                  if (@status != '0') then f:fill($commands/s:status, 'status', @status) else ()), ' ')"/>
               <s:example>
                 <s:code language="shell">{@line}</s:code>
                 <xsl:if test="normalize-space(output)"><s:code language="text" role="output">{output}</s:code></xsl:if>
-                <xsl:if test="@status != '0'"><s:caption>{f:fill($commands/s:status, 'status', @status)}</s:caption></xsl:if>
+                <xsl:if test="$caption"><s:caption>{$caption}</s:caption></xsl:if>
               </s:example>
               <xsl:for-each select="svg">
                 <s:drawing href="{$page/@path}{@href}" alt="{../@line}" file="{@file}"/>
               </xsl:for-each>
             </xsl:for-each>
+          </s:section>
+        </xsl:if>
+        <!-- the help's exit statuses, when it gives them: each status and
+             when the command exits with it -->
+        <xsl:variable name="statuses" select="$help/*[matches(local-name(), '^exit', 'i')]/*[(@status, @code)]"/>
+        <xsl:if test="$statuses">
+          <s:section id="exit-status">
+            <s:heading>{normalize-space($commands/s:exit-status)}</s:heading>
+            <s:list>
+              <xsl:for-each select="$statuses">
+                <s:item>
+                  <s:term><s:code>{(@status, @code)[1]}</s:code></s:term>
+                  <s:text>{f:sentence((@description, @meaning, @when, string(.))[normalize-space()][1])}</s:text>
+                </s:item>
+              </xsl:for-each>
+            </s:list>
           </s:section>
         </xsl:if>
         <xsl:variable name="see" select="$commands/(s:related, s:artifact)[@command = $name]"/>
@@ -1195,27 +1214,22 @@
     </xsl:for-each>
   </xsl:function>
 
-  <!-- A table of options: each one's names, the values it takes, what it does. -->
-  <xsl:function name="f:options-table" as="element(s:table)">
+  <!-- Options as a list of terms: each one's names, then what it does,
+       then the values it takes (the help's own words; the content's word
+       for "values"). A list, not a table: a description wraps, and on a
+       phone each option stacks. -->
+  <xsl:function name="f:options-list" as="element(s:list)">
     <xsl:param name="options" as="element(option)*"/>
-    <s:table>
-      <s:head>
-        <s:cell>{normalize-space($commands/s:option)}</s:cell>
-        <s:cell>{normalize-space($commands/s:values)}</s:cell>
-        <s:cell>{normalize-space($commands/s:meaning)}</s:cell>
-      </s:head>
+    <s:list>
       <xsl:for-each select="$options">
-        <s:row>
-          <s:cell><s:code>{@option}</s:code></s:cell>
-          <s:cell>
-            <xsl:for-each select="tokenize(@values, ',\s*')[. != '']">
-              <xsl:if test="position() gt 1">, </xsl:if><s:code>{.}</s:code>
-            </xsl:for-each>
-          </s:cell>
-          <s:cell>{@description}</s:cell>
-        </s:row>
+        <xsl:variable name="values" select="tokenize(@values, ',\s*')[. != '']"/>
+        <s:item>
+          <s:term><s:code>{@option}</s:code></s:term>
+          <s:text>{f:sentence(@description)}<xsl:if test="exists($values) and not(contains(@description, normalize-space($commands/s:values) || ':'))">
+              <xsl:text> </xsl:text>{normalize-space($commands/s:values)}: <xsl:for-each select="$values"><xsl:if test="position() gt 1">, </xsl:if><s:code>{.}</s:code></xsl:for-each>.</xsl:if></s:text>
+        </s:item>
       </xsl:for-each>
-    </s:table>
+    </s:list>
   </xsl:function>
 
   <!-- The commands page's blocks: the program's usage, then each command

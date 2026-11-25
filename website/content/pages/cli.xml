@@ -1,73 +1,151 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <page xmlns="https://www.tinyactors.dev/ns/site" id="cli" path="/cli/">
   <title>The tinyactors command</title>
-  <description>The tinyactors command compiles, checks, draws, compares and runs charts, and reads the snapshots and blobs a host writes.</description>
-  <purpose kind="reference" for="workflow-tester agent-platform"/>
+  <description>When to use the tinyactors command beside the Node.js, Python and C libraries: checks in CI, version diffs before a deploy, snapshots read offline, charts run from a shell or an agent.</description>
+  <purpose kind="explanation" for="workflow-tester agent-platform"/>
 
   <hero>
     <headline>Check, compare and run charts from a shell</headline>
-    <lede><code>tinyactors</code> finds the path to a state, the change that breaks running actors, and every actor in a snapshot. Each answer comes as Markdown, JSON or XML.</lede>
+    <lede><code>tinyactors</code> is one program that compiles, checks, compares, draws and runs statecharts, and reads the snapshots your running application writes. Your application runs its actors through the Node.js, Python or C library; the command does the work around that process: CI, deploys and debugging. After reading, you can tell which jobs belong to the command and which to your code.</lede>
     <install>
       <command package="c">mise use github:tinyactors-dev/tinyactors-core@{version}</command>
     </install>
+    <actions>
+      <action to="cli-tutorial">Start the tutorial</action>
+      <action to="cli-ci">Check charts in CI</action>
+      <action to="cli" section="commands">See every command</action>
+    </actions>
   </hero>
 
-  <section id="install">
-    <heading>One program per platform, checked by mise</heading>
-    <p>Each release of tinyactors-core carries the command for Linux and macOS, on x86_64 and arm64. mise picks your machine's archive, checks it against the release's checksums and puts <code>tinyactors</code> on your path.</p>
+  <section id="beside">
+    <heading>The command needs no language runtime</heading>
+    <problem>Your application runs its actors through a library inside its own process. Checking a chart in CI, reviewing a deploy or reading a stored snapshot happens outside that process, and a script for each adds a language runtime to every build job.</problem>
+    <passage>A chart is an SCXML file that describes one kind of actor: its states, the events it handles and the transitions between them. A host is the runtime that runs actors from compiled charts, called an image, a <code>.tai</code> file. The libraries embed a host in your application, and the <code>tinyactors</code> command reads and runs the same charts from a shell.</passage>
+    <passage>The command is built from the same C libraries, and none of them carries it, so your application pays nothing for it at run time. Each tinyactors-core release ships it for Linux and macOS, and mise installs it and checks it against the release's checksums. A build job then needs no Node.js, Python or C compiler to check its charts.</passage>
+    <passage>Every command answers in Markdown for people, or in JSON or XML for scripts, with the same members in the same order. A CI job reads <code>charts[0].states</code> from the JSON that a person reads as a table.</passage>
     <claims>
       <claim>
-        <statement>One Linux binary runs on every distribution</statement>
-        <p>The Linux program is linked statically against musl, so one file serves glibc and musl systems alike. The macOS one loads only libSystem.</p>
+        <statement>One Linux file runs on every distribution</statement>
+        <p>The Linux program is linked statically against musl, so it runs on glibc and musl systems alike. The macOS one loads only libSystem.</p>
         <source href="https://github.com/tinyactors-dev/tinyactors/blob/main/tinyactors-core/docs/distribution.md#the-tinyactors-command">tinyactors-core, <code>docs/distribution.md</code></source>
       </claim>
       <claim>
-        <statement>The command runs charts on quickjs</statement>
-        <p>It carries the host and the ECMAScript datamodel, so <code>tinyactors run</code> runs your charts with no language package installed.</p>
-        <source href="https://github.com/tinyactors-dev/tinyactors/blob/main/tinyactors-core/docs/cli.md#run">tinyactors-core, <code>docs/cli.md</code></source>
+        <statement>About 2 MB, with the host inside</statement>
+        <p>The x86_64 Linux program is 2,080,424 bytes, measured on 2026-11-25. It carries the compiler, the host and the quickjs JavaScript engine.</p>
+        <source href="https://github.com/tinyactors-dev/tinyactors/blob/main/tinyactors-core/docs/distribution.md#the-tinyactors-command">tinyactors-core, <code>docs/distribution.md</code></source>
       </claim>
     </claims>
   </section>
 
-  <section id="commands" answers="workflow-tester.ci-commands">
-    <heading>Each command answers one question</heading>
-    <p>Each page below is made from the command's own help, with its examples run on an order and a payment chart.</p>
-    <commands for="workflow-tester agent-platform">
-      <title>tinyactors {command}</title>
-      <usage>Run it</usage>
-      <options>Options</options>
-      <program-options>Options every command takes</program-options>
-      <examples>Examples, run on an order chart</examples>
-      <see>Read next</see>
-      <option>Option</option>
-      <values>Values</values>
-      <meaning>What it does</meaning>
-      <status>It exits with status {status}.</status>
-      <from>From the help of tinyactors {version}, which wrote everything on this page.</from>
-      <related command="run"><link to="cli-protocol"/></related>
-      <related command="inspect"><link to="cli-snapshots"/></related>
-      <related command="actors"><link to="cli-snapshots"/></related>
-      <artifact command="run" arguments="run --schema" file="run.schema.json">The protocol's JSON Schema, from this release</artifact>
-    </commands>
-  </section>
-
-  <section id="formats">
-    <heading>Programs read the same answer as JSON</heading>
-    <p>With <code>-f json</code> or <code>-f xml</code>, every command answers with the members its Markdown shows, in the same order. A CI job reads <code>charts[0].states</code> from JSON.</p>
+  <section id="ci">
+    <heading>Charts are checked before they merge</heading>
+    <problem>A misspelt event name compiles, and the order that waits for it waits forever. Review of the XML misses it, and booting the application's test suite to find it costs minutes on every pull request.</problem>
+    <passage><code>check</code> compiles charts and writes nothing, and <code>-W</code> refuses a chart that compiles with a warning. <code>lint</code> reads the compiled chart without running it and reports what cannot work as written: unreachable states, dead ends, shadowed transitions and events nothing handles. <code>fmt --check</code> holds every chart to one canonical layout, so a diff shows only real edits.</passage>
+    <passage>With <code>-W</code>, <code>--deny</code> and <code>--check</code>, each exits with status 1 when it finds something a build should stop for, so a CI step needs no parsing. <code>path</code> answers which transitions lead from where an actor starts to a given state, and <code>graph -f svg</code> draws the chart for a review. A chart that passes them all is valid on its own, which says nothing yet about the actors already running its previous version.</passage>
     <claims>
       <claim>
-        <statement>Exit statuses are part of the answer</statement>
-        <p><code>diff --exit-code</code> exits with 1 on a difference, <code>lint --deny</code> on a finding, and <code>fmt --check</code> on a file to rewrite.</p>
+        <statement>Unreachable means unreachable at run time</statement>
+        <p><code>lint</code> lets any event come at any time and every condition hold. A state it finds unreachable stays so whatever happens when the chart runs.</p>
+        <source href="https://github.com/tinyactors-dev/tinyactors/blob/main/tinyactors-core/docs/cli.md#lint">tinyactors-core, <code>docs/cli.md</code></source>
+      </claim>
+      <claim>
+        <statement>A failed check exits with 1</statement>
+        <p><code>check</code> exits with 1 on a chart that does not compile. So do <code>lint --deny</code> on a denied finding and <code>fmt --check</code> on a file to rewrite.</p>
         <source href="https://github.com/tinyactors-dev/tinyactors/blob/main/tinyactors-core/docs/cli.md#exit-status">tinyactors-core, <code>docs/cli.md</code></source>
       </claim>
     </claims>
   </section>
 
-  <section id="more">
-    <heading>Drive a host, read what it wrote</heading>
+  <section id="deploy">
+    <heading>A diff shows what a deploy does</heading>
+    <problem>A new version renames the state <code>paying</code> to <code>charging</code>, and the XML diff is two short lines. Orders waiting in <code>paying</code> would lose their place when they move to it.</problem>
+    <passage>After a host loads a new version of a chart, a migration moves running actors to it by state id, keeping the variables both versions declare and running no entry actions. A state the new version lacks leaves the actor in its nearest kept ancestor's initial state. <code>tinyactors diff</code> compares two versions as statecharts and marks each change that breaks the actors running the old one.</passage>
+    <passage>An added state or transition changes what actors do next and is not breaking. A removed state, a removed variable or an event a state no longer handles changes what actors hold, and <code>diff --breaking --exit-code</code> fails the build on those. The answer ends with what a migration would do, such as <code>paying → open</code>. Once a version runs, the next questions come from the actors themselves.</passage>
+    <claims>
+      <claim>
+        <statement>Breaking changes alter what running actors hold</statement>
+        <p>The command lists each breaking change with what a running actor gets, from a removed state to a datamodel changed.</p>
+        <source href="https://github.com/tinyactors-dev/tinyactors/blob/main/tinyactors-core/docs/cli.md#breaking-or-behaviour">tinyactors-core, <code>docs/cli.md</code></source>
+      </claim>
+    </claims>
+  </section>
+
+  <section id="snapshots">
+    <heading>A snapshot is read without a host</heading>
+    <problem>An order has waited in <code>paying</code> for an hour in production. Its logs tell what happened before, not which state, queued events or pending timeout the order holds now.</problem>
+    <passage>A host can write a snapshot, a file holding every actor it runs, and an idle actor can be written out alone as a hibernation blob for your store. <code>tinyactors actors</code> lists each actor of a snapshot: its chart and segment, its active states, and the events and delayed sends it waits for.</passage>
+    <passage><code>tinyactors inspect</code> says what a snapshot or blob holds, and whether a blob wakes in the host a snapshot restores. Neither runs a chart: the command reads the library's own memory layout. That layout belongs to one build, so read a snapshot with the command of the release that wrote it. Before any host has run a chart, the command can run it too.</passage>
+    <claims>
+      <claim>
+        <statement>Nothing runs while a snapshot is read</statement>
+        <p>The command restores the snapshot's memory with datamodels that do nothing, so no chart code is called.</p>
+        <source href="https://github.com/tinyactors-dev/tinyactors/blob/main/tinyactors-core/docs/cli.md#snapshots-and-blobs">tinyactors-core, <code>docs/cli.md</code></source>
+      </claim>
+      <claim>
+        <statement>Each release reads its own formats</statement>
+        <p>Snapshots and blobs are raw memory with a format version. The command reads its own library's formats and names any other.</p>
+        <source href="https://github.com/tinyactors-dev/tinyactors/blob/main/tinyactors-core/docs/cli.md#inputs">tinyactors-core, <code>docs/cli.md</code></source>
+      </claim>
+    </claims>
+  </section>
+
+  <section id="run">
+    <heading>A script or an agent drives one host</heading>
+    <problem>An agent writing a chart needs to try it before any application code exists: spawn an order, answer its payment request, let its 30-second timeout fire. Waiting 30 real seconds per try, or writing a host program first, slows every iteration.</problem>
+    <passage><code>tinyactors run</code> starts one host and serves JSON-RPC 2.0 on standard input and output, one message per line. The client spawns actors, sends events, answers the sends they make and moves the clock. The clock moves only when the client says so, and <code>Math.random</code> has a fixed seed, so the same requests print the same lines.</passage>
+    <passage>A server that spawns actors over JSON-RPC can look like a way to run them in production. It is a workbench: one host, one client on its standard input, charts in ECMAScript on quickjs, and a protocol that may change in any release. Production actors belong in your process, where the libraries give them your store, your I/O and your event loop.</passage>
+    <table>
+      <head><cell>Job</cell><cell>Where it belongs</cell></head>
+      <row><cell>Check, lint and format charts in CI</cell><cell><code>tinyactors check</code>, <code>lint</code>, <code>fmt</code></cell></row>
+      <row><cell>Compare a version with the deployed one</cell><cell><code>tinyactors diff</code></cell></row>
+      <row><cell>Read a snapshot or a blob</cell><cell><code>tinyactors actors</code>, <code>inspect</code></cell></row>
+      <row><cell>Draw a chart for a review</cell><cell><code>tinyactors graph</code></cell></row>
+      <row><cell>Try a chart from a shell or an agent</cell><cell><code>tinyactors run</code></cell></row>
+      <row><cell>Serve your application's traffic</cell><cell>The Node.js, Python or C library</cell></row>
+    </table>
+    <claims>
+      <claim>
+        <statement>The protocol is experimental</statement>
+        <p><code>run</code> and its protocol may change in any release until a second client uses them. <code>tinyactors run --schema</code> prints the schema of the release you have.</p>
+        <source href="https://github.com/tinyactors-dev/tinyactors/blob/main/tinyactors-core/docs/cli.md#run">tinyactors-core, <code>docs/cli.md</code></source>
+      </claim>
+      <claim>
+        <statement>A session repeats byte for byte</statement>
+        <p>With a simulated clock and a fixed seed, the same requests write the same lines, trace ids included.</p>
+        <source href="https://github.com/tinyactors-dev/tinyactors/blob/main/tinyactors-core/docs/cli.md#startup-and-the-end-of-input">tinyactors-core, <code>docs/cli.md</code></source>
+      </claim>
+    </claims>
+  </section>
+
+  <section id="next">
+    <heading>Learn it on one order chart</heading>
     <list>
-      <item><term><link to="cli-protocol">Drive a host from a script</link></term><text>A script spawns actors, answers their sends and moves the clock over JSON-RPC.</text></item>
-      <item><term><link to="cli-snapshots">Read a snapshot</link></term><text>A snapshot file holds every actor of a host, and the command reads it without restoring it.</text></item>
+      <item><term><link to="cli-tutorial">Your first session</link></term><text>Compile an order chart, find its misspelt event with <code>lint</code>, draw it and run one order.</text></item>
+      <item><term><link to="cli-ci">Check charts in CI</link></term><text>Fail a pull request that breaks a chart, its layout or the actors running it.</text></item>
+      <item><term><link to="cli-protocol">Drive a host from a script</link></term><text>Answer an order's payment request and move the clock over JSON-RPC.</text></item>
+      <item><term><link to="cli-snapshots">Read a snapshot</link></term><text>Find where each order of a host is, from its snapshot file.</text></item>
     </list>
+  </section>
+
+  <section id="commands" kind="reference" answers="workflow-tester.ci-commands">
+    <heading>Each command answers one question</heading>
+    <commands for="workflow-tester agent-platform">
+      <title>tinyactors {command}</title>
+      <usage>Usage</usage>
+      <options>Options</options>
+      <program-options>Options every command takes</program-options>
+      <examples>Examples</examples>
+      <exit-status>Exit status</exit-status>
+      <see>Read next</see>
+      <values>Values</values>
+      <status>It exits with status {status}.</status>
+      <related command="run"><link to="cli-protocol"/></related>
+      <related command="inspect"><link to="cli-snapshots"/></related>
+      <related command="actors"><link to="cli-snapshots"/></related>
+      <related command="lint"><link to="cli-ci"/></related>
+      <related command="diff"><link to="cli-ci"/></related>
+      <related command="fmt"><link to="cli-ci"/></related>
+      <artifact command="run" arguments="run --schema" file="run.schema.json">The protocol's JSON Schema</artifact>
+    </commands>
   </section>
 </page>

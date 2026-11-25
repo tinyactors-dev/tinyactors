@@ -495,6 +495,7 @@
       <xs:element ref="table"/>
       <xs:element ref="figure"/>
       <xs:element ref="demo"/>
+      <xs:element ref="drawing"/>
       <xs:element ref="playground"/>
       <xs:element ref="changelog"/>
       <xs:element ref="commands"/>
@@ -553,6 +554,23 @@
       <xs:attribute name="poster" type="path" use="required"/>
       <xs:assert test="(: a video from content/videos :) matches(@src, '^\.\./videos/[a-z0-9-]+\.mp4$')"/>
       <xs:assert test="(: its poster beside it :) @poster = replace(@src, '\.mp4$', '.jpg')"/>
+    </xs:complexType>
+  </xs:element>
+
+  <xs:element name="drawing">
+    <xs:annotation><xs:documentation>
+      A picture a program drew, shown as it drew it: an SVG file under
+      examples/ (`src`) that a page's commands wrote, such as the
+      tutorial's `tinyactors graph -f svg` (mise run test compares the file
+      with what the command writes now). `alt` says what it shows, for a
+      reader who cannot see it and for the page's Markdown. The command
+      pages' drawings (an example of the help that writes an SVG) are made
+      by the build, with `href` in place of `src`.
+    </xs:documentation></xs:annotation>
+    <xs:complexType>
+      <xs:attribute name="src" type="path" use="required"/>
+      <xs:attribute name="alt" type="plain-attribute" use="required"/>
+      <xs:assert test="(: an SVG under examples/ :) matches(@src, '^(\.\./)+examples/[a-z0-9/-]+\.svg$')"/>
     </xs:complexType>
   </xs:element>
 
@@ -860,21 +878,22 @@
       own, at this page's path followed by its name ("/cli/compile/"), with
       the id of this page followed by "-" and its name ("cli-compile"): its
       usage and description, its options and the options every command
-      takes, each example with what it printed (and the pictures it drew),
-      then what `related` and `artifact` add. Nothing on those pages is
-      written by hand: a new command or option appears when the site builds
-      against a new release. One page of the site holds it.
+      takes (each a term and its description, the values it takes after
+      it), each example with its caption (when the help gives one) and
+      what it printed (and the pictures it drew), its exit statuses (when
+      the help gives them), then what `related` and `artifact` add.
+      Nothing on those pages is written by hand: a new command or option
+      appears when the site builds against a new release. One page of the
+      site holds it.
 
       The children are the words those pages use, since the help gives
       only its own: `title`, each command page's title, with "{command}"
       for the command's name; the headings `usage`, `options`,
-      `program-options` (the options every command takes), `examples`
-      and `see` (the links that follow); the columns of an options table
-      (`option`, `values`, `meaning`); `status`, an example's caption when
-      it exits with another status than 0, with "{status}"; and `from`,
-      which says which release the page describes, with "{version}" for
-      the binary's version. `for` is the command pages' audiences, as a
-      purpose's.
+      `program-options` (the options every command takes), `examples`,
+      `exit-status` and `see` (the links that follow); `values`, the word
+      before the values an option takes; and `status`, added to an
+      example's caption when it exits with another status than 0, with
+      "{status}". `for` is the command pages' audiences, as a purpose's.
 
       `related` adds a link (a page of this site that explains what the
       help cannot carry) to the page of its `command`; `artifact` a file
@@ -891,12 +910,10 @@
         <xs:element name="options" type="title"/>
         <xs:element name="program-options" type="title"/>
         <xs:element name="examples" type="title"/>
+        <xs:element name="exit-status" type="title"/>
         <xs:element name="see" type="title"/>
-        <xs:element name="option" type="plain"/>
         <xs:element name="values" type="plain"/>
-        <xs:element name="meaning" type="plain"/>
         <xs:element name="status" type="with-status"/>
-        <xs:element name="from" type="with-version"/>
         <xs:element name="related" minOccurs="0" maxOccurs="unbounded">
           <xs:complexType>
             <xs:sequence>
@@ -1109,12 +1126,6 @@
     </xs:restriction>
   </xs:simpleType>
 
-  <xs:simpleType name="with-version">
-    <xs:annotation><xs:documentation>Plain text that holds {version}, where a command page puts the version of the command it describes.</xs:documentation></xs:annotation>
-    <xs:restriction base="xs:string">
-      <xs:pattern value="[^\n]*\{version\}[^\n]*"/>
-    </xs:restriction>
-  </xs:simpleType>
 
   <xs:simpleType name="plain-attribute">
     <xs:restriction base="xs:token">
@@ -1152,6 +1163,8 @@
       <xs:enumeration value="python"/>
       <xs:enumeration value="c"/>
       <xs:enumeration value="shell"/>
+      <xs:enumeration value="yaml"/>
+      <xs:enumeration value="toml"/>
       <xs:enumeration value="text"/>
     </xs:restriction>
   </xs:simpleType>

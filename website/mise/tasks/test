@@ -413,7 +413,7 @@ Website.documents.each do |document|
     end
   end
 end
-examples = cli_xml.scan(/<example line="([^"]*)" status="(\d+)">/)
+examples = cli_xml.scan(/<example line="([^"]*)" caption="[^"]*" status="(\d+)">/)
 examples.each do |line, status|
   failures << "cli: the help's example `#{unescape.call(line)}` exited with #{status}" if status.to_i > 1
 end
@@ -423,6 +423,18 @@ cli::TRANSCRIPTS.each do |file, line|
   out, = cli.shell(line)
   want = cli::FIXTURE.join(file).read
   failures << "cli: `#{line}` printed\n#{out}but examples/cli/#{file} says\n#{want}" unless out == want
+end
+steps = 0
+cli::WALKTHROUGHS.each do |name, walkthrough|
+  page = Website::CONTENT.join('pages', walkthrough[:page]).read
+  cli.walkthrough!(name).each do |step|
+    steps += 1
+    where = "#{walkthrough[:page]}: `#{step[:line]}`"
+    failures << "cli: #{walkthrough[:page]} does not show `#{step[:line]}`" unless page.include?(step[:line].gsub('<', '&lt;').gsub('>', '&gt;'))
+    failures << "cli: #{where} exited with #{step[:exited]}, not #{step[:status] || 0}" unless step[:exited] == (step[:status] || 0)
+    want = cli::FIXTURE.join(name, step[:output]).read
+    failures << "cli: #{where} printed\n#{step[:printed]}but examples/cli/#{name}/#{step[:output]} says\n#{want}" unless step[:printed] == want
+  end
 end
 version = cli_xml[/<cli version="([^"]+)"/, 1]
 core = Website::REPO.join('tinyactors-core/CHANGELOG.md').read[/^## \[([^\]]+)\] - /, 1]
@@ -434,7 +446,7 @@ else
   failures << "cli: mise.toml pins tinyactors-core #{cli.pin}, but the install command shows its newest release, #{core}" unless cli.pin == core
 end
 puts "website: cli: tinyactors #{version}: #{commands.size} commands have their pages; #{examples.size} examples of its help ran; " \
-     "#{named} options the content names checked against it; #{cli::TRANSCRIPTS.size} transcripts match"
+     "#{named} options the content names checked against it; #{cli::TRANSCRIPTS.size} transcripts and #{steps} steps of #{cli::WALKTHROUGHS.size} walkthroughs match"
 
 # 6. The components' pure parts (their rendering runs in a browser).
 out, ok = Website.capture('node', Website::ROOT.join('test/components.mjs'))

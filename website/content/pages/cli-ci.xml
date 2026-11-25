@@ -1,0 +1,97 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<page xmlns="https://www.tinyactors.dev/ns/site" id="cli-ci" path="/cli/ci/">
+  <title>Check charts in CI</title>
+  <description>Fail a pull request whose chart does not compile, cannot work as written, is not in the canonical layout, or breaks the actors running the deployed version.</description>
+  <purpose kind="how-to" for="workflow-tester agent-platform"/>
+
+  <hero>
+    <headline>Stop broken charts before they deploy</headline>
+    <lede>Four commands fail a pull request with exit status 1. The last, <code>diff</code>, compares the change with the version your actors run now.</lede>
+    <actions>
+      <action to="cli-ci" section="workflow">Copy the workflow</action>
+      <action to="cli-tutorial">Learn the commands</action>
+    </actions>
+  </hero>
+
+  <section id="install">
+    <heading>1. Add the command to mise.toml</heading>
+    <p>mise installs the release on each runner and checks it against the release's checksums. Name a version in place of <code>latest</code> to pin it.</p>
+    <code language="toml" file="mise.toml">
+      [tools]
+      "github:tinyactors-dev/tinyactors-core" = "latest"
+    </code>
+  </section>
+
+  <section id="deployed">
+    <heading>2. Keep the image you deploy</heading>
+    <p>Compile the chart when you deploy it and store <code>deployed.tai</code> where the next build can fetch it. The deployed chart here is the <link to="cli-tutorial">tutorial's</link> order.</p>
+    <example>
+      <code language="shell">tinyactors compile order.scxml -o deployed.tai</code>
+      <code src="../../examples/cli/ci/deployed.txt" language="text" role="output"/>
+    </example>
+  </section>
+
+  <section id="check">
+    <heading>3. Check, lint and format the change</heading>
+    <p>The pull request renames <code>paying</code> to <code>charging</code>. <code>check -W</code> treats a warning as an error, and the renamed chart compiles with neither.</p>
+    <code src="../../examples/cli/ci/next.scxml" lines="11-14" language="scxml" file="order.scxml"/>
+    <example>
+      <code language="shell">tinyactors check -W order.scxml</code>
+      <code src="../../examples/cli/ci/check.txt" language="text" role="output"/>
+    </example>
+    <p>With <code>--deny all</code>, any finding of <code>lint</code> exits with 1, such as an unreachable state. The renamed chart has none.</p>
+    <example>
+      <code language="shell">tinyactors lint --deny all order.scxml</code>
+      <code src="../../examples/cli/ci/lint.txt" language="text" role="output"/>
+    </example>
+    <p>Charts in one layout keep a pull request's diff to its real edits. <code>fmt --check</code> fails on a file out of layout and changes nothing; <code>fmt -w</code> rewrites it.</p>
+    <example>
+      <code language="shell">tinyactors fmt --check order.scxml</code>
+      <code src="../../examples/cli/ci/fmt.txt" language="text" role="output"/>
+    </example>
+  </section>
+
+  <section id="diff">
+    <heading>4. Compare the change with the deployed image</heading>
+    <p>The change passes every check, yet orders waiting in <code>paying</code> would lose their state. <code>diff --breaking --exit-code</code> lists the changes that break them and exits with 1.</p>
+    <example>
+      <code language="shell">tinyactors diff --breaking --exit-code deployed.tai order.scxml</code>
+      <code src="../../examples/cli/ci/diff.txt" language="text" role="output"/>
+      <caption>It exits with status 1: a migration would put each order waiting in <code>paying</code> back in <code>open</code>, its charge already sent.</caption>
+    </example>
+    <claims>
+      <claim>
+        <statement>A removed state sends actors to an ancestor</statement>
+        <p>An actor in a removed state enters its nearest kept ancestor's initial state, and no entry action runs.</p>
+        <source href="https://github.com/tinyactors-dev/tinyactors/blob/main/tinyactors-core/docs/cli.md#breaking-or-behaviour">tinyactors-core, <code>docs/cli.md</code></source>
+      </claim>
+    </claims>
+    <p>Keep the state's id, or deploy the new version without migrating, so running orders finish on the old one.</p>
+  </section>
+
+  <section id="workflow">
+    <heading>5. Run the checks on every pull request</heading>
+    <p>This GitHub Actions job installs mise's tools with <link href="https://github.com/jdx/mise-action">mise-action</link> and runs the four commands. Fetch <code>deployed.tai</code> from wherever your deploy stores it.</p>
+    <code language="yaml" file=".github/workflows/charts.yml">
+      name: charts
+      on: pull_request
+      jobs:
+        charts:
+          runs-on: ubuntu-latest
+          steps:
+            - uses: actions/checkout@v4
+            - uses: jdx/mise-action@v2
+            - run: tinyactors check -W order.scxml
+            - run: tinyactors lint --deny all order.scxml
+            - run: tinyactors fmt --check order.scxml
+            - run: tinyactors diff --breaking --exit-code deployed.tai order.scxml
+    </code>
+    <claims>
+      <claim>
+        <statement>Exit status 1 means a check failed</statement>
+        <p>Status 2 is a command line not understood, and 3 a file that could not be read.</p>
+        <source href="https://github.com/tinyactors-dev/tinyactors/blob/main/tinyactors-core/docs/cli.md#exit-status">tinyactors-core, <code>docs/cli.md</code></source>
+      </claim>
+    </claims>
+  </section>
+</page>

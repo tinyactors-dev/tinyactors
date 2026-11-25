@@ -1,0 +1,91 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<page xmlns="https://www.tinyactors.dev/ns/site" id="cli-tutorial" path="/cli/tutorial/">
+  <title>Your first session with the tinyactors command</title>
+  <description>Compile an order chart, find its misspelt event with lint, fix it, find the path to shipped, draw it and run one order with tinyactors run.</description>
+  <purpose kind="tutorial" for="workflow-tester agent-platform"/>
+
+  <hero>
+    <headline>Check, draw and run an order chart</headline>
+    <lede>In seven commands you take an order chart from a draft with a hidden mistake to an order paid on its second attempt.</lede>
+    <install>
+      <command package="c">mise use github:tinyactors-dev/tinyactors-core@{version}</command>
+    </install>
+    <actions>
+      <action to="cli-tutorial" section="compile">Start with step 1</action>
+    </actions>
+  </hero>
+
+  <section id="compile">
+    <heading>1. Compile the order chart</heading>
+    <p>An order collects items and asks a payment service for a charge. After 30 seconds of silence it asks again, three times at most.</p>
+    <code src="../../examples/cli/tutorial/draft.scxml" language="scxml" file="order.scxml"/>
+    <p>Save it as <code>order.scxml</code>; <code>compile</code> turns it into <code>order.tai</code>, the image your application loads. The chart compiles with no diagnostics.</p>
+    <example>
+      <code language="shell">tinyactors compile order.scxml -o order.tai</code>
+      <code src="../../examples/cli/tutorial/compile.txt" language="text" role="output"/>
+    </example>
+  </section>
+
+  <section id="lint">
+    <heading>2. Ask lint what cannot work</heading>
+    <p>A chart that compiles can still wait for an event that never comes. <code>lint</code> reads the chart without running it.</p>
+    <example>
+      <code language="shell">tinyactors lint order.scxml</code>
+      <code src="../../examples/cli/tutorial/lint.txt" language="text" role="output"/>
+    </example>
+    <p><code>paying</code> sends itself <code>payment.timeout</code>, but its transitions wait for <code>payment.timedout</code>. An order whose payment service never answers would wait forever.</p>
+  </section>
+
+  <section id="fix">
+    <heading>3. Fix the event and check again</heading>
+    <p>Change <code>payment.timedout</code> to <code>payment.timeout</code> in both transitions of <code>paying</code>.</p>
+    <code src="../../examples/cli/tutorial/order.scxml" lines="28-29" language="scxml" file="order.scxml"/>
+    <p><code>check -W</code> compiles the chart, writes nothing, and fails on a warning as on an error.</p>
+    <example>
+      <code language="shell">tinyactors check -W order.scxml</code>
+      <code src="../../examples/cli/tutorial/check.txt" language="text" role="output"/>
+    </example>
+    <p>With <code>--deny all</code>, any finding makes <code>lint</code> exit with 1. It now finds nothing and exits with 0.</p>
+    <example>
+      <code language="shell">tinyactors lint --deny all order.scxml</code>
+      <code src="../../examples/cli/tutorial/lint-fixed.txt" language="text" role="output"/>
+    </example>
+  </section>
+
+  <section id="path">
+    <heading>4. Find the way to shipped</heading>
+    <p><code>path</code> finds the shortest sequence of transitions from <code>open</code> to a state. An order ships after three events, and checkout needs a total above 0.</p>
+    <example>
+      <code language="shell">tinyactors path order.scxml --to shipped</code>
+      <code src="../../examples/cli/tutorial/path.txt" language="text" role="output"/>
+    </example>
+  </section>
+
+  <section id="graph">
+    <heading>5. Draw the chart</heading>
+    <p><code>graph -f svg</code> draws every state as a box and every transition as a labelled route. The picture follows your system's light or dark setting.</p>
+    <code language="shell">tinyactors graph -f svg order.scxml &gt; order.svg</code>
+    <drawing src="../../examples/cli/tutorial/order.svg" alt="The order chart: open, paying, paid, shipped and cancelled, with paying's retry looping back to itself"/>
+  </section>
+
+  <section id="run">
+    <heading>6. Run one order</heading>
+    <p><code>tinyactors run</code> reads JSON-RPC requests, one a line. This session adds a pen to an order, checks out, lets 30 seconds pass, then answers the second charge.</p>
+    <code src="../../examples/cli/tutorial/session.jsonl" language="text" file="session.jsonl"/>
+    <p><code>--io-processor payments</code> makes your session the payment service. Each <code>effect.send</code> is a charge the order asks of it.</p>
+    <example>
+      <code language="shell">tinyactors run --io-processor payments order.scxml &lt; session.jsonl</code>
+      <code src="../../examples/cli/tutorial/run.txt" language="text" role="output"/>
+    </example>
+    <p>With request 5 the clock moves 30 seconds, so the next turn fires the timeout you fixed. Request 9 reads the order in <code>paid</code>.</p>
+  </section>
+
+  <section id="next">
+    <heading>Put the checks in your build</heading>
+    <p>In CI, <code>fmt</code> and <code>diff</code> join <code>check</code> and <code>lint</code> to fail a pull request before it merges.</p>
+    <list>
+      <item><term><link to="cli-ci">Check charts in CI</link></term><text>Run <code>check</code>, <code>lint</code>, <code>fmt</code> and <code>diff</code> on every pull request.</text></item>
+      <item><term><link to="cli-protocol">Drive a host from a script</link></term><text>Hold a send until your script answers it.</text></item>
+    </list>
+  </section>
+</page>

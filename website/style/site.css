@@ -163,6 +163,8 @@ p code, li code, h1 code, h2 code, h3 code, figcaption code {
   background: var(--surface-code); border: 1px solid var(--code-border); border-radius: var(--radius-1);
   padding: 0 0.3em; white-space: nowrap;
 }
+/* a command's name as a page's headline breaks between its words on a phone */
+.hero__headline code { white-space: normal; -webkit-box-decoration-break: clone; box-decoration-break: clone; }
 
 /* ---------------------------------------------------- hero: the page's one sheet */
 
@@ -255,6 +257,17 @@ ol.items .items__term::before { counter-increment: item; content: counter(item) 
 .code .ta-code__head { justify-content: space-between; }
 .code__language { color: var(--code-muted); }
 .code pre { padding: var(--space-4); }
+/* a line longer than the block scrolls inside it: a thin scrollbar, and a
+   shade at each edge that still has text beyond it */
+.code pre, .chart pre {
+  scrollbar-width: thin; scrollbar-color: var(--code-muted) transparent;
+  background:
+    linear-gradient(to right, var(--surface-code) 40%, transparent) left / 40px 100% no-repeat local,
+    linear-gradient(to left, var(--surface-code) 40%, transparent) right / 40px 100% no-repeat local,
+    linear-gradient(to right, color-mix(in srgb, var(--code-fg) 22%, transparent), transparent) left / 16px 100% no-repeat scroll,
+    linear-gradient(to left, color-mix(in srgb, var(--code-fg) 22%, transparent), transparent) right / 16px 100% no-repeat scroll,
+    var(--surface-code);
+}
 .code pre code { font: var(--type-code); background: none; border: 0; padding: 0; white-space: pre; }
 .code--output .ta-code__head { color: var(--state-running); }
 .example { display: grid; gap: var(--space-3); }
@@ -338,6 +351,8 @@ ta-tabs { display: block; }
 .figure__caption { font: var(--type-body-sm); color: var(--fg-2); max-width: var(--prose-max); }
 /* A picture a command drew (the CLI pages' examples): its own size, never wider than the column. */
 .drawing img { display: block; max-width: 100%; height: auto; margin: 0 auto; }
+/* on a phone a drawing keeps its own size and scrolls in its frame */
+@media (max-width: 720px) { .drawing img { max-width: none; } }
 .figure__line { fill: none; stroke: var(--fg-3); }
 .figure__frame { fill: var(--surface-1); stroke: var(--rule); stroke-width: 1.5; }
 .figure__fill { fill: var(--surface-2); stroke: var(--border-2); }
@@ -561,6 +576,7 @@ html:has(> #tinyactors-copywriter) .app { --app-inset-start: 68px; --app-inset-b
   .items--terms li { grid-template-columns: 1fr; gap: var(--space-1); }
   .claims, .claims:has(> :nth-child(4)) { grid-template-columns: 1fr; }
   p code, li code { white-space: normal; }
+  .table td { white-space: normal; }
 }
 
 /* ---------------------------------------------------- the hero's author */

@@ -1,0 +1,16 @@
+# Fmt
+
+- **Mode**: check
+- **Files**: 1
+- **Changed**: 0
+- **Refused**: 0
+
+## Results
+
+| File | Changed | Refused | Image |
+| --- | --- | --- | --- |
+| order.scxml | no | no | same |
+
+## Diagnostics
+
+_none_

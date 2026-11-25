@@ -10,10 +10,12 @@ import c from '/vendor/highlight.js/es/languages/c.min.js';
 import javascript from '/vendor/highlight.js/es/languages/javascript.min.js';
 import python from '/vendor/highlight.js/es/languages/python.min.js';
 import typescript from '/vendor/highlight.js/es/languages/typescript.min.js';
+import ini from '/vendor/highlight.js/es/languages/ini.min.js';
 import xml from '/vendor/highlight.js/es/languages/xml.min.js';
+import yaml from '/vendor/highlight.js/es/languages/yaml.min.js';
 
-const languages = { scxml: 'xml', xml: 'xml', javascript: 'javascript', typescript: 'typescript', python: 'python', c: 'c', shell: 'bash' };
-for (const [name, language] of Object.entries({ bash, c, javascript, python, typescript, xml })) hljs.registerLanguage(name, language);
+const languages = { scxml: 'xml', xml: 'xml', javascript: 'javascript', typescript: 'typescript', python: 'python', c: 'c', shell: 'bash', yaml: 'yaml', toml: 'ini' };
+for (const [name, language] of Object.entries({ bash, c, ini, javascript, python, typescript, xml, yaml })) hljs.registerLanguage(name, language);
 
 for (const code of document.querySelectorAll('pre code[data-language]')) {
   const language = languages[code.dataset.language];

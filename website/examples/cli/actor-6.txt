@@ -1,0 +1,31 @@
+# Actors
+
+- **Snapshot**: shop.snapshot
+- **System ID**: shop
+- **Time**: 10000
+
+## Actors
+
+### Actor 1: order-6
+
+- **Session**: 6
+- **Name**: order-6
+- **Chart**: order
+- **Segment**: 0
+- **State**: idle
+- **Invocations**: 0
+- **Queued**: 0
+
+#### Configuration
+
+- paying
+
+#### Mailbox
+
+_none_
+
+#### Delayed
+
+| Event | Sendid | Due | In |
+| --- | --- | --- | --- |
+| payment.timeout | deadline | 30000 | 20s |

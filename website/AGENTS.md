@@ -183,7 +183,11 @@ The wording of each point is the content's (`content/site.xml`,
 - **It documents the latest release of the command, from the command.**
   The pages under `/cli/` are made from the pinned binary's own help and
   its examples run on `examples/cli/` (README.md, "The CLI section"):
-  never write a command's usage, options or examples in `content/`. Move
+  never write a command's usage, options or examples in `content/`. The
+  hand-written pages follow Diátaxis: `/cli/` explains when to use the
+  command (the deep-dive voice), the tutorial teaches by doing, the
+  how-to pages reach a goal. A command line they show with its output is
+  a transcript or a walkthrough step that `mise run test` runs. Move
   the pin (`mise.toml`) when tinyactors-core releases, and rerun `mise run
   test`. `TINYACTORS_CLI` is for development only.
 
