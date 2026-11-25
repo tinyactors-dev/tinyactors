@@ -704,6 +704,7 @@ static void turn(tool_call *call) {
     uint64_t allowed = number_of(call, "runs", TOOL_SERVE_RUNS);
     tool_held_ack(server); /* the client has answered what it held */
     int held = tool_drain(server, flags);
+    if (!held) tool_telemetry_retake(server); /* takes the allocator refused before */
     ta_run run = {TA_RUN_IDLE, 0, 0, 0, UINT64_MAX};
     uint32_t runs = 0;
     uint64_t fuel = 0;
@@ -711,6 +712,9 @@ static void turn(tool_call *call) {
     while (!held && runs < allowed && !server->failed) {
         ta_host_advance_time(server->host, server->clock.now); /* before every run */
         run = ta_host_run(server->host, budget);
+        /* with an encoder, after it too: the run's span records are stamped
+           between the clocks around it, not stretched to the next advance */
+        if (server->telemetry) ta_host_advance_time(server->host, server->clock.now);
         runs++;
         fuel += run.used;
         server->woke = 0;
@@ -1079,7 +1083,9 @@ static ta_status restored_of(tool_server *server, ta_bytes pack, const restoring
 /* The host replaced by one restored from a pack run.snapshot wrote, with
  * the server's config and datamodel limits: the old host and its quickjs
  * are freed once the new one is whole, and the clock goes on from the
- * snapshot's time. A refused restore leaves the server's host as it was.
+ * snapshot's time. A refused restore leaves the server's host as it was;
+ * once the new host is whole, the old one's open spans are ended
+ * (trace.end) and what its encoder holds is written to the client first.
  * The restored host's first turn announces each invocation that was
  * running (effect.invoke with `restored`). */
 static void restore(tool_call *call) {
@@ -1118,6 +1124,7 @@ static void restore(tool_call *call) {
         if (status == TA_ERROR_INVALID) call->error.message = ta_string("the snapshot does not restore with this build");
         return;
     }
+    tool_telemetry_end(server); /* the old host's spans and logs, to the client before it goes */
     ta_host_free(server->host);
     ta_datamodel_ecmascript_free(server->ecmascript); /* after the host */
     server->host = made.host;
@@ -1138,6 +1145,149 @@ static void restore(tool_call *call) {
     ta_cbor_write_end(&call->result);
     result_number(call, "time", server->clock.now.monotonic);
     result_number(call, "wallNs", server->clock.now.wall_ns);
+}
+
+/* ---- run.traces, run.metrics, run.post ---------------------------------------------------- */
+
+/* A take or a metrics call the host refused: without an encoder, the
+ * config's "telemetry" is what would give it one. */
+static void telemetry_refused(tool_call *call, ta_status status) {
+    tool_serve_status(call, status);
+    if (status == TA_ERROR_STATE)
+        call->error.message = ta_string("the host has no telemetry: give the config a \"telemetry\" key");
+}
+
+/* The spans staged now, decoded by core. Taking them opened a batch of its
+ * own (refused while one is held): the drain acks it, then takes the
+ * decode's reply, which writes the result. */
+static void traces(tool_call *call) {
+    tool_server *server = call->server;
+    ta_bytes taken;
+    ta_status status = ta_host_traces(server->host, &taken);
+    if (status != TA_OK) {
+        telemetry_refused(call, status);
+        return;
+    }
+    server->open = 1;
+    if (!taken.length) {
+        ta_cbor_write_text(&call->result, ta_string("spans"));
+        ta_cbor_write_array(&call->result, 0);
+        tool_drain(server, 0);
+        return;
+    }
+    uint64_t handle = 0;
+    status = tool_spans_post(server, &(tool_spans){taken, TOOL_POST_SPANS_RESULT, 0, 0, call}, &handle);
+    tool_drain(server, 0);
+    if (status != TA_OK) {
+        tool_serve_status(call, status);
+        call->error.message = ta_string("out of memory decoding the spans: they are lost");
+        return;
+    }
+    tool_post *post = (tool_post *)ta_table_get(&server->posts, handle);
+    if (post) { /* no reply came: the post is no longer this call's */
+        post->call = 0;
+        tool_serve_refuse(call, (tool_serve_refusal){TA_RPC_INTERNAL_ERROR, 0, "internal", ta_string(""),
+                                                     ta_string("the host gave no reply: please report it")});
+    }
+}
+
+/* The host's counters now, OTLP's bytes, copied into the result before the
+ * drain acks the batch the call opened (refused while one is held). */
+static void metrics(tool_call *call) {
+    tool_server *server = call->server;
+    ta_bytes otlp;
+    ta_status status = ta_host_metrics(server->host, &otlp);
+    if (status != TA_OK) {
+        telemetry_refused(call, status);
+        return;
+    }
+    server->open = 1;
+    ta_cbor_write_text(&call->result, ta_string("otlp"));
+    ta_cbor_write_bytes(&call->result, otlp); /* copied; JSON writes bytes as base64url */
+    tool_drain(server, 0);
+}
+
+/* Whether an id is one core echoes (an integer, text or null): one the
+ * server can replace with its row's handle and give back. */
+static int is_id(const ta_cbor_document *document, uint32_t at) {
+    const ta_cbor_token *id = &document->tokens[at];
+    return id->kind == TA_CBOR_UINT || id->kind == TA_CBOR_NEGINT || id->kind == TA_CBOR_TEXT ||
+           (id->kind == TA_CBOR_SIMPLE && id->value == TA_CBOR_NULL);
+}
+
+/* A message for ta_host_post as the client wrote it in CBOR, for what JSON
+ * cannot carry (bytes) and to read a reply's exact values. A request's id
+ * is replaced by a row's handle, so the reply is matched as every post's
+ * is, and given back in the reply; a message core cannot read is posted as
+ * it is, and core's reply (its id null) is the call's. No reply: none in
+ * the result (a notification). */
+static void post(tool_call *call) {
+    tool_server *server = call->server;
+    ta_bytes message;
+    ta_status status = bytes_of(call, param(call, "message"), &message);
+    if (status == TA_ERROR_INVALID) {
+        tool_serve_refuse(call, (tool_serve_refusal){TA_RPC_MALFORMED, 0, "malformed", ta_string("params.message"),
+                                                     ta_string("not base64url text")});
+        return;
+    }
+    ta_cbor_document document;
+    if (status == TA_OK) status = ta_rpc_decode(&(ta_rpc_decoding){message, &server->request}, &document);
+    if (status == TA_ERROR_NO_MEMORY) {
+        refused_at(call, status, ta_string("params.message"));
+        return;
+    }
+    uint32_t id = status == TA_OK && document.tokens[0].kind == TA_CBOR_MAP
+                      ? ta_cbor_member(&document, 0, ta_string("id"))
+                      : TA_NIL;
+    uint64_t handle = 0;
+    if (id != TA_NIL && is_id(&document, id)) {
+        tool_post *row = (tool_post *)ta_table_add(&server->posts, &handle);
+        if (!row) {
+            tool_serve_status(call, TA_ERROR_NO_MEMORY);
+            return;
+        }
+        ta_memset(row, 0, sizeof *row);
+        row->kind = TOOL_POST_RAW;
+        row->call = call;
+        row->message = &document; /* read by the drain below, within this call */
+        row->id = id;
+        ta_cbor_writer writer;
+        ta_cbor_writer_init(&writer, (ta_buffer){0, 0, 0}, &server->request_allocator);
+        ta_cbor_write_map(&writer, document.tokens[0].count);
+        uint32_t at = 1;
+        for (uint32_t pair = 0; pair < document.tokens[0].count; pair++) {
+            uint32_t value = ta_cbor_next(&document, at);
+            ta_rpc_write_item(&writer, (ta_rpc_item){&document, at, 0});
+            if (value == id) ta_cbor_write_uint(&writer, handle);
+            else ta_rpc_write_item(&writer, (ta_rpc_item){&document, value, 0});
+            at = ta_cbor_next(&document, value);
+        }
+        status = ta_cbor_writer_bytes(&writer, &message);
+        if (status != TA_OK) {
+            ta_table_remove(&server->posts, handle);
+            tool_serve_status(call, status);
+            return;
+        }
+    } else {
+        id = TA_NIL;
+        server->posting = call; /* core's reply, if any, has no id of ours */
+    }
+    status = ta_host_post(server->host, message);
+    if (status == TA_OK) tool_drain(server, 0);
+    server->posting = 0;
+    if (id == TA_NIL) {
+        if (status != TA_OK) tool_serve_status(call, status);
+        return;
+    }
+    tool_post *row = (tool_post *)ta_table_get(&server->posts, handle);
+    if (status != TA_OK) {
+        ta_table_remove(&server->posts, handle);
+        tool_serve_status(call, status);
+    } else if (row) { /* no reply came: the post is no longer this call's */
+        row->call = 0;
+        tool_serve_refuse(call, (tool_serve_refusal){TA_RPC_INTERNAL_ERROR, 0, "internal", ta_string(""),
+                                                     ta_string("the host gave no reply: please report it")});
+    }
 }
 
 /* ---- run.schema ----------------------------------------------------------------------------- */
@@ -1203,7 +1353,8 @@ static void forward(tool_call *call) {
  * lookups, the clock, the sweep, a migration started and a blob taken
  * (which joins the batch), which core takes while a batch is open, and the
  * two that end it. Refused: what would need the batch's ack (a forwarded
- * post, whose reply comes only after it) and what needs the host
+ * post or run.post, whose reply comes only after it; spans and metrics,
+ * taken in a batch of their own and acked) and what needs the host
  * quiescent (an image added, a snapshot taken or restored). */
 static const tool_method methods[] = {
     {TA_CLI_TEXT("run.addImage"), add_image, 0, 0},
@@ -1225,6 +1376,9 @@ static const tool_method methods[] = {
     {TA_CLI_TEXT("run.migrate"), migrate, TOOL_METHOD_WHILE_HELD, 0},
     {TA_CLI_TEXT("run.snapshot"), snapshot, 0, 0},
     {TA_CLI_TEXT("run.restore"), restore, 0, 0},
+    {TA_CLI_TEXT("run.traces"), traces, 0, 0},
+    {TA_CLI_TEXT("run.metrics"), metrics, 0, 0},
+    {TA_CLI_TEXT("run.post"), post, 0, 0},
     {TA_CLI_TEXT("run.schema"), schema, TOOL_METHOD_WHILE_HELD, 0},
 };
 

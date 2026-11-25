@@ -73,3 +73,11 @@
 < {"jsonrpc":"2.0","method":"effect.done","params":{"batch":3,"index":0,"session":1,"name":"ticket-1","final":"closed"}}
 < [{"jsonrpc":"2.0","id":34,"result":{}},{"jsonrpc":"2.0","id":null,"error":{"code":-32600,"message":"a message is a JSON-RPC 2.0 request: an object","data":{"reason":"type","path":""}}},{"jsonrpc":"2.0","id":35,"error":{"code":-32001,"message":"no such session in this host","data":{"reason":"stale","path":"params.session"}}}]
 > [{"jsonrpc":"2.0","method":"run.turn"}]
+> {"jsonrpc":"2.0","id":36,"method":"run.traces"}
+< {"jsonrpc":"2.0","id":36,"error":{"code":-32002,"message":"the host has no telemetry: give the config a \"telemetry\" key","data":{"reason":"state","path":"","status":"TA_ERROR_STATE"}}}
+> {"jsonrpc":"2.0","id":37,"method":"run.metrics"}
+< {"jsonrpc":"2.0","id":37,"error":{"code":-32002,"message":"the host has no telemetry: give the config a \"telemetry\" key","data":{"reason":"state","path":"","status":"TA_ERROR_STATE"}}}
+> {"jsonrpc":"2.0","id":38,"method":"run.post","params":{"message":"A"}}
+< {"jsonrpc":"2.0","id":38,"error":{"code":-32006,"message":"not base64url text","data":{"reason":"malformed","path":"params.message"}}}
+> {"jsonrpc":"2.0","id":39,"method":"run.post","params":{"message":"o2JpZA=="}}
+< {"jsonrpc":"2.0","id":39,"error":{"code":-32602,"message":"is not in the form the schema gives","data":{"reason":"range","path":"params.message"}}}

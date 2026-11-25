@@ -526,6 +526,93 @@ static void test_run_snapshot_inspected(void) {
                         "--system\""));
 }
 
+/* The base64url text after `key` in `text` (up to its quote), decoded into
+ * `out` (at most `capacity` bytes): the bytes' length, 0 when `key` is
+ * not there. */
+typedef struct base64_field {
+    const char *text, *key;
+} base64_field;
+
+static size_t base64_bytes(base64_field field, unsigned char *out, size_t capacity) {
+    static const char alphabet[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+    const char *at = strstr(field.text, field.key);
+    if (!at) return 0;
+    at += strlen(field.key);
+    size_t length = 0;
+    uint32_t bits = 0, held = 0;
+    for (; *at && *at != '"'; at++) {
+        const char *digit = strchr(alphabet, *at);
+        if (!digit) return 0;
+        bits = bits << 6 | (uint32_t)(digit - alphabet);
+        held += 6;
+        if (held >= 8) {
+            held -= 8;
+            if (length < capacity) out[length++] = (unsigned char)(bits >> held);
+            bits &= (1u << held) - 1;
+        }
+    }
+    return length;
+}
+
+static int bytes_hold(const unsigned char *bytes, size_t length, const char *needle) {
+    size_t wanted = strlen(needle);
+    for (size_t i = 0; i + wanted <= length; i++)
+        if (memcmp(bytes + i, needle, wanted) == 0) return 1;
+    return 0;
+}
+
+/* Telemetry's raw OTLP: effect.logs and run.metrics write the bytes the
+ * host gives, which carry the library's version (the scope's), so the
+ * transcripts leave them out (tests/run/telemetry has "logs": false) and
+ * this test reads them: the order's log line in the logs, the resource and
+ * the actors' gauge in the metrics. With an encoder, the end of input
+ * ends the open spans (trace.end) and writes them. */
+static void test_run_telemetry_bytes(void) {
+    static const char config[] =
+        "{\"system\": {\"ticksPerSecond\": 1000}, \"ioProcessors\": {\"payments\": {}}, "
+        "\"telemetry\": {\"flushInterval\": 5000, \"resource\": {\"service.name\": \"orders\"}}}\n";
+    static const char session[] =
+        "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"run.spawn\",\"params\":{\"chart\":\"order\",\"name\":\"order-1\","
+        "\"params\":{\"total\":4200}}}\n"
+        "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"run.send\",\"params\":{\"target\":1,\"event\":\"checkout\",\"data\":"
+        "{\"card\":\"tok_visa\"}}}\n"
+        "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"run.turn\",\"params\":{\"hold\":true}}\n"
+        "{\"jsonrpc\":\"2.0\",\"id\":4,\"method\":\"run.send\",\"params\":{\"target\":1,\"event\":\"charge.ok\","
+        "\"sendid\":\"pay\",\"origintype\":\"payments\",\"data\":{\"charge\":\"ch_81\"}}}\n"
+        "{\"jsonrpc\":\"2.0\",\"id\":5,\"method\":\"run.turn\"}\n"
+        "{\"jsonrpc\":\"2.0\",\"id\":6,\"method\":\"run.advanceTime\",\"params\":{\"by\":\"5s\"}}\n"
+        "{\"jsonrpc\":\"2.0\",\"id\":7,\"method\":\"run.turn\"}\n"
+        "{\"jsonrpc\":\"2.0\",\"id\":8,\"method\":\"run.metrics\"}\n"
+        "[{\"jsonrpc\":\"2.0\",\"id\":9,\"method\":\"run.spawn\",\"params\":{\"chart\":\"order\",\"name\":\"order-2\","
+        "\"params\":{\"total\":990}}},{\"jsonrpc\":\"2.0\",\"id\":10,\"method\":\"run.turn\"}]\n";
+    CHECK(fixture_write("run-telemetry-session", session));
+    char command[4096];
+    snprintf(command, sizeof command,
+             "rm -rf '%s/run-telemetry' && cp -R '%s/telemetry' '%s/run-telemetry' && cd '%s/run-telemetry' && "
+             "printf '%%s' '%s' > config.json && "
+             "TZ=UTC '%s/tinyactors' run --config config.json order.scxml < ../run-telemetry-session > ../output 2> ../errors",
+             TA_TEST_TEMPORARY_DIRECTORY, TA_TEST_TRANSCRIPTS, TA_TEST_TEMPORARY_DIRECTORY, TA_TEST_TEMPORARY_DIRECTORY,
+             config, TA_TEST_PROGRAMS);
+    int status = system(command);
+    CHECK_EQUAL(WIFEXITED(status) ? WEXITSTATUS(status) : -1, 0);
+    const char *output = text_of("output");
+    /* the flush at 5 s: the logs, then the spans (their decode's reply comes after the ack) */
+    const char *logs = strstr(output, "\"method\":\"effect.logs\",\"params\":{\"batch\":3,\"index\":1,");
+    const char *spans = strstr(output, "\"method\":\"effect.traces\",\"params\":{\"batch\":3,\"index\":0,");
+    const char *turned = strstr(output, "\"id\":7,\"result\":{\"status\":\"idle\"");
+    CHECK(logs && spans && turned && logs < spans && spans < turned);
+    static unsigned char bytes[1 << 16];
+    size_t length = base64_bytes((base64_field){output, "\"effect.logs\",\"params\":{\"batch\":3,\"index\":1,\"otlp\":\""},
+                                 bytes, sizeof bytes);
+    CHECK(length > 0 && bytes_hold(bytes, length, "paid ch_81") && bytes_hold(bytes, length, "orders"));
+    length = base64_bytes((base64_field){output, "\"id\":8,\"result\":{\"otlp\":\""}, bytes, sizeof bytes);
+    CHECK(length > 0 && bytes_hold(bytes, length, "orders") && bytes_hold(bytes, length, "tinyactors.actors"));
+    /* the end of input: order-2's spans, written after its turn's response */
+    const char *last = strstr(output, "\"id\":10,\"result\":{\"status\":\"idle\"");
+    const char *ended = last ? strstr(last, "\"method\":\"effect.traces\"") : NULL;
+    CHECK(ended && strstr(ended, "\"tinyactors.actor.name\":\"order-2\""));
+}
+
 /* `tinyactors run --schema` is the schema's file, byte for byte. */
 static void test_run_schema(void) {
     char path[2048];
@@ -1301,5 +1388,6 @@ int main(void) {
     RUN(test_run_schema);
     RUN(test_run_transcripts);
     RUN(test_run_snapshot_inspected);
+    RUN(test_run_telemetry_bytes);
     TEST_MAIN_END();
 }

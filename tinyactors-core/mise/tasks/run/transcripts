@@ -10,7 +10,11 @@
 # "< " lines byte for byte; this task writes them, after a deliberate change
 # to the server, from the dev build. A client line's own lines are found by
 # running the case with the lines up to it and taking what the run before
-# lacked: the server is deterministic, so a prefix answers the same.
+# lacked: the server is deterministic, so a prefix answers the same. The end
+# of input writes lines too (a held batch's effects, the spans trace.end
+# ends), which belong after the last client line only: a prefix is run with
+# a request the server refuses at once after it (END_OF_PREFIX, a run.*
+# method it does not have), and only the lines before that response count.
 
 require_relative '../../core'
 require 'fileutils'
@@ -18,6 +22,8 @@ require 'open3'
 require 'tmpdir'
 
 CASES = Core::ROOT.join('tests/run')
+END_OF_PREFIX = '{"jsonrpc":"2.0","id":"end-of-prefix","method":"run.endOfPrefix"}'
+END_OF_PREFIX_ANSWER = '{"jsonrpc":"2.0","id":"end-of-prefix",'
 PROGRAM = Core.program_path('dev', 'tinyactors')
 
 # Run in a copy of the case, as the test does, so the files a session
@@ -43,7 +49,13 @@ names.each do |name|
   written = []
   seen = []
   client.each_index do |i|
-    now = answers(directory, arguments, client[0..i])
+    last = i == client.size - 1
+    now = answers(directory, arguments, last ? client : client[0..i] + [END_OF_PREFIX])
+    unless last
+      ended = now.index { |line| line.start_with?(END_OF_PREFIX_ANSWER) }
+      abort "#{name}: the server did not answer the end of a prefix" unless ended
+      now = now.first(ended)
+    end
     abort "#{name}: the answers to a prefix changed: the server is not deterministic" unless now.first(seen.size) == seen
     written << "> #{client[i]}"
     now.drop(seen.size).each { |line| written << "< #{line}" }

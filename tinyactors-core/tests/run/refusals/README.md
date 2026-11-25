@@ -13,7 +13,10 @@ invocation that does not exist (-32001);
 `data` for a chart of the null datamodel (-32602 `range`); `cbor` the
 datamodel cannot read (-32006); the clock moved back; files that cannot
 be read and charts that do not compile, with their diagnostics; a line past
-`--max-message` (-32600 `limit`), skipped to its end; a notification that
+`--max-message` (-32600 `limit`), skipped to its end; `run.traces` and
+`run.metrics` of a host without telemetry (-32002); `run.post` of text
+that is not base64url (-32006) and of padded text, which the schema's
+pattern refuses first (-32602); a notification that
 fails, answered with nothing; and a batch holding a request, a
 notification, something that is not a request and a forwarded request,
 answered as one array in its order.

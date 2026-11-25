@@ -1765,7 +1765,91 @@ outline left a choice:
   with it. Step 9 should end the old host's traces (post `trace.end`,
   drain its `TRACES`/`LOGS` to the client) before freeing it, as the end
   of input will, and `run.restore`'s response then follows those
-  notifications.
+  notifications. Step 9 did.
+
+**Step 9** (2026-11-25): `effect.traces`, `effect.logs`, `run.traces`,
+`run.metrics`, `run.post`, and `trace.end` at the end of input and before
+a restore. Every `run.*` method of the schema is now the server's, so
+`test_run_memory`'s list of unbuilt methods is gone and the method table
+and the schema's `run.*` methods are held equal both ways. Where the
+outline left a choice:
+
+- **Post kinds:** `SPANS` (a `TRACES` effect's decode: its
+  `effect.traces`), `SPANS_RESULT` (`run.traces`' result), `END`
+  (`trace.end`) and `RAW` (`run.post`'s request, its id replaced). A row
+  of `SPANS` keeps the `TRACES` effect's batch and index, which its
+  `effect.traces` carries though it is written after that batch's ack,
+  when the decode's reply comes (a later, invisible batch: the reply's).
+- **A `TRACES` or `LOGS` effect is taken until a take writes nothing**
+  (at most 64 takes), as `trace.end` asks: after it the staging may not
+  have held every span. Each traces request is its own decode and its own
+  `effect.traces`, so one effect can have several, with the same batch and
+  index; a first take that writes nothing is an `effect.traces` with no
+  spans. A take the allocator refuses sets `owed` and is taken again at
+  the next `run.turn` and at the end, in a batch of its own (core gives no
+  second effect until a take), as the Python binding retakes; it is told
+  on standard error.
+- **The turn runs again after an idle run whose drain took telemetry**,
+  as after a refused request: the run's `nextDeadline` was the flush the
+  take just made, so without it the client would be told a deadline that
+  is already past. With an encoder the clocks are advanced after each run
+  too, as the bindings do, so a run's span records are stamped where it
+  ran instead of stretched to the next advance. Core's interpolation
+  (`otlp_wall_of`) then stamps a record written between runs (a spawn's)
+  with the time of the last run that did work, which a transcript shows
+  (`tests/run/telemetry`, `order-2`'s spawn at 0 s); a request to core
+  could stamp it with the latest mark of its fuel instead (not made:
+  unverified whether that is wanted).
+- **`trace.end` only with an encoder**: the server reads `telemetry` from
+  `host.config` at startup and posts nothing without one, so hosts
+  without telemetry count no extra batch (no transcript changed). A
+  restore ends the old host's traces only once the new host is whole (a
+  refused restore leaves the old host's spans open), and the spans the
+  snapshot held unsent then come again from the restored host, with the
+  same span ids.
+- **`run.traces` and `run.metrics`** take their output with no batch open
+  (refused while one is held, by the method table), so it opens a batch of
+  its own that the drain acks; `run.traces` then takes the decode's reply
+  in the same drain. Without an encoder both are -32002 with a message
+  naming the config's `telemetry`.
+- **`run.post`** decodes the message first. A map with an `id` core echoes
+  (an integer, text or null) is posted with the id replaced by a `RAW`
+  row's handle, and the reply given back with the client's id in its
+  place (the rest copied token by token), so the client's ids never meet
+  the server's. Anything else (not one CBOR item, not a map, an `id` core
+  cannot read, no `id`) is posted as it is; core answers what it cannot
+  read with id null, and such a reply, which matches no row, is the
+  call's (`server->posting`, set while it drains). No reply: no `reply`
+  member. Text that is not base64url is -32006. **Schema fix:**
+  `run.post.result`'s `reply` said "absent for a message without id",
+  which is wrong for a message core cannot read (answered even without
+  an id); the descriptions of `run.post`, `run.traces`, `run.metrics`,
+  `run.restore` and `effect.traces` now say when they are refused and
+  what `batch` and `index` are.
+- **Raw OTLP is not in transcripts.** `effect.logs` and `run.metrics`
+  carry the library's version (the scope's), so a transcript holding them
+  would change with every release: `tests/run/telemetry` turns logs off,
+  and `test_tool` (`test_run_telemetry_bytes`) reads the bytes for the
+  order's log line, the resource and the actors' gauge. Spans are decoded
+  by core and repeat byte for byte (trace seed 0, nonce 0, the simulated
+  clock).
+- **`mise run run:transcripts`** ran each prefix of a session and took
+  the lines the shorter one lacked, which breaks once the end of input
+  writes lines (the spans `trace.end` ends): each prefix but the last is
+  now run with a request the server refuses at once (`run.endOfPrefix`,
+  -32601) after it, and only the lines before that answer count.
+- **Transcripts:** `tests/run/telemetry` (an order flow with a flush
+  interval, the held-batch refusals of `run.traces`, `run.metrics` and
+  `run.post`, `effect.traces`, a forwarded `trace.watch`, `run.traces`,
+  `run.post` answered, as a notification with a byte string and with
+  messages core cannot read, the old host's spans before a restore's
+  response, and `trace.end` at the end of input) and four lines of
+  `tests/run/refusals` (no telemetry; text that is not base64url).
+  `test_run_memory` runs a telemetry session of its own (logs on) with
+  the refusing allocator.
+- **Noticed, not changed (core's):** a forwarded `trace.unwatch` stops the
+  spans of traces the watch had sampled, even of macrosteps that come
+  later in them (a delayed send's); whether that is meant is unverified.
 
 ## 8. Decisions
 

@@ -547,12 +547,16 @@ static int server_start(tool *t, tool_server *server) {
 
 /* The end of input: a held batch is acked (its senders go on, as if the
  * client had taken their sends without an answer), what is pending drained
- * to the client, then the host freed and quickjs after it. */
+ * to the client; with an encoder, the open spans ended (trace.end) and
+ * every span and log record still held written to the client; then the
+ * host freed and quickjs after it. No run: what the client sees at the end
+ * follows from its last message alone. */
 static void server_stop(tool_server *server) {
     if (server->host) {
         ta_growable_arena_mark mark = ta_growable_arena_position(&server->request);
         tool_held_ack(server);
         tool_drain(server, 0);
+        if (!server->failed) tool_telemetry_end(server);
         ta_growable_arena_release(&server->request, mark);
         ta_host_free(server->host);
     }

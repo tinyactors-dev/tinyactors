@@ -29,21 +29,37 @@
 typedef enum tool_serve_limits {
     TOOL_SERVE_BUDGET = 10000, /* run.turn's fuel per run when it names none */
     TOOL_SERVE_RUNS = 1000,    /* run.turn's runs at most when it names none */
-    TOOL_SERVE_REQUEST_KEEP = 256 * 1024 /* the request arena's chunks kept between messages */
+    TOOL_SERVE_REQUEST_KEEP = 256 * 1024, /* the request arena's chunks kept between messages */
+    TOOL_SERVE_TAKES = 64 /* takes of one TRACES or LOGS effect, until a take writes nothing */
 } tool_serve_limits;
 
 /* What a pending post is, by the row its id names. */
 typedef enum tool_post_kind {
-    TOOL_POST_FORWARDED = 0, /* a client's request: answered with its id */
-    TOOL_POST_CONFIG = 1     /* host.config at creation */
+    TOOL_POST_FORWARDED = 0,    /* a client's request: answered with its id */
+    TOOL_POST_CONFIG = 1,       /* host.config at creation */
+    TOOL_POST_SPANS = 2,        /* trace.spans.decode of a TRACES effect's request: effect.traces */
+    TOOL_POST_SPANS_RESULT = 3, /* the same for run.traces: its result's spans */
+    TOOL_POST_END = 4,          /* trace.end, at the end of input and before a restore */
+    TOOL_POST_RAW = 5           /* run.post's message, its id replaced: the reply gets it back */
 } tool_post_kind;
 
 struct tool_call;
 typedef struct tool_post {
-    uint32_t kind; /* tool_post_kind */
+    uint32_t kind;  /* tool_post_kind */
+    uint32_t index; /* TOOL_POST_SPANS: the TRACES effect's place in its batch */
+    uint64_t batch; /* TOOL_POST_SPANS: its batch */
+    struct tool_call *call; /* FORWARDED, SPANS_RESULT, RAW: answered within it */
+    const ta_cbor_document *message; /* RAW: the client's message (the request arena's) */
+    uint32_t id;                     /* RAW: its id's token */
     uint32_t pad;
-    struct tool_call *call; /* TOOL_POST_FORWARDED: answered within it */
 } tool_post;
+
+/* The telemetry takes the allocator refused, taken again at the next
+ * run.turn and at the end: core gives no second effect until a take. */
+typedef enum tool_owed {
+    TOOL_OWED_TRACES = 1u << 0,
+    TOOL_OWED_LOGS = 1u << 1
+} tool_owed;
 
 typedef struct tool_clock {
     ta_system_time now;
@@ -66,14 +82,19 @@ typedef struct tool_server {
     const ta_string_view *processors; /* the effective ioProcessors' types, in order */
     uint32_t processor_count;
     uint32_t failed;  /* standard output could not be written: the client went away */
-    uint32_t woke;    /* the drain gave the host an input (a refused request):
-                         a run that went idle before it runs again */
+    uint32_t woke;    /* the drain gave the host an input (a refused request), or took
+                         its telemetry, which moves the deadline the run gave (a flush
+                         interval): a run that went idle before it runs again */
     uint32_t open;    /* a batch is open: a take that returned effects, or an output
                          taken with no batch open, opened it; the ack closes it */
     uint32_t held;    /* the open batch is left for the client (run.turn's hold),
                          until its run.turn, run.ack or the end of input */
+    uint32_t telemetry; /* the config has an encoder: trace.end before the host is freed */
+    uint32_t owed;      /* tool_owed */
     uint32_t pad;
-    uint64_t batches; /* batches handed out */
+    uint64_t batches;   /* batches handed out */
+    struct tool_call *posting; /* run.post's call while it drains: a reply with no id of
+                                  ours (null: core could not read the message) is its */
 } tool_server;
 
 /* One message being answered. */
@@ -145,6 +166,27 @@ int tool_drain(tool_server *server, uint32_t flags);
 /* Ack the held batch, if one is: its parked senders go on, with what the
  * client gave them meanwhile in their queues. */
 void tool_held_ack(tool_server *server);
+
+/* An OTLP traces request, decoded by core: trace.spans.decode posted with
+ * the bytes (a view the host lends until the ack, read during the post)
+ * under a row of the server's, answered in a later take of the drain. */
+typedef struct tool_spans {
+    ta_bytes traces;
+    uint32_t kind;  /* TOOL_POST_SPANS: an effect.traces; TOOL_POST_SPANS_RESULT: run.traces' result */
+    uint32_t index; /* TOOL_POST_SPANS: the TRACES effect's place */
+    uint64_t batch; /* TOOL_POST_SPANS: its batch */
+    struct tool_call *call; /* TOOL_POST_SPANS_RESULT: the call answered */
+} tool_spans;
+/* TA_OK and the row's handle; TA_ERROR_NO_MEMORY: nothing posted. */
+ta_status tool_spans_post(tool_server *server, const tool_spans *spans, uint64_t *handle);
+/* The takes the allocator refused (server->owed), again, in a batch of
+ * their own, acked before it returns. Not while a batch is held. */
+void tool_telemetry_retake(tool_server *server);
+/* With an encoder, the host's open spans ended (trace.end) and every span
+ * and log record it still holds written to the client, before the host is
+ * freed: at the end of input, and for the old host of a restore. Not while
+ * a batch is held. */
+void tool_telemetry_end(tool_server *server);
 
 /* A payload as `name` (and its CBOR twin `cbor_name` when JSON changed
  * it), a member of the map the writer has open; nothing for no payload. */

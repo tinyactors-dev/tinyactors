@@ -13,8 +13,8 @@
  * and the retired segment); the host snapshotted (answered, and written to
  * a file the platform keeps in memory) and restored in place from the file
  * and from the answer; and the end of input with a batch held, fed a few
- * bytes at a time. The server's method table is held to the schema's run.*
- * methods too. */
+ * bytes at a time. A second session runs with telemetry (session_telemetry).
+ * The server's method table is held to the schema's run.* methods too. */
 #include <stdlib.h>
 #include <string.h>
 
@@ -123,10 +123,55 @@ static const char session_hibernation[] =
     "run/@order-19\",\"event\":\"checkout\",\"data\":{\"card\":\"tok_visa\"}}}\n"
     "{\"jsonrpc\":\"2.0\",\"id\":27,\"method\":\"run.turn\",\"params\":{\"hold\":true}}\n";
 
+/* Telemetry, on tests/run/telemetry's chart with logs on (telemetry_config):
+ * spans and log records flushed by a turn, a watch forwarded, run.traces and
+ * run.metrics refused while a batch is held and taken, run.post answered
+ * with the client's id, as a notification and with a message core cannot
+ * read, the old host's spans ended and written before a restore, and the
+ * end of input's trace.end. */
+static const char telemetry_config[] =
+    "{\"system\": {\"ticksPerSecond\": 1000}, \"ioProcessors\": {\"payments\": {}}, "
+    "\"telemetry\": {\"flushInterval\": 5000, \"resource\": {\"service.name\": \"orders\"}}}";
+static const char session_telemetry[] =
+    "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"run.spawn\",\"params\":{\"chart\":\"order\",\"name\":\"order-1\",\"p"
+    "arams\":{\"total\":4200}}}\n"
+    "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"run.send\",\"params\":{\"target\":1,\"event\":\"checkout\",\"data\":"
+    "{\"card\":\"tok_visa\"}}}\n"
+    "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"run.turn\",\"params\":{\"hold\":true}}\n"
+    "[{\"jsonrpc\":\"2.0\",\"id\":4,\"method\":\"run.traces\"},{\"jsonrpc\":\"2.0\",\"id\":5,\"method\":\"run.metri"
+    "cs\"},{\"jsonrpc\":\"2.0\",\"id\":6,\"method\":\"run.post\",\"params\":{\"message\":\"omJpZAdmbWV0aG9kaXRyYWNl"
+    "LmVuZA\"}}]\n"
+    "{\"jsonrpc\":\"2.0\",\"id\":7,\"method\":\"run.send\",\"params\":{\"target\":1,\"event\":\"charge.ok\",\"sendid\""
+    ":\"pay\",\"origintype\":\"payments\",\"data\":{\"charge\":\"ch_81\"}}}\n"
+    "{\"jsonrpc\":\"2.0\",\"id\":8,\"method\":\"run.turn\"}\n"
+    "[{\"jsonrpc\":\"2.0\",\"id\":9,\"method\":\"run.advanceTime\",\"params\":{\"by\":\"5s\"}},{\"jsonrpc\":\"2.0\","
+    "\"id\":10,\"method\":\"run.turn\"}]\n"
+    "{\"jsonrpc\":\"2.0\",\"id\":11,\"method\":\"trace.watch\",\"params\":{\"rules\":[{\"chart\":\"order\",\"detail\""
+    ":\"decisions\"}],\"seconds\":60}}\n"
+    "[{\"jsonrpc\":\"2.0\",\"id\":12,\"method\":\"run.spawn\",\"params\":{\"chart\":\"order\",\"name\":\"order-2\",\"p"
+    "arams\":{\"total\":990}}},{\"jsonrpc\":\"2.0\",\"id\":13,\"method\":\"run.send\",\"params\":{\"target\":2,\"even"
+    "t\":\"checkout\",\"data\":{\"card\":\"tok_expired\"}}},{\"jsonrpc\":\"2.0\",\"id\":14,\"method\":\"run.turn\"}]\n"
+    "{\"jsonrpc\":\"2.0\",\"id\":15,\"method\":\"run.traces\"}\n"
+    "{\"jsonrpc\":\"2.0\",\"id\":16,\"method\":\"run.metrics\"}\n"
+    "{\"jsonrpc\":\"2.0\",\"id\":17,\"method\":\"run.post\",\"params\":{\"message\":\"o2JpZGVjdHgtMmZtZXRob2RtYWN0b3Iu"
+    "Y29udGV4dGZwYXJhbXOhZ3Nlc3Npb24C\"}}\n"
+    "{\"jsonrpc\":\"2.0\",\"id\":18,\"method\":\"run.post\",\"params\":{\"message\":\"omZtZXRob2RqYWN0b3Iuc2VuZGZwYXJh"
+    "bXOjZ3Nlc3Npb24CZWV2ZW50bmNvdXBvbi5hcHBsaWVkZGRhdGGhZ3ZvdWNoZXJEC63A3g\"}}\n"
+    "{\"jsonrpc\":\"2.0\",\"id\":19,\"method\":\"run.post\",\"params\":{\"message\":\"gW1hY3Rvci5jb250ZXh0\"}}\n"
+    "[{\"jsonrpc\":\"2.0\",\"id\":20,\"method\":\"run.advanceTime\",\"params\":{\"by\":\"30s\"}},{\"jsonrpc\":\"2.0\""
+    ",\"id\":21,\"method\":\"run.turn\"}]\n"
+    "[{\"jsonrpc\":\"2.0\",\"id\":22,\"method\":\"run.spawn\",\"params\":{\"chart\":\"order\",\"name\":\"order-3\",\"p"
+    "arams\":{\"total\":150}}},{\"jsonrpc\":\"2.0\",\"id\":23,\"method\":\"run.turn\"}]\n"
+    "{\"jsonrpc\":\"2.0\",\"id\":24,\"method\":\"run.snapshot\",\"params\":{\"path\":\"shop.snapshot\"}}\n"
+    "{\"jsonrpc\":\"2.0\",\"id\":25,\"method\":\"run.restore\",\"params\":{\"path\":\"shop.snapshot\"}}\n"
+    "[{\"jsonrpc\":\"2.0\",\"id\":26,\"method\":\"run.send\",\"params\":{\"target\":3,\"event\":\"checkout\",\"data\""
+    ":{\"card\":\"tok_visa\"}}},{\"jsonrpc\":\"2.0\",\"id\":27,\"method\":\"run.turn\"}]\n";
+
 /* ---- a platform in memory ------------------------------------------------------------ */
 
 typedef struct memory_platform {
-    long budget; /* allocations left; negative: no limit */
+    int telemetry; /* session_telemetry, in tests/run/telemetry with telemetry_config */
+    long budget;   /* allocations left; negative: no limit */
     long made, live;
     size_t at;  /* of the session's parts: what receive gave so far */
     char *output;
@@ -168,8 +213,17 @@ static ta_status memory_read(void *context, const tool_read *request, ta_bytes *
         *out = (ta_bytes){bytes, platform->file_length};
         return TA_OK;
     }
+    if (platform->telemetry && request->path.length == strlen("config.json") &&
+        memcmp(request->path.pointer, "config.json", request->path.length) == 0) {
+        void *bytes = ta_growable_arena_alloc(request->arena, sizeof telemetry_config, 8);
+        if (!bytes) return TA_ERROR_NO_MEMORY;
+        memcpy(bytes, telemetry_config, sizeof telemetry_config - 1);
+        *out = (ta_bytes){bytes, sizeof telemetry_config - 1};
+        return TA_OK;
+    }
     char path[1024];
-    snprintf(path, sizeof path, "%s/order/%.*s", TA_TEST_TRANSCRIPTS, (int)request->path.length, request->path.pointer);
+    snprintf(path, sizeof path, "%s/%s/%.*s", TA_TEST_TRANSCRIPTS, platform->telemetry ? "telemetry" : "order",
+             (int)request->path.length, request->path.pointer);
     FILE *file = fopen(path, "rb");
     if (!file) return TA_ERROR_INVALID;
     fseek(file, 0, SEEK_END);
@@ -227,6 +281,8 @@ typedef struct session_part {
 enum { SESSION_PARTS = 4, SESSION_RESTORE = 2 };
 
 static session_part part_of(memory_platform *platform, size_t part) {
+    if (platform->telemetry)
+        return part ? (session_part){"", 0} : (session_part){session_telemetry, sizeof session_telemetry - 1};
     switch (part) {
     case 0: return (session_part){session, sizeof session - 1};
     case 1: return (session_part){session_snapshot, sizeof session_snapshot - 1};
@@ -258,11 +314,18 @@ typedef struct outcome {
     char *output;
 } outcome;
 
-static outcome serve(long budget) {
+/* Which session, and the allocations it may make (negative: no limit). */
+typedef struct serving {
+    int telemetry;
+    long budget;
+} serving;
+
+static outcome serve(serving how) {
     static const char *const words[] = {"run", "--config", "config.json", "order.scxml"};
     memory_platform state;
     memset(&state, 0, sizeof state);
-    state.budget = budget;
+    state.telemetry = how.telemetry;
+    state.budget = how.budget;
     tool_platform platform;
     memset(&platform, 0, sizeof platform);
     platform.context = &state;
@@ -278,7 +341,7 @@ static outcome serve(long budget) {
 }
 
 static void test_every_refusal_is_a_status(void) {
-    outcome whole = serve(-1);
+    outcome whole = serve((serving){0, -1});
     CHECK_EQUAL(whole.exit, 0);
     CHECK_EQUAL(whole.live, 0);
     CHECK(whole.output && strstr(whole.output, "\"name\":\"order-17\",\"final\":\"paid\""));
@@ -304,7 +367,7 @@ static void test_every_refusal_is_a_status(void) {
     CHECK(whole.output && strstr(whole.output, "\"id\":64,\"result\":{\"status\":\"idle\""));
     long tried = 0, answered_memory = 0;
     for (long budget = 0; budget < whole.made; budget++) {
-        outcome refused = serve(budget);
+        outcome refused = serve((serving){0, budget});
         tried++;
         CHECK(refused.exit == 0 || refused.exit == 3);
         CHECK_EQUAL(refused.live, 0); /* everything taken was given back */
@@ -317,14 +380,45 @@ static void test_every_refusal_is_a_status(void) {
     free(whole.output);
 }
 
-/* The run.* methods of the schema that later steps of the protocol build:
- * the server answers them -32601 until then. */
-static const char *const unbuilt[] = {"run.traces", "run.metrics", "run.post"};
 
-static int is_unbuilt(ta_string_view name) {
-    for (size_t i = 0; i < sizeof unbuilt / sizeof unbuilt[0]; i++)
-        if (name.length == strlen(unbuilt[i]) && memcmp(name.pointer, unbuilt[i], name.length) == 0) return 1;
-    return 0;
+/* The telemetry session: whole, then with every budget. */
+static void test_telemetry_refusals(void) {
+    outcome whole = serve((serving){1, -1});
+    CHECK_EQUAL(whole.exit, 0);
+    CHECK_EQUAL(whole.live, 0);
+    const char *output = whole.output ? whole.output : "";
+    CHECK(strstr(output, "\"id\":4,\"error\":{\"code\":-32002"));
+    CHECK(strstr(output, "\"id\":5,\"error\":{\"code\":-32002"));
+    CHECK(strstr(output, "\"id\":6,\"error\":{\"code\":-32002"));
+    CHECK(strstr(output, "\"method\":\"effect.logs\",\"params\":{\"batch\":3,\"index\":1,\"otlp\":\""));
+    CHECK(strstr(output, "\"method\":\"effect.traces\",\"params\":{\"batch\":3,\"index\":0,\"spans\":[{"));
+    CHECK(strstr(output, "\"id\":11,\"result\":{\"id\":1}"));
+    CHECK(strstr(output, "\"id\":15,\"result\":{\"spans\":[{"));
+    CHECK(strstr(output, "\"id\":16,\"result\":{\"otlp\":\""));
+    /* {"id": "ctx-2", "result": {"variables": {"total": 990, "charge": null, "coupon": undefined}}} */
+    CHECK(strstr(output, "\"id\":17,\"result\":{\"reply\":\"omJpZGVjdHgtMmZyZXN1bHShaXZhcmlhYmxlc6NldG90YWwZA95mY2hh"
+                         "cmdl9mZjb3Vwb273\"}"));
+    CHECK(strstr(output, "\"id\":18,\"result\":{}"));
+    CHECK(strstr(output, "\"id\":19,\"result\":{\"reply\":\"omJpZPZlZXJyb3Kj"));
+    /* the old host's spans before the restore's response, the new one's at the end of input */
+    const char *ended = strstr(output, "\"id\":24,\"result\":{\"bytes\":");
+    const char *before = ended ? strstr(ended, "\"method\":\"effect.traces\"") : NULL;
+    const char *restored = strstr(output, "\"id\":25,\"result\":{\"segments\":[0]");
+    CHECK(before && restored && before < restored);
+    const char *turned = strstr(output, "\"id\":27,\"result\":{\"status\":\"idle\"");
+    CHECK(turned && strstr(turned, "\"method\":\"effect.traces\""));
+    long answered_memory = 0;
+    for (long budget = 0; budget < whole.made; budget++) {
+        outcome refused = serve((serving){1, budget});
+        CHECK(refused.exit == 0 || refused.exit == 3);
+        CHECK_EQUAL(refused.live, 0);
+        if (refused.output && strstr(refused.output, "-32004")) answered_memory++;
+        free(refused.output);
+    }
+    fprintf(stderr, "  telemetry: %ld allocations, %ld budgets answered -32004 and went on\n", whole.made,
+            answered_memory);
+    CHECK(answered_memory > 0);
+    free(whole.output);
 }
 
 static int is_served(tool_method_list served, ta_string_view name) {
@@ -336,8 +430,7 @@ static int is_served(tool_method_list served, ta_string_view name) {
 }
 
 /* Both ways: every method the server answers is a run.* method of the
- * schema, and every run.* method of the schema is the server's or listed
- * as unbuilt (and not both). */
+ * schema, and every run.* method of the schema is the server's. */
 static void test_methods_are_the_schemas(void) {
     tool_method_list served = tool_serve_methods();
     CHECK(served.count > 0);
@@ -347,24 +440,22 @@ static void test_methods_are_the_schemas(void) {
         if (!found) fprintf(stderr, "  the server has %.*s, the schema has not\n", (int)name.length, name.pointer);
         CHECK(found);
         CHECK(name.length > 4 && memcmp(name.pointer, "run.", 4) == 0);
-        CHECK(!is_unbuilt(name));
     }
     uint32_t described = 0;
     for (uint32_t i = 0; i < tool_schema_run.method_count; i++) {
         ta_string_view name = tool_schema_run.methods[i].name;
         if (name.length < 4 || memcmp(name.pointer, "run.", 4) != 0) continue;
         described++;
-        int known = is_served(served, name) || is_unbuilt(name);
+        int known = is_served(served, name);
         if (!known) fprintf(stderr, "  the schema has %.*s, the server has not\n", (int)name.length, name.pointer);
         CHECK(known);
     }
-    for (size_t i = 0; i < sizeof unbuilt / sizeof unbuilt[0]; i++)
-        CHECK(tool_schema_method_find(&tool_schema_run, ta_string(unbuilt[i])) < tool_schema_run.method_count);
-    CHECK_EQUAL(described, served.count + (uint32_t)(sizeof unbuilt / sizeof unbuilt[0]));
+    CHECK_EQUAL(described, served.count);
 }
 
 int main(void) {
     RUN(test_methods_are_the_schemas);
     RUN(test_every_refusal_is_a_status);
+    RUN(test_telemetry_refusals);
     TEST_MAIN_END();
 }

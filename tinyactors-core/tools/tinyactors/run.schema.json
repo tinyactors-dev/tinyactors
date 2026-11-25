@@ -653,7 +653,7 @@
     },
 
     "run.restore.params": {
-      "description": "Replace the host with one restored from a snapshot `run.snapshot` wrote for the same system, given or read from `path`, with the server's config and datamodel limits. Refused (-32002) while a batch is held. The next `run.turn` announces each invocation that was running (`effect.invoke` with `restored`).",
+      "description": "Replace the host with one restored from a snapshot `run.snapshot` wrote for the same system, given or read from `path`, with the server's config and datamodel limits. Refused (-32002) while a batch is held. With telemetry, the old host's open spans are ended (`trace.end`) and what it still holds is written (`effect.traces`, `effect.logs`) before the response. The next `run.turn` announces each invocation that was running (`effect.invoke` with `restored`).",
       "type": "object",
       "oneOf": [
         {
@@ -680,7 +680,10 @@
       "additionalProperties": false
     },
 
-    "run.traces.params": {"$ref": "#/$defs/noParams"},
+    "run.traces.params": {
+      "description": "The spans the host has staged now (`ta_host_traces`), decoded by core (`trace.spans.decode`), in a batch of their own acked before the response. Refused (-32002) while a batch is held, and without telemetry (the config's `telemetry`).",
+      "$ref": "#/$defs/noParams"
+    },
     "run.traces.result": {
       "type": "object",
       "properties": {"spans": {"$ref": "#/$defs/spans"}},
@@ -688,7 +691,10 @@
       "additionalProperties": false
     },
 
-    "run.metrics.params": {"$ref": "#/$defs/noParams"},
+    "run.metrics.params": {
+      "description": "The host's counters now (`ta_host_metrics`), in a batch of their own acked before the response. Refused (-32002) while a batch is held, and without telemetry (the config's `telemetry`).",
+      "$ref": "#/$defs/noParams"
+    },
     "run.metrics.result": {
       "type": "object",
       "properties": {"otlp": {"description": "An OTLP ExportMetricsServiceRequest.", "$ref": "#/$defs/base64url"}},
@@ -697,7 +703,7 @@
     },
 
     "run.post.params": {
-      "description": "A message for `ta_host_post` as CBOR, as given: for bytes JSON cannot carry, and to read a reply's exact values.",
+      "description": "A message for `ta_host_post` as CBOR, as given: for bytes JSON cannot carry, and to read a reply's exact values. A request's id is the client's own: the server posts the message under an id of its own and gives the client's back in the reply. Refused (-32002) while a batch is held.",
       "type": "object",
       "properties": {"message": {"$ref": "#/$defs/base64url"}},
       "required": ["message"],
@@ -705,7 +711,7 @@
     },
     "run.post.result": {
       "type": "object",
-      "properties": {"reply": {"description": "The reply's CBOR; absent for a message without id.", "$ref": "#/$defs/base64url"}},
+      "properties": {"reply": {"description": "The reply's CBOR, with the message's id; absent when core answered nothing (a notification it could read). A message core cannot read, or that is not a request, is answered with id null, even without an id.", "$ref": "#/$defs/base64url"}},
       "additionalProperties": false
     },
 
@@ -1222,7 +1228,7 @@
       "additionalProperties": false
     },
     "effect.traces.params": {
-      "description": "Spans the host staged, decoded.",
+      "description": "Spans the host staged, decoded by core. `batch` and `index` are the `TA_HOST_EFFECT_TRACES` effect's, but the notification comes after that batch's ack, when the decode's reply does (after a held batch, once the client acks it); one per request taken, so an effect whose staging did not hold every span (after `trace.end`) has several.",
       "type": "object",
       "properties": {
         "batch": {"$ref": "#/$defs/uint64"},
@@ -1233,7 +1239,7 @@
       "additionalProperties": false
     },
     "effect.logs.params": {
-      "description": "Log records the host staged, as an OTLP ExportLogsServiceRequest.",
+      "description": "Log records the host staged, as an OTLP ExportLogsServiceRequest (core has no decoder of logs); one per request taken.",
       "type": "object",
       "properties": {
         "batch": {"$ref": "#/$defs/uint64"},

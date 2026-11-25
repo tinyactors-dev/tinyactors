@@ -1,0 +1,1 @@
+{"system": {"ticksPerSecond": 1000}, "ioProcessors": {"payments": {}}, "telemetry": {"flushInterval": 5000, "logs": false, "resource": {"service.name": "orders"}}}

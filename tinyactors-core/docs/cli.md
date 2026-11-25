@@ -735,8 +735,11 @@ reads a message (3 for a file it cannot read).
 
 The end of standard input ends the server: there is no `shutdown` method.
 It acks a held batch (its senders go on, as if the client had taken their
-sends without an answer: success is silence), writes what is pending, frees
-the host and quickjs and exits with 0.
+sends without an answer: success is silence), writes what is pending; with
+telemetry, ends the open spans (`trace.end`) and writes every span and log
+record the host still holds ([Telemetry](#telemetry)); then frees the host
+and quickjs and exits with 0. Nothing runs at the end: what it writes
+follows from the last message alone.
 
 ### Methods
 
@@ -766,13 +769,13 @@ integer) or a local address (`ta_host_resolve`). Every result is an object.
 | `run.migrate` | `chart` (a name; none: every chart), `session` (one actor), `wake`, `timeout` (ticks or a duration) | `migration`: its id | `ta_host_migrate` (`TA_HOST_MIGRATE_WAKE`); the actors move in later runs |
 | `run.snapshot` | `path` (optional: a file, written whole) | `snapshot`, or `bytes` with `path` | `ta_host_snapshot`, `ta_datamodel_ecmascript_snapshot`, `ta_host_snapshot_pack` (below) |
 | `run.restore` | `snapshot` or `path` | `segments` (the live ones), `time`, `wallNs` | `ta_host_snapshot_unpack`, `ta_host_snapshot_image`, `ta_host_restore`, `ta_datamodel_ecmascript_restore`; the old host and quickjs freed after |
+| `run.traces` | — | `spans`, as `trace.spans.decode` answers them | `ta_host_traces`, `trace.spans.decode` posted with its bytes, the ack, the drain that answers it |
+| `run.metrics` | — | `otlp`: an ExportMetricsServiceRequest | `ta_host_metrics`, copied, then the ack |
+| `run.post` | `message`: CBOR (base64url) | `reply`: the reply's CBOR, with the message's id; none when core answered nothing | `ta_host_post`, the message as given but its id (below) |
 | `run.schema` | — | `schema`: the protocol's JSON Schema | none |
 | any other | as core's | core's `result` or `error`, with the client's id | `ta_host_post` (`actor.state`, `host.stats`, `trace.*`, ...) |
 
-A `run.*` method the server does not have is -32601 of its own. The
-schema lists methods this release does not serve yet (telemetry,
-`run.post`): their params are checked, then the server answers
--32601.
+A `run.*` method the server does not have is -32601 of its own.
 The only defaults the server owns are `budget` and `runs`, so that a chart
 that never idles cannot hang the client, and `--max-message`.
 
@@ -781,6 +784,15 @@ that never idles cannot hang the client, and `--max-message`.
 posts; the reply's result or error comes back with the client's id. Core
 answers a method it does not know with -32601. A notification (no `id`)
 is posted and answered with nothing, as in both protocols.
+
+**`run.post`** posts a message the client wrote in CBOR, for what JSON
+cannot carry (a byte string in an event's data) and to read a reply's exact
+values (`undefined`, which JSON writes as `null`). A request's id is
+replaced by a row's handle, as a forwarded one's is, and the reply comes
+back as CBOR with the client's id in its place. A message core cannot read,
+or that is not a request, is posted as it is, and core's reply, its id
+null, is the answer; a notification core can read is answered with no
+`reply`. Text that is not base64url is -32006.
 
 **Time.** Monotonic time starts at 0 and moves only with
 `run.advanceTime`; wall time starts at `--wall-start` and moves by the same
@@ -796,11 +808,14 @@ what is pending, then, at most `runs` times, advances the clocks, runs
 (`ta_host_run` with `budget`), and takes, handles and acks again, writing
 every effect as a notification before its batch's ack. It goes on after
 `TA_RUN_EFFECTS`, `TA_RUN_EFFECTS_FULL` and `TA_RUN_YIELDED`, and after an
-idle run whose effects gave the host an input (a refused request); it
+idle run whose effects gave the host an input (a refused request) or
+whose telemetry it took (which moves the deadline the run gave); it
 answers `status` `idle` (with `nextDeadline`), `yielded` (the runs spent),
 `held` (below), `exhausted` (`detail` the pool) or `fault` (`detail` the
 status's name). A run's outcome is not an error: the host goes on.
-Without `hold`, a send's waiting sender goes on at the ack, so an answer
+With telemetry, the clocks are advanced after each run too, so the run's
+span records are stamped at the time it ran, not stretched to the next
+advance. Without `hold`, a send's waiting sender goes on at the ack, so an answer
 the client gives later arrives as an ordinary event.
 
 ### Hibernation and migration
@@ -857,7 +872,35 @@ snapshot's, and `Math.random` draws what it drew after the snapshot. The
 restored host keeps the snapshot's identity, so a blob taken before the
 snapshot, or after it, wakes in it. The first `run.turn` after a restore
 announces each invocation that was running as an `effect.invoke` with
-`restored`: the client starts its stand-in again, or fails it.
+`restored`: the client starts its stand-in again, or fails it. With
+telemetry, once the new host is whole the old one's open spans are ended
+and what it still holds is written (`effect.traces`, `effect.logs`) before
+the response, as at the end of input. Spans the snapshot held unsent come
+again from the restored host, with the same ids.
+
+### Telemetry
+
+A config with a `telemetry` key gives the host an encoder
+([host-config.md](host-config.md)): its trace records become OTLP spans,
+its `<log>` lines and failed actions log records, staged until a request is
+ready (the staging is full, or `flushInterval` has passed since its first
+record, which is a deadline of `run.turn`). The server takes each request
+during dispatch and writes it: spans decoded by core (`effect.traces`,
+written when the decode's reply comes, after the batch's ack, with the
+`TRACES` effect's `batch` and `index`), log records as OTLP's bytes
+(`effect.logs`: core has no decoder for logs). `run.traces` takes the spans
+staged now, decoded, and `run.metrics` the host's counters; both are
+refused (-32002) while a batch is held and without telemetry. Forwarded
+`trace.configure`, `trace.watch` and `trace.unwatch` choose what is traced,
+and a forwarded `trace.end` ends the open spans. The server posts
+`trace.end` itself, with an encoder, at the end of input and to a host a
+restore replaces, and writes what it gives, taking until a take writes
+nothing (at most 64 takes of each). A take the allocator refuses is told
+on standard error and taken again at the next `run.turn`: core gives no
+second effect until a take. Span times are the wall clock's, simulated: a
+record written between runs (a spawn's) is stamped with the time of the
+last run before it that did work. The raw OTLP of `effect.logs` and `run.metrics` names the
+library's version.
 
 ### Held batches
 
@@ -887,6 +930,8 @@ holding it, so that its response leaves no batch open; nothing runs.
 | `run.advanceTime` | allowed: the clock moves, nothing runs |
 | `run.turn`, `run.ack` | allowed: they ack the held batch |
 | forwarded methods | refused, -32002 `state`: core answers a post made while a batch is open only after its ack, so the response could not come before the next request; an actor's state cannot be read while its sends wait |
+| `run.post` | refused, -32002 `state`, as forwarded methods are |
+| `run.traces`, `run.metrics` | refused, -32002 `state`: they take an output in a batch of their own and ack it, which would ack the client's batch |
 | `run.addImage`, `run.snapshot`, `run.restore` | refused, -32002 `state`: images are added to, and snapshots taken of and restored to, a quiescent host |
 
 ### Notifications
@@ -910,12 +955,13 @@ effect does not set is left out.
 | `TA_HOST_EFFECT_MIGRATED` | `effect.migrated`: `session`, `segment` and `chart` (where it runs now), `migration` | |
 | `TA_HOST_EFFECT_MIGRATION_DONE` | `effect.migrationDone`: `migration`, `migrated` (how many), `failed` (`[{session, status}]`), `pending` (sessions); the lists read during dispatch (`ta_host_migration_failed`, `ta_host_migration_pending`) | wake the pending and migrate them again |
 | `TA_HOST_EFFECT_SEGMENT_FREED` | `effect.segmentFreed`: `segment` | |
+| `TA_HOST_EFFECT_TRACES` | `effect.traces`: `spans`, as `trace.spans.decode` answers them; the server takes the request (`ta_host_traces`) and posts its decode during dispatch, and writes the notification when the reply comes, after the batch's ack | |
+| `TA_HOST_EFFECT_LOGS` | `effect.logs`: `otlp`, the ExportLogsServiceRequest the server takes (`ta_host_logs`) | |
 | `TA_HOST_EFFECT_NOTIFICATION` | written as it is, its `method` and `params` (none is defined) | |
 
 The client runs every service a chart invokes (`<invoke>` of a type
 that is not a chart): an invocation is its segment and token, never its
-invoke id. Telemetry's effects come with a later release of the protocol.
-Every view an effect's notification reads is read and written before the
+invoke id. Every view an effect's notification reads is read and written before the
 ack, held batch or not.
 
 ### Values
@@ -956,7 +1002,7 @@ The error object is core's: `{"code", "message", "data": {"reason",
 | no such method | -32601 | `unknown` |
 | a param missing, of the wrong type, unknown, out of range; `data` for a chart that reads no values; the clock moved back | -32602 | `missing`, `type`, `unknown`, `range` |
 | `TA_ERROR_STALE` (no such session or name; a blob not the session's latest) | -32001 | `stale` |
-| `TA_ERROR_STATE` (a snapshot while a migration runs); a method refused while a batch is held; `run.ack` with none held | -32002 | `state` |
+| `TA_ERROR_STATE` (a snapshot while a migration runs; telemetry without an encoder); a method refused while a batch is held; `run.ack` with none held | -32002 | `state` |
 | `TA_ERROR_LIMIT` | -32003 | `limit` |
 | `TA_ERROR_NO_MEMORY` | -32004 | `memory` |
 | `TA_ERROR_INVALID` (another system's address, a chart no image has, charts that do not compile: the message holds their diagnostics; a blob of another session or host; a snapshot that is not the server's, or a file that cannot be read or written) | -32005 | `invalid` |
