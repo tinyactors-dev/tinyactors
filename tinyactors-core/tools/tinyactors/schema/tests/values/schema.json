@@ -1,0 +1,33 @@
+{
+  "description": "enum and const of strings, integers (64 bits either way) and booleans.",
+  "type": "object",
+  "properties": {
+    "color": {
+      "enum": [
+        "red",
+        "green"
+      ]
+    },
+    "version": {
+      "const": "2.0"
+    },
+    "level": {
+      "enum": [
+        -1,
+        0,
+        18446744073709551615,
+        -18446744073709551616
+      ]
+    },
+    "flag": {
+      "const": true
+    },
+    "mixed": {
+      "enum": [
+        "a",
+        1,
+        false
+      ]
+    }
+  }
+}

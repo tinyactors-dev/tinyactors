@@ -1,0 +1,1 @@
+schema.json#/properties/x/type: type beside $ref is not supported

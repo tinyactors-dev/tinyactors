@@ -1,0 +1,151 @@
+{
+  "description": "oneOf told apart by type, by a member's const, and by a member only one branch takes.",
+  "type": "object",
+  "properties": {
+    "target": {
+      "oneOf": [
+        {
+          "type": "integer",
+          "minimum": 1
+        },
+        {
+          "type": "string"
+        }
+      ]
+    },
+    "shape": {
+      "type": "object",
+      "oneOf": [
+        {
+          "properties": {
+            "kind": {
+              "const": "circle"
+            },
+            "radius": {
+              "type": "number"
+            }
+          },
+          "required": [
+            "kind",
+            "radius"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "properties": {
+            "kind": {
+              "const": "square"
+            },
+            "side": {
+              "type": "number"
+            }
+          },
+          "required": [
+            "kind",
+            "side"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "source": {
+      "type": "object",
+      "oneOf": [
+        {
+          "properties": {
+            "files": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "strict": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "files"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "properties": {
+            "text": {
+              "type": "string"
+            },
+            "strict": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "text"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "message": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/reply"
+        },
+        {
+          "$ref": "#/$defs/note"
+        },
+        {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/reply"
+          }
+        }
+      ]
+    }
+  },
+  "$defs": {
+    "reply": {
+      "type": "object",
+      "oneOf": [
+        {
+          "properties": {
+            "id": {
+              "type": "integer"
+            },
+            "result": true
+          },
+          "required": [
+            "id",
+            "result"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "properties": {
+            "id": {
+              "type": "integer"
+            },
+            "error": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "error"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "note": {
+      "type": "object",
+      "properties": {
+        "method": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "method"
+      ],
+      "additionalProperties": false
+    }
+  }
+}

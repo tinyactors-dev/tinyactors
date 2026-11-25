@@ -1,0 +1,1 @@
+schema.json#/$defs/run.spawn.params/properties/name/pattern: pattern "^[a-z]+$" not supported

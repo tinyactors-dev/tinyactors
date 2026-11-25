@@ -1,0 +1,46 @@
+{
+  "description": "Members: required, additionalProperties false, and not both of two.",
+  "type": "object",
+  "properties": {
+    "id": {
+      "type": "integer"
+    },
+    "name": {
+      "type": "string"
+    },
+    "data": true,
+    "cbor": {
+      "type": "string"
+    },
+    "inner": {
+      "type": "object",
+      "properties": {
+        "x": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "x"
+      ],
+      "additionalProperties": false
+    },
+    "open": {
+      "type": "object",
+      "properties": {
+        "y": {
+          "type": "integer"
+        }
+      }
+    }
+  },
+  "required": [
+    "id"
+  ],
+  "not": {
+    "required": [
+      "data",
+      "cbor"
+    ]
+  },
+  "additionalProperties": false
+}

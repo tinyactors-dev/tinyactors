@@ -1,0 +1,1 @@
+schema.json#/additionalProperties: additionalProperties is supported as false only

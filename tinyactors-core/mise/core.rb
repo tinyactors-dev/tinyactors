@@ -26,7 +26,42 @@ module Core
   # check:freestanding links them with nothing left undefined. A layer that
   # is `freestanding: :headers` compiles without them too, but calls a layer
   # that is not freestanding (the compiler), so it is left out of that link.
-  Layer = Struct.new(:name, :sources, :uses, :freestanding, :flags, :libraries, keyword_init: true)
+  # `generated` names the GENERATORS whose C files it compiles too.
+  Layer = Struct.new(:name, :sources, :uses, :freestanding, :flags, :libraries, :generated, keyword_init: true)
+
+  # Sources the build generates from data, before it compiles what includes
+  # them: a generator writes its files into
+  # build/<variant>/generated/<directory> from its `inputs`, again whenever
+  # one of them changed (their digest is kept beside the files), and never
+  # into the source tree. `sources` are the C files among them; `includes`
+  # the directories, besides its own, that what compiles them reads headers
+  # from.
+  Generator = Struct.new(:directory, :inputs, :sources, :includes, :run, keyword_init: true)
+
+  SCHEMA_GENERATOR = 'tools/tinyactors/schema/generate.rb'
+  GENERATORS = {
+    # The protocol's JSON Schema (tools/tinyactors/run.schema.json) as the
+    # tables tools/tinyactors/schema_check.c walks, and its bytes for
+    # `tinyactors run --schema` (docs/proposals/cli-json-rpc.md, section 7.8).
+    'schema_run' => Generator.new(
+      directory: 'tools/tinyactors', inputs: [SCHEMA_GENERATOR, 'tools/tinyactors/run.schema.json'],
+      sources: %w[schema_run.c], includes: %w[tools/tinyactors],
+      run: lambda do |out|
+        require_relative "../#{SCHEMA_GENERATOR}"
+        Schema.generate(ROOT.join('tools/tinyactors/run.schema.json'), out, 'schema_run')
+      end
+    ),
+    # The generator's fixture cases (tools/tinyactors/schema/tests), for
+    # test_schema_check.
+    'schema_fixtures' => Generator.new(
+      directory: 'tests/schema', inputs: [SCHEMA_GENERATOR, 'tools/tinyactors/schema/tests/**/*'],
+      sources: %w[schema_fixtures.c], includes: %w[tools/tinyactors],
+      run: lambda do |out|
+        require_relative "../#{SCHEMA_GENERATOR}"
+        Schema.generate_fixtures(ROOT.join('tools/tinyactors/schema/tests'), out)
+      end
+    )
+  }.freeze
 
   # How QuickJS compiles. Without C11 atomics it leaves out `Atomics.wait`
   # and its threads, so it calls no pthread function: a data model is single
@@ -71,9 +106,12 @@ module Core
     # The tinyactors command's commands (tools/tinyactors): the C library only
     # in its platform file, which the program adds (TOOLS below). It reads
     # snapshots by restoring them into a host (snapshot.c).
+    # Its schema checker walks tables generated from the run protocol's
+    # JSON Schema (GENERATORS).
     Layer.new(name: 'tool', uses: %w[cli svg analysis compile image host], freestanding: :headers,
-              sources: %w[program input compile_command inspect disassemble graph diff lint path canonical snapshot]
-                .map { |s| "tools/tinyactors/#{s}.c" }),
+              sources: %w[program input compile_command inspect disassemble graph diff lint path canonical snapshot
+                          schema_check].map { |s| "tools/tinyactors/#{s}.c" },
+              generated: %w[schema_run]),
     # The BasicHTTP Event I/O Processor's codec; the transport stays with the host.
     Layer.new(name: 'basic_http', uses: %w[base], freestanding: true, sources: %w[src/basic_http/basic_http.c]),
     # Trace records to OTLP protobuf and back: a codec, like basic_http (docs/adr/0006).
@@ -181,11 +219,13 @@ module Core
   # timings, so it runs after the others, by itself (AGENTS.md, "Tests run in
   # parallel"). `libraries` are what it links beyond its layers' (`-lm` for
   # a program that calls the math library itself, as its layers' are).
-  Program = Struct.new(:name, :sources, :uses, :defines, :arguments, :cxx, :full, :alone, :libraries,
+  # `generated` names the GENERATORS whose C files it compiles too.
+  Program = Struct.new(:name, :sources, :uses, :defines, :arguments, :cxx, :full, :alone, :libraries, :generated,
                        keyword_init: true)
 
-  def self.unit(name, *uses, defines: {}, full: false, alone: false)
-    Program.new(name: name, sources: ["tests/unit/#{name}.c"], uses: uses, defines: defines, full: full, alone: alone)
+  def self.unit(name, *uses, defines: {}, full: false, alone: false, generated: [])
+    Program.new(name: name, sources: ["tests/unit/#{name}.c"], uses: uses, defines: defines, full: full, alone: alone,
+                generated: generated)
   end
 
   ECMASCRIPT = %w[datamodel_ecmascript quickjs].freeze
@@ -204,6 +244,8 @@ module Core
     unit('test_status', 'base'),
     unit('test_cli_arguments', 'cli'),
     unit('test_cli_report', 'cli'),
+    # The schema checker against the generator's fixture cases.
+    unit('test_schema_check', 'tool', generated: %w[schema_fixtures]),
     unit('test_diagram', 'svg'),
     unit('test_analysis', 'analysis', 'compile'),
     unit('test_table', 'base'),
@@ -336,14 +378,65 @@ module Core
     ordered.reverse
   end
 
-  def compile_command(variant_name, layer: nil, cxx: false, defines: {})
+  def compile_command(variant_name, layer: nil, cxx: false, defines: {}, generated: layer&.generated)
     # C++ is only the check that the public headers are valid C++: it links
     # no C++ library, so it leaves out UBSan's vptr check, which needs one.
     flags = layer&.flags || [*WARNINGS, *(cxx ? %w[-x c++ -std=c++17 -fno-sanitize=vptr] : C_WARNINGS)]
     flags = [*flags, *FREESTANDING] if layer&.freestanding
     [*target(variant_name).compile_command, *flags, *variant(variant_name)[:flags], *INCLUDES,
-     *defines.map { |key, value| "-D#{key}=\"#{value}\"" }]
+     *generated_includes(variant_name, generated || []), *defines.map { |key, value| "-D#{key}=\"#{value}\"" }]
   end
+
+  # ---- generated sources ------------------------------------------------------------
+
+  GENERATING = Mutex.new
+
+  def generated_directory(variant_name, name)
+    directory(variant_name).join('generated', GENERATORS.fetch(name).directory)
+  end
+
+  # Runs generator `name` for the build when an input changed since it last
+  # wrote its files, or one of them is missing; the directory it writes.
+  def generate(variant_name, name)
+    generator = GENERATORS.fetch(name)
+    out = generated_directory(variant_name, name)
+    inputs = generator.inputs.flat_map { |pattern| Dir[ROOT.join(pattern).to_s] }.select { |path| File.file?(path) }
+    key = Cache.digest(inputs.sort.map { |path| Pathname.new(path) })
+    stamp = out.join(".#{name}.inputs")
+    GENERATING.synchronize do
+      next if stamp.file? && stamp.read == key && generator.sources.all? { |source| out.join(source).file? }
+
+      FileUtils.mkdir_p(out)
+      begin
+        generator.run.call(out)
+      rescue StandardError => e
+        abort "generate #{name}: #{e.message}"
+      end
+      stamp.write(key)
+    end
+    out
+  end
+
+  # The C files generators `names` write for the build (generating them),
+  # relative to ROOT as the layers' sources are.
+  def generated_sources(variant_name, names)
+    names.flat_map do |name|
+      out = generate(variant_name, name)
+      GENERATORS.fetch(name).sources.map { |source| out.join(source).relative_path_from(ROOT).to_s }
+    end
+  end
+
+  # What a compile of generators `names`' files, or of a file that includes
+  # their headers, adds to the include path.
+  def generated_includes(variant_name, names)
+    names.flat_map do |name|
+      ["-I#{generated_directory(variant_name, name).relative_path_from(ROOT)}",
+       *GENERATORS.fetch(name).includes.map { |include| "-I#{include}" }]
+    end.uniq
+  end
+
+  # A layer's sources, the generated ones included.
+  def layer_sources(variant_name, layer) = layer.sources + generated_sources(variant_name, layer.generated || [])
 
   def compile(command, source, object)
     outcome, output = Cache.compile(command, source, object)
@@ -362,7 +455,9 @@ module Core
     work = layers.flat_map do |name|
       layer = LAYERS.fetch(name)
       command = compile_command(variant_name, layer: layer)
-      layer.sources.map { |source| [name, command, source, objects_root.join(name, "#{File.basename(source, '.c')}.o")] }
+      layer_sources(variant_name, layer).map do |source|
+        [name, command, source, objects_root.join(name, "#{File.basename(source, '.c')}.o")]
+      end
     end
     in_parallel(work) { |_name, command, source, object| compile(command, source, object) }
     layers.each do |name|
@@ -386,8 +481,13 @@ module Core
                version: -> { development_version }, diagrams: -> { ROOT.join('tests', 'diagram') },
                repository: -> { ROOT.join('..') } }
     defines = (program.defines || {}).transform_values { |value| places.key?(value) ? places[value].call : value }
-    command = compile_command(variant_name, cxx: program.cxx, defines: defines)
-    objects = program.sources.map do |source|
+    # It reads the generated headers of the layers it links, and compiles
+    # its own generated sources.
+    headers = [*link_order(program.uses).flat_map { |name| LAYERS.fetch(name).generated || [] },
+               *program.generated].uniq
+    command = compile_command(variant_name, cxx: program.cxx, defines: defines, generated: headers)
+    sources = program.sources + generated_sources(variant_name, program.generated || [])
+    objects = sources.map do |source|
       object = directory(variant_name).join('objects', program.name, "#{File.basename(source).sub(/\.c(pp)?\z/, '')}.o")
       compile(command, source, object)
       object.to_s

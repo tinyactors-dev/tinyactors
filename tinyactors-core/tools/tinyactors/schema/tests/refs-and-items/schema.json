@@ -1,0 +1,55 @@
+{
+  "description": "$ref to $defs, items, and the paths of nested values.",
+  "$defs": {
+    "event": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "tags": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/tag"
+          }
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "additionalProperties": false
+    },
+    "tag": {
+      "type": "string",
+      "minLength": 1
+    },
+    "alias": {
+      "$ref": "#/$defs/tag",
+      "description": "documentation beside $ref"
+    }
+  },
+  "type": "object",
+  "properties": {
+    "events": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/event"
+      }
+    },
+    "grid": {
+      "type": "array",
+      "items": {
+        "type": "array",
+        "items": {
+          "type": "integer"
+        }
+      }
+    },
+    "alias": {
+      "$ref": "#/$defs/alias"
+    },
+    "label with space": {
+      "type": "string"
+    }
+  }
+}

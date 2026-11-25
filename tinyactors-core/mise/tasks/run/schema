@@ -1,0 +1,15 @@
+#!/usr/bin/env ruby
+#MISE description="Check the run protocol's JSON Schema with a 2020-12 validator (json_schemer): the schema itself, its methods against docs/requests.md, the generator's fixture cases (which test_schema_check runs through the generated checker) and its refusals"
+# vim:ft=ruby
+
+# tools/tinyactors/schema/check.rb says what it checks. The validator is a
+# gem, pinned with its dependencies in tools/tinyactors/schema/Gemfile.lock
+# and installed once into build/gems (from rubygems.org, the first time).
+
+require_relative '../../core'
+
+env = { 'BUNDLE_GEMFILE' => Core::ROOT.join('tools/tinyactors/schema/Gemfile').to_s,
+        'BUNDLE_PATH' => Core::BUILD.join('gems').to_s, 'BUNDLE_FROZEN' => 'true', 'BUNDLE_SILENCE_ROOT_WARNING' => 'true' }
+installed = system(env, 'bundle', 'check', out: File::NULL, err: File::NULL)
+Core.run('bundle', 'install', '--quiet', env: env) unless installed
+Core.run('bundle', 'exec', 'ruby', 'tools/tinyactors/schema/check.rb', env: env)

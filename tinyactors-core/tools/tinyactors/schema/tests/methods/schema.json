@@ -1,0 +1,108 @@
+{
+  "description": "Methods: a request told apart by method, each with its params; checked from \"params\".",
+  "$defs": {
+    "request": {
+      "type": "object",
+      "oneOf": [
+        {
+          "properties": {
+            "method": {
+              "const": "order.create"
+            },
+            "params": {
+              "$ref": "#/$defs/order.create.params"
+            },
+            "id": {
+              "type": [
+                "integer",
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "properties": {
+            "method": {
+              "const": "order.cancel"
+            },
+            "params": {
+              "$ref": "#/$defs/order.cancel.params"
+            },
+            "id": {
+              "type": [
+                "integer",
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "method"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "order.create.params": {
+      "type": "object",
+      "properties": {
+        "customer": {
+          "type": "string"
+        },
+        "items": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "properties": {
+              "sku": {
+                "type": "string"
+              },
+              "quantity": {
+                "type": "integer",
+                "minimum": 1
+              }
+            },
+            "required": [
+              "sku",
+              "quantity"
+            ],
+            "additionalProperties": false
+          }
+        }
+      },
+      "required": [
+        "customer",
+        "items"
+      ],
+      "additionalProperties": false
+    },
+    "order.create.result": {
+      "type": "object",
+      "properties": {
+        "order": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "order"
+      ],
+      "additionalProperties": false
+    },
+    "order.cancel.params": {
+      "type": "object",
+      "properties": {
+        "reason": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}

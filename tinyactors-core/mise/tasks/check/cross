@@ -14,8 +14,8 @@ Core.in_parallel(Toolchain::Target.native_releases) do |target|
   objects = Core::LAYERS.values.flat_map do |layer|
     flags = layer.flags || [*Core::WARNINGS, *Core::C_WARNINGS]
     flags = [*flags, *Core::FREESTANDING] if layer.freestanding
-    command = target.compile_command(*flags, *Core::INCLUDES)
-    layer.sources.map do |source|
+    command = target.compile_command(*flags, *Core::INCLUDES, *Core.generated_includes('cross', layer.generated || []))
+    Core.layer_sources('cross', layer).map do |source|
       object = Core.directory('cross').join(target.name, layer.name, "#{File.basename(source, '.c')}.o")
       Core.compile(command, source, object)
       object.to_s
@@ -25,8 +25,10 @@ Core.in_parallel(Toolchain::Target.native_releases) do |target|
   programs = (Core::PROGRAMS + Core::TOOLS).flat_map do |program|
     defines = (program.defines || {}).map { |key, value| "-D#{key}=\"#{value == :scratch ? '.' : value}\"" }
     language = program.cxx ? %w[-x c++ -std=c++17] : Core::C_WARNINGS
-    command = target.compile_command(*Core::WARNINGS, *language, *Core::INCLUDES, *defines)
-    program.sources.map do |source|
+    generated = Core.link_order(program.uses).flat_map { |name| Core::LAYERS.fetch(name).generated || [] }
+    command = target.compile_command(*Core::WARNINGS, *language, *Core::INCLUDES, *defines,
+                                     *Core.generated_includes('cross', [*generated, *program.generated].uniq))
+    (program.sources + Core.generated_sources('cross', program.generated || [])).map do |source|
       object = Core.directory('cross').join(target.name, 'programs', program.name, "#{File.basename(source)}.o")
       Core.compile(command, source, object)
     end

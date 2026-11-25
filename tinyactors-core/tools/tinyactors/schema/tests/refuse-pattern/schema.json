@@ -1,0 +1,13 @@
+{
+  "$defs": {
+    "run.spawn.params": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string",
+          "pattern": "^[a-z]+$"
+        }
+      }
+    }
+  }
+}

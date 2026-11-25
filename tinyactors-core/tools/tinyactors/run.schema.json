@@ -1,0 +1,1241 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://tinyactors.dev/schemas/run.schema.json",
+  "title": "tinyactors run",
+  "description": "The protocol of `tinyactors run`: JSON-RPC 2.0, one message per line, between a client and one host. A client writes a `clientMessage` per line and reads a `serverMessage` per line. The server's own methods are `run.*`; every other method is forwarded to the host's control plane (docs/requests.md). Effects reach the client as `effect.*` notifications. Values are JSON; where JSON cannot hold a value (bytes, undefined, a non-finite float, a tag), its CBOR comes too, base64url without padding, as the field's twin (`data` and `cbor`, `params` and `paramsCBOR`). Experimental: the protocol may change in any release.",
+  "$defs": {
+    "clientMessage": {
+      "description": "One line a client writes: a request, a notification (a request without `id`, applied with no response), or a batch of them.",
+      "oneOf": [
+        {"$ref": "#/$defs/request"},
+        {"$ref": "#/$defs/requestBatch"}
+      ]
+    },
+    "serverMessage": {
+      "description": "One line the server writes: a response, a notification (`effect.*`), or a batch of responses.",
+      "oneOf": [
+        {"$ref": "#/$defs/response"},
+        {"$ref": "#/$defs/notification"},
+        {"$ref": "#/$defs/responseBatch"}
+      ]
+    },
+    "requestBatch": {
+      "description": "A JSON-RPC batch: each element runs in order, as if sent alone; the responses come as one array after the last (none when every element was a notification). An empty array is refused.",
+      "type": "array",
+      "minItems": 1,
+      "items": {"$ref": "#/$defs/request"}
+    },
+    "responseBatch": {
+      "description": "The responses to a batch, in its order.",
+      "type": "array",
+      "minItems": 1,
+      "items": {"$ref": "#/$defs/response"}
+    },
+    "id": {
+      "description": "A request's id, echoed in its response; `null` in the response to a message that could not be read.",
+      "type": ["integer", "string", "null"]
+    },
+    "uint32": {
+      "description": "An unsigned integer of 32 bits.",
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 4294967295
+    },
+    "uint64": {
+      "description": "An unsigned integer of 64 bits: it reaches 2^64-1, past what a double holds exactly; a client that cares parses integers as big integers.",
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 18446744073709551615
+    },
+    "session": {
+      "description": "A session id, from 1; it reaches 2^64-1 (segment k numbers its sessions from k * 2^32 + 1).",
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 18446744073709551615
+    },
+    "segment": {
+      "description": "A segment, as `run.addImage` answered it.",
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 4294967295
+    },
+    "chartIndex": {
+      "description": "A chart's index in its segment's image.",
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 4294967295
+    },
+    "invocation": {
+      "description": "The token of an invocation the client runs, from its `effect.invoke`.",
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 4294967295
+    },
+    "ticks": {
+      "description": "The host's clock in ticks at `system.ticksPerSecond` (default 1e9: nanoseconds); it reaches 2^64-1.",
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 18446744073709551615
+    },
+    "duration": {
+      "description": "A duration as SCXML writes a delay: a number and `s` or `ms` (`\"30s\"`, `\"150ms\"`, `\"0.5s\"`), converted to ticks with `ticksPerSecond`.",
+      "type": "string",
+      "pattern": "^[ \\t]*([0-9]+(\\.[0-9]*)?|\\.[0-9]+)(ms|s)[ \\t]*$"
+    },
+    "time": {
+      "description": "Ticks, or a duration.",
+      "oneOf": [
+        {"$ref": "#/$defs/ticks"},
+        {"$ref": "#/$defs/duration"}
+      ]
+    },
+    "address": {
+      "description": "An actor's address: `tinyactors://<system>/#_scxml_<session>` or `tinyactors://<system>/@<name>`.",
+      "type": "string"
+    },
+    "target": {
+      "description": "A session, or a local address the server resolves.",
+      "oneOf": [
+        {"$ref": "#/$defs/session"},
+        {"$ref": "#/$defs/address"}
+      ]
+    },
+    "traceparent": {
+      "description": "A W3C traceparent, as text; text that does not parse starts a new trace.",
+      "type": "string"
+    },
+    "base64url": {
+      "description": "Bytes as base64url without padding (RFC 4648, section 5).",
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_-]*$"
+    },
+    "value": {
+      "description": "A neutral value as JSON: integers to 64 bits, floats, text, arrays, objects with text keys, true, false, null. Written, bytes are base64url text, undefined and non-finite floats null, and a tag its item (an address its text); the value's `cbor` twin then comes too."
+    },
+    "cbor": {
+      "description": "A neutral value's CBOR (RFC 8949), base64url without padding: the twin of a value JSON cannot hold exactly. On input it stands instead of the value; on output it follows the value when writing it changed something.",
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_-]*$"
+    },
+    "noParams": {
+      "description": "A method that takes no params: `params` absent, or an empty object.",
+      "type": "object",
+      "properties": {},
+      "additionalProperties": false
+    },
+    "empty": {
+      "description": "A result with nothing in it.",
+      "type": "object",
+      "properties": {},
+      "additionalProperties": false
+    },
+    "error": {
+      "description": "A JSON-RPC error, core's shape: `code` and `reason` say what happened, `path` where (`\"params.events[2].data\"`, `\"\"` for the message as a whole); `message` is for people. The server's own errors add `status`, the name of the status a C call refused with.",
+      "type": "object",
+      "properties": {
+        "code": {
+          "description": "-32700 not JSON or a repeated key; -32600 not a request; -32601 no such method; -32602 a param refused; -32001 stale; -32002 state (a batch is held, or the host cannot now); -32003 limit; -32004 memory; -32005 invalid; -32006 malformed bytes or data; -32007 unsupported; -32603 internal.",
+          "type": "integer",
+          "enum": [-32700, -32600, -32601, -32602, -32603, -32001, -32002, -32003, -32004, -32005, -32006, -32007]
+        },
+        "message": {"type": "string"},
+        "data": {
+          "type": "object",
+          "properties": {
+            "reason": {
+              "type": "string",
+              "enum": ["malformed", "type", "missing", "unknown", "range", "limit", "stale", "state", "memory", "invalid", "unsupported", "internal"]
+            },
+            "path": {"type": "string"},
+            "status": {"description": "`ta_status_name` of the refused call's status, such as `TA_ERROR_STATE`.", "type": "string"}
+          },
+          "required": ["reason", "path"],
+          "additionalProperties": false
+        }
+      },
+      "required": ["code", "message"],
+      "additionalProperties": false
+    },
+    "response": {
+      "description": "The response to a request: its `result`, or an `error`.",
+      "type": "object",
+      "oneOf": [
+        {
+          "properties": {
+            "jsonrpc": {"const": "2.0"},
+            "id": {"$ref": "#/$defs/id"},
+            "result": {"description": "The method's result: `<method>.result` in `$defs`.", "type": "object"}
+          },
+          "required": ["jsonrpc", "id", "result"],
+          "additionalProperties": false
+        },
+        {
+          "properties": {
+            "jsonrpc": {"const": "2.0"},
+            "id": {"$ref": "#/$defs/id"},
+            "error": {"$ref": "#/$defs/error"}
+          },
+          "required": ["jsonrpc", "id", "error"],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "runStatus": {
+      "description": "How a turn ended: `idle` (nothing runnable; `nextDeadline` says when a delayed send is due), `yielded` (`runs` spent, actors still runnable), `held` (a batch is left open for the client), `exhausted` (a pool could not grow; `detail` names it), `fault` (`detail` is the status's name).",
+      "type": "string",
+      "enum": ["idle", "yielded", "held", "exhausted", "fault"]
+    },
+    "diagnostic": {
+      "description": "A compiler diagnostic, as `tinyactors check --format json` writes it.",
+      "type": "object",
+      "properties": {
+        "file": {"type": "string"},
+        "line": {"$ref": "#/$defs/uint32"},
+        "column": {"$ref": "#/$defs/uint32"},
+        "severity": {"type": "string", "enum": ["error", "warning", "note"]},
+        "message": {"type": "string"}
+      },
+      "required": ["file", "line", "column", "severity", "message"],
+      "additionalProperties": false
+    },
+    "span": {
+      "description": "A span, as `trace.spans.decode` answers it: `trace` and `span` lowercase hex, `parent` hex or null for a root span, `kind` and `status` OTLP's numbers, `start` and `end` nanoseconds since the Unix epoch on the host's wall clock.",
+      "type": "object",
+      "properties": {
+        "trace": {"type": "string", "pattern": "^[0-9a-f]*$"},
+        "span": {"type": "string", "pattern": "^[0-9a-f]*$"},
+        "parent": {"type": ["string", "null"]},
+        "name": {"type": "string"},
+        "kind": {"$ref": "#/$defs/uint32"},
+        "start": {"$ref": "#/$defs/uint64"},
+        "end": {"$ref": "#/$defs/uint64"},
+        "status": {"$ref": "#/$defs/uint32"},
+        "statusMessage": {"type": "string"},
+        "attributes": {"description": "Key to value; a list value an array, a key-value list an object, anything deeper null.", "type": "object"},
+        "events": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "name": {"type": "string"},
+              "time": {"$ref": "#/$defs/uint64"},
+              "attributes": {"type": "object"}
+            },
+            "required": ["name", "time", "attributes"],
+            "additionalProperties": false
+          }
+        }
+      },
+      "required": ["trace", "span", "parent", "name", "kind", "start", "end", "status", "statusMessage", "attributes", "events"],
+      "additionalProperties": false
+    },
+    "spans": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/span"}
+    },
+    "detail": {"type": "string", "enum": ["summary", "decisions", "full", "off"]},
+    "share": {
+      "description": "A share from 0 to 1.",
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1
+    },
+    "traceRule": {
+      "description": "A trace rule (docs/requests.md, \"Trace rules\"); each field it leaves out matches anything.",
+      "type": "object",
+      "properties": {
+        "at": {"type": "string", "enum": ["start", "take"]},
+        "chart": {"type": "string"},
+        "actor": {"description": "An actor's name; a trailing `*` makes it a prefix.", "type": "string"},
+        "event": {"description": "An event descriptor, SCXML's prefix rule.", "type": "string"},
+        "session": {"$ref": "#/$defs/session"},
+        "from": {
+          "type": "array",
+          "items": {"type": "string", "enum": ["host", "actor", "timer", "spawn", "sampled", "unsampled"]}
+        },
+        "sample": {
+          "description": "What a match decides: keep, sample, drop, or the share of trace ids sampled.",
+          "oneOf": [
+            {"type": "string", "enum": ["keep", "sample", "drop"]},
+            {"$ref": "#/$defs/share"}
+          ]
+        },
+        "detail": {"$ref": "#/$defs/detail"},
+        "values": {"type": "boolean"},
+        "perSecond": {"$ref": "#/$defs/uint64"},
+        "burst": {"$ref": "#/$defs/uint64"}
+      },
+      "additionalProperties": false
+    },
+    "traceRules": {
+      "type": "array",
+      "maxItems": 32,
+      "items": {"$ref": "#/$defs/traceRule"}
+    },
+    "poolUse": {
+      "type": "object",
+      "properties": {
+        "capacity": {"$ref": "#/$defs/uint64"},
+        "used": {"$ref": "#/$defs/uint64"},
+        "highWater": {"$ref": "#/$defs/uint64"}
+      },
+      "required": ["capacity", "used", "highWater"],
+      "additionalProperties": false
+    },
+    "stateValue": {
+      "description": "A configuration as a nested state value, xstate's `value`: an atomic state is its id; a compound state `{\"<id>\": <its active child>}`; a parallel state `{\"<id>\": {\"<region>\": ...}}`; an atomic region `{}`.",
+      "type": ["string", "object"]
+    },
+
+    "request": {
+      "description": "A request (with `id`) or a notification (without), discriminated by `method`. A method this schema does not list is forwarded to the host, which answers -32601 when it does not know it.",
+      "type": "object",
+      "oneOf": [
+        {"properties": {"jsonrpc": {"const": "2.0"}, "method": {"const": "run.addImage"}, "params": {"$ref": "#/$defs/run.addImage.params"}, "id": {"$ref": "#/$defs/id"}}, "required": ["jsonrpc", "method", "params"], "additionalProperties": false},
+        {"properties": {"jsonrpc": {"const": "2.0"}, "method": {"const": "run.boot"}, "params": {"$ref": "#/$defs/run.boot.params"}, "id": {"$ref": "#/$defs/id"}}, "required": ["jsonrpc", "method", "params"], "additionalProperties": false},
+        {"properties": {"jsonrpc": {"const": "2.0"}, "method": {"const": "run.chart"}, "params": {"$ref": "#/$defs/run.chart.params"}, "id": {"$ref": "#/$defs/id"}}, "required": ["jsonrpc", "method", "params"], "additionalProperties": false},
+        {"properties": {"jsonrpc": {"const": "2.0"}, "method": {"const": "run.spawn"}, "params": {"$ref": "#/$defs/run.spawn.params"}, "id": {"$ref": "#/$defs/id"}}, "required": ["jsonrpc", "method", "params"], "additionalProperties": false},
+        {"properties": {"jsonrpc": {"const": "2.0"}, "method": {"const": "run.send"}, "params": {"$ref": "#/$defs/run.send.params"}, "id": {"$ref": "#/$defs/id"}}, "required": ["jsonrpc", "method", "params"], "additionalProperties": false},
+        {"properties": {"jsonrpc": {"const": "2.0"}, "method": {"const": "run.sendMany"}, "params": {"$ref": "#/$defs/run.sendMany.params"}, "id": {"$ref": "#/$defs/id"}}, "required": ["jsonrpc", "method", "params"], "additionalProperties": false},
+        {"properties": {"jsonrpc": {"const": "2.0"}, "method": {"const": "run.fail"}, "params": {"$ref": "#/$defs/run.fail.params"}, "id": {"$ref": "#/$defs/id"}}, "required": ["jsonrpc", "method", "params"], "additionalProperties": false},
+        {"properties": {"jsonrpc": {"const": "2.0"}, "method": {"const": "run.terminate"}, "params": {"$ref": "#/$defs/run.terminate.params"}, "id": {"$ref": "#/$defs/id"}}, "required": ["jsonrpc", "method", "params"], "additionalProperties": false},
+        {"properties": {"jsonrpc": {"const": "2.0"}, "method": {"const": "run.resolve"}, "params": {"$ref": "#/$defs/run.resolve.params"}, "id": {"$ref": "#/$defs/id"}}, "required": ["jsonrpc", "method", "params"], "additionalProperties": false},
+        {"properties": {"jsonrpc": {"const": "2.0"}, "method": {"const": "run.actorByName"}, "params": {"$ref": "#/$defs/run.actorByName.params"}, "id": {"$ref": "#/$defs/id"}}, "required": ["jsonrpc", "method", "params"], "additionalProperties": false},
+        {"properties": {"jsonrpc": {"const": "2.0"}, "method": {"const": "run.advanceTime"}, "params": {"$ref": "#/$defs/run.advanceTime.params"}, "id": {"$ref": "#/$defs/id"}}, "required": ["jsonrpc", "method"], "additionalProperties": false},
+        {"properties": {"jsonrpc": {"const": "2.0"}, "method": {"const": "run.turn"}, "params": {"$ref": "#/$defs/run.turn.params"}, "id": {"$ref": "#/$defs/id"}}, "required": ["jsonrpc", "method"], "additionalProperties": false},
+        {"properties": {"jsonrpc": {"const": "2.0"}, "method": {"const": "run.ack"}, "params": {"$ref": "#/$defs/run.ack.params"}, "id": {"$ref": "#/$defs/id"}}, "required": ["jsonrpc", "method"], "additionalProperties": false},
+        {"properties": {"jsonrpc": {"const": "2.0"}, "method": {"const": "run.hibernate"}, "params": {"$ref": "#/$defs/run.hibernate.params"}, "id": {"$ref": "#/$defs/id"}}, "required": ["jsonrpc", "method", "params"], "additionalProperties": false},
+        {"properties": {"jsonrpc": {"const": "2.0"}, "method": {"const": "run.wake"}, "params": {"$ref": "#/$defs/run.wake.params"}, "id": {"$ref": "#/$defs/id"}}, "required": ["jsonrpc", "method", "params"], "additionalProperties": false},
+        {"properties": {"jsonrpc": {"const": "2.0"}, "method": {"const": "run.sweep"}, "params": {"$ref": "#/$defs/run.sweep.params"}, "id": {"$ref": "#/$defs/id"}}, "required": ["jsonrpc", "method", "params"], "additionalProperties": false},
+        {"properties": {"jsonrpc": {"const": "2.0"}, "method": {"const": "run.migrate"}, "params": {"$ref": "#/$defs/run.migrate.params"}, "id": {"$ref": "#/$defs/id"}}, "required": ["jsonrpc", "method"], "additionalProperties": false},
+        {"properties": {"jsonrpc": {"const": "2.0"}, "method": {"const": "run.snapshot"}, "params": {"$ref": "#/$defs/run.snapshot.params"}, "id": {"$ref": "#/$defs/id"}}, "required": ["jsonrpc", "method"], "additionalProperties": false},
+        {"properties": {"jsonrpc": {"const": "2.0"}, "method": {"const": "run.restore"}, "params": {"$ref": "#/$defs/run.restore.params"}, "id": {"$ref": "#/$defs/id"}}, "required": ["jsonrpc", "method", "params"], "additionalProperties": false},
+        {"properties": {"jsonrpc": {"const": "2.0"}, "method": {"const": "run.traces"}, "params": {"$ref": "#/$defs/run.traces.params"}, "id": {"$ref": "#/$defs/id"}}, "required": ["jsonrpc", "method"], "additionalProperties": false},
+        {"properties": {"jsonrpc": {"const": "2.0"}, "method": {"const": "run.metrics"}, "params": {"$ref": "#/$defs/run.metrics.params"}, "id": {"$ref": "#/$defs/id"}}, "required": ["jsonrpc", "method"], "additionalProperties": false},
+        {"properties": {"jsonrpc": {"const": "2.0"}, "method": {"const": "run.post"}, "params": {"$ref": "#/$defs/run.post.params"}, "id": {"$ref": "#/$defs/id"}}, "required": ["jsonrpc", "method", "params"], "additionalProperties": false},
+        {"properties": {"jsonrpc": {"const": "2.0"}, "method": {"const": "run.schema"}, "params": {"$ref": "#/$defs/run.schema.params"}, "id": {"$ref": "#/$defs/id"}}, "required": ["jsonrpc", "method"], "additionalProperties": false},
+        {"properties": {"jsonrpc": {"const": "2.0"}, "method": {"const": "trace.configure"}, "params": {"$ref": "#/$defs/trace.configure.params"}, "id": {"$ref": "#/$defs/id"}}, "required": ["jsonrpc", "method"], "additionalProperties": false},
+        {"properties": {"jsonrpc": {"const": "2.0"}, "method": {"const": "trace.watch"}, "params": {"$ref": "#/$defs/trace.watch.params"}, "id": {"$ref": "#/$defs/id"}}, "required": ["jsonrpc", "method", "params"], "additionalProperties": false},
+        {"properties": {"jsonrpc": {"const": "2.0"}, "method": {"const": "trace.unwatch"}, "params": {"$ref": "#/$defs/trace.unwatch.params"}, "id": {"$ref": "#/$defs/id"}}, "required": ["jsonrpc", "method", "params"], "additionalProperties": false},
+        {"properties": {"jsonrpc": {"const": "2.0"}, "method": {"const": "trace.end"}, "params": {"$ref": "#/$defs/trace.end.params"}, "id": {"$ref": "#/$defs/id"}}, "required": ["jsonrpc", "method"], "additionalProperties": false},
+        {"properties": {"jsonrpc": {"const": "2.0"}, "method": {"const": "trace.spans.decode"}, "params": {"$ref": "#/$defs/trace.spans.decode.params"}, "id": {"$ref": "#/$defs/id"}}, "required": ["jsonrpc", "method", "params"], "additionalProperties": false},
+        {"properties": {"jsonrpc": {"const": "2.0"}, "method": {"const": "host.stats"}, "params": {"$ref": "#/$defs/host.stats.params"}, "id": {"$ref": "#/$defs/id"}}, "required": ["jsonrpc", "method"], "additionalProperties": false},
+        {"properties": {"jsonrpc": {"const": "2.0"}, "method": {"const": "host.config"}, "params": {"$ref": "#/$defs/host.config.params"}, "id": {"$ref": "#/$defs/id"}}, "required": ["jsonrpc", "method"], "additionalProperties": false},
+        {"properties": {"jsonrpc": {"const": "2.0"}, "method": {"const": "actor.list"}, "params": {"$ref": "#/$defs/actor.list.params"}, "id": {"$ref": "#/$defs/id"}}, "required": ["jsonrpc", "method"], "additionalProperties": false},
+        {"properties": {"jsonrpc": {"const": "2.0"}, "method": {"const": "actor.get"}, "params": {"$ref": "#/$defs/actor.get.params"}, "id": {"$ref": "#/$defs/id"}}, "required": ["jsonrpc", "method", "params"], "additionalProperties": false},
+        {"properties": {"jsonrpc": {"const": "2.0"}, "method": {"const": "actor.context"}, "params": {"$ref": "#/$defs/actor.context.params"}, "id": {"$ref": "#/$defs/id"}}, "required": ["jsonrpc", "method", "params"], "additionalProperties": false},
+        {"properties": {"jsonrpc": {"const": "2.0"}, "method": {"const": "actor.send"}, "params": {"$ref": "#/$defs/actor.send.params"}, "id": {"$ref": "#/$defs/id"}}, "required": ["jsonrpc", "method", "params"], "additionalProperties": false},
+        {"properties": {"jsonrpc": {"const": "2.0"}, "method": {"const": "actor.state"}, "params": {"$ref": "#/$defs/actor.state.params"}, "id": {"$ref": "#/$defs/id"}}, "required": ["jsonrpc", "method", "params"], "additionalProperties": false}
+      ]
+    },
+
+    "run.addImage.params": {
+      "description": "Compile charts, or take an image, and add it as a new segment: exactly one of `files` (paths, read as the command's inputs are), `sources` (charts as text, the first the default boot chart; a `src` names another by its name) or `image` (a compiled image, `.tai`).",
+      "type": "object",
+      "oneOf": [
+        {
+          "properties": {
+            "files": {"type": "array", "minItems": 1, "items": {"type": "string"}},
+            "warningsAsErrors": {"type": "boolean"}
+          },
+          "required": ["files"],
+          "additionalProperties": false
+        },
+        {
+          "properties": {
+            "sources": {
+              "type": "array",
+              "minItems": 1,
+              "items": {
+                "type": "object",
+                "properties": {"name": {"type": "string"}, "text": {"type": "string"}},
+                "required": ["name", "text"],
+                "additionalProperties": false
+              }
+            },
+            "warningsAsErrors": {"type": "boolean"}
+          },
+          "required": ["sources"],
+          "additionalProperties": false
+        },
+        {
+          "properties": {
+            "image": {"$ref": "#/$defs/base64url"},
+            "warningsAsErrors": {"type": "boolean"}
+          },
+          "required": ["image"],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "run.addImage.result": {
+      "type": "object",
+      "properties": {
+        "segment": {"$ref": "#/$defs/segment"},
+        "charts": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {"name": {"type": "string"}, "chart": {"$ref": "#/$defs/chartIndex"}},
+            "required": ["name", "chart"],
+            "additionalProperties": false
+          }
+        },
+        "diagnostics": {"type": "array", "items": {"$ref": "#/$defs/diagnostic"}}
+      },
+      "required": ["segment", "charts", "diagnostics"],
+      "additionalProperties": false
+    },
+
+    "run.boot.params": {
+      "description": "Spawn the boot actors of a segment's manifest (`ta_host_boot`).",
+      "type": "object",
+      "properties": {"segment": {"$ref": "#/$defs/segment"}},
+      "required": ["segment"],
+      "additionalProperties": false
+    },
+    "run.boot.result": {"$ref": "#/$defs/empty"},
+
+    "run.chart.params": {
+      "description": "The current version of a chart (`ta_host_chart`).",
+      "type": "object",
+      "properties": {"name": {"type": "string"}},
+      "required": ["name"],
+      "additionalProperties": false
+    },
+    "run.chart.result": {
+      "type": "object",
+      "properties": {"segment": {"$ref": "#/$defs/segment"}, "chart": {"$ref": "#/$defs/chartIndex"}},
+      "required": ["segment", "chart"],
+      "additionalProperties": false
+    },
+
+    "run.spawn.params": {
+      "description": "Spawn an actor (`ta_host_spawn`): `chart` a name (its current version), or `segment` and `chart` an index. `params` (or `paramsCBOR`) bind the chart's `<data>` at its first macrostep.",
+      "type": "object",
+      "properties": {
+        "chart": {
+          "oneOf": [
+            {"type": "string"},
+            {"$ref": "#/$defs/chartIndex"}
+          ]
+        },
+        "segment": {"$ref": "#/$defs/segment"},
+        "name": {"type": "string"},
+        "params": {"$ref": "#/$defs/value"},
+        "paramsCBOR": {"$ref": "#/$defs/cbor"},
+        "traceparent": {"$ref": "#/$defs/traceparent"}
+      },
+      "required": ["chart"],
+      "not": {"required": ["params", "paramsCBOR"]},
+      "additionalProperties": false
+    },
+    "run.spawn.result": {
+      "type": "object",
+      "properties": {"session": {"$ref": "#/$defs/session"}, "address": {"$ref": "#/$defs/address"}},
+      "required": ["session", "address"],
+      "additionalProperties": false
+    },
+
+    "run.send.params": {
+      "description": "An event for an actor (`ta_host_send`), with every field of `ta_event_in`. To answer a send from an `effect.send`, pass its `sendid` and `origintype` (the processor's type). As a service the client runs, pass `invocation` (the token of its `effect.invoke`), and `done` to end it (`event` is then core's `done.invoke.<id>`).",
+      "type": "object",
+      "properties": {
+        "target": {"$ref": "#/$defs/target"},
+        "event": {"type": "string"},
+        "data": {"$ref": "#/$defs/value"},
+        "cbor": {"$ref": "#/$defs/cbor"},
+        "sendid": {"type": "string"},
+        "origin": {"$ref": "#/$defs/address"},
+        "origintype": {"type": "string"},
+        "raw": {"type": "string"},
+        "traceparent": {"$ref": "#/$defs/traceparent"},
+        "invocation": {"$ref": "#/$defs/invocation"},
+        "done": {"type": "boolean"}
+      },
+      "required": ["target"],
+      "not": {"required": ["data", "cbor"]},
+      "additionalProperties": false
+    },
+    "run.send.result": {"$ref": "#/$defs/empty"},
+
+    "run.sendMany.params": {
+      "description": "Events in order (`ta_host_send_many`); it stops at the first refused.",
+      "type": "object",
+      "properties": {
+        "events": {"type": "array", "items": {"$ref": "#/$defs/run.send.params"}}
+      },
+      "required": ["events"],
+      "additionalProperties": false
+    },
+    "run.sendMany.result": {
+      "type": "object",
+      "properties": {"accepted": {"description": "The length of the accepted prefix.", "$ref": "#/$defs/uint32"}},
+      "required": ["accepted"],
+      "additionalProperties": false
+    },
+
+    "run.fail.params": {
+      "description": "Fail a send (`error.communication` in its sender's queue: `target` and the send's `sendid`), or an invocation the client runs (`target` and its `invocation`).",
+      "type": "object",
+      "oneOf": [
+        {
+          "properties": {"target": {"$ref": "#/$defs/target"}, "sendid": {"type": "string"}},
+          "required": ["target", "sendid"],
+          "additionalProperties": false
+        },
+        {
+          "properties": {"target": {"$ref": "#/$defs/target"}, "invocation": {"$ref": "#/$defs/invocation"}},
+          "required": ["target", "invocation"],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "run.fail.result": {"$ref": "#/$defs/empty"},
+
+    "run.terminate.params": {
+      "description": "End an actor (`ta_host_terminate`).",
+      "type": "object",
+      "properties": {"target": {"$ref": "#/$defs/target"}},
+      "required": ["target"],
+      "additionalProperties": false
+    },
+    "run.terminate.result": {"$ref": "#/$defs/empty"},
+
+    "run.resolve.params": {
+      "description": "The session a local address names (`ta_host_resolve`).",
+      "type": "object",
+      "properties": {"address": {"$ref": "#/$defs/address"}},
+      "required": ["address"],
+      "additionalProperties": false
+    },
+    "run.resolve.result": {
+      "type": "object",
+      "properties": {"session": {"description": "null: none.", "type": ["integer", "null"], "minimum": 1, "maximum": 18446744073709551615}},
+      "required": ["session"],
+      "additionalProperties": false
+    },
+
+    "run.actorByName.params": {
+      "description": "The oldest live actor spawned under a name (`ta_host_actor_by_name`).",
+      "type": "object",
+      "properties": {"name": {"type": "string"}},
+      "required": ["name"],
+      "additionalProperties": false
+    },
+    "run.actorByName.result": {
+      "type": "object",
+      "properties": {"session": {"description": "null: none.", "type": ["integer", "null"], "minimum": 1, "maximum": 18446744073709551615}},
+      "required": ["session"],
+      "additionalProperties": false
+    },
+
+    "run.advanceTime.params": {
+      "description": "Move the simulated clocks (`ta_host_advance_time`): monotonic time `by` a duration or `to` a time, wall time by the same duration, or to `wallNs`. Nothing runs.",
+      "type": "object",
+      "properties": {
+        "by": {"$ref": "#/$defs/time"},
+        "to": {"$ref": "#/$defs/time"},
+        "wallNs": {"description": "Nanoseconds since the Unix epoch.", "$ref": "#/$defs/uint64"}
+      },
+      "not": {"required": ["by", "to"]},
+      "additionalProperties": false
+    },
+    "run.advanceTime.result": {
+      "type": "object",
+      "properties": {"time": {"$ref": "#/$defs/ticks"}, "wallNs": {"$ref": "#/$defs/uint64"}},
+      "required": ["time", "wallNs"],
+      "additionalProperties": false
+    },
+
+    "run.turn.params": {
+      "description": "Run the host until it is idle, at most `runs` runs of `budget` fuel each, with every effect written as an `effect.*` notification before the response. With `hold`, a batch with a waiting send only the client decides is left open (`status` `held`) until the client's next `run.turn` or `run.ack`.",
+      "type": "object",
+      "properties": {
+        "budget": {"description": "Fuel per run; default 10,000.", "type": "integer", "minimum": 1, "maximum": 4294967295},
+        "runs": {"description": "Runs at most; default 1,000.", "type": "integer", "minimum": 1, "maximum": 4294967295},
+        "hold": {"type": "boolean"}
+      },
+      "additionalProperties": false
+    },
+    "run.turn.result": {
+      "type": "object",
+      "properties": {
+        "status": {"$ref": "#/$defs/runStatus"},
+        "detail": {"description": "For `exhausted`, the pool; for `fault`, the status's name.", "type": "string"},
+        "runs": {"$ref": "#/$defs/uint32"},
+        "fuel": {"$ref": "#/$defs/uint64"},
+        "time": {"$ref": "#/$defs/ticks"},
+        "nextDeadline": {"description": "null: none.", "type": ["integer", "null"], "minimum": 0, "maximum": 18446744073709551615}
+      },
+      "required": ["status", "runs", "fuel", "time", "nextDeadline"],
+      "additionalProperties": false
+    },
+
+    "run.ack.params": {"$ref": "#/$defs/noParams"},
+    "run.ack.result": {"$ref": "#/$defs/empty"},
+
+    "run.hibernate.params": {
+      "description": "Hibernate an actor at rest (`ta_host_hibernate`): its blob is the client's to keep.",
+      "type": "object",
+      "properties": {"session": {"$ref": "#/$defs/session"}},
+      "required": ["session"],
+      "additionalProperties": false
+    },
+    "run.hibernate.result": {
+      "type": "object",
+      "properties": {"blob": {"$ref": "#/$defs/base64url"}},
+      "required": ["blob"],
+      "additionalProperties": false
+    },
+
+    "run.wake.params": {
+      "description": "Wake a hibernated actor from its blob (`ta_host_wake`).",
+      "type": "object",
+      "properties": {"session": {"$ref": "#/$defs/session"}, "blob": {"$ref": "#/$defs/base64url"}},
+      "required": ["session", "blob"],
+      "additionalProperties": false
+    },
+    "run.wake.result": {"$ref": "#/$defs/empty"},
+
+    "run.sweep.params": {
+      "description": "The CLOCK sweep (`ta_host_sweep`): scan at most `maxScan` actors, answer at most `limit` at rest to hibernate.",
+      "type": "object",
+      "properties": {"maxScan": {"$ref": "#/$defs/uint32"}, "limit": {"$ref": "#/$defs/uint32"}},
+      "required": ["maxScan", "limit"],
+      "additionalProperties": false
+    },
+    "run.sweep.result": {
+      "type": "object",
+      "properties": {"sessions": {"type": "array", "items": {"$ref": "#/$defs/session"}}},
+      "required": ["sessions"],
+      "additionalProperties": false
+    },
+
+    "run.migrate.params": {
+      "description": "Move actors to the current version of their chart (`ta_host_migrate`): every chart, one chart by name, or one session; `wake` asks for hibernated actors too (`effect.wake`); `timeout` ends it.",
+      "type": "object",
+      "properties": {
+        "chart": {"type": "string"},
+        "session": {"$ref": "#/$defs/session"},
+        "wake": {"type": "boolean"},
+        "timeout": {"$ref": "#/$defs/time"}
+      },
+      "additionalProperties": false
+    },
+    "run.migrate.result": {
+      "type": "object",
+      "properties": {"migration": {"$ref": "#/$defs/uint32"}},
+      "required": ["migration"],
+      "additionalProperties": false
+    },
+
+    "run.snapshot.params": {
+      "description": "A snapshot of the quiescent host (`ta_host_snapshot_pack`), answered, or written whole to `path`.",
+      "type": "object",
+      "properties": {"path": {"type": "string"}},
+      "additionalProperties": false
+    },
+    "run.snapshot.result": {
+      "type": "object",
+      "oneOf": [
+        {
+          "properties": {"snapshot": {"$ref": "#/$defs/base64url"}},
+          "required": ["snapshot"],
+          "additionalProperties": false
+        },
+        {
+          "properties": {"bytes": {"description": "The bytes written to `path`.", "$ref": "#/$defs/uint64"}},
+          "required": ["bytes"],
+          "additionalProperties": false
+        }
+      ]
+    },
+
+    "run.restore.params": {
+      "description": "Replace the host with one restored from a snapshot, given or read from `path`.",
+      "type": "object",
+      "oneOf": [
+        {
+          "properties": {"snapshot": {"$ref": "#/$defs/base64url"}},
+          "required": ["snapshot"],
+          "additionalProperties": false
+        },
+        {
+          "properties": {"path": {"type": "string"}},
+          "required": ["path"],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "run.restore.result": {
+      "type": "object",
+      "properties": {"segments": {"type": "array", "items": {"$ref": "#/$defs/segment"}}},
+      "required": ["segments"],
+      "additionalProperties": false
+    },
+
+    "run.traces.params": {"$ref": "#/$defs/noParams"},
+    "run.traces.result": {
+      "type": "object",
+      "properties": {"spans": {"$ref": "#/$defs/spans"}},
+      "required": ["spans"],
+      "additionalProperties": false
+    },
+
+    "run.metrics.params": {"$ref": "#/$defs/noParams"},
+    "run.metrics.result": {
+      "type": "object",
+      "properties": {"otlp": {"description": "An OTLP ExportMetricsServiceRequest.", "$ref": "#/$defs/base64url"}},
+      "required": ["otlp"],
+      "additionalProperties": false
+    },
+
+    "run.post.params": {
+      "description": "A message for `ta_host_post` as CBOR, as given: for bytes JSON cannot carry, and to read a reply's exact values.",
+      "type": "object",
+      "properties": {"message": {"$ref": "#/$defs/base64url"}},
+      "required": ["message"],
+      "additionalProperties": false
+    },
+    "run.post.result": {
+      "type": "object",
+      "properties": {"reply": {"description": "The reply's CBOR; absent for a message without id.", "$ref": "#/$defs/base64url"}},
+      "additionalProperties": false
+    },
+
+    "run.schema.params": {"$ref": "#/$defs/noParams"},
+    "run.schema.result": {
+      "type": "object",
+      "properties": {"schema": {"description": "This schema.", "type": "object"}},
+      "required": ["schema"],
+      "additionalProperties": false
+    },
+
+    "trace.configure.params": {
+      "description": "Forwarded to the host: what every segment traces.",
+      "type": "object",
+      "properties": {
+        "detail": {"$ref": "#/$defs/detail"},
+        "values": {"type": "boolean"},
+        "sample": {"$ref": "#/$defs/share"},
+        "records": {"type": "boolean"},
+        "rules": {"$ref": "#/$defs/traceRules"}
+      },
+      "additionalProperties": false
+    },
+    "trace.configure.result": {"$ref": "#/$defs/empty"},
+
+    "trace.watch.params": {
+      "description": "Forwarded to the host: rules in front of the configured ones, for `seconds` on the host's clock (null: no end; core refuses 1e9 and past).",
+      "type": "object",
+      "properties": {
+        "rules": {"type": "array", "minItems": 1, "maxItems": 32, "items": {"$ref": "#/$defs/traceRule"}},
+        "seconds": {"type": ["number", "null"], "minimum": 0, "maximum": 1000000000}
+      },
+      "required": ["rules"],
+      "additionalProperties": false
+    },
+    "trace.watch.result": {
+      "type": "object",
+      "properties": {"id": {"$ref": "#/$defs/uint64"}},
+      "required": ["id"],
+      "additionalProperties": false
+    },
+
+    "trace.unwatch.params": {
+      "description": "Forwarded to the host: end a watch early.",
+      "type": "object",
+      "properties": {"id": {"$ref": "#/$defs/uint64"}},
+      "required": ["id"],
+      "additionalProperties": false
+    },
+    "trace.unwatch.result": {"$ref": "#/$defs/empty"},
+
+    "trace.end.params": {"$ref": "#/$defs/noParams"},
+    "trace.end.result": {"$ref": "#/$defs/empty"},
+
+    "trace.spans.decode.params": {
+      "description": "Forwarded to the host, which takes `traces` as CBOR bytes only: a JSON string reaches it as text and is refused (`type`). Send it with `run.post`.",
+      "type": "object",
+      "properties": {"traces": {"$ref": "#/$defs/base64url"}},
+      "required": ["traces"],
+      "additionalProperties": false
+    },
+    "trace.spans.decode.result": {
+      "type": "object",
+      "properties": {"spans": {"$ref": "#/$defs/spans"}},
+      "required": ["spans"],
+      "additionalProperties": false
+    },
+
+    "host.stats.params": {"$ref": "#/$defs/noParams"},
+    "host.stats.result": {
+      "type": "object",
+      "properties": {
+        "host": {
+          "type": "object",
+          "properties": {
+            "segments": {"$ref": "#/$defs/uint64"},
+            "actors": {"$ref": "#/$defs/uint64"},
+            "hibernated": {"$ref": "#/$defs/uint64"},
+            "runnable": {"$ref": "#/$defs/uint64"},
+            "migrations": {"$ref": "#/$defs/uint64"},
+            "regionBytes": {"$ref": "#/$defs/uint64"},
+            "delivered": {"$ref": "#/$defs/uint64"},
+            "routed": {"$ref": "#/$defs/uint64"},
+            "migrated": {"$ref": "#/$defs/uint64"},
+            "retired": {"$ref": "#/$defs/uint64"},
+            "fuelClock": {"$ref": "#/$defs/uint64"}
+          },
+          "required": ["segments", "actors", "hibernated", "runnable", "migrations", "regionBytes", "delivered", "routed", "migrated", "retired", "fuelClock"],
+          "additionalProperties": false
+        },
+        "pools": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "segment": {"$ref": "#/$defs/segment"},
+              "actors": {"$ref": "#/$defs/poolUse"},
+              "events": {"$ref": "#/$defs/poolUse"},
+              "timers": {"$ref": "#/$defs/poolUse"},
+              "workspaces": {"$ref": "#/$defs/poolUse"},
+              "requests": {"$ref": "#/$defs/poolUse"},
+              "slabBytes": {"$ref": "#/$defs/poolUse"}
+            },
+            "required": ["segment", "actors", "events", "timers", "workspaces", "requests", "slabBytes"],
+            "additionalProperties": false
+          }
+        },
+        "charts": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "name": {"type": "string"},
+              "actors": {"$ref": "#/$defs/uint64"},
+              "hibernated": {"$ref": "#/$defs/uint64"},
+              "spawned": {"$ref": "#/$defs/uint64"},
+              "ended": {"$ref": "#/$defs/uint64"},
+              "turns": {"$ref": "#/$defs/uint64"},
+              "macrosteps": {"$ref": "#/$defs/uint64"},
+              "fuel": {"$ref": "#/$defs/uint64"},
+              "errorsExecution": {"$ref": "#/$defs/uint64"},
+              "errorsCommunication": {"$ref": "#/$defs/uint64"},
+              "errorsPlatform": {"$ref": "#/$defs/uint64"},
+              "faults": {"$ref": "#/$defs/uint64"}
+            },
+            "required": ["name", "actors", "hibernated", "spawned", "ended", "turns", "macrosteps", "fuel", "errorsExecution", "errorsCommunication", "errorsPlatform", "faults"],
+            "additionalProperties": false
+          }
+        }
+      },
+      "required": ["host", "pools", "charts"],
+      "additionalProperties": false
+    },
+
+    "host.config.params": {"$ref": "#/$defs/noParams"},
+    "host.config.result": {
+      "description": "The host's effective config, every default filled in, in core's shape: `ioProcessors` is core's list.",
+      "type": "object",
+      "properties": {
+        "systemID": {"type": "string"},
+        "system": {
+          "type": "object",
+          "properties": {
+            "maxActors": {"$ref": "#/$defs/uint64"},
+            "maxEvents": {"$ref": "#/$defs/uint64"},
+            "maxTimers": {"$ref": "#/$defs/uint64"},
+            "workspaces": {"$ref": "#/$defs/uint64"},
+            "maxRequests": {"$ref": "#/$defs/uint64"},
+            "outbox": {"$ref": "#/$defs/uint64"},
+            "quantum": {"$ref": "#/$defs/uint64"},
+            "instanceBytes": {"$ref": "#/$defs/uint64"},
+            "stringBytes": {"$ref": "#/$defs/uint64"},
+            "ticksPerSecond": {"$ref": "#/$defs/uint64"},
+            "traceBytes": {"$ref": "#/$defs/uint64"},
+            "traceContexts": {"$ref": "#/$defs/uint64"},
+            "traceRules": {"$ref": "#/$defs/uint64"},
+            "traceSeed": {"$ref": "#/$defs/uint64"},
+            "tracing": {"type": "boolean"}
+          },
+          "required": ["maxActors", "maxEvents", "maxTimers", "workspaces", "maxRequests", "outbox", "quantum", "instanceBytes", "stringBytes", "ticksPerSecond", "traceBytes", "traceContexts", "traceRules", "traceSeed", "tracing"],
+          "additionalProperties": false
+        },
+        "ioProcessors": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {"type": {"type": "string"}, "location": {"type": "string"}},
+            "required": ["type", "location"],
+            "additionalProperties": false
+          }
+        },
+        "migrateQuantum": {"$ref": "#/$defs/uint64"},
+        "telemetry": {
+          "type": "object",
+          "properties": {
+            "stagingBytes": {"$ref": "#/$defs/uint64"},
+            "logBytes": {"$ref": "#/$defs/uint64"},
+            "openSpans": {"$ref": "#/$defs/uint64"},
+            "chunks": {"$ref": "#/$defs/uint64"},
+            "scopes": {"$ref": "#/$defs/uint64"},
+            "valueLimit": {"$ref": "#/$defs/uint64"},
+            "renderBytes": {"$ref": "#/$defs/uint64"},
+            "resourceBytes": {"$ref": "#/$defs/uint64"},
+            "metricBytes": {"$ref": "#/$defs/uint64"},
+            "spanMetricCharts": {"$ref": "#/$defs/uint64"},
+            "flushInterval": {"$ref": "#/$defs/uint64"},
+            "linkParents": {"type": "boolean"},
+            "values": {"type": "boolean"},
+            "logs": {"type": "boolean"},
+            "resource": {"description": "Text to text.", "type": "object"}
+          },
+          "required": ["stagingBytes", "logBytes", "openSpans", "chunks", "scopes", "valueLimit", "renderBytes", "resourceBytes", "metricBytes", "spanMetricCharts", "flushInterval", "linkParents", "values", "logs", "resource"],
+          "additionalProperties": false
+        }
+      },
+      "required": ["systemID", "system", "ioProcessors", "migrateQuantum"],
+      "additionalProperties": false
+    },
+
+    "actor.list.params": {
+      "description": "Forwarded to the host: the sessions, a page at a time.",
+      "type": "object",
+      "properties": {
+        "cursor": {"description": "Opaque, from the previous result; 0: the start.", "$ref": "#/$defs/uint64"},
+        "limit": {"type": "integer", "minimum": 1, "maximum": 512}
+      },
+      "additionalProperties": false
+    },
+    "actor.list.result": {
+      "type": "object",
+      "properties": {
+        "sessions": {"type": "array", "items": {"$ref": "#/$defs/session"}},
+        "cursor": {"description": "null: every session was listed.", "type": ["integer", "null"], "minimum": 0, "maximum": 18446744073709551615}
+      },
+      "required": ["sessions", "cursor"],
+      "additionalProperties": false
+    },
+
+    "actor.get.params": {
+      "description": "Forwarded to the host: one session.",
+      "type": "object",
+      "properties": {"session": {"$ref": "#/$defs/session"}},
+      "required": ["session"],
+      "additionalProperties": false
+    },
+    "actor.get.result": {
+      "type": "object",
+      "properties": {
+        "session": {"$ref": "#/$defs/session"},
+        "segment": {"$ref": "#/$defs/segment"},
+        "chart": {"type": "string"},
+        "parent": {"description": "The session that invoked it; null for a root actor.", "type": ["integer", "null"], "minimum": 1, "maximum": 18446744073709551615},
+        "mailbox": {"$ref": "#/$defs/uint64"},
+        "invocations": {"$ref": "#/$defs/uint64"},
+        "timers": {
+          "type": "array",
+          "maxItems": 32,
+          "items": {
+            "type": "object",
+            "properties": {
+              "sendid": {"type": ["string", "null"]},
+              "event": {"type": "string"},
+              "due": {"$ref": "#/$defs/ticks"}
+            },
+            "required": ["sendid", "event", "due"],
+            "additionalProperties": false
+          }
+        },
+        "timersPending": {"$ref": "#/$defs/uint64"}
+      },
+      "required": ["session", "segment", "chart", "parent", "mailbox", "invocations", "timers", "timersPending"],
+      "additionalProperties": false
+    },
+
+    "actor.context.params": {
+      "description": "Forwarded to the host: a session's variables.",
+      "type": "object",
+      "properties": {"session": {"$ref": "#/$defs/session"}},
+      "required": ["session"],
+      "additionalProperties": false
+    },
+    "actor.context.result": {
+      "type": "object",
+      "properties": {"variables": {"description": "Each `<data>` id to its value; undefined is written null (`run.post` tells them apart).", "type": "object"}},
+      "required": ["variables"],
+      "additionalProperties": false
+    },
+
+    "actor.send.params": {
+      "description": "Forwarded to the host: an event for one actor, by `session` or local `address`. `run.send` takes every field of `ta_event_in`.",
+      "type": "object",
+      "oneOf": [
+        {
+          "properties": {
+            "session": {"$ref": "#/$defs/session"},
+            "event": {"type": "string"},
+            "data": {"$ref": "#/$defs/value"},
+            "origin": {"type": "string"},
+            "sendid": {"type": "string"}
+          },
+          "required": ["session", "event"],
+          "additionalProperties": false
+        },
+        {
+          "properties": {
+            "address": {"$ref": "#/$defs/address"},
+            "event": {"type": "string"},
+            "data": {"$ref": "#/$defs/value"},
+            "origin": {"type": "string"},
+            "sendid": {"type": "string"}
+          },
+          "required": ["address", "event"],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "actor.send.result": {"$ref": "#/$defs/empty"},
+
+    "actor.state.params": {
+      "description": "Forwarded to the host: a session's configuration.",
+      "type": "object",
+      "properties": {"session": {"$ref": "#/$defs/session"}},
+      "required": ["session"],
+      "additionalProperties": false
+    },
+    "actor.state.result": {
+      "type": "object",
+      "properties": {
+        "value": {"$ref": "#/$defs/stateValue"},
+        "history": {"description": "Each history state that recorded to where it would return, as a state value.", "type": "object"}
+      },
+      "required": ["value", "history"],
+      "additionalProperties": false
+    },
+
+    "notification": {
+      "description": "An effect the host handed out, written before the response to the request that caused it, discriminated by `method`. Every one carries `batch` (the server's count of batches) and `index` (its place in the batch); a field the effect does not set is left out.",
+      "type": "object",
+      "oneOf": [
+        {"properties": {"jsonrpc": {"const": "2.0"}, "method": {"const": "effect.send"}, "params": {"$ref": "#/$defs/effect.send.params"}}, "required": ["jsonrpc", "method", "params"], "additionalProperties": false},
+        {"properties": {"jsonrpc": {"const": "2.0"}, "method": {"const": "effect.invoke"}, "params": {"$ref": "#/$defs/effect.invoke.params"}}, "required": ["jsonrpc", "method", "params"], "additionalProperties": false},
+        {"properties": {"jsonrpc": {"const": "2.0"}, "method": {"const": "effect.uninvoke"}, "params": {"$ref": "#/$defs/effect.uninvoke.params"}}, "required": ["jsonrpc", "method", "params"], "additionalProperties": false},
+        {"properties": {"jsonrpc": {"const": "2.0"}, "method": {"const": "effect.request"}, "params": {"$ref": "#/$defs/effect.request.params"}}, "required": ["jsonrpc", "method", "params"], "additionalProperties": false},
+        {"properties": {"jsonrpc": {"const": "2.0"}, "method": {"const": "effect.wake"}, "params": {"$ref": "#/$defs/effect.wake.params"}}, "required": ["jsonrpc", "method", "params"], "additionalProperties": false},
+        {"properties": {"jsonrpc": {"const": "2.0"}, "method": {"const": "effect.log"}, "params": {"$ref": "#/$defs/effect.log.params"}}, "required": ["jsonrpc", "method", "params"], "additionalProperties": false},
+        {"properties": {"jsonrpc": {"const": "2.0"}, "method": {"const": "effect.done"}, "params": {"$ref": "#/$defs/effect.done.params"}}, "required": ["jsonrpc", "method", "params"], "additionalProperties": false},
+        {"properties": {"jsonrpc": {"const": "2.0"}, "method": {"const": "effect.error"}, "params": {"$ref": "#/$defs/effect.error.params"}}, "required": ["jsonrpc", "method", "params"], "additionalProperties": false},
+        {"properties": {"jsonrpc": {"const": "2.0"}, "method": {"const": "effect.migrated"}, "params": {"$ref": "#/$defs/effect.migrated.params"}}, "required": ["jsonrpc", "method", "params"], "additionalProperties": false},
+        {"properties": {"jsonrpc": {"const": "2.0"}, "method": {"const": "effect.migrationDone"}, "params": {"$ref": "#/$defs/effect.migrationDone.params"}}, "required": ["jsonrpc", "method", "params"], "additionalProperties": false},
+        {"properties": {"jsonrpc": {"const": "2.0"}, "method": {"const": "effect.segmentFreed"}, "params": {"$ref": "#/$defs/effect.segmentFreed.params"}}, "required": ["jsonrpc", "method", "params"], "additionalProperties": false},
+        {"properties": {"jsonrpc": {"const": "2.0"}, "method": {"const": "effect.traces"}, "params": {"$ref": "#/$defs/effect.traces.params"}}, "required": ["jsonrpc", "method", "params"], "additionalProperties": false},
+        {"properties": {"jsonrpc": {"const": "2.0"}, "method": {"const": "effect.logs"}, "params": {"$ref": "#/$defs/effect.logs.params"}}, "required": ["jsonrpc", "method", "params"], "additionalProperties": false}
+      ]
+    },
+
+    "transportMessage": {
+      "description": "A send to another system's address, as the other system's `run.send` takes it unchanged.",
+      "type": "object",
+      "properties": {
+        "target": {"$ref": "#/$defs/address"},
+        "event": {"type": "string"},
+        "data": {"$ref": "#/$defs/value"},
+        "cbor": {"$ref": "#/$defs/cbor"},
+        "sendid": {"type": "string"},
+        "origin": {"$ref": "#/$defs/address"},
+        "traceparent": {"$ref": "#/$defs/traceparent"}
+      },
+      "required": ["target", "event"],
+      "additionalProperties": false
+    },
+    "effect.send.params": {
+      "description": "A `<send>` the client handles: to an I/O processor of the config (`type`), to another system (`message`, for the transport), or to a service the client runs (`invocation` and `segment`). `waiting`: the sender waits for the batch's ack, so an answer given before it is in its queue when it goes on.",
+      "type": "object",
+      "properties": {
+        "batch": {"$ref": "#/$defs/uint64"},
+        "index": {"$ref": "#/$defs/uint32"},
+        "session": {"$ref": "#/$defs/session"},
+        "type": {"type": "string"},
+        "target": {"type": "string"},
+        "event": {"type": "string"},
+        "sendid": {"type": "string"},
+        "data": {"$ref": "#/$defs/value"},
+        "cbor": {"$ref": "#/$defs/cbor"},
+        "traceparent": {"$ref": "#/$defs/traceparent"},
+        "waiting": {"type": "boolean"},
+        "message": {"$ref": "#/$defs/transportMessage"},
+        "invocation": {"$ref": "#/$defs/invocation"},
+        "segment": {"$ref": "#/$defs/segment"}
+      },
+      "required": ["batch", "index", "session"],
+      "additionalProperties": false
+    },
+    "effect.invoke.params": {
+      "description": "An `<invoke>` of a service: the client runs every one. Answer with `run.send` (`invocation`, and `done` to end it) or `run.fail`. `restored`: announced again by a restored host's first turn.",
+      "type": "object",
+      "properties": {
+        "batch": {"$ref": "#/$defs/uint64"},
+        "index": {"$ref": "#/$defs/uint32"},
+        "session": {"$ref": "#/$defs/session"},
+        "segment": {"$ref": "#/$defs/segment"},
+        "invocation": {"$ref": "#/$defs/invocation"},
+        "type": {"type": "string"},
+        "src": {"type": "string"},
+        "invokeid": {"type": "string"},
+        "data": {"$ref": "#/$defs/value"},
+        "cbor": {"$ref": "#/$defs/cbor"},
+        "restored": {"type": "boolean"}
+      },
+      "required": ["batch", "index", "session", "segment", "invocation"],
+      "additionalProperties": false
+    },
+    "effect.uninvoke.params": {
+      "description": "An invocation cancelled: stop its stand-in.",
+      "type": "object",
+      "properties": {
+        "batch": {"$ref": "#/$defs/uint64"},
+        "index": {"$ref": "#/$defs/uint32"},
+        "segment": {"$ref": "#/$defs/segment"},
+        "invocation": {"$ref": "#/$defs/invocation"}
+      },
+      "required": ["batch", "index", "segment", "invocation"],
+      "additionalProperties": false
+    },
+    "effect.request.params": {
+      "description": "A chart asked for a chart its image lacks; the server refuses it (the parent gets `error.execution`).",
+      "type": "object",
+      "properties": {
+        "batch": {"$ref": "#/$defs/uint64"},
+        "index": {"$ref": "#/$defs/uint32"},
+        "session": {"$ref": "#/$defs/session"},
+        "src": {"type": "string"}
+      },
+      "required": ["batch", "index", "session", "src"],
+      "additionalProperties": false
+    },
+    "effect.wake.params": {
+      "description": "A hibernated actor is wanted again: `run.wake` it with the blob `run.hibernate` gave. `migration`: a migration asked for it.",
+      "type": "object",
+      "properties": {
+        "batch": {"$ref": "#/$defs/uint64"},
+        "index": {"$ref": "#/$defs/uint32"},
+        "session": {"$ref": "#/$defs/session"},
+        "migration": {"$ref": "#/$defs/uint32"}
+      },
+      "required": ["batch", "index", "session"],
+      "additionalProperties": false
+    },
+    "effect.log.params": {
+      "description": "A `<log>`.",
+      "type": "object",
+      "properties": {
+        "batch": {"$ref": "#/$defs/uint64"},
+        "index": {"$ref": "#/$defs/uint32"},
+        "session": {"$ref": "#/$defs/session"},
+        "label": {"type": "string"},
+        "text": {"type": "string"}
+      },
+      "required": ["batch", "index", "session"],
+      "additionalProperties": false
+    },
+    "effect.done.params": {
+      "description": "A top-level actor reached a final state: its name, the final state's id, and its donedata.",
+      "type": "object",
+      "properties": {
+        "batch": {"$ref": "#/$defs/uint64"},
+        "index": {"$ref": "#/$defs/uint32"},
+        "session": {"$ref": "#/$defs/session"},
+        "name": {"type": "string"},
+        "final": {"type": "string"},
+        "data": {"$ref": "#/$defs/value"},
+        "cbor": {"$ref": "#/$defs/cbor"}
+      },
+      "required": ["batch", "index", "session"],
+      "additionalProperties": false
+    },
+    "effect.error.params": {
+      "description": "A top-level actor ended on a fault: `status` names it.",
+      "type": "object",
+      "properties": {
+        "batch": {"$ref": "#/$defs/uint64"},
+        "index": {"$ref": "#/$defs/uint32"},
+        "session": {"$ref": "#/$defs/session"},
+        "status": {"type": "string"}
+      },
+      "required": ["batch", "index", "session", "status"],
+      "additionalProperties": false
+    },
+    "effect.migrated.params": {
+      "description": "An actor moved to a new version: its segment and chart now.",
+      "type": "object",
+      "properties": {
+        "batch": {"$ref": "#/$defs/uint64"},
+        "index": {"$ref": "#/$defs/uint32"},
+        "session": {"$ref": "#/$defs/session"},
+        "segment": {"$ref": "#/$defs/segment"},
+        "chart": {"$ref": "#/$defs/chartIndex"},
+        "migration": {"$ref": "#/$defs/uint32"}
+      },
+      "required": ["batch", "index", "session", "segment", "chart", "migration"],
+      "additionalProperties": false
+    },
+    "effect.migrationDone.params": {
+      "description": "A migration ended: how many moved, those that failed with their status, and those it left pending (hibernated, not woken).",
+      "type": "object",
+      "properties": {
+        "batch": {"$ref": "#/$defs/uint64"},
+        "index": {"$ref": "#/$defs/uint32"},
+        "migration": {"$ref": "#/$defs/uint32"},
+        "migrated": {"$ref": "#/$defs/uint64"},
+        "failed": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {"session": {"$ref": "#/$defs/session"}, "status": {"type": "string"}},
+            "required": ["session", "status"],
+            "additionalProperties": false
+          }
+        },
+        "pending": {"type": "array", "items": {"$ref": "#/$defs/session"}}
+      },
+      "required": ["batch", "index", "migration", "migrated", "failed", "pending"],
+      "additionalProperties": false
+    },
+    "effect.segmentFreed.params": {
+      "description": "A retired segment was freed.",
+      "type": "object",
+      "properties": {
+        "batch": {"$ref": "#/$defs/uint64"},
+        "index": {"$ref": "#/$defs/uint32"},
+        "segment": {"$ref": "#/$defs/segment"}
+      },
+      "required": ["batch", "index", "segment"],
+      "additionalProperties": false
+    },
+    "effect.traces.params": {
+      "description": "Spans the host staged, decoded.",
+      "type": "object",
+      "properties": {
+        "batch": {"$ref": "#/$defs/uint64"},
+        "index": {"$ref": "#/$defs/uint32"},
+        "spans": {"$ref": "#/$defs/spans"}
+      },
+      "required": ["batch", "index", "spans"],
+      "additionalProperties": false
+    },
+    "effect.logs.params": {
+      "description": "Log records the host staged, as an OTLP ExportLogsServiceRequest.",
+      "type": "object",
+      "properties": {
+        "batch": {"$ref": "#/$defs/uint64"},
+        "index": {"$ref": "#/$defs/uint32"},
+        "otlp": {"$ref": "#/$defs/base64url"}
+      },
+      "required": ["batch", "index", "otlp"],
+      "additionalProperties": false
+    }
+  }
+}

@@ -1,0 +1,1 @@
+{"method":"order.create","document":{"customer":"c-17","items":[{"sku":"tea","quantity":0}]},"error":{"code":-32602,"reason":"range","path":"params.items[0].quantity"}}

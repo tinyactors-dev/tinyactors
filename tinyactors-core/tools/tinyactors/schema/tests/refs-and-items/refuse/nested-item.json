@@ -1,0 +1,1 @@
+{"document":{"events":[{"name":"a"},{"name":"b","tags":["ok",""]}]},"error":{"code":-32602,"reason":"range","path":"events[1].tags[1]"}}

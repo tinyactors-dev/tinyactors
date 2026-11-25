@@ -1,0 +1,7 @@
+{
+  "properties": {
+    "a": {
+      "$ref": "other.json#/$defs/a"
+    }
+  }
+}

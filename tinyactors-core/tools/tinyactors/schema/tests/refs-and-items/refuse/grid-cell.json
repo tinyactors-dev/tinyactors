@@ -1,0 +1,1 @@
+{"document":{"grid":[[1],[2,"x"]]},"error":{"code":-32602,"reason":"type","path":"grid[1][1]"}}

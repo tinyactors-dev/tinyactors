@@ -155,7 +155,11 @@ implementation of that layer). Layer dependency rules are in
 │   ├── tinyactors/            ✅ the tinyactors command (docs/cli.md): git-style commands over
 │   │                             charts, manifests and images, answers in markdown, json or xml,
 │   │                             fmt (canonical.c) writing charts again in one layout;
-│   │                             platform.c the only file with the C library (tests/unit/test_tool.c)
+│   │                             platform.c the only file with the C library (tests/unit/test_tool.c);
+│   │                             run.schema.json the run protocol's JSON Schema, schema_check.c its
+│   │                             checker over tables schema/generate.rb writes into
+│   │                             build/<variant>/generated (tests/unit/test_schema_check.c,
+│   │                             mise run run:schema)
 │   └── tarun/                 ◻ runner CLI: image + scripted events + simulated time -> trace
 │
 ├── tests/

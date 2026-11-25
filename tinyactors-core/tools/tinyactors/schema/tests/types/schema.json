@@ -1,0 +1,37 @@
+{
+  "description": "Each type, a list of types, and schemas that allow anything.",
+  "type": "object",
+  "properties": {
+    "o": {
+      "type": "object"
+    },
+    "a": {
+      "type": "array"
+    },
+    "s": {
+      "type": "string"
+    },
+    "i": {
+      "type": "integer"
+    },
+    "n": {
+      "type": "number"
+    },
+    "b": {
+      "type": "boolean"
+    },
+    "z": {
+      "type": "null"
+    },
+    "either": {
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "anything": true,
+    "documented": {
+      "description": "any value"
+    }
+  }
+}

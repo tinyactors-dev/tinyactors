@@ -1,0 +1,1 @@
+schema.json#/anyOf: anyOf is not supported

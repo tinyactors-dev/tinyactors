@@ -17,7 +17,9 @@ programs and the builds (`dev`: ASan/UBSan at -O1; `release`; `wasi`).
   (`build/dev/lib`, `build/dev/bin`); `--release` builds `build/release`.
 - `mise run test` builds and runs every test program, then `lint`,
   `check:freestanding`, `api --check` (after `amalgamate`), `wasm:test`,
-  `conform` and `check:wasm`; `--full` adds `torture:test` and `check:cross`. Each also runs on its own.
+  `conform`, `check:wasm` and `run:schema` (the run protocol's JSON
+  Schema and the schema generator's fixtures against json_schemer, pinned
+  in `tools/tinyactors/schema/Gemfile.lock`); `--full` adds `torture:test` and `check:cross`. Each also runs on its own.
 - `mise run check:freestanding` must pass for any change under
   `src/{base,image,core,system}`; `mise run check:wasm` builds the tests for
   wasm32-wasi and runs them under wasmtime.

@@ -1,0 +1,25 @@
+{
+  "description": "The patterns the checker implements.",
+  "type": "object",
+  "properties": {
+    "bytes": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_-]*$"
+    },
+    "delay": {
+      "type": "string",
+      "pattern": "^[ \\t]*([0-9]+(\\.[0-9]*)?|\\.[0-9]+)(ms|s)[ \\t]*$"
+    },
+    "hex": {
+      "type": "string",
+      "pattern": "^[0-9a-f]*$"
+    },
+    "delayOrTicks": {
+      "type": [
+        "integer",
+        "string"
+      ],
+      "pattern": "^[ \\t]*([0-9]+(\\.[0-9]*)?|\\.[0-9]+)(ms|s)[ \\t]*$"
+    }
+  }
+}
