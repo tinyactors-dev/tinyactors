@@ -135,13 +135,19 @@ actors sending to each other.
 The [memory program](https://github.com/tinyactors-dev/tinyactors/tree/main/tinyactors-napi/examples/memory) measures what one more actor, message and
 delayed send costs in a process: the memory it holds of its own, in
 memory or swapped out, the host included (not the code of the runtime,
-which the kernel can drop and read back). Run it for your runtime, datamodel, chart and data:
+which the kernel can drop and read back), and what of it each part
+accounts for: the core's reservation and use, what the host allocates
+beside its regions, and quickjs's heap. Run it for your runtime,
+datamodel, chart and data:
 
 ```sh
 node examples/memory/main.mjs --counts 1000000 --datamodel native
 ```
 
-One run of it (2026-11-20; Intel Xeon @ 2.10GHz, 4 CPUs, 16 GiB, Linux;
+The tables below show the process's memory only: they come from a run
+of an earlier version of the program, before it accounted each part, and
+will be replaced at the next sweep of the published numbers. One run of
+it (2026-11-20; Intel Xeon @ 2.10GHz, 4 CPUs, 16 GiB, Linux;
 node 22.23.5, bun 1.4.1; a counter chart with one `<data>`, messages of
 `{"text": "hello"}`, tracing on). The hibernated row keeps at most 1000
 actors resident and the rest in a store.

@@ -97,7 +97,7 @@ static void ta_napi_host_finalize(napi_env env, void *data, void *hint) {
     (void)hint;
     ta_napi_host_release(env, host);
     if (host->self != NULL) napi_delete_reference(env, host->self);
-    ta_allocator allocator = host->allocator;
+    ta_allocator allocator = host->counted.given;
     allocator.free(allocator.context, host, sizeof *host);
 }
 
@@ -575,7 +575,7 @@ static bool ta_napi_host_create(napi_env env, ta_napi_host *host, napi_value con
     }
     if (ok) {
         ta_buffer refusal = {ta_growable_arena_alloc(&host->arena, TA_NAPI_CONFIG_ERROR, 8), TA_NAPI_CONFIG_ERROR, 0};
-        ta_host_environment environment = {sizeof environment, 1, host->datamodels, host->allocator, NULL,
+        ta_host_environment environment = {sizeof environment, 1, host->datamodels, host->counted.given, NULL,
                                            refusal.pointer != NULL ? &refusal : NULL, ta_napi_host_nonce(env)};
         status = ta_host_create(cbor, &environment, &host->host);
         if (status != TA_OK) {
@@ -709,7 +709,7 @@ static bool ta_napi_host_restore_core(napi_env env, ta_napi_host *host, ta_napi_
     for (uint32_t i = 0; ok && i < contents.image_count; i++) images[i] = ta_host_snapshot_image(pack, i);
     if (ok) {
         ta_buffer refusal = {ta_growable_arena_alloc(&host->arena, TA_NAPI_CONFIG_ERROR, 8), TA_NAPI_CONFIG_ERROR, 0};
-        ta_host_environment environment = {sizeof environment, 1, host->datamodels, host->allocator, NULL,
+        ta_host_environment environment = {sizeof environment, 1, host->datamodels, host->counted.given, NULL,
                                            refusal.pointer != NULL ? &refusal : NULL, 0}; /* the snapshot's identity */
         ta_host_snapshot_input input = {cbor, {contents.host, contents.host_length}, images, contents.image_count, 0};
         status = ta_host_restore(&environment, &input, &host->host);
@@ -842,7 +842,8 @@ static napi_value ta_napi_host_new(napi_env env, napi_callback_info info) {
     memset(host, 0, sizeof *host);
     host->env = env;
     host->native.host = host;
-    host->allocator = allocator;
+    host->counted.given = allocator;
+    host->allocator = ta_napi_counted_allocator(&host->counted);
     host->deadline = UINT64_MAX;
     host->telemetry = !ta_napi_is(env, ta_napi_option(env, &options, "telemetry"), napi_undefined);
     ta_growable_arena_config arena = {sizeof arena, 0, 16384, &host->allocator};
@@ -987,6 +988,41 @@ static napi_value ta_napi_host_quickjs_heap(napi_env env, napi_callback_info inf
     if (host == NULL) return NULL;
     if (host->quickjs == NULL || host->host == NULL) napi_get_undefined(env, &result);
     else napi_create_double(env, (double)ta_datamodel_ecmascript_heap_bytes(host->quickjs), &result);
+    return result;
+}
+
+/* host.quickjsHeapBlocks: the blocks the quickjs engine holds
+ * (ta_datamodel_ecmascript_heap_blocks, O(1)); each costs the C library's
+ * header beside its bytes. undefined on a native host and on a closed one. */
+static napi_value ta_napi_host_quickjs_blocks(napi_env env, napi_callback_info info) {
+    ta_napi_host *host = ta_napi_host_of(env, &(ta_napi_host_check){ta_napi_this(env, info), false});
+    napi_value result = NULL;
+    if (host == NULL) return NULL;
+    if (host->quickjs == NULL || host->host == NULL) napi_get_undefined(env, &result);
+    else napi_create_double(env, (double)ta_datamodel_ecmascript_heap_blocks(host->quickjs), &result);
+    return result;
+}
+
+/* The addon's bindingMemory(host): {bytes, peak, blocks} of the binding's
+ * own blocks of a Host (addon.h, ta_napi_counted). lib/direct.mjs does not
+ * export it: the binding's tests load the addon to read it (no public
+ * API). Valid on a closed host too: its bytes are then 0. */
+static napi_value ta_napi_binding_memory(napi_env env, napi_callback_info info) {
+    size_t argc = 1;
+    napi_value argv[1] = {NULL};
+    if (napi_get_cb_info(env, info, &argc, argv, NULL, NULL) != napi_ok) return NULL;
+    ta_napi_host *host = ta_napi_host_of(env, &(ta_napi_host_check){argc >= 1 ? argv[0] : NULL, false});
+    if (host == NULL) return NULL;
+    const struct {
+        const char *name;
+        uint64_t value;
+    } fields[] = {{"bytes", host->counted.bytes}, {"peak", host->counted.peak}, {"blocks", host->counted.blocks}};
+    napi_value result, value;
+    if (napi_create_object(env, &result) != napi_ok) return NULL;
+    for (size_t i = 0; i < sizeof fields / sizeof fields[0]; i++)
+        if (napi_create_double(env, (double)fields[i].value, &value) != napi_ok ||
+            napi_set_named_property(env, result, fields[i].name, value) != napi_ok)
+            return NULL;
     return result;
 }
 
@@ -1885,6 +1921,7 @@ napi_status ta_napi_host_define(napi_env env, napi_value exports) {
         {"ticksPerSecond", NULL, NULL, ta_napi_host_ticks, NULL, NULL, napi_configurable, NULL},
         {"nextDeadline", NULL, NULL, ta_napi_host_next_deadline, NULL, NULL, napi_configurable, NULL},
         {"quickjsHeapBytes", NULL, NULL, ta_napi_host_quickjs_heap, NULL, NULL, napi_configurable, NULL},
+        {"quickjsHeapBlocks", NULL, NULL, ta_napi_host_quickjs_blocks, NULL, NULL, napi_configurable, NULL},
         {"now", NULL, ta_napi_host_now, NULL, NULL, NULL, napi_default_method, NULL},
         {"idle", NULL, ta_napi_host_idle, NULL, NULL, NULL, napi_default_method, NULL},
         {"addImage", NULL, ta_napi_host_add_image, NULL, NULL, NULL, napi_default_method, NULL},
@@ -1917,5 +1954,9 @@ napi_status ta_napi_host_define(napi_env env, napi_value exports) {
     napi_status status = napi_define_class(env, "Host", NAPI_AUTO_LENGTH, ta_napi_host_new, NULL, count, properties, &class);
     if (status == napi_ok) status = ta_napi_methods_define(env, class);
     if (status == napi_ok) status = napi_set_named_property(env, exports, "Host", class);
+    napi_value memory;
+    if (status == napi_ok)
+        status = napi_create_function(env, "bindingMemory", NAPI_AUTO_LENGTH, ta_napi_binding_memory, NULL, &memory);
+    if (status == napi_ok) status = napi_set_named_property(env, exports, "bindingMemory", memory);
     return status;
 }

@@ -17,6 +17,14 @@ module NodeAPI
   # The objects the addon links, and the addon itself, which lib/direct.mjs loads.
   OBJECTS = BUILD.join('objects')
   ADDON = BUILD.join('tinyactors.node')
+  # ta-layout, core's tools/layout/layout.c built against the same
+  # amalgamation: the region ta_system_layout carves for an image and a
+  # config, which the memory example's test checks its core column with
+  # (docs/proposals/memory-accounting.md, O2). A program, not the addon:
+  # the C library is its own to call.
+  LAYOUT_SOURCE = ROOT.join('../tinyactors-core/tools/layout/layout.c').expand_path
+  LAYOUT = BUILD.join('ta-layout')
+  LAYOUT_FLAGS = %w[-std=c11 -Wall -Wextra -Wconversion -Werror].freeze
   # The suite's adapter, `node conform.mjs` (tinyactors-test/docs/driver.md).
   ADAPTER = ROOT.join('conform.mjs')
   # The mapping table (tinyactors-core/docs/bindings.md, section 2).
@@ -253,5 +261,15 @@ module NodeAPI
                               inputs: headers)
     end
     Toolchain::Target.host.plugin([*core, txml, *own].map(&:to_s), into: ADDON.to_s)
+    build_layout(core.reject { |object| object.basename.to_s.start_with?('tinyactors_datamodel_ecmascript') })
+  end
+
+  # Builds build/ta-layout from core's tools/layout/layout.c and the core
+  # objects the addon links but quickjs (it calls the compiler and
+  # ta_system_layout).
+  def build_layout(core)
+    object = compile(LAYOUT_SOURCE, OBJECTS.join('layout', 'layout.o'),
+                     flags: [*LAYOUT_FLAGS, *OPTIMIZE, "-I#{CORE_BUILD}"], inputs: CORE_BUILD.glob('*.h'))
+    Toolchain::Target.host.program([object, *core].map(&:to_s), into: LAYOUT.to_s)
   end
 end

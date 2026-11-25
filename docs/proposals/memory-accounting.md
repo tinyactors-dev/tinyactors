@@ -514,3 +514,35 @@ recorded here.
   library's allocator. `heap_bytes` is unchanged, so no binding changes
   with this step. The test: after a warm-up, 2,000 systems each spawning
   and freeing a session leave the block count where it was.
+- **The Node binding (step 5).** The binding's counter is
+  `ta_napi_counted` in the host (`src/addon.h`, `src/module.c`): the
+  host's `allocator`, which its tables, arenas and the native datamodel's
+  writer use, counts over the environment's allocator, which core's host
+  and the host's own block use uncounted. It is read by the addon's
+  `bindingMemory(host)`, which `lib/direct.mjs` does not re-export (O1:
+  no public API); `test/memory.test.mjs` loads the addon to read it (0
+  bytes after close, and `close()` allocates nothing), and the wasm
+  package skips that file. `mise run build` links `build/ta-layout` from
+  core's `tools/layout/layout.c` and the core objects the addon links,
+  quickjs's left out (it needs `libm`, and layout.c calls nothing of it).
+  The example (`examples/memory/main.mjs`) does not run `ta-layout`: an
+  application runs it from an installed package, which has no
+  `ta-layout`. It takes core reserved from two hosts' `regionBytes`, as
+  before, and the record sizes for core used from two more hosts per
+  pool at 2^16 and 2^17, as `ta-layout`'s check does; its test runs
+  `build/ta-layout` (both modes) and requires each row's core reserved
+  and the record sizes to equal it, so the equality the proposal asks
+  holds without the example needing the program. The columns are core
+  reserved, core used, host other, quickjs, accounted, process and blob
+  (no binding column: O1). quickjs's column needs its blocks, so
+  `host.quickjsHeapBlocks` joined the API (`ta_datamodel_ecmascript_heap_blocks`,
+  in both packages, `index.d.ts` and `docs/api-map.md`); its header is
+  taken as 16 B, the 64-bit C library's. The test found that quickjs keeps
+  the event an actor handled last in core's events pool (its `_event`;
+  the native datamodel detaches it), so after an event a quickjs actor
+  uses one event's record more than a native one, and the delayed-send
+  row's actor one; the test states it. Host other is 0 B per thing in
+  every row of a sized host, as spike R1 found. `mise run measure`,
+  `tools/measure.mjs` and the per-session table of `AGENTS.md` are gone;
+  the example's README and the capacity guide say their tables predate
+  the accounted columns and wait for step 7.

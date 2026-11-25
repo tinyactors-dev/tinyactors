@@ -907,6 +907,11 @@ export class Host implements Disposable, AsyncDisposable {
    * each access (cheap): what `quickjs.memoryLimit` bounds. `undefined` on
    * a native host and once closed. */
   readonly quickjsHeapBytes: number | undefined;
+  /** The blocks the quickjs engine holds, read on each access (cheap):
+   * beside its heap bytes, each block costs the C library's header of two
+   * words (16 B on a 64-bit machine). `undefined` on a native host and
+   * once closed. */
+  readonly quickjsHeapBlocks: number | undefined;
 
   /** Loads a compiled image, which it copies, and returns its segment, a
    * number. A chart whose name the host already has gets a new version:

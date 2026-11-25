@@ -1,7 +1,9 @@
 # Memory
 
 This program measures what an actor, a message and a delayed send cost
-on your runtime. It prints whole bytes per thing.
+on your runtime, part by part: what the core reserves and uses, what the
+host allocates beside it, quickjs's heap, and what the process holds. It
+prints whole bytes per thing.
 
 ```sh
 node examples/memory/main.mjs                       # or: bun examples/memory/main.mjs
@@ -9,6 +11,13 @@ node examples/memory/main.mjs --counts 1000000
 node examples/memory/main.mjs --datamodel quickjs --quickjs-memory-limit 8589934592
 node examples/memory/main.mjs --chart my-chart.scxml --data '{"text": "a longer message"}'
 ```
+
+The table below predates the accounted columns: it comes from the
+earlier version of this program, whose columns were memory, heap, core
+reserves and blob. It will be replaced at the next sweep of the
+published numbers (the root `AGENTS.md`, "Published numbers"). Its
+memory column is today's process, and its core reserves today's core
+reserved.
 
 ```output
 node 22.23.5, datamodel native, tracing on, 1000000 of each
@@ -21,18 +30,56 @@ per message waiting              315 B      56 B          106 B
 per delayed send pending         357 B      55 B          151 B
 ```
 
+Today it prints, for 5000 of each on quickjs (one run on a machine that
+was not quiet, so the process column is only an example):
+
+```output
+bun 1.4.4, datamodel quickjs, tracing on, 5000 of each
+
+                              core reserved  core used  host other  quickjs  accounted  process  blob
+per actor, started                    198 B      179 B         0 B    617 B      815 B   1350 B
+per actor, after an event             198 B      285 B         0 B   1194 B     1392 B   1937 B
+per actor, hibernated                  81 B      102 B         0 B    146 B      227 B    836 B 147 B
+per message waiting                   106 B      106 B         0 B    178 B      284 B    683 B
+per delayed send pending              151 B      151 B         0 B    180 B      331 B    662 B
+
+core's records: actor 81 B, event 106 B, timer 45 B
+```
+
 ## What the columns mean
 
-- **memory** is what the process holds more for each thing, the host
-  included: its own pages, not the code of mapped files. Plan with this
-  number.
-- **heap** is the datamodel's part of it: the JavaScript engine's heap on
-  the native datamodel, quickjs's own heap on quickjs. An actor's
-  variables and a message's data are here.
-- **core reserves** is the core's records for each thing. The host
-  reserves them when it sizes its pools, and they count in memory once
-  used.
+Each column but process comes from a count that is exact: the core's
+definitions, its own counters, or the bytes an allocator was asked for.
+
+- **core reserved** is the core's region for one more of the thing: what
+  a host sized for the count holds beyond one sized for none of it. The
+  host holds it from its creation, whether the things exist or not, so
+  plan with this number. For an actor it is its record (81 B), the
+  instance of the image's largest chart, and its strings.
+- **core used** is what the things use of that region, from the core's
+  own counters (`host.stats`' pools): the records in use of each pool
+  times the record's size, which the last line prints, and the slab of
+  instances and strings. A hibernated actor keeps its record and gives
+  its instance back.
+- **host other** is what the host allocates beside its regions
+  (`allocatedBytes` less `regionBytes` in `host.stats`): nothing per
+  thing in a host sized up front.
+- **quickjs** is, on quickjs, the engine's heap and the C library's
+  header of 16 B beside each of its blocks (`host.quickjsHeapBytes` and
+  `host.quickjsHeapBlocks`). An actor's variables and a message's data
+  are here.
+- **accounted** is core reserved, host other and quickjs together.
+- **process** is what the process holds more for each thing, the host
+  included: its own pages, not the code of mapped files. It is the
+  machine's and the engine's reading, never exact: the gap between it and
+  accounted is mostly the JavaScript engine holding the chart's data (on
+  the native datamodel, an actor's variables live in your engine's heap,
+  which no column above sees), then malloc's overhead per block and the
+  fixed costs of a host and an engine spread over the count.
 - **blob** is what a hibernated actor leaves in your store.
+
+The binding's own tables and arenas (its session rows, for one) are not a
+column: the package has no API for them. Its tests count them.
 
 ## What the rows mean
 
@@ -65,12 +112,19 @@ heap does not hold a million resident actors after an event:
 
 ## How it measures
 
-Each row runs in a process of its own. It sizes the host's pools for the
-count up front, so no pool grows during the measurement. It takes the
-memory after a collection, makes the things, and takes it again. Memory
-counts from before the host is made; the heap from after.
+Each row runs in a process of its own. It sizes every pool the row fills
+for the count up front, so no pool grows during the measurement. Core
+reserved is the difference between the regions of two hosts, one sized
+for the count and one for none of it. The rest it reads before and after
+making the things: `host.stats`, quickjs's heap and, after a collection,
+the process's memory, which counts from before the host is made. The
+record sizes come from two more hosts per pool, at 2^16 and 2^17 of it,
+as the core checks its own (`tools/layout/layout.c` in
+`tinyactors-core`); the example's test checks each core column against
+that program, `ta-layout`, which `mise run build` builds beside the
+addon.
 
-On Linux, memory is the process's anonymous pages, in memory or swapped
+On Linux, the process's memory is the process's anonymous pages, in memory or swapped
 out (`RssAnon` and `VmSwap` in `/proc/self/status`): what the host, the
 engine and quickjs allocate. It leaves out the pages of mapped files,
 the code of the runtime and the addon, which the kernel drops when the
@@ -79,7 +133,7 @@ are no cost per thing, and dropped between the two samples they made a
 row negative. Elsewhere it is the resident set (`process.memoryUsage().rss`).
 
 The host and the engine have fixed costs, which a small count shows
-more. The numbers vary by a few bytes between runs.
+more in the process column. The other columns do not vary between runs.
 
 ## The data
 
@@ -101,6 +155,9 @@ Each line is one row at one count: `runtime`, `datamodel`, `tracing`,
 `count`, `row`, `memory`, `heap`, `core_reserves`, `blob` (bytes),
 `failed` (what stopped a row that failed), `machine` and `date`. Plot
 `memory` against `count` for each `row` to see the fixed costs spread.
+That file predates the accounted columns; a run of this program writes
+`core_reserved`, `core_used`, `host_other`, `quickjs`, `accounted`,
+`process` and `blob` instead, and the next sweep will add such a file.
 
 That run took memory as the whole resident set, which also counts the
 code of the runtime paged in during a measurement, about 5 MB on node:

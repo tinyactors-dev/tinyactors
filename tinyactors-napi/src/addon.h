@@ -119,6 +119,27 @@ ta_napi_instance *ta_napi_instance_of(napi_env env);
  * environment's teardown. */
 ta_allocator ta_napi_allocator(napi_env env);
 
+/* The binding's own blocks of a host, counted: its tables, its arenas and
+ * the native datamodel's kept writer, which a host allocates through
+ * ta_napi_counted_allocator over `given` (the host's own block and core's
+ * blocks go through `given` uncounted). Plain integers on the host's
+ * thread; the allocator is called at growth and close, never per event.
+ * The binding's tests read them (the addon's bindingMemory, which
+ * lib/direct.mjs does not export: no public API).
+ *
+ *   given   the allocator the host's blocks come from (ta_napi_allocator);
+ *   bytes   what the binding holds through it now;
+ *   peak    the most it held at once;
+ *   blocks  the blocks it has allocated since the host was made. */
+typedef struct ta_napi_counted {
+    ta_allocator given;
+    uint64_t bytes, peak, blocks;
+} ta_napi_counted;
+
+/* An allocator over `counted->given` that counts in `counted`, which must
+ * outlive it (a host's: its own block). */
+ta_allocator ta_napi_counted_allocator(ta_napi_counted *counted);
+
 /* What an arena keeps between calls (AGENTS.md, "The binding's memory"):
  * a release to a mark that empties it (the outermost call's: nothing
  * else lives in it) gives its chunks back when it keeps more than its
@@ -371,7 +392,11 @@ typedef enum ta_napi_datamodel_kind {
  *   env         the environment that made it: every call checks it;
  *   self        a weak reference to the wrapper, whose own property under
  *               the instance's `handlers` symbol holds the handlers;
- *   allocator   ta_napi_allocator(env), the context of every block;
+ *   counted     the binding's own blocks, counted, over
+ *               ta_napi_allocator(env), which core's host and this struct
+ *               use (counted.given);
+ *   allocator   ta_napi_counted_allocator(&counted): the tables, the
+ *               arenas and the datamodel's writer grow through it;
  *   host        core's host; NULL once freed (`closed`);
  *   datamodels  the environment's one datamodel (core reads the list for
  *               the host's life);
@@ -417,6 +442,7 @@ typedef struct ta_napi_host {
     napi_env env;
     ta_napi_native native;
     napi_ref self;
+    ta_napi_counted counted;
     ta_allocator allocator;
     ta_host *host;
     ta_napi_datamodel_kind datamodel;

@@ -1,10 +1,38 @@
-// The measurements run, and the core's share is what `mise run layout` in
-// tinyactors-core gives: a message 106 B (57 B without tracing), a delayed
-// send 151 B (102 B). Run by `mise run examples memory`.
+// The measurements run, and each core column is what the core's own
+// definitions give: the reservation is ta-layout's region for the same
+// image and capacities (tinyactors-core's tools/layout/layout.c, which
+// `mise run build` builds beside the addon as build/ta-layout), the record
+// sizes are ta-layout's own check, and the use is those records times the
+// pools' counts. The process column is the machine's and the engine's,
+// never asserted. Run by `mise run examples memory`.
 import assert from 'node:assert/strict';
-import { existsSync, readFileSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { test } from 'node:test';
-import { memory, run } from './main.mjs';
+import { compiled, memory, run, sizes } from './main.mjs';
+
+const COUNT = 5000;
+const LAYOUT = fileURLToPath(new URL('../../build/ta-layout', import.meta.url));
+
+/** What ta-layout prints for `args`, as a map of name -> bytes. */
+function layout(...args) {
+  const result = spawnSync(LAYOUT, args.map(String), { encoding: 'utf8' });
+  assert.equal(result.status, 0, `ta-layout ${args.join(' ')}: ${result.stderr}`);
+  return Object.fromEntries(result.stdout.trim().split('\n').map((line) => {
+    const [name, bytes] = line.split(' ');
+    return [name, Number(bytes)];
+  }));
+}
+
+/** ta-layout's reservation per thing of a row: its region at COUNT and at
+ * none, the same capacities the example's hosts are given. */
+function reservation(image, what, tracing) {
+  const region = (n) => layout(image, ...Object.entries(sizes(what, COUNT, n, tracing)).map(([name, value]) => `${name}=${value}`)).region;
+  return Math.round((region(COUNT) - region(0)) / COUNT);
+}
 
 const MADV_PAGEOUT = 21; // Linux's <sys/mman.h>, since 5.4
 
@@ -41,18 +69,59 @@ test('memory leaves out the pages of mapped files the kernel reclaims', { skip: 
 
 for (const datamodel of ['native', 'quickjs']) {
   for (const tracing of [true, false]) {
-    test(`${datamodel}, tracing ${tracing ? 'on' : 'off'}: each thing costs memory, and the core's share is its records`, () => {
-      const results = run({ count: 5000, datamodel, tracing });
-      assert.equal(results.message.waiting.region, tracing ? 106 : 57);
-      assert.equal(results['delayed send'].pending.region, tracing ? 151 : 102);
-      assert.ok(results.actor.started.region > 81, `an actor's region: ${results.actor.started.region} B`);
-      // a hibernated actor keeps its records only: 81 B, up to 89 B as the indexes round up
-      const { hibernated } = results.hibernated;
-      assert.ok(hibernated.region >= 81 && hibernated.region <= 89, `a hibernated actor's region: ${hibernated.region} B`);
-      assert.ok(hibernated.blob > 0, `a hibernated actor's blob: ${hibernated.blob} B`);
-      for (const row of [results.actor.started, results.actor.handled, hibernated, results.message.waiting, results['delayed send'].pending]) {
-        assert.ok(row.resident > 0, JSON.stringify(row));
+    test(`${datamodel}, tracing ${tracing ? 'on' : 'off'}: each core column is what the core's definitions give`, async () => {
+      const directory = mkdtempSync(join(tmpdir(), 'tinyactors-memory-'));
+      try {
+        const image = join(directory, 'counter.tai');
+        writeFileSync(image, compiled().image);
+        await check(image, datamodel, tracing);
+      } finally {
+        rmSync(directory, { recursive: true, force: true });
       }
     });
   }
+}
+
+async function check(image, datamodel, tracing) {
+  const results = await run({ count: COUNT, datamodel, tracing });
+  // the records: what core checks against its types' debug information
+  const records = layout();
+  assert.deepEqual(results.units, { actor: records.actor, event: records[tracing ? 'event' : 'untraced-event'], timer: records.timer });
+  const { units } = results;
+  const rows = {
+    started: [results.actor.started, 'actor'], handled: [results.actor.handled, 'actor'],
+    hibernated: [results.hibernated.hibernated, 'hibernated'], waiting: [results.message.waiting, 'message'],
+    pending: [results['delayed send'].pending, 'delayed send'],
+  };
+  for (const [key, [row, what]] of Object.entries(rows)) {
+    assert.equal(row.failed, undefined, `${key}: ${row.failed}`);
+    // the reservation: ta-layout's region for the same image and capacities
+    assert.equal(row.reserved, reservation(image, what, tracing), `${key}: core reserved`);
+    // every pool the row fills was sized for it: none grew
+    assert.deepEqual(row.grown, [], `${key}: pools that grew`);
+    if (datamodel === 'native') assert.equal(row.quickjs, undefined, `${key}: quickjs on a native host`);
+    else assert.ok(row.quickjs > 0, `${key}: quickjs ${row.quickjs} B`);
+    assert.equal(typeof row.process, 'number', `${key}: process`); // the machine's: never asserted
+  }
+  const { started, hibernated, waiting, pending } = Object.fromEntries(Object.entries(rows).map(([key, [row]]) => [key, row]));
+  // core used: the pools' records in use, and the slab
+  assert.deepEqual(waiting.pools, { actors: 0, events: COUNT, timers: 0 });
+  assert.equal(waiting.used, units.event, 'a message waiting uses its event');
+  assert.equal(waiting.reserved, units.event, 'a message reserves its event');
+  // quickjs keeps the event an actor handled last, as its _event, in the
+  // core's pool until the next one (the native datamodel detaches it): one
+  // more event on quickjs for the delayed sends' actor, one per actor after
+  // an event
+  const kept = datamodel === 'quickjs' ? 1 : 0;
+  assert.deepEqual(pending.pools, { actors: 0, events: COUNT + kept, timers: COUNT });
+  assert.equal(pending.used, units.timer + units.event, 'a delayed send uses its timer and its message');
+  assert.equal(pending.reserved, units.timer + units.event, 'a delayed send reserves its timer and its message');
+  assert.equal(started.pools.actors, COUNT);
+  assert.deepEqual(rows.handled[0].pools, { actors: COUNT, events: kept * COUNT, timers: 0 });
+  assert.ok(started.used > units.actor, `a started actor uses its record and its instance: ${started.used} B`);
+  assert.equal(hibernated.pools.actors, COUNT);
+  assert.ok(hibernated.used >= units.actor, `a hibernated actor keeps its record: ${hibernated.used} B`);
+  assert.ok(hibernated.blob > 0, `a hibernated actor's blob: ${hibernated.blob} B`);
+  // a host sized up front allocates nothing per thing beside its region
+  for (const row of [started, waiting, pending]) assert.equal(row.hostOther, 0, JSON.stringify(row));
 }

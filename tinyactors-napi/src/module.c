@@ -35,6 +35,30 @@ ta_allocator ta_napi_allocator(napi_env env) {
     return (ta_allocator){env, ta_napi_allocator_alloc, ta_napi_allocator_free};
 }
 
+/* The binding's own blocks, counted on their way to the given allocator
+ * (addon.h, ta_napi_counted); free is given the size, so no header. */
+static void *ta_napi_counted_alloc(void *context, size_t size, size_t align) {
+    ta_napi_counted *counted = (ta_napi_counted *)context;
+    void *block = counted->given.alloc(counted->given.context, size, align);
+    if (block != NULL) {
+        counted->bytes += size;
+        counted->blocks++;
+        if (counted->bytes > counted->peak) counted->peak = counted->bytes;
+    }
+    return block;
+}
+
+static void ta_napi_counted_free(void *context, void *ptr, size_t size) {
+    if (ptr == NULL) return;
+    ta_napi_counted *counted = (ta_napi_counted *)context;
+    counted->given.free(counted->given.context, ptr, size);
+    counted->bytes -= size;
+}
+
+ta_allocator ta_napi_counted_allocator(ta_napi_counted *counted) {
+    return (ta_allocator){counted, ta_napi_counted_alloc, ta_napi_counted_free};
+}
+
 void ta_napi_arena_release(ta_growable_arena *arena, ta_growable_arena_mark mark, size_t cap) {
     ta_growable_arena_release(arena, mark);
     if (ta_growable_arena_position(arena).chunk == NULL && arena->reserved > cap)

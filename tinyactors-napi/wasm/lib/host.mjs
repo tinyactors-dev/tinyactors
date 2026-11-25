@@ -1677,6 +1677,12 @@ export class Host {
     const state = checked(this, false);
     return state.quickjs !== null && state.open ? state.quickjs.heapBytes() : undefined;
   }
+  // the blocks it holds, each with the C library's header beside its bytes
+  // (O(1)); undefined on a native host and on a closed one
+  get quickjsHeapBlocks() {
+    const state = checked(this, false);
+    return state.quickjs !== null && state.open ? state.quickjs.heapBlocks() : undefined;
+  }
 
   get nextDeadline() {
     const state = checked(this, false);

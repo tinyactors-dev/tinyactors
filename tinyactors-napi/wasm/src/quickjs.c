@@ -92,3 +92,8 @@ TA_WEB_EXPORT uint32_t ta_web_quickjs_reason(ta_web_host *host) {
 TA_WEB_EXPORT double ta_web_quickjs_heap_bytes(const ta_web_host *host) {
     return host->quickjs != NULL ? (double)ta_datamodel_ecmascript_heap_bytes(host->quickjs) : -1;
 }
+
+/* host.quickjsHeapBlocks: the blocks the engine holds (O(1)). */
+TA_WEB_EXPORT double ta_web_quickjs_heap_blocks(const ta_web_host *host) {
+    return host->quickjs != NULL ? (double)ta_datamodel_ecmascript_heap_blocks(host->quickjs) : -1;
+}

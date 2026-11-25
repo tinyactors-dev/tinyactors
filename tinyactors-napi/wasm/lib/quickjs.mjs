@@ -73,6 +73,7 @@ export class QuickJSDatamodel {
   }
 
   heapBytes() { return this.module.call('ta_web_quickjs_heap_bytes', this.state.pointer); }
+  heapBlocks() { return this.module.call('ta_web_quickjs_heap_blocks', this.state.pointer); }
 
   free() {}
 }

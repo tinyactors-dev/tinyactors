@@ -6,6 +6,7 @@ export const REASONS = {
   fs: 'needs node:fs',
   childProcess: 'needs node:child_process',
   workerThreads: 'needs node:worker_threads',
+  addon: 'reads the addon\'s own count of its blocks (bindingMemory), which lib/direct.mjs does not export and the wasm package does not have',
 };
 
 // file -> case -> reason, or [reason, runtimes...] for a case excluded in
@@ -83,6 +84,7 @@ export const EXCLUDED_FILES = {
   'crossing.test.mjs': ['childProcess', 'browser'], // the other package's snapshot is made by a process (browser.test.mjs crosses in a page)
   'docs.test.mjs': ['childProcess', 'browser'], // runs each example of the documentation as a process (wasm/test/documentation.mjs runs them in pages)
   'links.test.mjs': ['fs', 'browser'], // reads the package's documents
+  'memory.test.mjs': 'addon', // loads the addon itself for its bindingMemory
   'scale.test.mjs': ['childProcess', 'browser'], // runs each size as a process (tools/scale.mjs)
 };
 

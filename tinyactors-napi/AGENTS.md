@@ -511,6 +511,16 @@ The addon allocates almost nothing (bindings.md, section 6):
   process.
 - **Statuses are named by core:** a bare status in a message is
   `ta_status_name(status)` (`"TA_ERROR_STATE"`), never a table of ours.
+- **The binding's own blocks are counted** apart from core's: a host's
+  tables, arenas and the native datamodel's kept writer grow through
+  `ta_napi_counted_allocator` over the host's allocator, which counts the
+  bytes held, the peak and the blocks in the host (`ta_napi_counted`;
+  nothing per event: the allocator is called at growth and close); core's
+  host and the host's own block go to the allocator uncounted, since core
+  counts its own (`host.stats`' `allocatedBytes`). The addon's
+  `bindingMemory(host)` reads the count, and `lib/direct.mjs` does not
+  export it: no public API (docs/proposals/memory-accounting.md, O1).
+  Its test is in "Rules the suite cannot see".
 - **Where the allocator is called:** in the host's create and free, in
   the allocator (`src/module.c`, with `napi_adjust_external_memory`) and
   the environment's instance that holds it, and through core
@@ -755,58 +765,15 @@ d-dom, d-separate):
   clock goes on from the snapshot's time: the ticks it reads carry an
   offset (`ticks_offset`, mod 2^64) set at the restore, whatever clock
   reads them.
-- **Measured cost per session** (`mise run measure`, 2026-10-17: x86_64
-  Linux 6.18, Intel Xeon @ 2.10GHz, 4 CPUs, 16 GiB; node 22.23.3 with V8
-  12.4, bun 1.4.1; 10,000 actors of a chart with three `<data>`, one of
-  them a list, resident and idle; all four from one run, this machine's,
-  not the Python binding's): bytes per actor
-
-  | runtime, datamodel | resident | engine heap | region | after one event: resident | heap |
-  |---|---|---|---|---|---|
-  | node, native | 1188 | 197 | 287 | 1589 | 281 |
-  | node, quickjs | 891 | 10 | 287 | 1363 | 11 |
-  | bun, native | 1632 | 255 | 287 | 2602 | 345 |
-  | bun, quickjs | 1195 | 24 | 287 | 1602 | 24 |
-
-  The engine heap is node's `heapUsed + external` and bun's `heapSize +
-  extraMemorySize` after a forced collection; quickjs's heap is its own
-  malloc, in resident only. Resident varies between runs (bun's native
-  1632 to 1919 B in three runs that day; heap and region do not). The Python binding measured 433 B resident
-  on its `"python"` datamodel and 1104 B on quickjs on its own machine
-  (`tinyactors-cpython/AGENTS.md`): not comparable with these, which are
-  another machine's. A native session's heap is its scope (64 B on node),
-  its link (60 B), its list, its `_sessionid` and its element of the
-  host's `scopes` array (8 B); after one event its
-  `_event` adds about 85 B. Resident above heap and region is the
-  engine's, much of it a fixed cost the population amortizes: V8's young
-  generation grows during the spawns (about 300 B an actor of
-  `new_space` at 10,000), so at 40,000 the native datamodel is 747 B
-  resident on node and 971 B on bun (`--actors 40000`, 2026-10-16).
-  The region is sized up front here (`maxActors`); grown from the default
-  size it grows only the pool that ran out, by a quarter of the region
-  when that is at most 16 times the pool, and never shrinks (docs/allocation.md, finding 6, measured the
-  doubling of every pool it replaced: 48,967,040 B at 40,000 actors
-  against 10,415,192 B sized for them). The host's tables
-  add a slot per row, the row and core's 8 B record: 32 B a session.
-  **A session holds no `napi_ref`** (2026-10-17, docs/allocation.md,
-  finding 3): node's is a `v8impl::Reference` and its global handle,
-  about 96 B an actor of malloc (glibc's bytes in use, 160.4 B an actor
-  with it, 63.9 B without, 52 to 65 B of either the session table), so
-  the scopes are one JavaScript array per host at the row's slot and the
-  row is 24 B. Before and after, three runs each of `mise run measure`:
-  node native resident 1282, 1278, 1277 B and 1188, 1185, 1192 B (after
-  one event 1647, 1679, 1720 and 1589, 1593, 1579), heap 189 and 197 B;
-  bun native 2058, 2024, 2071 and 1632, 1661, 1919. Per event (the
-  benchmark of 10,000 actors of `fit`, one event to each per round, the
-  least of 40 rounds, pinned to one CPU, builds alternating, the mean of
-  12 runs on node and 8 on bun): node 5.225 us before, 5.198 us after;
-  bun 3.599 and 3.561. The array's read (`napi_get_element`) alone cost
-  node 1 to 3 % an event in three such series (5.277 us against 5.225 in
-  this one), since each entry reads its scope; the shared
-  context, which only a compilation needs, is no longer read per entry,
-  and that pays for it. Before the system
-  variables were made lazy, an earlier run on this machine gave 356 B of
-  heap on node and 448 B on bun (1565 B and 2135 B resident).
+- **What a session costs** is the memory example's to say
+  (`examples/memory/`, run by `mise run examples memory`): per actor,
+  message, delayed send and hibernated actor, the core's reservation and
+  use from its definitions and counters, the host's other allocations,
+  quickjs's heap with its blocks, and the process's memory beside them,
+  informational (docs/proposals/memory-accounting.md). A native session's
+  data lives in the application's engine, which no column of ours sees;
+  its row in the binding's session table (24 B and a slot) is the
+  binding's, counted by `bindingMemory` ("The binding's memory").
 
 ## Rules the suite cannot see, each with a test of its own
 
@@ -989,6 +956,10 @@ file.
   invoker'`, `'a restore without the service tells the invoker, and
   throws nothing'` and `'no service for the type is a communication error
   for the invoker, and nothing is thrown'`.
+- **The binding's own blocks are counted, and close frees every one:**
+  after `close()` the count of a host's tables, arenas and writers is 0
+  bytes, and `close()` allocates nothing. Test: `test/memory.test.mjs:
+  'the binding's own blocks are counted, and none is left after close'`.
 - **Sweep and wake refuse numbers out of range**, never wrapped. Test:
   `test/hibernation.test.mjs: 'sweep, hibernate and wake refuse numbers out
   of range'`.
@@ -1102,7 +1073,12 @@ manages its development dependencies; the C toolchain is the root's.
   compiles against it with `Toolchain::Target` (root
   `mise/lib/toolchain.rb`; never a compiler from `PATH`, never `$CC`).
   `Target#plugin` links a loadable module, and `Toolchain::ObjectFormat`
-  already allows a Node-API addon's undefined `napi_*`.
+  already allows a Node-API addon's undefined `napi_*`. The build also
+  compiles one source file of core's, `tools/layout/layout.c`, against
+  the same amalgamation into `build/ta-layout` (`Target#program`, with
+  the core objects the addon links but quickjs): the region
+  `ta_system_layout` carves for an image and a config, which the memory
+  example's test checks its core columns with.
 - `mise run lint`: the rules' tests, the rules over `src/` and `lib/`, the adapters'
   lint (`mise run //tinyactors-test:lint -- conform.mjs`: the adapter
   imports only `@tinyactors/node` and `node:` built-ins),
@@ -1120,11 +1096,6 @@ manages its development dependencies; the C toolchain is the root's.
   by `MILESTONE` in `mise/napi.rb` once the adapter exists. Its `#MISE
   sources` list this project's files, core's and the suite's. An
   exhaustive test goes behind `--full` (root `AGENTS.md`).
-- `mise run measure [--actors N]`: bytes per actor at a population of
-  one chart (`tools/measure.mjs`), resident and idle and after one event
-  each, on both datamodels under both runtimes, each in a process of its
-  own, with the machine's signature; it writes `build/measure.json`. A
-  measurement, not a test: `mise run test` does not run it.
 - `mise run stress [--actors N] [--resident R] [--events E]`: the
   hibernation gate (`tools/stress.mjs`): N actors of a counter, at most R
   resident, the rest in the runtime's SQLite (`node:sqlite` under node,
@@ -1312,7 +1283,6 @@ src/                 addon.h, module.c, host.c, loop.c, effects.c, methods.c, va
 conform.mjs          the suite's adapter, over the public API only
 test/                what the suite cannot see: liveness, workers, GC, refusals
 tools/lint/          rules/, tests/, utils/ (ast-grep)
-tools/measure.mjs    bytes per actor, node and bun, native and quickjs (mise run measure)
 tools/stress.mjs     hibernation under load, the rest in SQLite (mise run stress)
 tools/migration.mjs  live migration under load, the rest in SQLite (mise run migration)
 tools/snapshot.mjs   a deploy rehearsed on a restored copy of a live host (mise run snapshot)
@@ -1322,7 +1292,7 @@ tools/store.mjs      what the gates share: the SQLite store, a seeded generator
 tools/parity.mjs     the parity check: both packages' shapes (tools/shape.mjs) compared, and each against index.d.ts
 mise/napi.rb         what the tasks share
 mise/pack.rb         the packages: the release build per target, its checks, npm pack, the smoke tests
-mise/tasks/          build, test, conform, lint, measure, stress, migration, snapshot, services, scale, pack (and pack:wasm), wasm:*, release
+mise/tasks/          build, test, conform, lint, stress, migration, snapshot, services, scale, pack (and pack:wasm), wasm:*, release
 tools/smoke.mjs      the packages' smoke test, run where they are installed
 tools/smoke-wasm*.mjs  @tinyactors/wasm's: node and bun, and Chromium (a page, a module Worker)
 examples/            applications over the package, each with a README and a test (mise run examples);
@@ -1338,6 +1308,7 @@ examples/            applications over the package, each with a README and a tes
                      inventory-sync/: a warehouse and a storefront as two systems over a socket, compensation, idempotent requests
                      job-scheduler/: recurring and one-shot jobs on the real clock, retries, deadlines, drift, a graceful shutdown
                      elevator-control/: a bank of cars, parallel regions, In(), deep history, invoked door controllers, generated scenarios
+                     memory/: what an actor, a message, a delayed send and a hibernated actor cost, part by part
                      remote-python/: a Python host and a Node host over a socket (mise run remote-python)
-build/               core's amalgamation and the addon (not in git)
+build/               core's amalgamation, the addon and ta-layout (not in git)
 ```

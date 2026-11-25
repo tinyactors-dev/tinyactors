@@ -44,6 +44,7 @@ rows were written (log entries `l-p0-map-*`, for the maintainer).
 | `host.system` | `host.config` | the system id the host was made with (`options.system`), read once at creation |
 | `options.quickjs`: `{maxOps, memoryLimit, stackLimit, realm}` | `ta_datamodel_ecmascript_new`, `TA_DATAMODEL_ECMASCRIPT_REALM_AUTO`, `TA_DATAMODEL_ECMASCRIPT_REALM_ISOLATED` | the sandbox's limits, passed through as `ta_datamodel_ecmascript_config`'s `max_ops`, `memory_limit` (bytes), `stack_limit` (bytes) and `realm` (`"auto"` or `"isolated"`), each absent field core's default (0: `max_ops` 1,000,000, `memory_limit` `TA_DATAMODEL_ECMASCRIPT_MEMORY_LIMIT_DEFAULT`, 1 GiB); given with `datamodel: "native"` it throws `TypeError` at creation |
 | `host.quickjsHeapBytes` | `ta_datamodel_ecmascript_heap_bytes` | the quickjs engine's heap in bytes, read on each access (O(1)), for an operator watching a sandboxed host against `memoryLimit`; `undefined` on a native host and on a closed one |
+| `host.quickjsHeapBlocks` | `ta_datamodel_ecmascript_heap_blocks` | the blocks the quickjs engine holds, read on each access (O(1)); with `quickjsHeapBytes`, what the engine holds of the C library's allocator: the bytes and a header of two words a block; `undefined` on a native host and on a closed one |
 | `host.ticksPerSecond`, `host.closed` | `host.config`, `ta_host_free` | read once at creation; whether the host was freed (as Python's) |
 | `host.close()`, `host[Symbol.dispose]()`, `host[Symbol.asyncDispose]()` | `trace.end`, `ta_host_traces`, `ta_host_logs`, `ta_host_effects_ack`, `ta_host_free` | frees the host (`ta_host_free`), its tables and its datamodel, and drops the handlers; a second call does nothing; the stop of bindings.md section 4: the timers cleared, a waiting `idle()` rejected with `TA_ERROR_STATE`, and with a telemetry handler and an encoder `trace.end` ends the open spans and the last take (bounded: 64 batches of at most 64 takes per signal; inputs from the handler allowed, its `close()` deferred, its error thrown once the host is freed) goes to it; pending response handlers dropped, never called; from a handler, deferred to the end of the turn; `asyncDispose` also awaits the promises the last take's handlers returned |
 | `host.addImage(image) → number` | `ta_host_add_image` | any `Uint8Array` or `ArrayBuffer` (`compiled.image`, a `.tai` file read), copied by the host during the call; returns the segment |
@@ -219,7 +220,9 @@ function decided here for the API review is marked so; its decision is in
 - **quickjs's memory, for the operator of a sandboxed host** (*decided
   for the API review*, log `l-p0-inventory-quickjs-limits`):
   `ta_datamodel_ecmascript_heap_bytes` behind `host.quickjsHeapBytes`, a
-  read of the engine's heap on a `datamodel: "quickjs"` host; the limit
+  read of the engine's heap on a `datamodel: "quickjs"` host, and
+  `ta_datamodel_ecmascript_heap_blocks` behind `host.quickjsHeapBlocks`,
+  its blocks; the limit
   itself is the Host option at creation (`options.quickjs.memoryLimit`,
   `ta_datamodel_ecmascript_config.memory_limit`), so
   `ta_datamodel_ecmascript_set_memory_limit` is not exposed (below).

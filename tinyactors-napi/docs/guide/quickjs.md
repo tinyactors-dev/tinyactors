@@ -134,3 +134,7 @@ SCXML. Around the edges:
 `host.quickjsHeapBytes` is the engine's heap in bytes, every actor's
 together, for an operator watching it against `memoryLimit`; it is
 `undefined` on a native host and once the host is closed.
+`host.quickjsHeapBlocks` is the number of blocks those bytes are in: the
+C library keeps a header of two words (16 B on a 64-bit machine) beside
+each, so the engine holds `quickjsHeapBytes + 16 × quickjsHeapBlocks` of
+the process's memory.

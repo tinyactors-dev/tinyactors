@@ -75,25 +75,30 @@ test('a host that names no datamodel gets the native one', async () => {
   equal(JSON.stringify(seen), JSON.stringify({ undefined: 'object', '[object Object]': 'object', native: 'object', quickjs: 'undefined' }), 'which datamodel ran');
 });
 
-test('quickjsHeapBytes is the quickjs engine\'s heap; undefined on a native host and once closed', async () => {
+test('quickjsHeapBytes and quickjsHeapBlocks are the quickjs engine\'s heap; undefined on a native host and once closed', async () => {
   const chart = scxml('hog', `
     <datamodel><data id="kept" expr="[]"/></datamodel>
     <state id="s"><transition event="grow"><script>for (let i = 0; i &lt; 20000; i++) kept.push({ i })</script></transition></state>`);
   const native = new Host([], { ...CONFIG, datamodel: 'native' });
   equal(native.quickjsHeapBytes, undefined, 'a native host');
+  equal(native.quickjsHeapBlocks, undefined, 'a native host\'s blocks');
   native.close();
   const host = new Host([], { ...CONFIG, ...QUICKJS });
   host.addImage(image({ hog: chart }));
   const session = host.spawn(host.chart('hog'));
   await host.idle();
   const before = host.quickjsHeapBytes;
+  const blocks = host.quickjsHeapBlocks;
+  if (!(Number.isSafeInteger(blocks) && blocks > 0)) throw new Error(`a quickjs host's blocks read ${blocks}`);
   if (!(typeof before === 'number' && before > 0)) throw new Error(`a quickjs host's heap reads ${before}`);
   host.send(session, 'grow');
   await host.idle();
   const after = host.quickjsHeapBytes;
+  if (!(host.quickjsHeapBlocks > blocks)) throw new Error(`20,000 objects kept: the blocks went from ${blocks} to ${host.quickjsHeapBlocks}`);
   if (!(after > before + 20000 * 16)) throw new Error(`20,000 objects kept: the heap went from ${before} to ${after} bytes`);
   host.close();
   equal(host.quickjsHeapBytes, undefined, 'a closed host');
+  equal(host.quickjsHeapBlocks, undefined, 'a closed host\'s blocks');
 });
 
 test('options are checked', () => {
