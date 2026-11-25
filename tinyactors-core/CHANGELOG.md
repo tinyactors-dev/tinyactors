@@ -109,6 +109,7 @@ Some behaviour changes under existing code. The compiler refuses markup that SCX
 
 **Fixed**
 
+- compile's help example compiles a manifest as an input (2ab09c1)
 - the memory examples' hibernated row holds hibernated actors only (120604b)
 - tinyactors run gives core a systemID that is not text (8ff6b6f)
 - the run protocol's schema lists host.stats' allocation counts (fb65117)
@@ -129,8 +130,9 @@ Some behaviour changes under existing code. The compiler refuses markup that SCX
 - ta_format_double and ta_format_quoted in base/format (843c1f8)
 
 <details>
-<summary>Internal (5)</summary>
+<summary>Internal (6)</summary>
 
+- docs/cli.md names exactly the commands and options of tinyactors (445766a)
 - the conformance suite against tinyactors run (af3b9f3)
 - the layout check runs in the fast pass (c537c57)
 - a writing-c skill holds the C rules, and AGENTS.md asks for it (527c951)
