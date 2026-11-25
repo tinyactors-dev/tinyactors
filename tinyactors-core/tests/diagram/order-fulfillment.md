@@ -63,6 +63,9 @@
 
 | Kind | Subject | Touches |
 | --- | --- | --- |
+| edgesOverlap | validating → failed | validating → failed |
+| edgesOverlap | payment → refunding on cancel | charging → failed on payment.declined |
+| edgesOverlap | payment → refunding on cancel | charging → refunding on payment.timeout payment.error |
 | labelOnEdge | charging → backoff on payment.timeout payment.error | validating → failed |
 | labelOnEdge | charging → backoff on payment.timeout payment.error | validating → failed |
 | labelOnEdge | charging → backoff on payment.timeout payment.error | charging → failed on payment.declined |

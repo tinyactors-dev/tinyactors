@@ -60,4 +60,7 @@
 
 #### Problems
 
-_none_
+| Kind | Subject | Touches |
+| --- | --- | --- |
+| edgesOverlap | online → reconnecting on connection.lost | reconnecting → resume on connect |
+| labelAstray | online → offline on disconnect |  |

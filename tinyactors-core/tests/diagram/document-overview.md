@@ -61,7 +61,15 @@
 
 | Kind | Subject | Touches |
 | --- | --- | --- |
+| edgesOverlap | review → rejected on legal.reject | review → rejected on finance.reject |
+| edgesOverlap | review → rejected on legal.reject | signoff → rejected on signoff.reject |
+| edgesOverlap | review → rejected on legal.reject | archiving → approved on archived |
+| edgesOverlap | review → rejected on finance.reject | signoff → rejected on signoff.reject |
+| edgesOverlap | review → rejected on finance.reject | archiving → approved on archived |
+| edgesOverlap | signoff → rejected on signoff.reject | archiving → approved on archived |
 | labelOnEdge | review → signoff on done.state.review | review → rejected on finance.reject |
+| labelAstray | review → revising on finance.changes |  |
+| labelAstray | review → rejected on finance.reject |  |
 | labelOnEdge | revising → review on resubmit | review → revising on legal.changes |
 | labelOnEdge | revising → review on resubmit | review → rejected on legal.reject |
 | labelOnEdge | revising → review on resubmit | review → revising on finance.changes |
@@ -70,3 +78,5 @@
 | labelOnEdge | signoff → archiving on signoff.approve | review → rejected on legal.reject |
 | labelOnEdge | signoff → archiving on signoff.approve | review → rejected on finance.reject |
 | labelOnEdge | signoff → archiving on signoff.approve | signoff → rejected on signoff.reject |
+| labelAstray | signoff → rejected on signoff.reject |  |
+| labelAstray | archiveRetry → archiving on archive.retry |  |

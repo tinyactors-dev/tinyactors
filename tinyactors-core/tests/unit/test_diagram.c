@@ -637,7 +637,68 @@ static void test_check(void) {
             break;
         }
     CHECK(problems_of(&a, &d.layout, TA_DIAGRAM_PROBLEM_LABEL_ON_BOX) >= 1);
+    /* a label beside its own route stays, one far from it is astray */
+    CHECK_EQUAL(problems_of(&a, &good.layout, TA_DIAGRAM_PROBLEM_LABEL_ASTRAY), 0);
+    for (uint32_t i = 0; i < good.layout.edge_count; i++) {
+        if (!good.layout.edges[i].labelled) continue;
+        damage_begin(&d, &good.layout);
+        ta_diagram_rect *label = &d.edges[i].label;
+        ta_diagram_point start = d.points[d.edges[i].first_point];
+        label->x = start.x + label->h / 2;
+        label->y = start.y + label->h / 2;
+        CHECK_EQUAL(problems_of(&a, &d.layout, TA_DIAGRAM_PROBLEM_LABEL_ASTRAY), 0);
+        label->x = start.x + 2 * label->h;
+        label->y = start.y + 2 * label->h;
+        CHECK_EQUAL(problems_of(&a, &d.layout, TA_DIAGRAM_PROBLEM_LABEL_ASTRAY), 1);
+        label->x = d.layout.width + 100;
+        CHECK_EQUAL(problems_of(&a, &d.layout, TA_DIAGRAM_PROBLEM_LABEL_ASTRAY), 1);
+        break;
+    }
+    /* another transition's edge run 1px beside an edge's last segment reads as one line with it;
+     * arriving at the same point only within a few px of it is a shared port */
+    CHECK_EQUAL(problems_of(&a, &good.layout, TA_DIAGRAM_PROBLEM_EDGES_OVERLAP), 0);
+    uint32_t tried = 0;
+    for (uint32_t i = 0; i < good.layout.edge_count && !tried; i++) {
+        const ta_diagram_edge *one = &good.layout.edges[i];
+        const ta_diagram_point *p = &good.layout.points[one->first_point];
+        ta_diagram_point end = p[one->point_count - 1], before = p[one->point_count - 2];
+        double dx = end.x - before.x, dy = end.y - before.y, length = dx < 0 ? -dx : dx;
+        length += dy < 0 ? -dy : dy;
+        if (length < 40) continue;
+        dx /= length;
+        dy /= length;
+        for (uint32_t j = 0; j < good.layout.edge_count; j++) {
+            if (good.layout.edges[j].transition == one->transition) continue;
+            static const uint32_t spare = 240; /* past every point of the good layout */
+            CHECK(one->first_point + one->point_count < spare);
+            damage_begin(&d, &good.layout);
+            d.edges[j].first_point = spare;
+            d.edges[j].point_count = 3;
+            /* from the side, then 8px along the last segment into its end */
+            d.points[spare] = (ta_diagram_point){end.x - 8 * dx - 30 * dy, end.y - 8 * dy + 30 * dx};
+            d.points[spare + 1] = (ta_diagram_point){end.x - 8 * dx, end.y - 8 * dy};
+            d.points[spare + 2] = end;
+            CHECK_EQUAL(problems_of(&a, &d.layout, TA_DIAGRAM_PROBLEM_EDGES_OVERLAP), 0);
+            /* 30px along it, into the same end: it runs with it */
+            d.points[spare] = (ta_diagram_point){end.x - 30 * dx - 30 * dy, end.y - 30 * dy + 30 * dx};
+            d.points[spare + 1] = (ta_diagram_point){end.x - 30 * dx, end.y - 30 * dy};
+            CHECK_EQUAL(problems_of(&a, &d.layout, TA_DIAGRAM_PROBLEM_EDGES_OVERLAP), 1);
+            /* 1px beside it, the whole last segment, to no shared end */
+            d.edges[j].point_count = 2;
+            d.points[spare] = (ta_diagram_point){before.x + dy, before.y - dx};
+            d.points[spare + 1] = (ta_diagram_point){end.x + dy, end.y - dx};
+            CHECK_EQUAL(problems_of(&a, &d.layout, TA_DIAGRAM_PROBLEM_EDGES_OVERLAP), 1);
+            /* 4px beside it: two lines */
+            d.points[spare] = (ta_diagram_point){before.x + 4 * dy, before.y - 4 * dx};
+            d.points[spare + 1] = (ta_diagram_point){end.x + 4 * dy, end.y - 4 * dx};
+            CHECK_EQUAL(problems_of(&a, &d.layout, TA_DIAGRAM_PROBLEM_EDGES_OVERLAP), 0);
+            tried = 1;
+            break;
+        }
+    }
+    CHECK(tried);
     CHECK(ta_diagram_problem_name(TA_DIAGRAM_PROBLEM_END_DETACHED).length == 11);
+    CHECK(ta_diagram_problem_name(TA_DIAGRAM_PROBLEM_EDGES_OVERLAP).length == 12);
     ta_growable_arena_free(&a.arena);
 }
 

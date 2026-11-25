@@ -633,7 +633,10 @@ final's pill, a history state's circle), `notOrthogonal`, `outsideParent`
 and `boxesOverlap`, which no layout may have, and the faults the layout still
 makes, to be worked down: `notCentred` (an edge alone on a side, off its
 middle), `throughBox`, `arrowAlongSide`, `labelOverlap`, `labelOnBox` and
-`labelOnEdge`. The SVG carries its own stylesheet, scoped: its classes and
+`labelOnEdge`, `labelAstray` (a label further from its own transition's
+line than its own height) and `edgesOverlap` (two transitions' lines less
+than 3 px apart for more than 10 px, so they read as one; where both end at
+one point, the 10 px before it are where they meet, not counted). The SVG carries its own stylesheet, scoped: its classes and
 ids are prefixed (`ta-`, `tinyactors-`) and its rules written under the
 root's class `tinyactors-diagram`, so the drawing put inline in a page takes
 none of the page's styles and gives it none.

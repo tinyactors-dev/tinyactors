@@ -65,8 +65,10 @@
 
 | Kind | Subject | Touches |
 | --- | --- | --- |
+| edgesOverlap | succeeded → ended | runEnded → waiting |
 | labelOnEdge | attempting → succeeded on result.ok | backingOff → attempting on retry |
 | labelOnEdge | attempting → failing on result.failed | attempting → failing on error.communication |
 | labelOnEdge | attempting → failing on result.failed | backingOff → attempting on retry |
 | labelOnEdge | attempting → failing on error.communication | attempting → failing on result.failed |
 | labelOnEdge | attempting → failing on error.communication | attempting → failing on attempt.timeout |
+| labelAstray | failing → runEnded |  |

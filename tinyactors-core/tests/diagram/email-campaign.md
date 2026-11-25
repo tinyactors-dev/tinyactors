@@ -56,5 +56,7 @@
 
 | Kind | Subject | Touches |
 | --- | --- | --- |
+| edgesOverlap | starting → running | starting → running |
 | labelOnEdge | active → held on campaign.pause | held → active on campaign.resume |
 | labelOnEdge | held → active on campaign.resume | active → held on campaign.pause |
+| labelAstray | spawning → spawning on poll wake |  |

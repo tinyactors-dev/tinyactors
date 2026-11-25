@@ -52,4 +52,8 @@ _none_
 
 #### Problems
 
-_none_
+| Kind | Subject | Touches |
+| --- | --- | --- |
+| edgesOverlap | open → authorising on pay | authorising → locked on hold |
+| edgesOverlap | authorising → locked on hold | captured → emailing on notify |
+| edgesOverlap | captured → emailing on notify | reviewing → locked on block |

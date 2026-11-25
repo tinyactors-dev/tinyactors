@@ -8,6 +8,8 @@
 
 static const double touching = 0.75; /* how far a point may be from an outline and still touch it */
 static const double centred = 1.0;   /* how far an edge alone on a side may be from its middle */
+static const double alongside = 3;   /* how close two parallel segments may run before they read as one line */
+static const double run_together = 10; /* how far they may run so before that counts */
 
 
 typedef ta_diagram_point point;
@@ -102,6 +104,78 @@ static int overlap(rect a, rect b) {
 static int within(rect inner, rect outer) {
     return inner.x >= outer.x - touching && inner.y >= outer.y - touching &&
            inner.x + inner.w <= outer.x + outer.w + touching && inner.y + inner.h <= outer.y + outer.h + touching;
+}
+
+/* The square of the gap between a rectangle and an axis-parallel segment: 0 where they meet. */
+static double rect_to_segment(rect r, point a, point b) {
+    double x0 = ta_diagram_min(a.x, b.x), x1 = ta_diagram_max(a.x, b.x);
+    double y0 = ta_diagram_min(a.y, b.y), y1 = ta_diagram_max(a.y, b.y);
+    double dx = ta_diagram_max(0, ta_diagram_max(r.x - x1, x0 - (r.x + r.w)));
+    double dy = ta_diagram_max(0, ta_diagram_max(r.y - y1, y0 - (r.y + r.h)));
+    return dx * dx + dy * dy;
+}
+
+static int same_point(point a, point b) {
+    return ta_diagram_abs(a.x - b.x) < touching && ta_diagram_abs(a.y - b.y) < touching;
+}
+
+/* An edge's route: its points and how many. */
+typedef struct route_view {
+    const point *p;
+    uint32_t count;
+} route_view;
+
+/* How far two segments run along one line, less the stretch within `run_together` of `port`
+ * (a point both routes end at, or none): the longest piece left, 0 when they are not
+ * collinear within `alongside`. */
+typedef struct collinear {
+    segment one, two;
+    int shared; /* 1: `port` is an end both routes have */
+    point port;
+} collinear;
+
+static double run_length(collinear c) {
+    point a = c.one.a, b = c.one.b, p = c.two.a, q = c.two.b;
+    int one_horizontal = ta_diagram_abs(a.y - b.y) < 0.01, two_horizontal = ta_diagram_abs(p.y - q.y) < 0.01;
+    int one_vertical = ta_diagram_abs(a.x - b.x) < 0.01, two_vertical = ta_diagram_abs(p.x - q.x) < 0.01;
+    double low, high, port_along, port_across, across;
+    if (one_horizontal && two_horizontal && !one_vertical && !two_vertical) {
+        if (ta_diagram_abs(a.y - p.y) >= alongside) return 0;
+        low = ta_diagram_max(ta_diagram_min(a.x, b.x), ta_diagram_min(p.x, q.x));
+        high = ta_diagram_min(ta_diagram_max(a.x, b.x), ta_diagram_max(p.x, q.x));
+        port_along = c.port.x, port_across = c.port.y, across = a.y;
+    } else if (one_vertical && two_vertical && !one_horizontal && !two_horizontal) {
+        if (ta_diagram_abs(a.x - p.x) >= alongside) return 0;
+        low = ta_diagram_max(ta_diagram_min(a.y, b.y), ta_diagram_min(p.y, q.y));
+        high = ta_diagram_min(ta_diagram_max(a.y, b.y), ta_diagram_max(p.y, q.y));
+        port_along = c.port.y, port_across = c.port.x, across = a.x;
+    } else {
+        return 0;
+    }
+    if (high <= low) return 0;
+    if (!c.shared || ta_diagram_abs(port_across - across) >= alongside) return high - low;
+    /* the stretch near the shared port is where the routes meet, not where they run together */
+    double before = ta_diagram_min(high, port_along - run_together) - low;
+    double after = high - ta_diagram_max(low, port_along + run_together);
+    return ta_diagram_max(0, ta_diagram_max(before, after));
+}
+
+/* 1 when the routes run along one line for more than `run_together` somewhere. */
+static int run_along(route_view one, route_view two) {
+    point ends[2] = {one.p[0], one.p[one.count - 1]};
+    collinear c = {{{0, 0}, {0, 0}}, {{0, 0}, {0, 0}}, 0, {0, 0}};
+    for (uint32_t e = 0; e < 2 && !c.shared; e++)
+        if (same_point(ends[e], two.p[0]) || same_point(ends[e], two.p[two.count - 1])) {
+            c.shared = 1;
+            c.port = ends[e];
+        }
+    for (uint32_t i = 1; i < one.count; i++)
+        for (uint32_t j = 1; j < two.count; j++) {
+            c.one = (segment){one.p[i - 1], one.p[i]};
+            c.two = (segment){two.p[j - 1], two.p[j]};
+            if (run_length(c) > run_together) return 1;
+        }
+    return 0;
 }
 
 /* ---- the check ------------------------------------------------------------------------------ */
@@ -205,7 +279,7 @@ ta_status ta_diagram_check(const ta_diagram_check_request *request, ta_diagram_p
     uint32_t boxes = layout->box_count, edges = layout->edge_count;
     /* at most: per edge, two ends, an angle and its crossings; per box, its parent and siblings;
      * per label, the other labels and the boxes */
-    c.capacity = edges * (4 + boxes) + layout->initial_count * 2 + boxes * (boxes + 1) + edges * (2 * edges + boxes) + 1;
+    c.capacity = edges * (4 + boxes) + layout->initial_count * 2 + boxes * (boxes + 1) + edges * (3 * edges + boxes + 1) + 1;
     c.list = (ta_diagram_problem *)ta_growable_arena_alloc(request->arena, sizeof(ta_diagram_problem) * c.capacity, 8);
     c.box_of = (const ta_diagram_box **)ta_growable_arena_alloc(request->arena, sizeof(ta_diagram_box *) * (chart->state_count + 1u), 8);
     if (!c.list || !c.box_of) return TA_ERROR_NO_MEMORY;
@@ -255,10 +329,31 @@ ta_status ta_diagram_check(const ta_diagram_check_request *request, ta_diagram_p
                 found(&c, (ta_diagram_problem){TA_DIAGRAM_PROBLEM_BOXES_OVERLAP, box->state, other->state});
         }
     }
-    /* labels: clear of each other and of every leaf */
+    /* edges of different transitions: never along one line */
+    for (uint32_t i = 0; i < edges; i++)
+        for (uint32_t j = i + 1; j < edges; j++) {
+            const ta_diagram_edge *one = &layout->edges[i], *two = &layout->edges[j];
+            if (one->transition == two->transition || one->point_count < 2 || two->point_count < 2) continue;
+            if (run_along((route_view){&layout->points[one->first_point], one->point_count},
+                          (route_view){&layout->points[two->first_point], two->point_count}))
+                found(&c, (ta_diagram_problem){TA_DIAGRAM_PROBLEM_EDGES_OVERLAP, i, j});
+        }
+    /* labels: near their own routes, clear of each other and of every leaf */
     for (uint32_t i = 0; i < edges; i++) {
         const ta_diagram_edge *edge = &layout->edges[i];
         if (!edge->labelled) continue;
+        double nearest = -1;
+        for (uint32_t j = 0; j < edges; j++) {
+            const ta_diagram_edge *own = &layout->edges[j];
+            if (own->transition != edge->transition) continue;
+            const ta_diagram_point *p = &layout->points[own->first_point];
+            for (uint32_t k = 1; k < own->point_count; k++) {
+                double gap = rect_to_segment(edge->label, p[k - 1], p[k]);
+                if (nearest < 0 || gap < nearest) nearest = gap;
+            }
+        }
+        if (nearest > edge->label.h * edge->label.h)
+            found(&c, (ta_diagram_problem){TA_DIAGRAM_PROBLEM_LABEL_ASTRAY, i, TA_NIL});
         for (uint32_t j = i + 1; j < edges; j++)
             if (layout->edges[j].labelled && overlap(edge->label, layout->edges[j].label))
                 found(&c, (ta_diagram_problem){TA_DIAGRAM_PROBLEM_LABEL_OVERLAP, i, j});
@@ -284,7 +379,7 @@ ta_status ta_diagram_check(const ta_diagram_check_request *request, ta_diagram_p
 static const char *const problem_names[] = {"startDetached", "endDetached",  "notOrthogonal",
                                             "arrowAlongSide", "notCentred",   "throughBox",
                                             "outsideParent", "boxesOverlap", "labelOverlap", "labelOnBox", "initialDetached",
-                                            "labelOnEdge"};
+                                            "labelOnEdge", "labelAstray", "edgesOverlap"};
 
 ta_string_view ta_diagram_problem_name(uint32_t kind) {
     if (kind >= sizeof problem_names / sizeof problem_names[0]) return ta_string("unknown");

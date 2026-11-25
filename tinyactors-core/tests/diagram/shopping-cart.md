@@ -77,4 +77,17 @@
 
 #### Problems
 
-_none_
+| Kind | Subject | Touches |
+| --- | --- | --- |
+| edgesOverlap | checkingOut → placed | retrying → reserving on retry |
+| edgesOverlap | reserving → compensating on reserve.refused | reserving → compensating on error.communication |
+| edgesOverlap | reserving → compensating on reserve.refused | reserving → compensating on reserving.timeout |
+| edgesOverlap | reserving → compensating on reserve.refused | reserving → compensating on cancel |
+| edgesOverlap | reserving → compensating on error.communication | reserving → compensating on reserving.timeout |
+| edgesOverlap | reserving → compensating on error.communication | reserving → compensating on cancel |
+| edgesOverlap | reserving → compensating on reserving.timeout | reserving → compensating on cancel |
+| labelAstray | checkingOut → compensating on confirm.refused |  |
+| labelAstray | checkingOut → compensating on error.communication |  |
+| labelAstray | checkingOut → compensating on checkout.timeout |  |
+| labelAstray | compensating → releaseBackoff on error.communication release.timeout |  |
+| labelAstray | compensating → retrying |  |

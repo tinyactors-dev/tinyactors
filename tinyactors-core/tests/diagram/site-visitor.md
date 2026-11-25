@@ -58,4 +58,10 @@
 
 #### Problems
 
-_none_
+| Kind | Subject | Touches |
+| --- | --- | --- |
+| edgesOverlap | roaming → eating on found | eating → roaming on chewed empty |
+| edgesOverlap | roaming → eating on found | approaching → greeted on greeting |
+| edgesOverlap | eating → roaming on chewed empty | approaching → greeted on greeting |
+| labelAstray | eating → roaming on chewed empty |  |
+| labelAstray | greeted → roaming on done |  |

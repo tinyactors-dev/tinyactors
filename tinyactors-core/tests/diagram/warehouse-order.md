@@ -59,3 +59,4 @@
 | --- | --- | --- |
 | labelOnEdge | picked → picking on recount | locating → backorder on short |
 | labelOnEdge | picked → picking on recount | backorder → locating on restock |
+| labelAstray | backorder → locating on restock |  |

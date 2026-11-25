@@ -471,7 +471,8 @@ static ta_status problems_of(tool *t, const chart_view *c) {
         ta_report_text(report, ta_string("subject"), state ? shown_id(c, problem->subject) : edge_text(t, c, problem->subject));
         ta_report_text(report, ta_string("touches"),
                        problem->other == TA_NIL ? ta_string("")
-                       : kind == TA_DIAGRAM_PROBLEM_LABEL_OVERLAP || kind == TA_DIAGRAM_PROBLEM_LABEL_ON_EDGE
+                       : kind == TA_DIAGRAM_PROBLEM_LABEL_OVERLAP || kind == TA_DIAGRAM_PROBLEM_LABEL_ON_EDGE ||
+                                 kind == TA_DIAGRAM_PROBLEM_EDGES_OVERLAP
                            ? edge_text(t, c, problem->other)
                            : shown_id(c, problem->other));
         ta_report_end(report);

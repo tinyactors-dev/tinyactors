@@ -249,13 +249,19 @@ typedef enum ta_diagram_problem_kind {
     TA_DIAGRAM_PROBLEM_LABEL_OVERLAP = 8,  /* a label over another edge's label (`other`: that edge) */
     TA_DIAGRAM_PROBLEM_LABEL_ON_BOX = 9,   /* a label over a leaf (`other`: its state) */
     TA_DIAGRAM_PROBLEM_INITIAL_DETACHED = 10, /* an initial marker's arrow is not on its state's outline */
-    TA_DIAGRAM_PROBLEM_LABEL_ON_EDGE = 11  /* a label over another edge's line (`other`: that edge) */
+    TA_DIAGRAM_PROBLEM_LABEL_ON_EDGE = 11, /* a label over another edge's line (`other`: that edge) */
+    /* a label further from its own transition's routes than its own height (`other`: TA_NIL) */
+    TA_DIAGRAM_PROBLEM_LABEL_ASTRAY = 12,
+    /* two edges of different transitions running along one line: collinear segments less than 3 px
+     * apart, side by side for more than 10 px, so they read as one (`other`: the other edge). Where
+     * both routes end at one point (a shared port), the length within 10 px of it is not counted. */
+    TA_DIAGRAM_PROBLEM_EDGES_OVERLAP = 13
 } ta_diagram_problem_kind;
 
 /* A problem and what it is about: `subject` an edge's index, or a state for OUTSIDE_PARENT,
  * BOXES_OVERLAP and INITIAL_DETACHED (the marker's target); `other` the state the problem
- * touches (the marker's container), the other edge for LABEL_OVERLAP and LABEL_ON_EDGE, TA_NIL
- * for none. */
+ * touches (the marker's container), the other edge for LABEL_OVERLAP, LABEL_ON_EDGE and
+ * EDGES_OVERLAP, TA_NIL for none. */
 typedef struct ta_diagram_problem {
     uint32_t kind; /* ta_diagram_problem_kind */
     uint32_t subject, other;

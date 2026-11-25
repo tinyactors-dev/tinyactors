@@ -53,4 +53,9 @@ _none_
 
 #### Problems
 
-_none_
+| Kind | Subject | Touches |
+| --- | --- | --- |
+| edgesOverlap | queued → voided on cancel | voided → queued on reopen |
+| edgesOverlap | collecting → awaiting on missing | collected → labelled on ship |
+| edgesOverlap | collecting → awaiting on missing | voided → queued on reopen |
+| labelAstray | labelled → voided on refund |  |

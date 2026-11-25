@@ -49,4 +49,6 @@
 
 #### Problems
 
-_none_
+| Kind | Subject | Touches |
+| --- | --- | --- |
+| labelAstray | charging → suspended on payment.declined |  |

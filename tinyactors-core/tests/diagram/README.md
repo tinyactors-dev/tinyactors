@@ -31,7 +31,7 @@ docs/cli.md's "Graph"). `test_layout_corpus` requires none of the hard ones
 in any chart: an arrow off its box (`startDetached`, `endDetached`,
 `initialDetached`), a bent segment, a box outside its parent or over a
 sibling. The others (`notCentred`, `throughBox`, `arrowAlongSide`,
-`labelOverlap`, `labelOnBox`, `labelOnEdge`) are faults the layout still
+`labelOverlap`, `labelOnBox`, `labelOnEdge`, `labelAstray`, `edgesOverlap`) are faults the layout still
 makes; they are part of the answers, so a change that adds one shows in the
 diff, and one that removes one is progress.
 
