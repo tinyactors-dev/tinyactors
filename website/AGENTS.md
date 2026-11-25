@@ -114,14 +114,16 @@ agents ahead of the in-process library):
 1. **Actors that run charts, written by agents** (the home page's
    sections `actors` and `agents`): an actor's behavior is one statechart,
    every state and transition written down, where an Erlang or Akka actor
-   runs any code. Statecharts make behavior readable and checkable, but
-   writing every state by hand cost more than most teams would pay; a
-   coding agent does that writing, which changes the trade. Its effects go
-   out as events for your code (isolated effects), and a simulated clock
-   runs its timeouts (simulation).
+   runs any code. The same chart runs in simulation and in your process,
+   and a simulated clock runs its timeouts (deterministic simulation).
+   An agent reasons locally: the chart holds every state and transition,
+   and its effects go out as events for your code, so an agent writes an
+   actor from the events entering and leaving it (the maintainer,
+   2026-11-25, replacing "a coding agent changes the trade").
 2. **An in-process library** (section `process`): no server, one C core
-   behind every language's package, small enough for every part of a
-   system.
+   behind every language's package, small enough to make a request or a
+   connection an actor, and idle actors kept in the application's own
+   store.
 3. **Properties instead of unit tests** (section `verify`): statecharts
    are a formal model with W3C semantics, so state properties over
    generated runs instead of examples. Say "properties" and "generated
