@@ -89,3 +89,7 @@ pointerId      copywriter/**/*                                           # DOM P
 # (chrome.tabs.onActivated, chrome.scripting.executeScript's target).
 tabId          copywriter/**/*                                           # chrome.tabs API field
 windowId       copywriter/**/*                                           # chrome.tabs API field
+
+# Linux's /proc/<pid>/status names the anonymous resident pages `RssAnon`;
+# the Python memory example reads that field.
+RssAnon        tinyactors-cpython/examples/memory/*                        # /proc/self/status field

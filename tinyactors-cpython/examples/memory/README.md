@@ -25,7 +25,8 @@ per delayed send pending         371 B        209 B          151 B
 ## What the columns mean
 
 - **memory** is what the process holds more for each thing, the host
-  included. Plan with this number.
+  included: its own pages, not the code of mapped files. Plan with this
+  number.
 - **Python heap** is the part Python's objects take: on the `python`
   datamodel, an actor's variables and a message's data. quickjs keeps its
   own heap, which only memory shows.
@@ -70,6 +71,15 @@ host's pools are sized for the count up front, so no pool grows during
 the measurement. It takes the memory, makes the things, and takes it
 again. The difference, divided by the count, is the row. Memory counts
 from before the host is made; the Python heap from after.
+
+On Linux, memory is the process's anonymous pages, in memory or swapped
+out (`RssAnon` and `VmSwap` in `/proc/self/status`): what the host, the
+interpreter and quickjs allocate. It leaves out the pages of mapped
+files, the code of the interpreter and the extension, which the kernel
+drops when the machine runs short of memory and reads back when they
+run again: they are no cost per thing, and dropped between the two
+samples they made a row negative. On macOS, which has no `/proc`, it is
+the peak resident set.
 
 The numbers vary by a few bytes between runs.
 

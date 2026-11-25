@@ -7,8 +7,9 @@ Each measurement runs in a process of its own. It sizes the host's pools
 for the count up front, takes the memory, makes N of the thing, and takes
 the memory again. It prints the difference per thing, in whole bytes:
 
-- memory: what the process holds more (its resident set), the host
-  included: plan with this number;
+- memory: what the process holds more (its own pages, in memory or
+  swapped out, not the code of mapped files), the host included: plan
+  with this number;
 - Python heap: of it, Python's objects (tracemalloc, in a second process,
   since tracing inflates the resident set). On the "python" datamodel an
   actor's variables and a message's data are here. quickjs keeps its own
@@ -58,10 +59,16 @@ ROWS = [("per actor, started", "actor", "started"),
 
 
 def resident():
-    """The resident set in bytes: /proc on Linux, else the peak (macOS's ru_maxrss is in bytes)."""
+    """The process's own memory in bytes: on Linux its anonymous pages, in memory or swapped out
+    (RssAnon + VmSwap); else the peak resident set (macOS's ru_maxrss is in bytes).
+
+    Not the whole resident set: that also counts the pages of mapped files (the interpreter's
+    and the extension's code), which the kernel drops under memory pressure and reads back when
+    they run again. Dropped between the two samples, they made a row negative."""
     try:
-        with open("/proc/self/statm") as statm:
-            return int(statm.read().split()[1]) * os.sysconf("SC_PAGE_SIZE")
+        with open("/proc/self/status") as status:
+            fields = dict(line.split(":", 1) for line in status)
+        return sum(int(fields[name].split()[0]) for name in ("RssAnon", "VmSwap")) * 1024  # in kB
     except OSError:
         return resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
 
