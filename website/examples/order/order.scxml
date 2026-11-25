@@ -3,6 +3,7 @@
   <datamodel>
     <data id="lines" expr="[]"/>
     <data id="total" expr="0"/>
+    <data id="attempts" expr="0"/>
     <data id="problem" expr="null"/>
   </datamodel>
 
@@ -14,15 +15,17 @@
       <assign location="total" expr="total + _event.data.price"/>
     </transition>
     <transition event="checkout" cond="lines.length &gt; 0" target="paying">
+      <assign location="attempts" expr="0"/>
       <assign location="problem" expr="null"/>
     </transition>
   </state>
 
   <!-- The order asks the payment service to charge the total, and waits.
-       A declined card, or a service that cannot be reached, sends it back
-       to the cart with the problem noted, to check out again. -->
+       A declined card sends it back to the cart; a service that cannot be
+       reached is tried again, three times in all. -->
   <state id="paying">
     <onentry>
+      <assign location="attempts" expr="attempts + 1"/>
       <send type="payments" event="charge">
         <param name="amount" expr="total"/>
         <param name="items" expr="lines.map((line) => line.item)"/>
@@ -31,12 +34,21 @@
     <transition event="charged" target="paid"/>
     <transition event="declined" target="cart">
       <assign location="problem" expr="_event.data.reason"/>
-      <log label="order" expr="'payment failed: ' + problem"/>
     </transition>
+    <transition event="error.communication" cond="attempts &lt; 3" target="retrying"/>
     <transition event="error.communication" target="cart">
       <assign location="problem" expr="'the payment service could not be reached'"/>
-      <log label="order" expr="'payment failed: ' + problem"/>
     </transition>
+  </state>
+
+  <!-- The payment service could not be reached: the order waits a second,
+       then charges again, on its own. -->
+  <state id="retrying">
+    <onentry>
+      <log label="order" expr="'payment service unreachable, attempt ' + attempts + ': retrying in 1 s'"/>
+      <send event="retry" delay="1s"/>
+    </onentry>
+    <transition event="retry" target="paying"/>
   </state>
 
   <!-- The order is paid: its total is what it hands back as it ends. -->

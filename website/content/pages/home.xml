@@ -21,8 +21,9 @@
   </hero>
 
   <section id="start" answers="agent-platform.code-first">
-    <heading>Run an actor from your code</heading>
-    <p>Your program compiles a chart, spawns an order actor and sends it events. It answers the order's payment, which fails the first time:</p>
+    <heading>The chart decides, your code acts</heading>
+    <p>The order actor keeps its cart in its data model, and its chart decides what each event means. When the payment service cannot be reached, the order tries again on its own.</p>
+    <p>The chart reaches the world only by sending events to an I/O processor, an object your program gives the host. This program's payment service fails the first charge, and the order retries a second later:</p>
     <program>
       <in package="node">
         <code src="../../examples/order/main.mjs" language="javascript" file="main.mjs"/>

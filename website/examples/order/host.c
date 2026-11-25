@@ -1,6 +1,8 @@
+#define _POSIX_C_SOURCE 200809L /* nanosleep */
 #include "host.h"
 #include <stdio.h>
 #include <stdlib.h>
+#include <time.h>
 
 /* The config, as CBOR: {"systemID": system, "ioProcessors": [{"type": io_processor}]} */
 static ta_status open_host(host *h, const host_options *options, ta_allocator *allocator) {
@@ -78,12 +80,25 @@ static void drain(host *h, host_handler *handle) {
     }
 }
 
+/* Sleeps until the host's clock, in nanoseconds (ta_runtime_now_ns), reads `deadline`. */
+static void sleep_until(ta_time deadline) {
+    ta_time now = ta_runtime_now_ns();
+    if (deadline <= now) return;
+    ta_time wait = deadline - now;
+    struct timespec duration = {(time_t)(wait / 1000000000u), (long)(wait % 1000000000u)};
+    nanosleep(&duration, NULL);
+}
+
 void host_run(host *h, host_handler *handle) {
-    for (;;) { /* a long-lived program arms a timer at run.next_deadline instead of stopping */
+    for (;;) {
         drain(h, handle);
+        ta_host_advance_time(h->host, (ta_host_time){ta_runtime_now_ns(), 0}); /* timers fire as it passes */
         ta_run run = ta_host_run(h->host, 10000);
         drain(h, handle);
-        if (run.status == TA_RUN_IDLE || run.status == TA_RUN_FAULT) return;
+        if (run.status == TA_RUN_FAULT) return;
+        if (run.status != TA_RUN_IDLE) continue; /* more to run now */
+        if (run.next_deadline == UINT64_MAX) return; /* nothing left, not even a timer */
+        sleep_until(run.next_deadline); /* a program with an event loop arms a timer instead */
     }
 }
 

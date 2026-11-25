@@ -1,4 +1,4 @@
 charge {"amount":42,"items":["notebook","pen"]}
-log payment failed: the payment service could not be reached
+log payment service unreachable, attempt 1: retrying in 1 s
 charge {"amount":42,"items":["notebook","pen"]}
 paid 42

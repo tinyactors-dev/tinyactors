@@ -32,7 +32,7 @@ typedef void host_handler(host *h, uint32_t effect);
 ta_status host_open(host *h, const host_options *options);
 uint64_t host_spawn(host *h, const char *chart);
 ta_status host_send(host *h, host_event event);
-/* Runs until nothing is left to do, handing each effect to `handle`. */
+/* Runs until nothing is left to do, timers included, handing each effect to `handle`. */
 void host_run(host *h, host_handler *handle);
 /* Answers the send `effect` with the event `name`, as its I/O processor. */
 ta_status host_answer(host *h, uint32_t effect, const char *name);
