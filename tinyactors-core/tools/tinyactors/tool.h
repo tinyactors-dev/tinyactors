@@ -120,6 +120,8 @@ typedef struct tool_text {
     ta_allocator allocator;
 } tool_text;
 void tool_text_init(tool *t, tool_text *text);
+/* The same in another arena (a request's, which the run server releases). */
+void tool_text_over(tool_text *text, ta_growable_arena *arena);
 void tool_text_append(tool_text *text, ta_string_view piece);
 void tool_text_number(tool_text *text, uint64_t value);
 void tool_text_duration(tool_text *text, uint64_t nanoseconds);
@@ -153,6 +155,12 @@ typedef struct tool_image {
     uint32_t diagnostic_count;
     const ta_diagnostic *diagnostics; /* the compile's, copied into the arena */
     ta_status status; /* TA_OK; the compile's or the open's refusal */
+    /* Why the inputs make no image when no diagnostic says it (a file that
+     * cannot be read, inputs that do not go together; empty otherwise), and
+     * the exit status a command gives for the refusal (tool_exit). */
+    ta_string_view complaint;
+    uint32_t exit;
+    uint32_t pad;
 } tool_image;
 
 typedef struct tool_inputs {
@@ -162,10 +170,25 @@ typedef struct tool_inputs {
     uint32_t segment; /* a snapshot's segment whose image is read; TA_NIL: its newest */
 } tool_inputs;
 
-/* Read and make the image (diagnostics kept). TA_OK: t->exit untouched and
- * out->opened. Otherwise the reason was told (tool_complain for a file,
- * the report for diagnostics) and t->exit set. A snapshot gives the image
- * of one of its segments (inputs.segment), each of its images verified. */
+/* Inputs to read, and the arena they are read and compiled into: the
+ * invocation's for a command; a request's for the run server, released
+ * once the image is added, so that each run.addImage leaves nothing behind. */
+typedef struct tool_image_request {
+    tool_inputs inputs;
+    ta_growable_arena *arena;
+} tool_image_request;
+/* Read and make the image (diagnostics kept), all of it in the request's
+ * arena, telling nothing. TA_OK: out->opened. Otherwise out->status is the
+ * refusal and out->exit the exit status a command gives for it; the reason
+ * is in out->diagnostics (a chart that does not compile, an image that does
+ * not verify) or out->complaint (a file that cannot be read, inputs that do
+ * not go together). A snapshot gives the image of one of its segments
+ * (inputs.segment), each of its images verified. */
+ta_status tool_image_make(tool *t, const tool_image_request *request, tool_image *out);
+/* tool_image_make into the invocation's arena, then telling: TA_OK with
+ * t->exit untouched and out->opened. Otherwise the complaint was told
+ * (tool_complain; a command reports the diagnostics itself, as tool_open
+ * does) and t->exit set. */
 ta_status tool_load(tool *t, tool_inputs inputs, tool_image *out);
 
 /* Sources to compile, already read: charts, or one manifest. */
@@ -173,11 +196,16 @@ typedef struct tool_compilation {
     uint32_t kind;  /* TOOL_INPUT_CHART or TOOL_INPUT_MANIFEST */
     uint32_t flags; /* TA_COMPILE_* */
     ta_source_list sources;
+    ta_growable_arena *arena; /* what the resolver reads into, and the result is kept in */
+    /* NULL: a src is a file, relative to the file naming it, then in each -I
+     * directory. Otherwise a src is one of these documents, by its name
+     * (charts given as text, as run.addImage's sources). */
+    const ta_source_list *documents;
 } tool_compilation;
-/* Compile through the command's resolver (a src relative to the file naming
- * it, then in each -I directory), into out->bytes and out->diagnostics, both
- * in the arena; out->status is the compile's. TA_ERROR_NO_MEMORY: what it
- * made could not be kept. Nothing is told. */
+/* Compile through the command's resolver into out->bytes and
+ * out->diagnostics, both in the compilation's arena; out->status is the
+ * compile's. TA_ERROR_NO_MEMORY: what it made could not be kept. Nothing is
+ * told. */
 ta_status tool_compile_sources(tool *t, const tool_compilation *compilation, tool_image *out);
 
 /* The inputs' diagnostics as a list member "diagnostics" of the report's

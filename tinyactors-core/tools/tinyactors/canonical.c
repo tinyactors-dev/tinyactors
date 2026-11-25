@@ -304,7 +304,7 @@ static ta_status image_of(canonical_run *run, const canonical_file *file, ta_str
                           ta_bytes *out) {
     ta_source source = {file->path, text};
     uint32_t kind = tool_input_kind_of((ta_bytes){file->original.pointer, file->original.length});
-    tool_compilation compilation = {kind, TA_COMPILE_STRIP_DEBUG, {&source, 1}};
+    tool_compilation compilation = {kind, TA_COMPILE_STRIP_DEBUG, {&source, 1}, run->t->arena, 0};
     tool_image image;
     ta_memset(&image, 0, sizeof image);
     ta_status kept = tool_compile_sources(run->t, &compilation, &image);

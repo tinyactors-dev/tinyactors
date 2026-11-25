@@ -334,7 +334,11 @@ const ta_cli_value *tool_last(const tool *t, uint32_t option) {
 }
 
 void tool_text_init(tool *t, tool_text *text) {
-    text->allocator = ta_growable_arena_allocator(t->arena);
+    tool_text_over(text, t->arena);
+}
+
+void tool_text_over(tool_text *text, ta_growable_arena *arena) {
+    text->allocator = ta_growable_arena_allocator(arena);
     text->output = ta_output_over((ta_buffer){0, 0, 0}, &text->allocator);
 }
 
