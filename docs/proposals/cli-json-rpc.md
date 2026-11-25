@@ -1513,7 +1513,7 @@ The maintainer settled every open question (2026-11-25); none is left.
 | a real-time clock | later, not in the first version | section 2 |
 | determinism | the ECMAScript datamodel takes a seed and the host's clocks: a request to core | section 4.8 |
 | a blob store in the server | none: blobs are the client's | section 4.5 |
-| `hold` or requests from the server | `hold`, decided with both protocols written out and judged for a debugger lab | section 4.9 |
+| `hold` or requests from the server | `hold`: the maintainer chose it from both protocols written out and judged for a debugger lab (2026-11-25) | section 4.9 |
 | `ta-conform` over the server's layer | not now | — |
 | effects as notifications | yes: effects are asynchronous by nature | section 4.4 |
 | the schema | JSON Schema 2020-12 (not OpenRPC), and a generator of the server's checks from it | sections 4.7, 7.8 |
