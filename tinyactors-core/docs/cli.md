@@ -144,7 +144,7 @@ with their length.
 | `data` | INPUT... | Each chart's `<data>`: id, the state declaring it, its expression and line. |
 | `expressions` | INPUT... | Each chart's expressions and scripts: kind, line, column, text; `--kind` keeps some (`condition`, `value`, `location`, `script`, `string`, `content`, `item`, `global-script`). |
 | `disassemble` | INPUT... | Each chart's executable content as instructions: their place, the entry points starting there (onentry and onexit of a state, a transition's actions, an invoke's finalize, the chart's script), the instruction and its operands. |
-| `graph` | INPUT... | Each chart drawn: nested boxes for its states, orthogonal routes for its transitions, labels on their routes. `-f svg` answers the picture (every selected chart, one above the other, under its name; light or dark by the reader's preference); the other formats answer the drawing as data: each box (its state, kind, how it is drawn and its rectangle), each edge (source, target, events, condition and its route as points) and the transitions a box lists inside it (those without a target, and those crossing three or more container borders). See [Graph](#graph). |
+| `graph` | INPUT... | Each chart drawn: nested boxes for its states, orthogonal routes for its transitions, labels on their routes, top to bottom (`--direction right`: left to right). `-f svg` answers the picture (every selected chart, one above the other, under its name; light or dark by the reader's preference, or `--theme light` / `dark`); the other formats answer the drawing as data: each box (its state, kind, how it is drawn and its rectangle), each edge (source, target, events, condition and its route as points) and the transitions a box lists inside it (those without a target, and those crossing three or more container borders). `--highlight STATE` marks states, `--path --to STATE [--from STATE]` marks the path `path` finds, its steps numbered; `--depth N` and `--fold STATE` fold containers into one box. See [Graph](#graph). |
 | `diff` | OLD NEW | Two versions, each an image, a manifest or a chart, compared chart by chart (matched by name) as statecharts: states, transitions, data, executable content, invokes and the events each state handles, each change marked breaking for actors running the old version or not, and what a migration does to them. `--breaking` lists only the breaking changes, `--all` the unchanged charts too, and `--exit-code` exits with 1 when they differ (with `--breaking`, when a change breaks running actors). See [Diff](#diff). |
 | `lint` | INPUT... | What cannot work as written, found without running the charts: each finding's rule, severity (warning or note), chart, state, transition, event, line (0 when the image has none) and a sentence saying what it means. `--deny RULE` (repeatable, `all` for every rule) exits with 1 when that rule finds something; `--allow RULE` (repeatable, `all`) leaves its findings out. See [Lint](#lint). |
 | `path` | INPUT... | The shortest sequence of transitions from the chart's initial configuration (or `--from STATE`) to a configuration holding `--to STATE`: each step's events (or eventless), condition, source, targets and the atomic states active after it; or that no path exists, or that the search stopped at its limit. `--unreachable` asks the opposite: success when no path exists. `--chart` names the chart (default: the first). See [Path](#path). |
@@ -592,6 +592,36 @@ tinyactors graph -f svg --chart payment shop.tai > payment.svg
 tinyactors graph -f json order.scxml | jq '.charts[0].edges[].route'
 ```
 
+Its options, each applying to every format: the data formats answer the
+layout the picture draws.
+
+| Option | What it does |
+|---|---|
+| `--direction down\|right` | How the layers run: top to bottom (`down`, the default) or left to right. A chart with long labels and few levels may read better `right`. |
+| `--theme auto\|light\|dark` | The picture's colours. `auto` (the default) writes both sets of tokens, the dark one under `@media (prefers-color-scheme: dark)`, so the reader's preference chooses; `light` or `dark` writes only that set. |
+| `--highlight STATE` | Marks the state's box (class `ta-highlight`, the theme's `--ta-highlight` accent); repeat it for more. |
+| `--path --to STATE [--from STATE]` | Marks the path the `path` command finds (from the initial configuration, or from `--from`): the states it passes through, and the transitions it takes, drawn in the `--ta-path` accent (class `ta-path`), each edge with a badge numbering its steps from 1 (`2,5` for a transition taken twice). A step whose transition is not drawn (it stays inside a folded box) keeps its number. No path: exit 1, as `path` does. |
+| `--depth N` | Folds every compound or parallel state nested deeper than `N` levels (a top-level state is at level 1): `--depth 0` draws the top-level states only. |
+| `--fold STATE` | Folds that compound or parallel state; repeat it for more. |
+
+A folded container is drawn as one box on a stack, with the number of
+states it stands for under its name (`drawnAs: "folded"` in the data, with
+`hides`, the count, on every box when a fold was asked). The transitions of
+its hidden states that leave it start at its box, those that enter it end
+at its box, an initial state inside it is its box, and those that stay
+inside it are not drawn. With `--highlight` or `--path`, every box answers
+its `marks` (`highlight`, `path`, both or none); with `--path`, every edge
+and every transition listed in a box its `steps`. A state these options
+name that no chart drawn has, a `--fold` of a state that is no container,
+a `--to` or `--from` that is a history state, `--path` without `--to` and
+`--to` or `--from` without `--path` exit with 2.
+
+```sh
+tinyactors graph -f svg --direction right --theme dark order.scxml > order.svg
+tinyactors graph -f svg --path --to shipped --highlight cancelled order.scxml > shipping.svg
+tinyactors graph -f svg --depth 1 --fold checkout shop.scxml > overview.svg
+```
+
 Every answer ends with the drawing's **problems**, found by geometry alone
 (`ta_diagram_check`): `startDetached`, `endDetached` and `initialDetached`
 (an arrow that does not touch its box's drawn outline: the rectangle, a
@@ -605,7 +635,8 @@ root's class `tinyactors-diagram`, so the drawing put inline in a page takes
 none of the page's styles and gives it none.
 
 The layout is checked by a corpus of charts and their expected layouts and
-problems (`tests/diagram`, its README).
+problems (`tests/diagram`, its README), each laid out down, and one with
+folding and a path.
 
 ## How it is built
 

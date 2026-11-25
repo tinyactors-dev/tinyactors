@@ -5,51 +5,51 @@
 ### Chart 1: job
 
 - **Name**: job
-- **Width**: 2008
-- **Height**: 358
+- **Width**: 809
+- **Height**: 990
 
 #### Boxes
 
 | State | Kind | Parent | Drawn as | X | Y | Width | Height |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| /scxml | compound |  | root | 0 | 0 | 2008 | 358 |
-| active | compound | /scxml | compound | 40 | 14 | 1519 | 330 |
-| arming | atomic | active | atomic | 80 | 224 | 70 | 34 |
-| waiting | atomic | active | atomic | 194 | 189 | 77 | 104 |
-| running | compound | active | compound | 572 | 78 | 973 | 252 |
-| attempting | atomic | running | atomic | 612 | 190 | 100 | 110 |
-| failing | atomic | running | atomic | 1102 | 258 | 77 | 58 |
-| backingOff | atomic | running | atomic | 1431 | 224 | 100 | 34 |
-| succeeded | atomic | running | atomic | 1102 | 166 | 92 | 34 |
-| runEnded | atomic | running | atomic | 1431 | 166 | 85 | 34 |
-| ended | final | /scxml | final | 1930 | 187 | 64 | 34 |
+| /scxml | compound |  | root | 0 | 0 | 809 | 990 |
+| active | compound | /scxml | compound | 14 | 40 | 781 | 770 |
+| arming | atomic | active | atomic | 370 | 130 | 70 | 34 |
+| waiting | atomic | active | atomic | 198 | 208 | 412 | 34 |
+| running | compound | active | compound | 28 | 304 | 753 | 492 |
+| attempting | atomic | running | atomic | 164 | 418 | 480 | 58 |
+| failing | atomic | running | atomic | 406 | 632 | 361 | 34 |
+| backingOff | atomic | running | atomic | 328 | 748 | 100 | 34 |
+| succeeded | atomic | running | atomic | 154 | 632 | 180 | 34 |
+| runEnded | atomic | running | atomic | 166 | 748 | 85 | 34 |
+| ended | final | /scxml | final | 327 | 942 | 154 | 34 |
 
 #### Edges
 
 | Source | Target | Events | Condition | Drawn as | Route |
 | --- | --- | --- | --- | --- | --- |
-| active | ended | cancel |  | forward | 1559,197 1932,197 |
-| active | ended | deadline.passed |  | forward | 1559,207 1890,207 1890,199 1931,199 |
-| arming | waiting |  |  | forward | 150,241 194,241 |
-| waiting | ended | drain |  | forward | 271,205 277,205 277,337 1840,337 1840,206 1930,206 |
-| waiting | running | due |  | forward | 271,215 572,215 |
-| waiting | waiting | reschedule | kind === 'recurring' | self | 271,225 287,225 287,251 271,251 |
-| waiting | waiting | reschedule |  | self | 271,261 287,261 287,287 271,287 |
-| attempting | succeeded | result.ok | _event.sendid === runID | forward | 712,200 1092,200 1092,183 1102,183 |
-| attempting | failing | result.failed | _event.sendid === runID | forward | 712,268 1102,268 |
-| attempting | failing | error.communication | _event.sendid === runID | forward | 712,278 1102,278 |
-| attempting | failing | attempt.timeout |  | forward | 712,288 1102,288 |
-| failing | ended |  | draining | forward | 1179,278 1910,278 1910,209 1931,209 |
-| failing | backingOff |  | `attempt < maxAttempts` | forward | 1179,298 1421,298 1421,248 1431,248 |
-| failing | runEnded |  | kind === 'recurring' | forward | 1179,268 1411,268 1411,192 1431,192 |
-| failing | ended |  |  | forward | 1179,288 1920,288 1920,211 1932,211 |
-| backingOff | ended | drain |  | forward | 1531,241 1900,241 1900,207 1931,207 |
-| backingOff | attempting | retry |  | back | 1431,237 1391,237 1391,243 1082,243 1082,226 712,226 |
-| succeeded | ended |  | draining | forward | 1194,183 1200,183 1200,159 1880,159 1880,201 1931,201 |
-| succeeded | runEnded |  | kind === 'recurring' | forward | 1194,175 1431,175 |
-| succeeded | ended |  |  | forward | 1194,192 1204,192 1204,159 1860,159 1860,202 1930,202 |
-| runEnded | ended |  | limit !== 0 && runs + skipped >= limit | forward | 1516,183 1870,183 1870,204 1930,204 |
-| runEnded | waiting |  |  | back | 1431,183 1417,183 1417,159 562,159 562,195 271,195 |
+| active | ended | cancel |  | forward | 402,810 402,942 |
+| active | ended | deadline.passed |  | forward | 498,810 498,912 418,912 418,942 |
+| arming | waiting |  |  | forward | 404,164 404,208 |
+| waiting | ended | drain |  | forward | 224,242 224,248 21,248 21,892 428,892 428,942 |
+| waiting | running | due |  | forward | 241,242 241,304 |
+| waiting | waiting | reschedule | kind === 'recurring' | self | 254,242 254,258 503,258 503,242 |
+| waiting | waiting | reschedule |  | self | 513,242 513,258 605,258 605,242 |
+| attempting | succeeded | result.ok | _event.sendid === runID | forward | 244,476 244,632 |
+| attempting | failing | result.failed | _event.sendid === runID | forward | 404,476 404,602 416,602 416,632 |
+| attempting | failing | error.communication | _event.sendid === runID | forward | 484,476 484,632 |
+| attempting | failing | attempt.timeout |  | forward | 564,476 564,632 |
+| failing | ended |  | draining | forward | 622,666 622,922 440,922 440,942 |
+| failing | backingOff |  | `attempt < maxAttempts` | forward | 550,666 550,738 418,738 418,748 |
+| failing | runEnded |  | kind === 'recurring' | forward | 478,666 478,728 241,728 241,748 |
+| failing | ended |  |  | forward | 695,666 695,932 452,932 452,942 |
+| backingOff | ended | drain |  | forward | 378,782 378,862 392,862 392,942 |
+| backingOff | attempting | retry |  | back | 385,748 385,708 391,708 391,612 324,612 324,476 |
+| succeeded | ended |  | draining | forward | 244,666 244,672 35,672 35,882 368,882 368,942 |
+| succeeded | runEnded |  | kind === 'recurring' | forward | 199,666 199,748 |
+| succeeded | ended |  |  | forward | 289,666 289,872 380,872 380,942 |
+| runEnded | ended |  | limit !== 0 && runs + skipped >= limit | forward | 209,782 209,902 356,902 356,942 |
+| runEnded | waiting |  |  | back | 209,748 209,738 35,738 35,294 207,294 207,242 |
 
 #### Inside
 
@@ -65,4 +65,8 @@
 
 | Kind | Subject | Touches |
 | --- | --- | --- |
-| labelOnEdge | attempting → failing on attempt.timeout | waiting → ended on drain |
+| labelOnEdge | attempting → succeeded on result.ok | backingOff → attempting on retry |
+| labelOnEdge | attempting → failing on result.failed | attempting → failing on error.communication |
+| labelOnEdge | attempting → failing on result.failed | backingOff → attempting on retry |
+| labelOnEdge | attempting → failing on error.communication | attempting → failing on result.failed |
+| labelOnEdge | attempting → failing on error.communication | attempting → failing on attempt.timeout |

@@ -91,6 +91,28 @@ static const ta_cli_option path_options[] = {
                                T("succeed when no path exists, and exit with 1 when one does")},
 };
 
+static const ta_string_view directions[] = {[TOOL_GRAPH_DOWN] = T("down"), [TOOL_GRAPH_RIGHT] = T("right")};
+static const ta_string_view themes[] = {[TOOL_GRAPH_THEME_AUTO] = T("auto"), [TOOL_GRAPH_THEME_LIGHT] = T("light"),
+                                        [TOOL_GRAPH_THEME_DARK] = T("dark")};
+static const ta_cli_option graph_options[] = {
+    WARNINGS_AS_ERRORS, INCLUDE, CHART, SEGMENT,
+    [TOOL_GRAPH_DIRECTION] = {T("direction"), 0, TA_CLI_OPTION_CHOICE, 0, 2, directions, T("DIRECTION"),
+                              T("lay the states out top to bottom (down, the default) or left to right (right)")},
+    [TOOL_GRAPH_THEME] = {T("theme"), 0, TA_CLI_OPTION_CHOICE, 0, 3, themes, T("THEME"),
+                          T("-f svg: the colours, light, dark, or auto (the default): the reader's preference")},
+    [TOOL_GRAPH_HIGHLIGHT] = {T("highlight"), 0, TA_CLI_OPTION_VALUE, TA_CLI_OPTION_REPEATABLE, 0, 0, T("STATE"),
+                              T("mark this state's box; repeat it for more")},
+    [TOOL_GRAPH_PATH] = {T("path"), 0, TA_CLI_OPTION_FLAG, 0, 0, 0, T(""),
+                         T("mark the path the path command finds to --to (from --from), its steps numbered")},
+    [TOOL_GRAPH_TO] = {T("to"), 't', TA_CLI_OPTION_VALUE, 0, 0, 0, T("STATE"), T("with --path: where the path goes")},
+    [TOOL_GRAPH_FROM] = {T("from"), 0, TA_CLI_OPTION_VALUE, 0, 0, 0, T("STATE"),
+                         T("with --path: where it starts (default: the initial configuration)")},
+    [TOOL_GRAPH_DEPTH] = {T("depth"), 'd', TA_CLI_OPTION_VALUE, 0, 0, 0, T("N"),
+                          T("fold every compound or parallel state nested deeper than N levels into one box")},
+    [TOOL_GRAPH_FOLD] = {T("fold"), 0, TA_CLI_OPTION_VALUE, TA_CLI_OPTION_REPEATABLE, 0, 0, T("STATE"),
+                         T("fold this compound or parallel state into one box; repeat it for more")},
+};
+
 static const ta_cli_option canonical_options[] = {
     [TOOL_CANONICAL_WRITE] = {T("write"), 'w', TA_CLI_OPTION_FLAG, 0, 0, 0, T(""),
                               T("rewrite each file in place, whole or not at all")},
@@ -125,9 +147,11 @@ static const ta_string_view data_examples[] = {T("data order.scxml")};
 static const ta_string_view expressions_examples[] = {
     T("expressions --kind condition order.scxml"), T("expressions -f xml order.tai")};
 static const ta_string_view disassemble_examples[] = {T("disassemble --chart order order.tai")};
-static const ta_string_view graph_examples[] = {T("graph -f svg order.scxml > order.svg"),
-                                                T("graph -f svg --chart payment shop.tai > payment.svg"),
-                                                T("graph -f json order.tai")};
+static const ta_string_view graph_examples[] = {
+    T("graph -f svg order.scxml > order.svg"), T("graph -f svg --chart payment shop.tai > payment.svg"),
+    T("graph -f svg --direction right --theme dark order.scxml > order.svg"),
+    T("graph -f svg --path --to shipped --highlight cancelled order.scxml > shipping.svg"),
+    T("graph -f svg --depth 1 --fold checkout shop.scxml > overview.svg"), T("graph -f json order.tai")};
 static const ta_string_view diff_examples[] = {
     T("diff order-v1.tai order-v2.scxml"), T("diff --breaking --exit-code deployed.tai order.scxml"),
     T("diff -f json --chart order old.tai new.tai")};
@@ -215,7 +239,7 @@ static const ta_cli_command commands[TOOL_COMMAND_COUNT] = {
                                   EXAMPLES(disassemble_examples)},
     [TOOL_COMMAND_GRAPH] = {T("graph"),
                             T("each chart as a diagram: -f svg draws it; the others list its boxes and edges"),
-                            INPUTS, T("INPUT..."), 1, TA_CLI_UNBOUNDED, OPTIONS(image_options),
+                            INPUTS, T("INPUT..."), 1, TA_CLI_UNBOUNDED, OPTIONS(graph_options),
                             EXAMPLES(graph_examples)},
     [TOOL_COMMAND_DIFF] =
         {T("diff"), T("what changed between two versions, and what it does to running actors"),

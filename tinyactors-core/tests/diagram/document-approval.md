@@ -5,65 +5,65 @@
 ### Chart 1: document
 
 - **Name**: document
-- **Width**: 3261
-- **Height**: 508
+- **Width**: 712
+- **Height**: 1304
 
 #### Boxes
 
 | State | Kind | Parent | Drawn as | X | Y | Width | Height |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| /scxml | compound |  | root | 0 | 0 | 3261 | 508 |
-| draft | atomic | /scxml | atomic | 40 | 342 | 64 | 58 |
-| inFlight | compound | /scxml | compound | 219 | 14 | 2760 | 452 |
-| active | compound | inFlight | compound | 259 | 54 | 1811 | 398 |
-| review | parallel | active | parallel | 683 | 94 | 1130 | 344 |
-| legal | compound | review | region | 697 | 158 | 1102 | 112 |
-| legalQueued | atomic | legal | atomic | 781 | 210 | 108 | 34 |
-| legalReviewing | atomic | legal | atomic | 1013 | 198 | 196 | 58 |
-| legalApproved | final | legal | final | 1349 | 210 | 123 | 34 |
-| legalWasAt | shallow history | legal | history | 711 | 214 | 26 | 26 |
-| finance | compound | review | region | 697 | 288 | 1102 | 136 |
-| financeQueued | atomic | finance | atomic | 781 | 352 | 123 | 34 |
-| financeReviewing | atomic | finance | atomic | 1043 | 328 | 282 | 82 |
-| financeApproved | final | finance | final | 1647 | 352 | 138 | 34 |
-| financeWasAt | shallow history | finance | history | 711 | 356 | 26 | 26 |
-| revising | atomic | active | atomic | 273 | 249 | 85 | 84 |
-| signoff | atomic | active | atomic | 1979 | 274 | 77 | 34 |
-| resumePoint | deep history | active | history | 273 | 351 | 26 | 26 |
-| escalated | atomic | inFlight | atomic | 2412 | 216 | 248 | 58 |
-| archiving | atomic | inFlight | atomic | 2412 | 292 | 92 | 34 |
-| archiveRetry | atomic | inFlight | atomic | 2850 | 296 | 115 | 34 |
-| approved | final | /scxml | final | 3155 | 179 | 85 | 34 |
-| rejected | final | /scxml | final | 3155 | 231 | 85 | 34 |
-| withdrawn | final | /scxml | final | 3155 | 297 | 92 | 34 |
+| /scxml | compound |  | root | 0 | 0 | 712 | 1304 |
+| draft | atomic | /scxml | atomic | 443 | 40 | 150 | 34 |
+| inFlight | compound | /scxml | compound | 14 | 136 | 656 | 1038 |
+| active | compound | inFlight | compound | 28 | 202 | 628 | 732 |
+| review | parallel | active | parallel | 42 | 378 | 600 | 456 |
+| legal | compound | review | region | 56 | 442 | 224 | 378 |
+| legalQueued | atomic | legal | atomic | 114 | 552 | 108 | 34 |
+| legalReviewing | atomic | legal | atomic | 70 | 638 | 196 | 58 |
+| legalApproved | final | legal | final | 107 | 748 | 123 | 34 |
+| legalWasAt | shallow history | legal | history | 155 | 482 | 26 | 26 |
+| finance | compound | review | region | 298 | 442 | 330 | 378 |
+| financeQueued | atomic | finance | atomic | 402 | 552 | 123 | 34 |
+| financeReviewing | atomic | finance | atomic | 312 | 638 | 302 | 82 |
+| financeApproved | final | finance | final | 394 | 772 | 138 | 34 |
+| financeWasAt | shallow history | finance | history | 450 | 482 | 26 | 26 |
+| revising | atomic | active | atomic | 136 | 242 | 413 | 34 |
+| signoff | atomic | active | atomic | 304 | 886 | 77 | 34 |
+| resumePoint | deep history | active | history | 567 | 242 | 26 | 26 |
+| escalated | atomic | inFlight | atomic | 144 | 1006 | 248 | 58 |
+| archiving | atomic | inFlight | atomic | 410 | 1006 | 160 | 34 |
+| archiveRetry | atomic | inFlight | atomic | 433 | 1126 | 115 | 34 |
+| approved | final | /scxml | final | 196 | 1256 | 85 | 34 |
+| rejected | final | /scxml | final | 299 | 1256 | 85 | 34 |
+| withdrawn | final | /scxml | final | 401 | 1256 | 92 | 34 |
 
 #### Edges
 
 | Source | Target | Events | Condition | Drawn as | Route |
 | --- | --- | --- | --- | --- | --- |
-| draft | inFlight | submit |  | forward | 104,361 219,361 |
-| draft | withdrawn | withdraw |  | forward | 104,381 209,381 209,489 3145,489 3145,323 3157,323 |
-| inFlight | withdrawn | withdraw |  | forward | 2979,306 3157,306 |
-| active | escalated | sla.expired |  | forward | 2070,244 2412,244 |
-| review | signoff | done.state.review |  | forward | 1813,291 1979,291 |
-| legalQueued | legalReviewing | legal.claim |  | forward | 888,227 1013,227 |
-| legalReviewing | legalApproved | legal.approve |  | forward | 1210,227 1349,227 |
-| legalReviewing | revising | legal.changes |  | back | 1013,237 1007,237 1007,263 358,263 |
-| legalWasAt | legalQueued |  |  | forward | 737,227 781,227 |
-| financeQueued | financeReviewing | finance.claim |  | forward | 904,369 1043,369 |
-| financeReviewing | financeApproved | finance.approve | !legalFirst(amount, legalFirstAt) \|\| In('legalApproved') | forward | 1325,369 1647,369 |
-| financeReviewing | revising | finance.changes |  | back | 1043,355 1037,355 1037,321 643,321 643,305 358,305 |
-| financeWasAt | financeQueued |  |  | forward | 737,369 781,369 |
-| revising | review | resubmit | _event.data && _event.data.material | forward | 358,291 683,291 |
-| revising | legalWasAt | resubmit |  | forward | 358,277 673,277 673,227 711,227 |
-| revising | financeWasAt | resubmit |  | forward | 358,319 633,319 633,369 711,369 |
-| signoff | archiving | signoff.approve | approvals.legal && approvals.finance | forward | 2056,297 2382,297 2382,309 2412,309 |
-| signoff | rejected | signoff.reject |  | forward | 2056,285 3125,285 3125,248 3155,248 |
-| resumePoint | review |  |  | forward | 298,368 683,368 |
-| escalated | resumePoint | resume |  | back | 2412,254 2402,254 2402,445 305,445 305,360 298,360 |
-| archiving | approved | archived |  | forward | 2504,300 2510,300 2510,459 3135,459 3135,196 3155,196 |
-| archiving | archiveRetry | error.communication |  | forward | 2504,309 2850,309 |
-| archiveRetry | archiving | archive.retry |  | back | 2850,319 2830,319 2830,317 2504,317 |
+| draft | inFlight | submit |  | forward | 478,74 478,136 |
+| draft | withdrawn | withdraw |  | forward | 550,74 550,126 693,126 693,1246 477,1246 477,1256 |
+| inFlight | withdrawn | withdraw |  | forward | 418,1174 418,1256 |
+| active | escalated | sla.expired |  | forward | 300,934 300,1006 |
+| review | signoff | done.state.review |  | forward | 342,834 342,886 |
+| legalQueued | legalReviewing | legal.claim |  | forward | 168,586 168,638 |
+| legalReviewing | legalApproved | legal.approve |  | forward | 168,696 168,748 |
+| legalReviewing | revising | legal.changes |  | back | 201,638 201,632 273,632 273,348 205,348 205,276 |
+| legalWasAt | legalQueued |  |  | forward | 168,508 168,552 |
+| financeQueued | financeReviewing | finance.claim |  | forward | 463,586 463,638 |
+| financeReviewing | financeApproved | finance.approve | !legalFirst(amount, legalFirstAt) \|\| In('legalApproved') | forward | 463,720 463,772 |
+| financeReviewing | revising | finance.changes |  | back | 413,638 413,632 305,632 305,328 411,328 411,276 |
+| financeWasAt | financeQueued |  |  | forward | 463,508 463,552 |
+| revising | review | resubmit | _event.data && _event.data.material | forward | 342,276 342,378 |
+| revising | legalWasAt | resubmit |  | forward | 273,276 273,358 168,358 168,482 |
+| revising | financeWasAt | resubmit |  | forward | 480,276 480,368 463,368 463,482 |
+| signoff | archiving | signoff.approve | approvals.legal && approvals.finance | forward | 355,920 355,976 490,976 490,1006 |
+| signoff | rejected | signoff.reject |  | forward | 329,920 329,940 21,940 21,1226 341,1226 341,1256 |
+| resumePoint | review |  |  | forward | 585,267 585,378 |
+| escalated | resumePoint | resume |  | back | 310,1006 310,996 649,996 649,274 575,274 575,267 |
+| archiving | approved | archived |  | forward | 450,1040 450,1050 663,1050 663,1236 238,1236 238,1256 |
+| archiving | archiveRetry | error.communication |  | forward | 490,1040 490,1126 |
+| archiveRetry | archiving | archive.retry |  | back | 530,1126 530,1040 |
 
 #### Inside
 
@@ -77,4 +77,9 @@
 
 #### Problems
 
-_none_
+| Kind | Subject | Touches |
+| --- | --- | --- |
+| labelOnEdge | revising → review on resubmit | financeReviewing → revising on finance.changes |
+| labelOnEdge | revising → review on resubmit | revising → legalWasAt on resubmit |
+| labelOnEdge | signoff → archiving on signoff.approve | active → escalated on sla.expired |
+| labelOnEdge | signoff → archiving on signoff.approve | signoff → rejected on signoff.reject |

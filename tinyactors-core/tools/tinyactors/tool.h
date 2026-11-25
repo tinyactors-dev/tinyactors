@@ -236,6 +236,22 @@ typedef enum tool_path_option {
     TOOL_PATH_FROM = 5,       /* --from STATE */
     TOOL_PATH_UNREACHABLE = 6 /* --unreachable: succeed when no path exists */
 } tool_path_option;
+typedef enum tool_graph_option {
+    TOOL_GRAPH_DIRECTION = 4, /* --direction down|right */
+    TOOL_GRAPH_THEME = 5,     /* --theme auto|light|dark */
+    TOOL_GRAPH_HIGHLIGHT = 6, /* --highlight STATE, repeatable */
+    TOOL_GRAPH_PATH = 7,      /* --path: mark the path to --to */
+    TOOL_GRAPH_TO = 8,        /* --to STATE */
+    TOOL_GRAPH_FROM = 9,      /* --from STATE */
+    TOOL_GRAPH_DEPTH = 10,    /* --depth N: fold the containers nested deeper */
+    TOOL_GRAPH_FOLD = 11      /* --fold STATE, repeatable */
+} tool_graph_option;
+typedef enum tool_graph_direction { TOOL_GRAPH_DOWN = 0, TOOL_GRAPH_RIGHT = 1 } tool_graph_direction;
+typedef enum tool_graph_theme {
+    TOOL_GRAPH_THEME_AUTO = 0,
+    TOOL_GRAPH_THEME_LIGHT = 1,
+    TOOL_GRAPH_THEME_DARK = 2
+} tool_graph_theme;
 typedef enum tool_actors_option {
     TOOL_ACTORS_SESSION = 4 /* --session N, repeatable: these sessions only */
 } tool_actors_option;

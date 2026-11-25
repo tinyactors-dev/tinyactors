@@ -63,7 +63,7 @@ module Core
     # and the shortest path to a state (src/analysis/analysis.h).
     # Freestanding; not in a released library.
     Layer.new(name: 'analysis', uses: %w[image], freestanding: true, sources: %w[src/analysis/search.c src/analysis/lint.c]),
-    Layer.new(name: 'diagram', uses: %w[base], freestanding: true, sources: %w[src/diagram/layout.c src/diagram/check.c]),
+    Layer.new(name: 'diagram', uses: %w[base], freestanding: true, sources: %w[src/diagram/layout.c src/diagram/fold.c src/diagram/check.c]),
     # The layout as SVG (src/diagram/svg.h), written through the compiler's
     # ta_xml_writer, so compiled without the C library's headers but not
     # linked as freestanding.

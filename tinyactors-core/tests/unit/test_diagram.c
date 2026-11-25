@@ -42,15 +42,15 @@ static void arena_begin(test_arena *a, size_t budget) {
 /* An order: open and paying in a compound `checkout`, paid and cancelled beside it; a parallel
  * `fulfilment` of two regions; a history state; a self loop; a transition with no target. */
 static const ta_diagram_state order_states[] = {
-    {TA_NIL, TA_DIAGRAM_STATE_ROOT, {"", 0}, 0, 1},              /* 0 */
-    {0, TA_DIAGRAM_STATE_STATE, {"checkout", 8}, 1, 1},            /* 1 */
-    {1, TA_DIAGRAM_STATE_STATE, {"open", 4}, 0, 0},                /* 2 */
-    {1, TA_DIAGRAM_STATE_STATE, {"paying", 6}, 0, 0},              /* 3 */
-    {1, TA_DIAGRAM_STATE_HISTORY_SHALLOW, {"resume", 6}, 0, 0},    /* 4 */
-    {0, TA_DIAGRAM_STATE_PARALLEL, {"fulfilment", 10}, 0, 0},       /* 5 */
-    {5, TA_DIAGRAM_STATE_STATE, {"packing", 7}, 0, 0},             /* 6 */
-    {5, TA_DIAGRAM_STATE_STATE, {"billing", 7}, 0, 0},             /* 7 */
-    {0, TA_DIAGRAM_STATE_FINAL, {"<paid & \"done\">", 15}, 0, 0},   /* 8: a name to escape */
+    {TA_NIL, TA_DIAGRAM_STATE_ROOT, {"", 0}, 0, 1, 0},              /* 0 */
+    {0, TA_DIAGRAM_STATE_STATE, {"checkout", 8}, 1, 1, 0},            /* 1 */
+    {1, TA_DIAGRAM_STATE_STATE, {"open", 4}, 0, 0, 0},                /* 2 */
+    {1, TA_DIAGRAM_STATE_STATE, {"paying", 6}, 0, 0, 0},              /* 3 */
+    {1, TA_DIAGRAM_STATE_HISTORY_SHALLOW, {"resume", 6}, 0, 0, 0},    /* 4 */
+    {0, TA_DIAGRAM_STATE_PARALLEL, {"fulfilment", 10}, 0, 0, 0},       /* 5 */
+    {5, TA_DIAGRAM_STATE_STATE, {"packing", 7}, 0, 0, 0},             /* 6 */
+    {5, TA_DIAGRAM_STATE_STATE, {"billing", 7}, 0, 0, 0},             /* 7 */
+    {0, TA_DIAGRAM_STATE_FINAL, {"<paid & \"done\">", 15}, 0, 0, 0},   /* 8: a name to escape */
 };
 static const uint32_t order_targets[] = {
     1,    /* the root's initial: checkout */
@@ -187,18 +187,18 @@ static void test_down(void) {
 /* A fulfilment of three regions, with edges between them both ways: from a box above another box
  * of its own region, into a box with a sibling beyond it, across two regions. */
 static const ta_diagram_state fulfilment_states[] = {
-    {TA_NIL, TA_DIAGRAM_STATE_ROOT, {"", 0}, 0, 1},             /* 0 */
-    {0, TA_DIAGRAM_STATE_PARALLEL, {"fulfilment", 10}, 0, 0},   /* 1 */
-    {1, TA_DIAGRAM_STATE_STATE, {"picking", 7}, 1, 1},          /* 2 */
-    {2, TA_DIAGRAM_STATE_STATE, {"locating", 8}, 0, 0},         /* 3 */
-    {2, TA_DIAGRAM_STATE_STATE, {"picked", 6}, 0, 0},           /* 4 */
-    {1, TA_DIAGRAM_STATE_STATE, {"invoicing", 9}, 2, 1},        /* 5 */
-    {5, TA_DIAGRAM_STATE_STATE, {"drafting", 8}, 0, 0},         /* 6 */
-    {5, TA_DIAGRAM_STATE_STATE, {"issued", 6}, 0, 0},           /* 7 */
-    {5, TA_DIAGRAM_STATE_STATE, {"backorder", 9}, 0, 0},        /* 8 */
-    {1, TA_DIAGRAM_STATE_STATE, {"shipping", 8}, 3, 1},         /* 9 */
-    {9, TA_DIAGRAM_STATE_STATE, {"awaiting", 8}, 0, 0},         /* 10 */
-    {9, TA_DIAGRAM_STATE_STATE, {"labelled", 8}, 0, 0},         /* 11 */
+    {TA_NIL, TA_DIAGRAM_STATE_ROOT, {"", 0}, 0, 1, 0},             /* 0 */
+    {0, TA_DIAGRAM_STATE_PARALLEL, {"fulfilment", 10}, 0, 0, 0},   /* 1 */
+    {1, TA_DIAGRAM_STATE_STATE, {"picking", 7}, 1, 1, 0},          /* 2 */
+    {2, TA_DIAGRAM_STATE_STATE, {"locating", 8}, 0, 0, 0},         /* 3 */
+    {2, TA_DIAGRAM_STATE_STATE, {"picked", 6}, 0, 0, 0},           /* 4 */
+    {1, TA_DIAGRAM_STATE_STATE, {"invoicing", 9}, 2, 1, 0},        /* 5 */
+    {5, TA_DIAGRAM_STATE_STATE, {"drafting", 8}, 0, 0, 0},         /* 6 */
+    {5, TA_DIAGRAM_STATE_STATE, {"issued", 6}, 0, 0, 0},           /* 7 */
+    {5, TA_DIAGRAM_STATE_STATE, {"backorder", 9}, 0, 0, 0},        /* 8 */
+    {1, TA_DIAGRAM_STATE_STATE, {"shipping", 8}, 3, 1, 0},         /* 9 */
+    {9, TA_DIAGRAM_STATE_STATE, {"awaiting", 8}, 0, 0, 0},         /* 10 */
+    {9, TA_DIAGRAM_STATE_STATE, {"labelled", 8}, 0, 0, 0},         /* 11 */
 };
 static const uint32_t fulfilment_targets[] = {1, 3, 6, 10, 4, 8, 11, 7, 3, 11, 6, 3};
 static const ta_diagram_transition fulfilment_transitions[] = {
@@ -238,19 +238,165 @@ static void test_between_regions(void) {
     ta_growable_arena_free(&a.arena);
 }
 
+
+/* The hard problems: what no layout may show. */
+static const uint32_t hard_problems[] = {TA_DIAGRAM_PROBLEM_START_DETACHED, TA_DIAGRAM_PROBLEM_END_DETACHED,
+                                         TA_DIAGRAM_PROBLEM_INITIAL_DETACHED, TA_DIAGRAM_PROBLEM_NOT_ORTHOGONAL,
+                                         TA_DIAGRAM_PROBLEM_OUTSIDE_PARENT, TA_DIAGRAM_PROBLEM_BOXES_OVERLAP};
+
+static uint32_t hard_count(test_arena *a, const ta_diagram_chart *chart, const ta_diagram_layout *layout) {
+    ta_diagram_check_request request = {chart, layout, &a->arena};
+    ta_diagram_problems problems;
+    if (ta_diagram_check(&request, &problems) != TA_OK) return UINT32_MAX;
+    uint32_t count = 0;
+    for (uint32_t i = 0; i < problems.count; i++)
+        for (size_t k = 0; k < sizeof hard_problems / sizeof hard_problems[0]; k++)
+            count += problems.list[i].kind == hard_problems[k];
+    return count;
+}
+
+/* A chart laid out in a direction, with its own measures. */
+static ta_status lay_out_toward(test_arena *a, const ta_diagram_chart *chart, uint32_t direction, drawn *out) {
+    out->portals = ta_diagram_portals(chart, &a->arena);
+    if (!out->portals) return TA_ERROR_NO_MEMORY;
+    ta_diagram_measure_request measure = {chart, out->portals, &a->arena};
+    ta_status status = ta_diagram_measure(&measure, &out->measures);
+    if (status != TA_OK) return status;
+    ta_diagram_request request = {chart, direction, 0, out->measures.states, out->measures.labels, out->portals, &a->arena};
+    return ta_diagram_layout_chart(&request, &out->layout);
+}
+
+/* A support ticket closed from four of its states: the final many edges arrive at. */
+static const ta_diagram_state ticket_states[] = {
+    {TA_NIL, TA_DIAGRAM_STATE_ROOT, {"", 0}, 0, 1, 0},   /* 0 */
+    {0, TA_DIAGRAM_STATE_STATE, {"triage", 6}, 0, 0, 0},  /* 1 */
+    {0, TA_DIAGRAM_STATE_STATE, {"working", 7}, 0, 0, 0}, /* 2 */
+    {0, TA_DIAGRAM_STATE_STATE, {"waiting", 7}, 0, 0, 0}, /* 3 */
+    {0, TA_DIAGRAM_STATE_STATE, {"review", 6}, 0, 0, 0},  /* 4 */
+    {0, TA_DIAGRAM_STATE_FINAL, {"closed", 6}, 0, 0, 0},  /* 5 */
+};
+static const uint32_t ticket_targets[] = {1, 2, 3, 4, 5, 5, 5, 5};
+static const ta_diagram_transition ticket_transitions[] = {
+    {1, 1, 1, {"assign", 6}, {"", 0}}, {2, 2, 1, {"ask", 3}, {"", 0}},     {3, 3, 1, {"answer", 6}, {"", 0}},
+    {1, 4, 1, {"close", 5}, {"", 0}},  {2, 5, 1, {"close", 5}, {"", 0}},   {3, 6, 1, {"close", 5}, {"", 0}},
+    {4, 7, 1, {"approve", 7}, {"", 0}},
+};
+static const ta_diagram_chart ticket = {ticket_states, 6, ticket_transitions, 7, ticket_targets};
+
+/* Down, the default of the command: the charts here break no hard rule, and a final four edges
+ * arrive at grows wide enough to keep their arrows apart. */
+static void test_down_charts(void) {
+    test_arena a;
+    arena_begin(&a, (size_t)-1);
+    const ta_diagram_chart *charts[] = {&order, &fulfilment, &ticket};
+    for (size_t i = 0; i < sizeof charts / sizeof charts[0]; i++) {
+        drawn d;
+        CHECK_EQUAL(lay_out_toward(&a, charts[i], TA_DIAGRAM_DOWN, &d), TA_OK);
+        CHECK_EQUAL(hard_count(&a, charts[i], &d.layout), 0);
+    }
+    drawn d;
+    CHECK_EQUAL(lay_out_toward(&a, &ticket, TA_DIAGRAM_DOWN, &d), TA_OK);
+    const ta_diagram_box *closed = box_of(&d.layout, 5);
+    CHECK(closed->rect.w >= 5 * 12 + closed->rect.h);
+    double least = 1e9;
+    for (uint32_t i = 0; i < d.layout.edge_count; i++)
+        for (uint32_t j = i + 1; j < d.layout.edge_count; j++) {
+            const ta_diagram_edge *e = &d.layout.edges[i], *f = &d.layout.edges[j];
+            if (e->target != 5 || f->target != 5) continue;
+            double x = d.layout.points[e->first_point + e->point_count - 1].x;
+            double y = d.layout.points[f->first_point + f->point_count - 1].x;
+            double gap = x > y ? x - y : y - x;
+            if (gap < least) least = gap;
+        }
+    CHECK(least >= 10);
+    ta_growable_arena_free(&a.arena);
+}
+
+/* Folding checkout: one box standing for open and paying, the edges of its hidden states
+ * leaving from it, the root's initial pointing at it, what stays inside it gone. */
+static void test_fold(void) {
+    test_arena a;
+    arena_begin(&a, (size_t)-1);
+    uint8_t folded[9] = {0};
+    folded[1] = 1; /* checkout */
+    folded[2] = 1; /* open: no container, never folded */
+    ta_diagram_fold_request request = {&order, folded, &a.arena};
+    ta_diagram_folding f;
+    CHECK_EQUAL(ta_diagram_fold(&request, &f), TA_OK);
+    CHECK_EQUAL(f.chart.state_count, 6); /* open, paying and the history state go */
+    uint32_t checkout = f.drawn_state[1];
+    CHECK_EQUAL(f.original_state[checkout], 1);
+    CHECK_EQUAL(f.drawn_state[2], checkout);
+    CHECK_EQUAL(f.drawn_state[3], checkout);
+    CHECK_EQUAL(f.drawn_state[4], checkout);
+    CHECK_EQUAL(f.chart.states[checkout].hidden, 2); /* open and paying, not the history state */
+    CHECK_EQUAL(f.chart.states[checkout].initial_count, 0);
+    CHECK_EQUAL(f.chart.targets[f.chart.states[0].first_initial], checkout);
+    CHECK_EQUAL(f.drawn_transition[0], TA_NIL); /* open -> paying: inside */
+    CHECK_EQUAL(f.drawn_transition[2], TA_NIL); /* paying's loop */
+    CHECK_EQUAL(f.drawn_transition[3], TA_NIL); /* paying's targetless */
+    CHECK_EQUAL(f.drawn_transition[5], TA_NIL); /* the history state's default */
+    uint32_t leaving = f.drawn_transition[1];   /* paying -> fulfilment: from the box */
+    CHECK(leaving != TA_NIL);
+    CHECK_EQUAL(f.chart.transitions[leaving].source, checkout);
+    CHECK_EQUAL(f.chart.transitions[leaving].events.length, 12);
+    drawn d;
+    CHECK_EQUAL(lay_out_toward(&a, &f.chart, TA_DIAGRAM_DOWN, &d), TA_OK);
+    const ta_diagram_box *box = box_of(&d.layout, checkout);
+    CHECK_EQUAL(box->kind, TA_DIAGRAM_BOX_FOLDED);
+    CHECK(box->rect.w >= 96);
+    CHECK_EQUAL(d.layout.inside_count[checkout], 0);
+    CHECK_EQUAL(d.layout.initials[0].target, checkout);
+    int attached = 0;
+    for (uint32_t i = 0; i < d.layout.edge_count; i++)
+        attached |= d.layout.edges[i].transition == leaving;
+    CHECK(attached);
+    CHECK_EQUAL(hard_count(&a, &f.chart, &d.layout), 0);
+    CHECK_EQUAL(lay_out_toward(&a, &f.chart, TA_DIAGRAM_RIGHT, &d), TA_OK);
+    CHECK_EQUAL(hard_count(&a, &f.chart, &d.layout), 0);
+    /* a parallel state folds the same way; nothing folded is the chart itself */
+    folded[1] = 0;
+    folded[5] = 1;
+    CHECK_EQUAL(ta_diagram_fold(&request, &f), TA_OK);
+    CHECK_EQUAL(f.chart.states[f.drawn_state[5]].hidden, 2);
+    CHECK_EQUAL(lay_out_toward(&a, &f.chart, TA_DIAGRAM_DOWN, &d), TA_OK);
+    CHECK_EQUAL(box_of(&d.layout, f.drawn_state[5])->kind, TA_DIAGRAM_BOX_FOLDED);
+    CHECK_EQUAL(hard_count(&a, &f.chart, &d.layout), 0);
+    request.folded = NULL;
+    CHECK_EQUAL(ta_diagram_fold(&request, &f), TA_OK);
+    CHECK_EQUAL(f.chart.state_count, order.state_count);
+    CHECK_EQUAL(f.chart.transition_count, order.transition_count);
+    /* a chart that is not a tree is refused */
+    ta_diagram_state backwards[2] = {{1, TA_DIAGRAM_STATE_ROOT, {"", 0}, 0, 0, 0}, {0, TA_DIAGRAM_STATE_STATE, {"open", 4}, 0, 0, 0}};
+    ta_diagram_chart broken = {backwards, 2, NULL, 0, order_targets};
+    request.chart = &broken;
+    CHECK_EQUAL(ta_diagram_fold(&request, &f), TA_ERROR_INVALID);
+    ta_growable_arena_free(&a.arena);
+    /* an arena that stops growing fails the fold, never more */
+    for (size_t budget = 0;; budget += 256) {
+        test_arena small;
+        arena_begin(&small, budget);
+        ta_diagram_fold_request tight = {&order, folded, &small.arena};
+        ta_status status = ta_diagram_fold(&tight, &f);
+        CHECK(status == TA_OK || status == TA_ERROR_NO_MEMORY);
+        ta_growable_arena_free(&small.arena);
+        if (status == TA_OK || budget > 100000) break;
+    }
+}
+
 /* A chart that is not a tree in document order, or a target past its states, is refused. */
 static void test_refusals(void) {
     test_arena a;
     arena_begin(&a, (size_t)-1);
-    ta_diagram_state backwards[3] = {order_states[0], {2, TA_DIAGRAM_STATE_STATE, {"open", 4}, 0, 0},
-                                     {0, TA_DIAGRAM_STATE_STATE, {"paid", 4}, 0, 0}};
+    ta_diagram_state backwards[3] = {order_states[0], {2, TA_DIAGRAM_STATE_STATE, {"open", 4}, 0, 0, 0},
+                                     {0, TA_DIAGRAM_STATE_STATE, {"paid", 4}, 0, 0, 0}};
     ta_diagram_chart chart = {backwards, 3, NULL, 0, order_targets};
     ta_diagram_request request = {&chart, TA_DIAGRAM_RIGHT, 0, NULL, NULL, NULL, &a.arena};
     ta_diagram_layout layout;
     CHECK_EQUAL(ta_diagram_layout_chart(&request, &layout), TA_ERROR_INVALID);
     static const uint32_t far[] = {1, 7};
     ta_diagram_transition away = {1, 1, 1, {"go", 2}, {"", 0}};
-    ta_diagram_state two[2] = {{TA_NIL, TA_DIAGRAM_STATE_ROOT, {"", 0}, 0, 1}, {0, TA_DIAGRAM_STATE_STATE, {"open", 4}, 0, 0}};
+    ta_diagram_state two[2] = {{TA_NIL, TA_DIAGRAM_STATE_ROOT, {"", 0}, 0, 1, 0}, {0, TA_DIAGRAM_STATE_STATE, {"open", 4}, 0, 0, 0}};
     chart = (ta_diagram_chart){two, 2, &away, 1, far};
     CHECK_EQUAL(ta_diagram_layout_chart(&request, &layout), TA_ERROR_INVALID);
     ta_growable_arena_free(&a.arena);
@@ -285,8 +431,9 @@ static void test_svg(void) {
     CHECK_EQUAL(lay_out(&a, &order, &d), TA_OK);
     ta_xml_writer *writer;
     CHECK_EQUAL(ta_xml_writer_new(NULL, &writer), TA_OK);
-    CHECK_EQUAL(ta_diagram_svg_open(writer, (ta_diagram_size){d.layout.width + 24, d.layout.height + 54}), TA_OK);
-    ta_diagram_drawing drawing = {&order, &d.layout, d.portals, {"order", 5}, 12, &a.arena};
+    ta_diagram_page page = {{d.layout.width + 24, d.layout.height + 54}, TA_DIAGRAM_THEME_AUTO};
+    CHECK_EQUAL(ta_diagram_svg_open(writer, &page), TA_OK);
+    ta_diagram_drawing drawing = {&order, &d.layout, d.portals, {"order", 5}, 12, &a.arena, NULL, NULL, 0};
     CHECK_EQUAL(ta_diagram_svg(writer, &drawing), TA_OK);
     CHECK_EQUAL(ta_diagram_svg_close(writer), TA_OK);
     ta_string_view svg;
@@ -299,6 +446,89 @@ static void test_svg(void) {
     CHECK(contains(svg, "<path class=\"ta-edge\" d=\"M"));
     CHECK(contains(svg, "--ta-fg1: #1c1c21;"));
     ta_xml_writer_free(writer);
+    ta_growable_arena_free(&a.arena);
+}
+
+
+/* An SVG of `chart` drawn as `drawing` says, on a page of `theme`. */
+static ta_string_view drawn_svg(test_arena *a, const ta_diagram_drawing *drawing, uint32_t theme) {
+    ta_allocator allocator = ta_growable_arena_allocator(&a->arena);
+    ta_xml_writer *writer;
+    if (ta_xml_writer_new(&allocator, &writer) != TA_OK) return (ta_string_view){"", 0};
+    ta_diagram_page page = {{drawing->layout->width + 24, drawing->layout->height + 54}, theme};
+    ta_diagram_svg_open(writer, &page);
+    ta_diagram_svg(writer, drawing);
+    ta_diagram_svg_close(writer);
+    ta_string_view svg = {"", 0};
+    if (ta_xml_writer_finish(writer, &svg) != TA_OK) svg = (ta_string_view){"", 0};
+    return svg; /* the writer's memory is the arena's */
+}
+
+static uint32_t occurrences(ta_string_view text, const char *needle) {
+    size_t n = strlen(needle);
+    uint32_t count = 0;
+    for (uint32_t i = 0; i + n <= text.length; i++)
+        count += memcmp(text.pointer + i, needle, n) == 0;
+    return count;
+}
+
+/* The themes: auto writes both token sets, the dark one under the reader's preference; light
+ * and dark write only their own. */
+static void test_themes(void) {
+    test_arena a;
+    arena_begin(&a, (size_t)-1);
+    drawn d;
+    CHECK_EQUAL(lay_out(&a, &order, &d), TA_OK);
+    ta_diagram_drawing drawing = {&order, &d.layout, d.portals, {"order", 5}, 12, &a.arena, NULL, NULL, 0};
+    ta_string_view svg = drawn_svg(&a, &drawing, TA_DIAGRAM_THEME_AUTO);
+    CHECK_EQUAL(occurrences(svg, "--ta-fg1:"), 2);
+    CHECK(contains(svg, "@media (prefers-color-scheme: dark)"));
+    svg = drawn_svg(&a, &drawing, TA_DIAGRAM_THEME_LIGHT);
+    CHECK_EQUAL(occurrences(svg, "--ta-fg1:"), 1);
+    CHECK(contains(svg, "--ta-fg1: #1c1c21;"));
+    CHECK(contains(svg, "--ta-path: #1f6feb;"));
+    CHECK(!contains(svg, "@media"));
+    svg = drawn_svg(&a, &drawing, TA_DIAGRAM_THEME_DARK);
+    CHECK_EQUAL(occurrences(svg, "--ta-fg1:"), 1);
+    CHECK(contains(svg, "--ta-fg1: #ececf1;"));
+    CHECK(contains(svg, "--ta-highlight: #f5b03d;"));
+    CHECK(!contains(svg, "@media"));
+    ta_growable_arena_free(&a.arena);
+}
+
+/* Marks are classes: a highlighted box, a path's boxes and edges, its steps numbered; and a
+ * folded box is drawn on its stack with its count. */
+static void test_marks(void) {
+    test_arena a;
+    arena_begin(&a, (size_t)-1);
+    drawn d;
+    CHECK_EQUAL(lay_out(&a, &order, &d), TA_OK);
+    uint8_t marks[9] = {0};
+    marks[8] = TA_DIAGRAM_MARK_HIGHLIGHT;                   /* paid */
+    marks[2] = marks[3] = TA_DIAGRAM_MARK_PATH;             /* open, paying */
+    static const uint32_t path[] = {0, 2, 2, TA_NIL};       /* checkout, then the retry twice, then one hidden */
+    ta_diagram_drawing drawing = {&order, &d.layout, d.portals, {"order", 5}, 12, &a.arena, marks, path, 4};
+    ta_string_view svg = drawn_svg(&a, &drawing, TA_DIAGRAM_THEME_AUTO);
+    CHECK(contains(svg, "class=\"ta-leaf ta-highlight\""));
+    CHECK_EQUAL(occurrences(svg, "class=\"ta-leaf ta-path\""), 2);
+    CHECK(contains(svg, "<path class=\"ta-edge ta-path\""));
+    CHECK(contains(svg, "marker-end=\"url(#tinyactors-arrow-path)\""));
+    CHECK(contains(svg, ">1</text>"));
+    CHECK(contains(svg, ">2,3</text>")); /* one transition taken twice: one badge */
+    CHECK(contains(svg, "class=\"ta-pill ta-path\""));
+    CHECK(!contains(svg, ">4</text>"));
+    /* a folded checkout */
+    uint8_t folded[9] = {0, 1};
+    ta_diagram_fold_request request = {&order, folded, &a.arena};
+    ta_diagram_folding f;
+    CHECK_EQUAL(ta_diagram_fold(&request, &f), TA_OK);
+    drawn g;
+    CHECK_EQUAL(lay_out_toward(&a, &f.chart, TA_DIAGRAM_DOWN, &g), TA_OK);
+    ta_diagram_drawing folded_drawing = {&f.chart, &g.layout, g.portals, {"order", 5}, 12, &a.arena, NULL, NULL, 0};
+    svg = drawn_svg(&a, &folded_drawing, TA_DIAGRAM_THEME_AUTO);
+    CHECK(contains(svg, "class=\"ta-folded-stack\""));
+    CHECK(contains(svg, "class=\"ta-leaf ta-folded\""));
+    CHECK(contains(svg, ">2 states</text>"));
     ta_growable_arena_free(&a.arena);
 }
 
@@ -416,9 +646,13 @@ int main(void) {
     RUN(test_deterministic);
     RUN(test_down);
     RUN(test_between_regions);
+    RUN(test_down_charts);
+    RUN(test_fold);
     RUN(test_refusals);
     RUN(test_no_memory);
     RUN(test_svg);
+    RUN(test_themes);
+    RUN(test_marks);
     RUN(test_check);
     TEST_MAIN_END();
 }

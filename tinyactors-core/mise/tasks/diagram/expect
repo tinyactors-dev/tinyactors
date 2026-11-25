@@ -16,7 +16,10 @@ charts = directory.glob('*.scxml').sort
 abort 'diagram:expect: no charts in tests/diagram' if charts.empty?
 
 charts.each do |chart|
-  answer = IO.popen([program.to_s, 'graph', chart.basename.to_s], chdir: directory.to_s, &:read)
+  # the options a chart is answered with, when a <name>.args beside it holds them
+  sidecar = chart.sub_ext('.args')
+  options = sidecar.exist? ? sidecar.read.split : []
+  answer = IO.popen([program.to_s, 'graph', *options, chart.basename.to_s], chdir: directory.to_s, &:read)
   abort "diagram:expect: tinyactors graph #{chart.basename} failed" unless $?.success?
   chart.sub_ext('.md').write(answer)
 end

@@ -49,7 +49,7 @@ static uint32_t side_of(rect r, point p) {
 
 static int is_leaf(const ta_diagram_box *box) {
     return box->kind == TA_DIAGRAM_BOX_ATOMIC || box->kind == TA_DIAGRAM_BOX_FINAL || box->kind == TA_DIAGRAM_BOX_HISTORY ||
-           (box->kind == TA_DIAGRAM_BOX_REGION && box->header == 0);
+           box->kind == TA_DIAGRAM_BOX_FOLDED || (box->kind == TA_DIAGRAM_BOX_REGION && box->header == 0);
 }
 
 /* 1 when the segment a-b passes through the inside of `r`, shrunk by `touching` all round. */

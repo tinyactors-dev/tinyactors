@@ -5,7 +5,10 @@ layout (`src/diagram/layout.c`) with its kind and rectangle, every edge with
 its route, and the transitions each box lists inside it. `test_tool`
 (`test_layout_corpus`) runs `graph` on every `*.scxml` here and compares its
 answer with the `.md` beside it, byte for byte. A change that moves one box
-by one pixel fails it.
+by one pixel fails it. The answers are `graph`'s default layout, top to
+bottom; a chart with a `<name>.args` beside it is answered with the options
+that file holds (`document-overview.args`: folding, a path and a
+highlighted state).
 
 This corpus is the layout's reference. The layout was ported from scxmljs's
 `layoutChart` (`@tinyactors/scxmljs` 0.3.0, `src/view/layout.ts`), and on
@@ -13,8 +16,12 @@ This corpus is the layout's reference. The layout was ported from scxmljs's
 for route, for every chart of the repository scxmljs could read (223), given
 the same sizes. It has changed since, here only: a node is aligned on its
 neighbours' ports rather than their boxes' middles (a container's ports are
-below its header), and a route ends on the outline drawn, a final's pill or
-a history state's circle. Nothing here depends on scxmljs any more: the
+below its header), a route ends on the outline drawn, a final's pill or
+a history state's circle, a leaf that three or more edges arrive at grows
+so their arrows keep 12 px apart, and down a box grows to 480 px (from
+320) to put its outgoing labels side by side. Folding (scxmljs's
+`collapsed` set) is a chart made before the layout (`src/diagram/fold.c`).
+Nothing here depends on scxmljs any more: the
 layout is ours, and so is its suite.
 
 ## Problems
@@ -56,6 +63,8 @@ corpus, and five written for it:
 | `insurance-claim` | three levels of nesting, a container's transition into its descendant, edges out of nested states |
 | `order-processing` | three parallel regions and nine edges between them, both ways, sharing the lanes beside them |
 | `checkout` | five parallel regions wrapped into a grid, edges within a column and across to the other |
+| `document-overview` | `document-approval` with `--depth 2 --path --to archiving --highlight escalated`: the parallel review folded into one box, the edges of its hidden states attached to it, a path and a highlighted state |
 
-A new chart needs only its `.scxml` here and `mise run diagram:expect`; give
-it a name of its own, an entity of a real system.
+A new chart needs only its `.scxml` here (and a `.args` for options) and
+`mise run diagram:expect`; give it a name of its own, an entity of a real
+system.

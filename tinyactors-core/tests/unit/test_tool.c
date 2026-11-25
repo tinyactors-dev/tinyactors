@@ -245,7 +245,7 @@ static const char ticket[] =
  * its boxes and routes) and as a picture. */
 static void test_graph_layout(void) {
     CHECK(fixture_write("support-ticket.scxml", ticket));
-    CHECK_EQUAL(run("graph -f json support-ticket.scxml"), 0);
+    CHECK_EQUAL(run("graph -f json --direction right support-ticket.scxml"), 0);
     CHECK(has("output", "\"drawnAs\": \"region\""));
     CHECK(has("output", "\"route\": \"145,208 161,208 161,234 145,234\"")); /* the self loop */
     /* in their boxes: the targetless ones, and escalate, which crosses three borders */
@@ -255,7 +255,7 @@ static void test_graph_layout(void) {
     CHECK(has("output", "| working | escalate |  | waiting |"));
 
     /* the picture: well-formed, escaped, one <g> per chart, its routes as paths */
-    CHECK_EQUAL(run("graph -f svg support-ticket.scxml"), 0);
+    CHECK_EQUAL(run("graph -f svg --direction right support-ticket.scxml"), 0);
     CHECK(has("output", "<svg xmlns=\"http://www.w3.org/2000/svg\" class=\"tinyactors-diagram\" width=\"1126.2\""));
     /* close leaves open's side level with closed's middle: one straight line, onto its pill */
     CHECK(has("output", "<path class=\"ta-edge\" d=\"M946.6,197 L1030.6,197\" marker-end=\"url(#tinyactors-arrow)\"/>"));
@@ -290,6 +290,67 @@ static void test_graph_layout(void) {
     CHECK(has("errors", "--format svg is for graph"));
 }
 
+
+/* graph's options: the direction, the theme, marks, a path, folding; and the refusals. */
+static void test_graph_options(void) {
+    CHECK(fixture_write("support-ticket.scxml", ticket));
+    /* down by default: escalated above open, as right puts it before */
+    CHECK_EQUAL(run("graph -f json support-ticket.scxml"), 0);
+    char down[1 << 16];
+    snprintf(down, sizeof down, "%s", text_of("output"));
+    CHECK_EQUAL(run("graph -f json --direction down support-ticket.scxml"), 0);
+    CHECK(strcmp(down, text_of("output")) == 0);
+    CHECK_EQUAL(run("graph -f json --direction right support-ticket.scxml"), 0);
+    CHECK(strcmp(down, text_of("output")) != 0);
+    CHECK_EQUAL(run("graph --direction sideways support-ticket.scxml"), 2);
+    /* the themes: one token set, or both */
+    CHECK_EQUAL(run("graph -f svg --theme dark support-ticket.scxml"), 0);
+    CHECK(has("output", "--ta-fg1: #ececf1;"));
+    CHECK(!strstr(text_of("output"), "@media"));
+    CHECK(!strstr(text_of("output"), "--ta-fg1: #1c1c21;"));
+    CHECK_EQUAL(run("graph -f svg --theme light support-ticket.scxml"), 0);
+    CHECK(has("output", "--ta-fg1: #1c1c21;"));
+    CHECK(!strstr(text_of("output"), "@media"));
+    /* marks: a highlighted state, a path with its steps numbered */
+    CHECK_EQUAL(run("graph -f svg --highlight working --highlight closed support-ticket.scxml"), 0);
+    CHECK(has("output", "ta-highlight"));
+    CHECK_EQUAL(run("graph -f svg --path --to closed support-ticket.scxml"), 0);
+    CHECK(has("output", "<path class=\"ta-edge ta-path\""));
+    CHECK(has("output", "class=\"ta-step\""));
+    CHECK(has("output", "class=\"ta-step-number\""));
+    CHECK_EQUAL(run("graph -f json --path --from working --to approved --highlight working support-ticket.scxml"), 0);
+    CHECK(has("output", "\"marks\": \"highlight path\"")); /* working: highlighted, and where the path starts */
+    CHECK(has("output", "\"steps\": \"1\""));
+    CHECK(has("output", "\"steps\": \"\""));
+    /* folding: one box for each folded container, the data saying what it hides */
+    CHECK_EQUAL(run("graph -f json --fold escalated support-ticket.scxml"), 0);
+    CHECK(has("output", "\"drawnAs\": \"folded\""));
+    CHECK(has("output", "\"hides\": 5"));
+    CHECK(!strstr(text_of("output"), "\"state\": \"waiting\""));
+    CHECK(!strstr(text_of("output"), "Detached"));
+    CHECK_EQUAL(run("graph --depth 0 support-ticket.scxml"), 0);
+    CHECK(has("output", "| open | compound | /scxml | folded | 2 |"));
+    CHECK(has("output", "| escalated | parallel | /scxml | folded | 5 |"));
+    CHECK_EQUAL(run("graph -f svg --depth 0 support-ticket.scxml"), 0);
+    CHECK(has("output", "class=\"ta-folded-stack\""));
+    CHECK(has("output", ">5 states</text>"));
+    /* refusals */
+    CHECK_EQUAL(run("graph --highlight nowhere support-ticket.scxml"), 2);
+    CHECK(has("errors", "'nowhere' is no state of a chart drawn"));
+    CHECK_EQUAL(run("graph --fold triage support-ticket.scxml"), 2);
+    CHECK(has("errors", "'triage' is not a compound or parallel state"));
+    CHECK_EQUAL(run("graph --path support-ticket.scxml"), 2);
+    CHECK(has("errors", "--path needs --to STATE"));
+    CHECK_EQUAL(run("graph --to closed support-ticket.scxml"), 2);
+    CHECK_EQUAL(run("graph --path --to hist support-ticket.scxml"), 2);
+    CHECK(has("errors", "history state"));
+    CHECK_EQUAL(run("graph --path --to nowhere support-ticket.scxml"), 2);
+    CHECK_EQUAL(run("graph --depth deep support-ticket.scxml"), 2);
+    /* a path that does not exist: from the final, nothing leaves */
+    CHECK_EQUAL(run("graph --path --from closed --to triage support-ticket.scxml"), 1);
+    CHECK(has("errors", "no path reaches 'triage'"));
+}
+
 /* A whole file, NUL-terminated, in memory the caller frees; NULL when it cannot be read. */
 static char *whole_file(const char *path) {
     FILE *file = fopen(path, "rb");
@@ -315,9 +376,16 @@ static void test_layout_corpus(void) {
     for (struct dirent *entry; (entry = readdir(directory));) {
         size_t length = strlen(entry->d_name);
         if (length < 6 || strcmp(entry->d_name + length - 6, ".scxml") != 0) continue;
-        char command[2048], expected[2048];
-        snprintf(command, sizeof command, "graph '%s/%s'", TA_TEST_DIAGRAMS, entry->d_name);
+        char command[2048], expected[2048], sidecar[2048];
         snprintf(expected, sizeof expected, "%s/%.*s.md", TA_TEST_DIAGRAMS, (int)(length - 6), entry->d_name);
+        /* the options a chart is answered with, when a <name>.args beside it holds them */
+        snprintf(sidecar, sizeof sidecar, "%s/%.*s.args", TA_TEST_DIAGRAMS, (int)(length - 6), entry->d_name);
+        char *options = whole_file(sidecar);
+        if (options)
+            for (char *at = options; *at; at++)
+                if (*at == '\n') *at = ' ';
+        snprintf(command, sizeof command, "graph %s '%s/%s'", options ? options : "", TA_TEST_DIAGRAMS, entry->d_name);
+        free(options);
         CHECK_EQUAL(run(command), 0);
         char *answer = whole_file(fixture_path("output")), *wanted = whole_file(expected);
         int same = answer && wanted && strcmp(answer, wanted) == 0;
@@ -1008,6 +1076,7 @@ int main(void) {
     RUN(test_the_command_line);
     RUN(test_disassemble_and_graph);
     RUN(test_graph_layout);
+    RUN(test_graph_options);
     RUN(test_layout_corpus);
     RUN(test_diff);
     RUN(test_lint_and_path);

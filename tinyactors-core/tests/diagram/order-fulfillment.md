@@ -5,52 +5,52 @@
 ### Chart 1: order
 
 - **Name**: order
-- **Width**: 3085
-- **Height**: 282
+- **Width**: 740
+- **Height**: 1284
 
 #### Boxes
 
 | State | Kind | Parent | Drawn as | X | Y | Width | Height |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| /scxml | compound |  | root | 0 | 0 | 3085 | 282 |
-| validating | atomic | /scxml | atomic | 40 | 204 | 100 | 64 |
-| payment | compound | /scxml | compound | 346 | 136 | 637 | 88 |
-| charging | atomic | payment | atomic | 386 | 176 | 85 | 34 |
-| backoff | atomic | payment | atomic | 892 | 176 | 77 | 34 |
-| fulfilment | compound | /scxml | compound | 1281 | 47 | 711 | 132 |
-| picking | atomic | fulfilment | atomic | 1321 | 96 | 77 | 58 |
-| cancelling | atomic | fulfilment | atomic | 1588 | 99 | 100 | 34 |
-| handedOver | atomic | fulfilment | atomic | 1878 | 87 | 100 | 58 |
-| refunding | compound | /scxml | compound | 2242 | 92 | 421 | 112 |
-| requesting | atomic | refunding | atomic | 2282 | 156 | 100 | 34 |
-| waiting | atomic | refunding | atomic | 2572 | 156 | 77 | 34 |
-| delivered | final | /scxml | final | 2242 | 14 | 92 | 34 |
-| cancelled | final | /scxml | final | 2978 | 130 | 92 | 34 |
-| failed | final | /scxml | final | 2978 | 183 | 70 | 34 |
+| /scxml | compound |  | root | 0 | 0 | 740 | 1284 |
+| validating | atomic | /scxml | atomic | 408 | 40 | 292 | 34 |
+| payment | compound | /scxml | compound | 212 | 146 | 419 | 210 |
+| charging | atomic | payment | atomic | 226 | 212 | 391 | 34 |
+| backoff | atomic | payment | atomic | 445 | 308 | 77 | 34 |
+| fulfilment | compound | /scxml | compound | 138 | 458 | 272 | 330 |
+| picking | atomic | fulfilment | atomic | 171 | 524 | 225 | 34 |
+| cancelling | atomic | fulfilment | atomic | 152 | 620 | 160 | 34 |
+| handedOver | atomic | fulfilment | atomic | 182 | 716 | 100 | 58 |
+| refunding | compound | /scxml | compound | 262 | 910 | 188 | 234 |
+| requesting | atomic | refunding | atomic | 276 | 1000 | 160 | 34 |
+| waiting | atomic | refunding | atomic | 317 | 1096 | 77 | 34 |
+| delivered | final | /scxml | final | 102 | 910 | 92 | 34 |
+| cancelled | final | /scxml | final | 254 | 1236 | 92 | 34 |
+| failed | final | /scxml | final | 364 | 1236 | 94 | 34 |
 
 #### Edges
 
 | Source | Target | Events | Condition | Drawn as | Route |
 | --- | --- | --- | --- | --- | --- |
-| validating | failed |  | items.length === 0 | forward | 140,236 326,236 326,252 1261,252 1261,257 2222,257 2222,252 2958,252 2958,202 2978,202 |
-| validating | failed |  | !(total > 0) | forward | 140,252 1271,252 1271,257 2232,257 2232,252 2968,252 2968,205 2979,205 |
-| validating | payment |  |  | forward | 140,214 346,214 |
-| payment | refunding | cancel |  | forward | 983,193 1241,193 1241,207 2202,207 2202,182 2242,182 |
-| charging | fulfilment | done.invoke.charge |  | forward | 471,182 477,182 477,169 1231,169 1231,126 1281,126 |
-| charging | failed | payment.declined |  | forward | 471,204 481,204 481,217 1251,217 1251,232 2212,232 2212,227 2948,227 2948,198 2978,198 |
-| charging | backoff | payment.timeout payment.error | `attempt < maxAttempts` | forward | 471,193 882,193 882,189 892,189 |
-| charging | refunding | payment.timeout payment.error |  | forward | 471,187 485,187 485,169 1221,169 1221,207 2162,207 2162,192 2242,192 |
-| backoff | charging | payment.retry |  | back | 892,199 471,199 |
-| fulfilment | refunding | shipping.outOfStock |  | forward | 1992,152 2242,152 |
-| fulfilment | delivered | done.invoke.ship |  | forward | 1992,83 2192,83 2192,31 2242,31 |
-| picking | handedOver | shipping.handedOver |  | forward | 1398,106 1578,106 1578,156 1868,156 1868,135 1878,135 |
-| picking | cancelling | cancel |  | forward | 1398,116 1588,116 |
-| cancelling | refunding | shipping.cancelled |  | forward | 1688,122 1694,122 1694,80 2182,80 2182,167 2242,167 |
-| cancelling | handedOver | shipping.handedOver |  | forward | 1688,110 1878,110 |
-| requesting | cancelled | refunded | outcome === 'cancelled' | forward | 2382,163 2388,163 2388,149 2938,149 2938,147 2978,147 |
-| requesting | failed | refunded |  | forward | 2382,184 2392,184 2392,197 2928,197 2928,195 2979,195 |
-| requesting | waiting | error.communication |  | forward | 2382,170 2572,170 |
-| waiting | requesting | refund.retry |  | back | 2572,179 2552,179 2552,177 2382,177 |
+| validating | failed |  | items.length === 0 | forward | 418,74 418,126 659,126 659,398 509,398 509,830 498,830 498,1186 419,1186 419,1236 |
+| validating | failed |  | !(total > 0) | forward | 558,74 558,136 659,136 659,448 509,448 509,900 498,900 498,1226 441,1226 441,1236 |
+| validating | payment |  |  | forward | 621,74 621,146 |
+| payment | refunding | cancel |  | forward | 422,356 422,428 459,428 459,880 402,880 402,910 |
+| charging | fulfilment | done.invoke.charge |  | forward | 291,246 291,418 274,418 274,458 |
+| charging | failed | payment.declined |  | forward | 422,246 422,438 484,438 484,890 473,890 473,1216 405,1216 405,1236 |
+| charging | backoff | payment.timeout payment.error | `attempt < maxAttempts` | forward | 487,246 487,308 |
+| charging | refunding | payment.timeout payment.error |  | forward | 356,246 356,408 459,408 459,840 412,840 412,910 |
+| backoff | charging | payment.retry |  | back | 513,308 513,298 552,298 552,246 |
+| fulfilment | refunding | shipping.outOfStock |  | forward | 319,788 319,910 |
+| fulfilment | delivered | done.invoke.ship |  | forward | 148,788 148,910 |
+| picking | handedOver | shipping.handedOver |  | forward | 181,558 181,600 335,600 335,706 272,706 272,716 |
+| picking | cancelling | cancel |  | forward | 291,558 291,610 232,610 232,620 |
+| cancelling | refunding | shipping.cancelled |  | forward | 259,654 259,660 145,660 145,860 299,860 299,910 |
+| cancelling | handedOver | shipping.handedOver |  | forward | 205,654 205,716 |
+| requesting | cancelled | refunded | outcome === 'cancelled' | forward | 308,1034 308,1196 300,1196 300,1236 |
+| requesting | failed | refunded |  | forward | 404,1034 404,1206 393,1206 393,1236 |
+| requesting | waiting | error.communication |  | forward | 340,1034 340,1096 |
+| waiting | requesting | refund.retry |  | back | 372,1096 372,1034 |
 
 #### Inside
 
@@ -63,6 +63,16 @@
 
 | Kind | Subject | Touches |
 | --- | --- | --- |
-| labelOnEdge | backoff → charging on payment.retry | charging → failed on payment.declined |
+| labelOnEdge | charging → backoff on payment.timeout payment.error | validating → failed |
+| labelOnEdge | charging → backoff on payment.timeout payment.error | validating → failed |
+| labelOnEdge | charging → backoff on payment.timeout payment.error | charging → failed on payment.declined |
+| labelOnEdge | charging → backoff on payment.timeout payment.error | charging → refunding on payment.timeout payment.error |
+| labelOnEdge | charging → backoff on payment.timeout payment.error | backoff → charging on payment.retry |
+| labelOnEdge | backoff → charging on payment.retry | validating → failed |
+| labelOnEdge | backoff → charging on payment.retry | validating → failed |
+| labelOnEdge | cancelling → handedOver on shipping.handedOver | cancelling → refunding on shipping.cancelled |
+| labelOnEdge | requesting → waiting on error.communication | requesting → cancelled on refunded |
+| labelOnEdge | requesting → waiting on error.communication | requesting → failed on refunded |
 | labelOnEdge | requesting → waiting on error.communication | waiting → requesting on refund.retry |
 | labelOnEdge | waiting → requesting on refund.retry | requesting → failed on refunded |
+| labelOnEdge | waiting → requesting on refund.retry | requesting → waiting on error.communication |

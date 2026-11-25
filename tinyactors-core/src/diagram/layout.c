@@ -1,9 +1,10 @@
 /* diagram/layout.c — a statechart as nested boxes with orthogonal routes
  * (diagram.h): scxmljs's layout.ts, ported to C. The steps keep its
  * comments and its order, so the two read side by side; what differs:
- * every container is expanded (nothing is folded), history states of a
- * parallel state are laid out with its regions, and maps and sets are
- * arrays indexed by state. Freestanding: no recursion, no C library. */
+ * folding is done before (fold.c: a folded container comes as a leaf whose
+ * `hidden` counts its states), history states of a parallel state are
+ * laid out with its regions, and maps and sets are arrays indexed by
+ * state. Freestanding: no recursion, no C library. */
 #include "diagram/diagram.h"
 
 #include "base/memory.h"
@@ -14,9 +15,10 @@
 static const ta_diagram_spacing default_spacing = {18, 44, 14, 10, 6};
 static const double initial_dot = 10; /* the initial marker's diameter */
 static const double self_out = 1.6;   /* how far a self loop reaches past its box, in edge spacings */
-static const double label_row = 320;  /* down: how wide a box may grow to put its outgoing labels side by side */
+static const double label_row = 480;  /* down: how wide a box may grow to put its outgoing labels side by side */
 static const double big = 1e300;      /* beyond every coordinate */
-static const double port_tie = 1e-6;  /* orders ports whose keys are equal, moving none */
+static const double port_tie = 1e-6;
+static const double port_pitch = 12;  /* the least gap between arrows arriving on one leaf's side */  /* orders ports whose keys are equal, moving none */
 enum { PORTAL_BORDERS = 3 };          /* a transition crossing this many container borders is listed, not routed */
 
 /* ---- small things ------------------------------------------------------------------------ */
@@ -194,6 +196,7 @@ static int is_compound(const layout *l, uint32_t s) {
 }
 static int is_container(const layout *l, uint32_t s) {
     uint32_t kind = state_of(l, s)->kind;
+    if (state_of(l, s)->hidden) return 0; /* folded: a leaf */
     return kind == TA_DIAGRAM_STATE_ROOT || kind == TA_DIAGRAM_STATE_PARALLEL || is_compound(l, s);
 }
 static int within(const layout *l, uint32_t s, uint32_t ancestor) {
@@ -873,6 +876,27 @@ static size arrange_layers(layout *l, uint32_t c, const size *sizes) {
         double want = ta_diagram_min(need + sp->label, room);
         if (want > node->h) node->h = want;
     }
+    /* a leaf many edges arrive at grows across the layers so its arrows keep apart: a pitch
+     * of port_pitch between them, clear of a final's round ends */
+    uint32_t *incoming = take(l, sizeof(uint32_t), kid_count + 1);
+    if (l->failed) return (size){0, 0};
+    for (uint32_t i = 0; i < l->transition_count; i++) {
+        const ta_diagram_transition *t = transition_of(l, l->transitions[i]);
+        if (!within(l, t->source, c) || t->source == c) continue;
+        uint32_t from = child_of(l, c, t->source);
+        for (uint32_t j = 0; j < t->target_count; j++) {
+            uint32_t target = target_of(l, t, j);
+            if (target == c || !within(l, target, c) || parent_of(l, target) != c || from == target || from == TA_NIL) continue;
+            incoming[l->slot[target]]++;
+        }
+    }
+    for (uint32_t i = 0; i < kid_count; i++) {
+        lnode *node = node_of(info, i);
+        if (incoming[i] < 3 || is_container(l, node->state) || is_history(l, node->state)) continue;
+        double ends = state_of(l, node->state)->kind == TA_DIAGRAM_STATE_FINAL ? node->w : 0;
+        double want = (incoming[i] + 1) * port_pitch + ends;
+        if (want > node->h) node->h = want;
+    }
 
     /* 5a. gaps between layers: room for labels (at the source side) and bend channels */
     uint32_t gaps = layer_count - 1;
@@ -1067,6 +1091,7 @@ static uint32_t box_kind(const layout *l, uint32_t s) {
     uint32_t kind = state_of(l, s)->kind;
     uint32_t parent = parent_of(l, s);
     if (kind == TA_DIAGRAM_STATE_ROOT) return TA_DIAGRAM_BOX_ROOT;
+    if (state_of(l, s)->hidden) return TA_DIAGRAM_BOX_FOLDED;
     if (kind == TA_DIAGRAM_STATE_PARALLEL) return TA_DIAGRAM_BOX_PARALLEL;
     if (kind == TA_DIAGRAM_STATE_FINAL) return TA_DIAGRAM_BOX_FINAL;
     if (kind == TA_DIAGRAM_STATE_HISTORY_SHALLOW || kind == TA_DIAGRAM_STATE_HISTORY_DEEP) return TA_DIAGRAM_BOX_HISTORY;

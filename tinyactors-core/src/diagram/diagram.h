@@ -32,6 +32,10 @@
  * are listed in their source's box ("event → target"), with the
  * transitions that have no target (ta_diagram_portals).
  *
+ * A container may be folded into one box (ta_diagram_fold): the chart is
+ * drawn without its descendants, the box standing for them, and their
+ * transitions to and from the rest of the chart start or end at it.
+ *
  * Pure and deterministic: no I/O, no randomness, the same chart always
  * looks the same. Freestanding: every array lives in the arena the caller
  * gives, and nothing recurses (the chart is walked in document order).
@@ -61,6 +65,9 @@ typedef struct ta_diagram_state {
     ta_string_view name; /* its id; empty for the root */
     /* Its initial states (a compound state's, the root's), in `targets`. */
     uint32_t first_initial, initial_count;
+    /* A folded container (ta_diagram_fold): how many states its box stands
+     * for, its descendants but history states; 0 for every other state. */
+    uint32_t hidden;
 } ta_diagram_state;
 
 /* A transition, in document order (a history state's default is one). */
@@ -133,7 +140,8 @@ typedef enum ta_diagram_box_kind {
     TA_DIAGRAM_BOX_PARALLEL = 3,
     TA_DIAGRAM_BOX_REGION = 4, /* a child of a parallel state */
     TA_DIAGRAM_BOX_FINAL = 5,
-    TA_DIAGRAM_BOX_HISTORY = 6
+    TA_DIAGRAM_BOX_HISTORY = 6,
+    TA_DIAGRAM_BOX_FOLDED = 7  /* a container drawn as one box (ta_diagram_state.hidden) */
 } ta_diagram_box_kind;
 
 typedef struct ta_diagram_box {
@@ -192,6 +200,39 @@ ta_status ta_diagram_layout_chart(const ta_diagram_request *request, ta_diagram_
  * container's transitions into its own descendants, and those crossing
  * three or more container borders. NULL when the arena could not grow. */
 uint8_t *ta_diagram_portals(const ta_diagram_chart *chart, ta_growable_arena *arena);
+
+/* ---- folding ------------------------------------------------------------------------------- */
+
+typedef struct ta_diagram_fold_request {
+    const ta_diagram_chart *chart;
+    /* per state, 1: fold it into one box. A folded state inside another
+     * folded one is hidden with it; a state that is no container (no
+     * children but history states) is never folded. */
+    const uint8_t *folded;
+    ta_growable_arena *arena;
+} ta_diagram_fold_request;
+
+/* The chart as drawn with its folded containers. Every array is in the
+ * request's arena; `chart`'s names are the original's. */
+typedef struct ta_diagram_folding {
+    /* The states that are drawn, in the original's document order, each
+     * folded container a leaf whose `hidden` counts what it stands for.
+     * Its transitions: the original's, in order, each target inside a
+     * folded container replaced by that container's box (repeated ones
+     * once), a source inside one likewise. A transition that stays inside
+     * one folded box (its source and every target there, or no target) is
+     * not drawn, but for the folded container's own transitions with no
+     * target, which it lists as any box does. Initial states inside a
+     * folded container are its box. */
+    ta_diagram_chart chart;
+    const uint32_t *drawn_state;      /* per original state: the state of `chart` drawing it */
+    const uint32_t *drawn_transition; /* per original transition: its index in `chart`, TA_NIL when not drawn */
+    const uint32_t *original_state;   /* per state of `chart`: its index in the original */
+} ta_diagram_folding;
+
+/* TA_OK; TA_ERROR_INVALID: a chart that is not a tree in document order;
+ * TA_ERROR_NO_MEMORY. */
+ta_status ta_diagram_fold(const ta_diagram_fold_request *request, ta_diagram_folding *out);
 
 /* ---- checking a layout -------------------------------------------------------------- */
 
