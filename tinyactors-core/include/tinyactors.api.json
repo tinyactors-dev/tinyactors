@@ -8270,11 +8270,19 @@
         {
           "name": "state_length",
           "type": "size_t"
+        },
+        {
+          "name": "layout",
+          "type": "ta_bytes"
+        },
+        {
+          "name": "layout_id",
+          "type": "uint64_t"
         }
       ],
       "layout": {
         "x86_64": {
-          "size": 80,
+          "size": 104,
           "align": 8,
           "offsets": {
             "size": 0,
@@ -8285,11 +8293,13 @@
             "host": 48,
             "host_length": 56,
             "state": 64,
-            "state_length": 72
+            "state_length": 72,
+            "layout": 80,
+            "layout_id": 96
           }
         },
         "aarch64": {
-          "size": 80,
+          "size": 104,
           "align": 8,
           "offsets": {
             "size": 0,
@@ -8300,11 +8310,13 @@
             "host": 48,
             "host_length": 56,
             "state": 64,
-            "state_length": 72
+            "state_length": 72,
+            "layout": 80,
+            "layout_id": 96
           }
         },
         "wasm32": {
-          "size": 48,
+          "size": 64,
           "align": 8,
           "offsets": {
             "size": 0,
@@ -8315,7 +8327,9 @@
             "host": 32,
             "host_length": 36,
             "state": 40,
-            "state_length": 44
+            "state_length": 44,
+            "layout": 48,
+            "layout_id": 56
           }
         }
       }
@@ -11206,6 +11220,23 @@
         {
           "name": "bytes",
           "type": "size_t *"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "ta_system_layout_description",
+      "returns": "ta_status",
+      "params": [
+        {
+          "name": "out",
+          "type": "ta_buffer *"
+        },
+        {
+          "name": "id",
+          "type": "uint64_t *"
         }
       ],
       "public": true,

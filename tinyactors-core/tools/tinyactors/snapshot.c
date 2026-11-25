@@ -208,7 +208,7 @@ static ta_string_view restore_refusal(tool *t, const restored *r) {
     tool_text_append(&text, status_name(r->status));
     tool_text_append(&text, r->status == TA_ERROR_INVALID
                                 ? ta_string(": this build of the library cannot restore it (a "
-                                            "snapshot of another build's format, or a damaged one)")
+                                            "snapshot of another build's layout, or a damaged one)")
                             : r->status == TA_ERROR_LIMIT
                                 ? ta_string(": its images name more datamodels than a host binds")
                                 : ta_string(""));
@@ -304,6 +304,31 @@ static uint64_t pack_format(ta_bytes pack) {
 
 /* ---- inspect: a snapshot ---------------------------------------------------------------- */
 
+/* The library version a pack's layout names (its "library"), empty when it
+ * names none. */
+static ta_string_view layout_library(tool *t, ta_bytes layout) {
+    ta_string_view none = {(const char *)0, 0};
+    ta_cbor_document document = {layout, (ta_cbor_token *)0, 0, 0};
+    if (ta_cbor_decode(&document) != TA_ERROR_NO_MEMORY) return none;
+    document.tokens = (ta_cbor_token *)ta_growable_arena_alloc(
+        t->arena, sizeof *document.tokens * document.count, sizeof(uint64_t));
+    document.capacity = document.count;
+    if (!document.tokens || ta_cbor_decode(&document) != TA_OK) return none;
+    uint32_t at = ta_cbor_member(&document, 0, ta_string("library"));
+    return at == TA_NIL ? none : ta_cbor_string(&document, at);
+}
+
+/* This build's layout id (ta_system_layout_description); 0 if it cannot be
+ * written. */
+static uint64_t this_layout_id(tool *t) {
+    ta_buffer probe = {(void *)0, 0, 0};
+    if (ta_system_layout_description(&probe, (uint64_t *)0) != TA_ERROR_NO_MEMORY) return 0;
+    ta_buffer description = {ta_growable_arena_alloc(t->arena, probe.length, 1), probe.length, 0};
+    uint64_t id = 0;
+    if (!description.pointer || ta_system_layout_description(&description, &id) != TA_OK) return 0;
+    return id;
+}
+
 static void inspect_snapshot(tool *t, ta_bytes pack) {
     ta_report *report = &t->report;
     restored r;
@@ -319,6 +344,9 @@ static void inspect_snapshot(tool *t, ta_bytes pack) {
         return;
     }
     ta_report_number(report, ta_string("hostFormat"), format_version(r.contents.host, r.contents.host_length));
+    ta_report_text(report, ta_string("library"), layout_library(t, r.contents.layout));
+    ta_report_text(report, ta_string("layoutID"), tool_hexadecimal(t, r.contents.layout_id));
+    ta_report_boolean(report, ta_string("thisLayout"), r.contents.layout_id == this_layout_id(t));
     ta_report_text(report, ta_string("systemID"), r.contents.system_id);
     ta_report_number(report, ta_string("time"), r.contents.time);
     uint64_t ticks_per_second = ticks_per_second_of(&r);

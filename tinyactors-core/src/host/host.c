@@ -3003,12 +3003,18 @@ ta_status ta_host_restore(const ta_host_environment *environment,
 
 /* ---- whole-system snapshots ------------------------------------------------------------- */
 
-/* "tinyactors-snapshot 3\n", 2 zero bytes; u32 system id length, u32 datamodel name
- * length; u64 time; u64 host length, u64 state length; u32 image count, u32 0; u64
- * image lengths; then the system id, the datamodel name, the host snapshot, the
- * state and the images, each from an 8-byte boundary. Little-endian. */
-static const char pack_magic[24] = "tinyactors-snapshot 3\n";
-#define PACK_FIXED 64u
+/* A pack, little-endian, its parts each from an 8-byte boundary:
+ *    0  "tinyactors-snapshot 4\n", 2 zero bytes
+ *   24  u32 system id length      28  u32 datamodel name length
+ *   32  u64 time                  40  u64 host snapshot length
+ *   48  u64 state length          56  u32 image count, 60 u32 0
+ *   64  u64 layout length         72  u64 layout id
+ *   80  u64 each image's length
+ * then the system id, the datamodel name, the layout (the CBOR of
+ * ta_system_layout_description, whose FNV-1a 64 is the layout id), the host
+ * snapshot, the state and the images. */
+static const char pack_magic[24] = "tinyactors-snapshot 4\n";
+#define PACK_FIXED 80u
 
 static size_t pack_align(size_t n) {
     return (n + 7u) & ~(size_t)7u;
@@ -3052,9 +3058,13 @@ ta_status ta_host_snapshot_pack(ta_host *host, const ta_datamodel_state *content
     ta_string_view id = {host->base + 13, 0}; /* tinyactors://<id>/ */
     while (id.pointer[id.length] && id.pointer[id.length] != '/')
         id.length++;
+    ta_buffer layout_probe = {(void *)0, 0, 0};
+    status = ta_system_layout_description(&layout_probe, (uint64_t *)0);
+    if (status != TA_OK && status != TA_ERROR_NO_MEMORY) return status;
+    size_t layout_length = layout_probe.length;
     size_t total = pack_align(PACK_FIXED + 8u * count) + pack_align(id.length) +
-                   pack_align(datamodel.length) + pack_align(host_length) +
-                   pack_align(state_length);
+                   pack_align(datamodel.length) + pack_align(layout_length) +
+                   pack_align(host_length) + pack_align(state_length);
     for (uint32_t i = 0; i < count; i++) {
         const host_segment *segment = segment_of(host, i);
         if (segment && segment->live) total += pack_align(ta_image_bytes(segment->image).length);
@@ -3070,11 +3080,18 @@ ta_status ta_host_snapshot_pack(ta_host *host, const ta_datamodel_state *content
     pack_u64(out + 40, host_length);
     pack_u64(out + 48, state_length);
     pack_u32(out + 56, count);
+    pack_u64(out + 64, layout_length);
     size_t at = pack_align(PACK_FIXED + 8u * count);
     ta_memcpy(out + at, id.pointer, id.length);
     at += pack_align(id.length);
     ta_memcpy(out + at, datamodel.pointer, datamodel.length);
     at += pack_align(datamodel.length);
+    ta_buffer layout = {out + at, layout_length, 0};
+    uint64_t layout_id = 0;
+    status = ta_system_layout_description(&layout, &layout_id);
+    if (status != TA_OK) return status;
+    pack_u64(out + 72, layout_id);
+    at += pack_align(layout_length);
     ta_buffer snapshot = {out + at, host_length, 0};
     status = ta_host_snapshot(host, &snapshot);
     if (status != TA_OK) return status;
@@ -3107,10 +3124,13 @@ ta_status ta_host_snapshot_unpack(ta_bytes pack, ta_host_snapshot_contents *out)
         return TA_ERROR_INVALID;
     uint32_t count = unpack_u32(in + 56);
     if (count > (length - PACK_FIXED) / 8u) return TA_ERROR_INVALID;
-    size_t at = pack_align(PACK_FIXED + 8u * count), id = 0, name = 0, host = 0, state = 0;
+    size_t at = pack_align(PACK_FIXED + 8u * count), id = 0, name = 0, layout = 0, host = 0,
+           state = 0;
     uint64_t host_length = unpack_u64(in + 40), state_length = unpack_u64(in + 48);
+    uint64_t layout_length = unpack_u64(in + 64);
     if (!pack_part(length, &at, unpack_u32(in + 24), &id) ||
         !pack_part(length, &at, unpack_u32(in + 28), &name) ||
+        !pack_part(length, &at, layout_length, &layout) ||
         !pack_part(length, &at, host_length, &host) ||
         !pack_part(length, &at, state_length, &state))
         return TA_ERROR_INVALID;
@@ -3127,6 +3147,8 @@ ta_status ta_host_snapshot_unpack(ta_bytes pack, ta_host_snapshot_contents *out)
     contents.system_id = (ta_string_view){(const char *)in + id, unpack_u32(in + 24)};
     contents.datamodel = (ta_string_view){(const char *)in + name, unpack_u32(in + 28)};
     contents.time = unpack_u64(in + 32);
+    contents.layout = (ta_bytes){in + layout, (size_t)layout_length};
+    contents.layout_id = unpack_u64(in + 72);
     contents.host = in + host;
     contents.host_length = (size_t)host_length;
     contents.state = in + state;

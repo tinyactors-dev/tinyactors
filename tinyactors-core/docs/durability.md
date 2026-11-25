@@ -90,7 +90,8 @@ Why the refusals:
   at once: for rehearsing a deploy on a copy, capturing a host for a
   developer, preparing tests, and taking a host out of the process for a
   while; never for durability or backups: a snapshot is raw region memory,
-  valid for the same build of the library only. They are the region bytes
+  valid for a build of the library that lays the region out the same way
+  only (below, "Snapshots name their layout"). They are the region bytes
   plus the datamodel's own snapshot; they need a drained outbox
   (`ta_system_snapshot`) or a quiescent host (effects
   acknowledged, no migration: `ta_host_snapshot`). Hibernation blobs stay
@@ -130,9 +131,34 @@ the region are copied verbatim. Each format carries a version, and a blob or
 snapshot whose version differs from the build's is refused
 (`TA_ERROR_INVALID`), never read: a blob wakes, and a snapshot restores, only
 in a build of the same format. The versions are `HIBERNATION_VERSION` and
-`EXPORT_VERSION` (`src/system/hibernate.c`), `TA_SYSTEM_VERSION` for a
-system's region (`src/system/system_internal.h`) and `SNAPSHOT_VERSION` for a
+`EXPORT_VERSION` (`src/system/hibernate.c`) and `SNAPSHOT_VERSION` for a
 host's snapshot (`src/host/host.c`); a change to a format changes its version.
+A system's region carries its layout id instead (below).
+
+### Snapshots name their layout
+
+A region is the build's structs as the compiler laid them out, so a snapshot
+can be read only by a build with the same layout. The system layer describes
+that layout (`ta_system_layout_description`, `src/system/region_layout.c`): as
+CBOR, the library's version, the byte order, the size of a pointer, `TA_NIL`,
+and every type a region holds (`ta_system`, what it embeds, and the records
+of its pools and arrays), each member with its name, offset, size, count,
+type and, for a link or an offset, its kind (`relative`, `index:<pool>`,
+`handle:<pool>`, `pointer`); then the pools and the arrays `ta_system`
+points to, with the member that holds each one's count. Every number in it
+comes from `offsetof` and `sizeof`, and `mise run layout` checks the table
+against the debug information: every member of every type is there, at the
+compiler's offset and size.
+
+The FNV-1a 64 of those bytes is the **layout id**. `ta_system_init` writes it
+at offset 8 of the region, after the magic, and `ta_system_restore` refuses a
+snapshot whose id differs from the build's (`TA_ERROR_INVALID`): a change to
+any region type, an inserted field included, changes the id, with no version
+to bump by hand. A pack (`ta_host_snapshot_pack`, format 4) carries the
+description itself and its id, so a reader that is not this build (the
+website's inspector) can decode the regions without the build's headers, and
+`tinyactors inspect` says whether a snapshot is of this build's layout.
+`ta_host_snapshot_unpack` refuses a pack of an earlier format.
 
 - **hibernation**: header (its writer's identity
   among its fields) | instance words | invoke ids as text | datamodel bytes.

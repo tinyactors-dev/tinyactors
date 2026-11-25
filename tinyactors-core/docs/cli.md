@@ -61,7 +61,7 @@ What a host writes is read too, by `inspect` and `actors`:
 
 | Input | Written by | Starts with | Read by |
 |---|---|---|---|
-| a snapshot | `ta_host_snapshot_pack`: the host's snapshot, every live segment's image, the system id, the host's time and the datamodels' state under its label | `tinyactors-snapshot ` and the pack's format | `inspect`, `actors`, and the image commands |
+| a snapshot | `ta_host_snapshot_pack`: the host's snapshot, every live segment's image, the system id, the host's time, the regions' layout and its id, and the datamodels' state under its label | `tinyactors-snapshot ` and the pack's format (4) | `inspect`, `actors`, and the image commands |
 | a hibernation blob | `ta_host_hibernate` (`ta_actor_hibernate`): one session's instance and datamodel state, which the application stores | `TAHB` | `inspect` |
 | an export blob | `ta_actor_export`: a session tree leaving its system, with its delayed sends (a migration's, inside a host; no host call hands one out) | `TAEX` | `inspect` |
 | a host snapshot alone | `ta_host_snapshot`: the regions without the images | `TAHS` | `inspect` (its segments only) |
@@ -215,10 +215,13 @@ bound as one that does nothing, and nothing runs, so none is called. It
 answers:
 
 - the pack's format, and the host snapshot's inside it;
+- the library version that packed it and its layout id (the regions'
+  layout, `ta_system_layout_description`), and whether it is this build's:
+  a snapshot of another layout is not restored;
 - the system id, the host's time when it was packed (in ticks) and the
   ticks per second;
 - the host's identity, which every blob it hibernated carries;
-- whether it was restored, and why not (another build's format, damage);
+- whether it was restored, and why not (another build's format or layout, damage);
 - every segment: live or retired, its image's hash and size, its charts,
   its actors and how many are hibernated; the totals;
 - the datamodels' state: the label it was packed under (`ecmascript` for
@@ -249,8 +252,11 @@ $ tinyactors inspect shop.snapshot
 # Inspect
 
 - **From**: snapshot
-- **Format**: 3
+- **Format**: 4
 - **Host format**: 4
+- **Library**: 0.3.0
+- **Layout ID**: cec775464fa664e2
+- **This layout**: yes
 - **System ID**: shop
 - **Time**: 0
 - **Ticks per second**: 1000
@@ -846,7 +852,8 @@ segment with no actors left and no current chart retires
 ### Snapshots
 
 `run.snapshot` packs the whole host (`ta_host_snapshot_pack`: every
-segment's region, the images, the system id and the host's time) with the
+segment's region, the images, the system id, the host's time and the
+regions' layout) with the
 server's state, labelled `tinyactors-run`: quickjs's state (every
 session's variables and `_event`, the payloads, `Math.random`'s state) and
 the wall clock, as CBOR `{"quickjs": bytes, "wallNs": uint}`. It answers

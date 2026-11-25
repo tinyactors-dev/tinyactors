@@ -534,6 +534,21 @@ TA_API ta_status ta_system_adopt(ta_system *system, ta_bytes blob, uint32_t *act
  * last_serial]. */
 TA_API ta_status ta_system_set_next_serial(ta_system *system, uint64_t serial);
 
+/* The layout of a segment's region in this build, as CBOR: the library's
+ * version, the byte order, the size of a pointer, TA_NIL, and every type a
+ * snapshot holds (ta_system, what it embeds, and the records of its pools
+ * and arrays) with each member's name, offset, size, count, type and, for
+ * a link or an offset, its kind; then the pools and the arrays ta_system
+ * points to (docs/durability.md, "Snapshots name their layout"). Written
+ * into `out` (ta_buffer: TA_ERROR_NO_MEMORY with out->length the bytes it
+ * needs, so a probe with capacity 0 sizes it); on TA_OK, *id (when not NULL)
+ * is the layout id: the FNV-1a 64 of exactly those bytes. A system's region
+ * starts with it (after its magic), and ta_system_restore refuses a
+ * snapshot of another layout. */
+TA_API ta_status ta_system_layout_description(ta_buffer *out, uint64_t *id);
+
+/* The region as bytes, which ta_system_restore takes back in a build of the
+ * same layout (ta_system_layout_description). */
 TA_API ta_status ta_system_snapshot(const ta_system *system, ta_buffer *out);
 /* Deterministic: only real state is written — dead pool/slab/heap/outbox
  * storage is zero, never host-heap residue, and host pointers (the datamodel

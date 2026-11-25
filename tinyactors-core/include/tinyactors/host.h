@@ -497,8 +497,10 @@ typedef struct ta_datamodel_state {
 } ta_datamodel_state;
 /* A whole system in one blob: the host's snapshot (ta_host_snapshot), the
  * datamodels' state, and the image of every live segment, with the system
- * id and the host's time, written into `out` (ta_buffer); otherwise as
- * ta_host_snapshot. The blob's parts are 8-aligned when the blob is. */
+ * id, the host's time and the region's layout (ta_system_layout_description)
+ * and its id, written into `out` (ta_buffer); otherwise as
+ * ta_host_snapshot. The blob's parts are 8-aligned when the blob is; the
+ * format is "tinyactors-snapshot 4" (src/host/host.c lays it out). */
 TA_API ta_status ta_host_snapshot_pack(ta_host *h, const ta_datamodel_state *state, ta_buffer *out);
 typedef struct ta_host_snapshot_contents {
     uint32_t size;
@@ -509,9 +511,14 @@ typedef struct ta_host_snapshot_contents {
     size_t host_length;
     const void *state; /* the datamodels' state, as given to ta_host_snapshot_pack */
     size_t state_length;
+    /* the layout of the build that packed it (ta_system_layout_description)
+     * and its id; a restore refuses another layout (ta_system_restore) */
+    ta_bytes layout;
+    uint64_t layout_id;
 } ta_host_snapshot_contents;
 /* The parts of a blob of ta_host_snapshot_pack (views into it). Set
- * out->size first. TA_ERROR_INVALID when it is not one. */
+ * out->size first. TA_ERROR_INVALID when it is not one, or one of another
+ * format (an earlier build's). */
 TA_API ta_status ta_host_snapshot_unpack(ta_bytes pack, ta_host_snapshot_contents *out);
 /* Segment i's image in the blob; empty for a retired one. */
 TA_API ta_bytes ta_host_snapshot_image(ta_bytes pack, uint32_t i);

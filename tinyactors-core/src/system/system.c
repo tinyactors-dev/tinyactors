@@ -322,13 +322,18 @@ ta_status ta_system_init(const ta_system_setup *setup, ta_system **out) {
     ta_system_config normalized;
     ta_system_config_normalize(view, config, &normalized);
     if (normalized.last_serial <= normalized.first_serial) return TA_ERROR_INVALID; /* no ids */
+    /* The layout id, from its description written where the region will be
+     * (place() zeroes it next): the region is larger than the description. */
+    uint64_t layout_id = 0;
+    ta_buffer scratch = {memory, length, 0};
+    if (ta_system_layout_description(&scratch, &layout_id) != TA_OK) return TA_ERROR_NO_MEMORY;
     ta_arena arena;
     carved o;
     ta_system *system = place(memory, length, view, &normalized, &o, &arena);
     if (!system) return TA_ERROR_NO_MEMORY;
     ta_memset(system, 0, sizeof *system);
     system->magic = TA_SYSTEM_MAGIC;
-    system->version = TA_SYSTEM_VERSION;
+    system->layout_id = layout_id;
     system->region_size = arena.offset;
     system->config = normalized;
     ta_trace_policy_default(&system->policy);
@@ -1317,8 +1322,13 @@ ta_status ta_system_restore(const ta_system_setup *setup, ta_bytes snapshot, ta_
         snap_length < sizeof(ta_system))
         return TA_ERROR_INVALID;
     const ta_system *old = (const ta_system *)snap;
-    if (old->magic != TA_SYSTEM_MAGIC || old->version != TA_SYSTEM_VERSION ||
-        old->region_size != snap_length)
+    if (old->magic != TA_SYSTEM_MAGIC || old->region_size != snap_length) return TA_ERROR_INVALID;
+    /* This build's layout id, from its description written into the memory
+     * the snapshot is copied into next (at least the snapshot's length). */
+    uint64_t layout_id = 0;
+    ta_buffer scratch = {memory, length, 0};
+    if (ta_system_layout_description(&scratch, &layout_id) != TA_OK ||
+        old->layout_id != layout_id)
         return TA_ERROR_INVALID; /* another layout (docs/durability.md) */
     if (old->core.image_view.hash != view->hash) return TA_ERROR_INVALID; /* different image */
     ta_memcpy(memory, snap, snap_length);

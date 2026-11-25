@@ -20,7 +20,13 @@
  *       population runs it at N and at 0 of a thing and divides the
  *       difference by N.
  *
- * It calls only ta_compile_charts, ta_image_open and ta_system_layout, so a
+ *   ta-layout --description
+ *       ta_system_layout_description's CBOR as its diagnostic notation, which
+ *       is JSON, then its layout id and size: `mise run layout` checks every
+ *       member against the debug information.
+ *
+ * It calls only public functions (ta_compile_charts, ta_image_open,
+ * ta_system_layout, ta_system_layout_description, ta_cbor_diagnostic), so a
  * binding builds it from this file against core's amalgamation. */
 #include <stddef.h>
 #include <stdio.h>
@@ -32,6 +38,7 @@
 #include "tinyactors.h"
 #include "tinyactors_runtime.h"
 #else
+#include <tinyactors/cbor.h>
 #include <tinyactors/compile.h>
 #include <tinyactors/image.h>
 #include <tinyactors/system.h>
@@ -61,6 +68,31 @@ static size_t region(const ta_image *image, capacity which, uint32_t count) {
     *fields[which] = count;
     size_t bytes = 0;
     return ta_system_layout(image, &config, &bytes) == TA_OK ? bytes : 0;
+}
+
+/* The description as JSON on one line, then "id <layout id in hex>". */
+static int describe(void) {
+    ta_buffer probe = {NULL, 0, 0};
+    if (ta_system_layout_description(&probe, NULL) != TA_ERROR_NO_MEMORY) return 1;
+    void *bytes = malloc(probe.length);
+    ta_buffer description = {bytes, probe.length, 0};
+    uint64_t id = 0;
+    int status = 1;
+    if (bytes && ta_system_layout_description(&description, &id) == TA_OK) {
+        ta_bytes cbor = {bytes, description.length};
+        ta_buffer text = {NULL, 0, 0};
+        ta_cbor_diagnostic(cbor, &text);
+        text.pointer = malloc(text.length);
+        text.capacity = text.length;
+        if (text.pointer && ta_cbor_diagnostic(cbor, &text) == TA_OK) {
+            printf("%.*s\nid %016llx\nbytes %zu\n", (int)text.length, (const char *)text.pointer,
+                   (unsigned long long)id, description.length);
+            status = 0;
+        }
+        free(text.pointer);
+    }
+    free(bytes);
+    return status;
 }
 
 /* A compiled source: its result, kept while its image is read. */
@@ -225,5 +257,6 @@ static int measure(int count, char **arguments) {
 }
 
 int main(int count, char **arguments) {
+    if (count > 1 && strcmp(arguments[1], "--description") == 0) return describe();
     return count > 1 ? measure(count - 1, arguments + 1) : check();
 }

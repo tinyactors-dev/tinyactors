@@ -149,7 +149,7 @@ group, the words build on each other.
   application can keep at most so many resident.
 - **Snapshot, restore.** The whole host as bytes (every segment's region,
   the datamodels' state, the images) and a new host made from them. Same
-  build of the library only, never a backup. It is a copy of the whole
+  layout of the region only (its layout id), never a backup. It is a copy of the whole
   application: rehearse a deploy on it, capture a host for a developer,
   start tests from one prepared world, or take a host out of the process
   for a while. A restored host announces each external invocation that
@@ -157,7 +157,12 @@ group, the words build on each other.
   stand-in, or tells the invoker it cannot.
 - **Pack.** The one-blob form of a snapshot (`ta_host_snapshot_pack`):
   the host's snapshot, the datamodels' state, the images and the system
-  id.
+  id, with the region's layout and its layout id.
+- **Layout id.** The FNV-1a 64 of the region's layout description
+  (`ta_system_layout_description`: every region type's members, offsets
+  and sizes, as CBOR). A region holds it after its magic, a pack carries
+  the description and the id, and a restore refuses a snapshot of another
+  layout id.
 - **Export, adopt.** The steps a migration moves an actor with, inside
   core: export writes the actor (and its timers) to a blob and removes
   it from its old segment, adopt makes it run in the new one with the

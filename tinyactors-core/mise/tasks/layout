@@ -1,5 +1,5 @@
 #!/usr/bin/env ruby
-#MISE description="What an actor, a message and a delayed send cost in a segment's region, from the types' debug information, checked against ta_system_layout"
+#MISE description="What an actor, a message and a delayed send cost in a segment's region, from the types' debug information, checked against ta_system_layout; and the region's description (src/system/region_layout.c) checked against the types"
 #USAGE flag "--all" help="Every capacity: also requests, outbox entries, trace rules, charts, slab pages and the segment's fixed cost"
 #USAGE flag "--types" help="The region's types: each one's size and padding"
 #USAGE flag "--members" help="The region's types with their members (implies --types)"
@@ -19,6 +19,13 @@
 # It also checks ta-layout's other mode, the region of an image file at the
 # capacities given (what a binding's memory example asks), against the
 # same cost.
+#
+# Last it checks the region's description (ta_system_layout_description,
+# src/system/region_layout.c), whose id a snapshot carries and a restore compares:
+# each type it describes has the size the debug information gives, each of
+# its members is there at the same offset and size, no member is missing,
+# and every struct a described member holds is described too. A difference
+# fails the task: the table in region_layout.c follows the types.
 #
 # It writes the numbers to build/debuginfo/layout.json, and with --json
 # prints them instead of the text. The sizes are this
@@ -172,7 +179,63 @@ else
   wrong.each { |name, bytes| warn "  #{name}: ta_system_layout gives #{measured[name].inspect} B, the types #{bytes} B" }
 end
 
+# The description against the debug information. An anonymous union is
+# described by its members, each at the union's offset and as wide as it.
+text, status = Open3.capture2(Core.program_path('debuginfo', 'ta-layout').to_s, '--description')
+abort 'layout: ta-layout --description failed' unless status.success?
+lines = text.lines
+description = JSON.parse(lines.first)
+layout_id = lines.find { |line| line.start_with?('id ') }.split.last
+description_bytes = Integer(lines.find { |line| line.start_with?('bytes ') }.split.last)
+described = description.fetch('types').to_h { |type| [type.fetch('name'), type] }
+problems = []
+described.each_value do |type|
+  name = type.fetch('name')
+  unless dwarf.struct?(name)
+    problems << "#{name}: described, but not in the debug information"
+    next
+  end
+  struct = dwarf.struct(name)
+  problems << "#{name}: #{type['size']} B described, #{struct.size} B in the debug information" if type['size'] != struct.size
+  members = type.fetch('members')
+  struct.members.each do |member|
+    if member.name == '(unnamed)'
+      matching = members.select { |m| m['offset'] == member.offset && m['size'] == member.size }
+      problems << "#{name}: its anonymous #{member.type} at #{member.offset} (#{member.size} B) is not described" if matching.empty?
+      next
+    end
+    m = members.find { |candidate| candidate['name'] == member.name }
+    if m.nil?
+      problems << "#{name}.#{member.name}: in the debug information (#{member.offset}, #{member.size} B), not described"
+    elsif m['offset'] != member.offset || m['size'] != member.size
+      problems << "#{name}.#{member.name}: described at #{m['offset']} (#{m['size']} B), " \
+                  "the debug information has #{member.offset} (#{member.size} B)"
+    end
+    element = member.type.sub(/\A(const |volatile )+/, '').sub(/(\[\d*\])+\z/, '')
+    if !member.type.include?('*') && dwarf.struct?(element) && !described.key?(element)
+      problems << "#{name}.#{member.name}: its type #{element} is not described"
+    end
+  end
+  members.each do |m|
+    next if struct.members.any? { |member| member.name == m['name'] }
+    next if struct.members.any? do |member|
+      member.name == '(unnamed)' && m['offset'] == member.offset && m['size'] == member.size
+    end
+
+    problems << "#{name}.#{m['name']}: described, but not a member in the debug information"
+  end
+end
+(TYPES - described.keys).each { |name| problems << "#{name}: a record of the region, not described" }
+out.puts
+if problems.empty?
+  out.puts "The region's description (src/system/region_layout.c) matches the debug information: #{described.size} types, " \
+       "#{described.values.sum { |type| type['members'].size }} members, #{description_bytes} B, layout id #{layout_id}."
+else
+  problems.each { |problem| warn "  #{problem}" }
+end
+
 document = JSON.pretty_generate(
+  'layoutID' => layout_id,
   'costs' => COSTS.to_h { |name, list| [name, { 'bytes' => total.(name), 'parts' => list.to_h }] }
                   .merge('message, tracing off' => { 'bytes' => untraced, 'parts' => untraced_message.to_h },
                          'actor, most' => { 'bytes' => actor_most }),
@@ -185,3 +248,4 @@ document = JSON.pretty_generate(
 File.write(Core.directory('debuginfo').join('layout.json'), document)
 puts document if json
 abort "layout: #{wrong.keys.join(', ')} differ from ta_system_layout: carve() changed, and COSTS must follow it" if wrong.any?
+abort "layout: the region's description (src/system/region_layout.c) differs from the types: change its table" if problems.any?

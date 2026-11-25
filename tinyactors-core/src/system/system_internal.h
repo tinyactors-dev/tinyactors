@@ -12,13 +12,6 @@
 #include "base/output.h"
 
 #define TA_SYSTEM_MAGIC 0x53594154u /* "TAYS" */
-/* The region's layout: 2 since the step counters and trace references
- * (docs/adr/0006 in the repository root), 3 with the charts' counts, 4 since
- * an external invocation's request keeps its type and params, 5 with the queue
- * of parked spawns, 6 with the index of actor names, 7 with each actor's count
- * of requests, 8 with the wake queue linked both ways, 9 with each actor's
- * note of its last hibernation; a snapshot of another is refused. */
-#define TA_SYSTEM_VERSION      10u
 #define TA_MAX_DATAMODELS      8u
 #define TA_EXTERNAL_INVOKE_BIT (1u << 23) /* in a child handle: external invoke token */
 /* slab byte budgets stay below 4 GiB so page arithmetic cannot overflow u32 */
@@ -118,7 +111,11 @@ typedef struct ta_effect_record {
 } ta_effect_record;
 
 struct ta_system {
-    uint32_t magic, version;
+    /* These three stay first, at these offsets, in every layout: a restore
+     * reads them before it trusts anything else. layout_id is
+     * ta_system_layout_description's: a snapshot of another is refused. */
+    uint32_t magic, pad;
+    uint64_t layout_id;
     uint64_t region_size;
     ta_system_config config;
     ta_core core;

@@ -12,7 +12,7 @@
 < {"jsonrpc":"2.0","method":"effect.migrationDone","params":{"batch":2,"index":0,"migration":1,"migrated":0,"failed":[{"session":2,"status":"TA_ERROR_STATE"}],"pending":[]}}
 < {"jsonrpc":"2.0","id":8,"result":{"status":"idle","runs":1,"fuel":0,"time":0,"nextDeadline":null}}
 > {"jsonrpc":"2.0","id":9,"method":"run.snapshot","params":{"path":"shop.snapshot"}}
-< {"jsonrpc":"2.0","id":9,"result":{"bytes":579608}}
+< {"jsonrpc":"2.0","id":9,"result":{"bytes":600144}}
 > [{"jsonrpc":"2.0","id":10,"method":"run.send","params":{"target":1,"invocation":16777217,"event":"payment.authorized","data":{"authorization":"auth_81"}}},{"jsonrpc":"2.0","id":11,"method":"run.turn"}]
 < {"jsonrpc":"2.0","method":"effect.log","params":{"batch":3,"index":0,"session":1,"label":"order","text":"authorized auth_81"}}
 < {"jsonrpc":"2.0","method":"effect.send","params":{"batch":3,"index":1,"session":1,"invocation":16777217,"segment":0,"event":"capture","data":{"authorization":"auth_81"},"traceparent":"00-6c160deed2f54c988920ad648fc30a3f-94e8a8f3181c87c4-03","waiting":true}}

@@ -1263,7 +1263,8 @@ static void test_snapshots_and_blobs(void) {
     /* a snapshot: its format, system, clock, segments and datamodels' state */
     CHECK_EQUAL(run("inspect shop.snapshot"), 0);
     CHECK(has("output", "- **From**: snapshot\n"));
-    CHECK(has("output", "- **Format**: 3\n"));
+    CHECK(has("output", "- **Format**: 4\n"));
+    CHECK(has("output", "- **This layout**: yes\n"));
     CHECK(has("output", "- **System ID**: shop\n"));
     CHECK(has("output", "- **Ticks per second**: 1000\n"));
     CHECK(has("output", "- **Restored**: yes\n"));

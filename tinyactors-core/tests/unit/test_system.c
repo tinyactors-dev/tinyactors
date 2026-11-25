@@ -3,6 +3,8 @@
  * snapshot/restore, termination, determinism. */
 #include "../harness/harness.h"
 #include "system/system_internal.h"
+#include <stddef.h>
+#include <tinyactors/cbor.h>
 #include "../support/system_util.h"
 
 #define SC(body)                                                                                   \
@@ -452,6 +454,70 @@ static void test_snapshot_restore(void) {
     tsys_free(&t);
 }
 
+/* The region's description: probed then written, the same bytes each time,
+ * its id the FNV-1a 64 of them and the one a system's header holds; a
+ * snapshot whose id differs, or whose description would not fit, is refused. */
+static void test_layout_description(void) {
+    ta_buffer probe = {NULL, 0, 0};
+    CHECK_EQUAL(ta_system_layout_description(&probe, NULL), TA_ERROR_NO_MEMORY);
+    size_t length = probe.length;
+    CHECK(length > 1000);
+    unsigned char *first = malloc(length), *second = malloc(length);
+    uint64_t id = 0, again = 0;
+    ta_buffer one = {first, length, 0}, two = {second, length, 0};
+    CHECK_EQUAL(ta_system_layout_description(&one, &id), TA_OK);
+    CHECK_EQUAL(ta_system_layout_description(&two, &again), TA_OK);
+    CHECK_EQUAL(one.length, length);
+    CHECK(id == again && memcmp(first, second, length) == 0);
+    uint64_t hash = 1469598103934665603ull;
+    for (size_t i = 0; i < length; i++)
+        hash = (hash ^ first[i]) * 1099511628211ull;
+    CHECK(hash == id);
+    ta_buffer small = {second, length - 1, 0};
+    CHECK_EQUAL(ta_system_layout_description(&small, &again), TA_ERROR_NO_MEMORY);
+    CHECK_EQUAL(small.length, length);
+    /* the description is a CBOR map naming ta_system first */
+    ta_cbor_token tokens[16];
+    ta_cbor_document document = {{first, length}, tokens, 16, 0};
+    CHECK_EQUAL(ta_cbor_decode(&document), TA_ERROR_NO_MEMORY);
+    ta_cbor_token *all = malloc(sizeof *all * document.count);
+    document = (ta_cbor_document){{first, length}, all, document.count, 0};
+    CHECK_EQUAL(ta_cbor_decode(&document), TA_OK);
+    uint32_t system = ta_cbor_member(&document, 0, ta_string("system"));
+    CHECK(system != TA_NIL);
+    ta_string_view name = ta_cbor_string(&document, system);
+    CHECK(name.length == 9 && memcmp(name.pointer, "ta_system", 9) == 0);
+    free(all);
+
+    test_system t;
+    CHECK(tsys_init(&t, ECHO, NULL, NULL));
+    CHECK(t.system->layout_id == id);
+    ta_buffer out = {NULL, 0, 0};
+    CHECK_EQUAL(ta_system_snapshot(t.system, &out), TA_ERROR_NO_MEMORY);
+    size_t bytes = out.length;
+    unsigned char *snap = malloc(bytes);
+    out = (ta_buffer){snap, bytes, 0};
+    CHECK_EQUAL(ta_system_snapshot(t.system, &out), TA_OK);
+    void *memory = malloc(bytes);
+    ta_system *restored;
+    snap[offsetof(ta_system, layout_id)] ^= 1; /* another build's layout */
+    CHECK_EQUAL(
+        ta_system_restore(&(ta_system_setup){{memory, bytes}, &t.image, NULL, &t.binding, 1, 0},
+                          (ta_bytes){snap, bytes}, &restored),
+        TA_ERROR_INVALID);
+    snap[offsetof(ta_system, layout_id)] ^= 1;
+    CHECK_EQUAL(
+        ta_system_restore(&(ta_system_setup){{memory, bytes}, &t.image, NULL, &t.binding, 1, 0},
+                          (ta_bytes){snap, bytes}, &restored),
+        TA_OK);
+    CHECK(restored->layout_id == id);
+    free(memory);
+    free(snap);
+    free(first);
+    free(second);
+    tsys_free(&t);
+}
+
 static void test_terminate_and_determinism(void) {
     const char *chart = SC("initial='a'><datamodel><data id='k' expr='0'/></datamodel>"
                            "<state id='p'><onexit><log label='bye' expr='k'/></onexit>"
@@ -783,6 +849,7 @@ int main(void) {
     RUN(test_timer_exhaustion);
     RUN(test_snapshot_no_residue);
     RUN(test_snapshot_restore);
+    RUN(test_layout_description);
     RUN(test_terminate_and_determinism);
     RUN(test_cross_system);
     RUN(test_stale_refusals);

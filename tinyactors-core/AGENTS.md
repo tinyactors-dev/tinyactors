@@ -63,6 +63,10 @@ programs and the builds (`dev`: ASan/UBSan at -O1; `release`; `wasi`).
   named as the host config's `system` map names them; it calls only public
   functions of core's amalgamation, so a binding builds it from
   `tools/layout/layout.c` beside its extension.
+  It also checks the region's description
+  (`src/system/region_layout.c`, whose id a snapshot carries and a restore
+  compares) against the same debug information: a change to a region type
+  changes that table in the same commit.
 - `third_party/` is vendored (`mise run vendor-quickjs`): never edit or
   format it.
 
