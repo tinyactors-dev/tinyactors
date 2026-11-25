@@ -156,6 +156,8 @@ module Website
     'highlight.js' => ['@highlightjs/cdn-assets', %w[LICENSE es/core.min.js es/languages/{xml,javascript,typescript,python,c,bash}.min.js]],
     # The presence ants' flags, one fetched per country seen (presence/layer.mjs).
     'flag-icons' => ['flag-icons', %w[LICENSE flags/4x3/*.svg]],
+    # The icons render/site.xsl inlines (f:lucide): only their licence.
+    'lucide' => ['lucide-static', %w[LICENSE]],
     # The live chat's typeface (examples/chat-live), Latin at 400, 700 and 900.
     'lato' => ['@fontsource/lato', %w[LICENSE files/lato-latin-{400,700,900}-normal.woff2]]
   }.freeze

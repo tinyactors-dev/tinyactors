@@ -138,6 +138,9 @@
         <xsl:if test=".//s:code[not(@role = 'output') and not(@language = 'text')]">
           <script type="module" src="/assets/components/highlight.mjs?v={$version}"></script>
         </xsl:if>
+        <xsl:if test=".//s:code[parent::s:section or parent::s:example] or .//s:live or .//s:install">
+          <script type="module" src="/assets/components/copy.mjs?v={$version}"></script>
+        </xsl:if>
         <xsl:if test=".//s:playground">
           <script type="module" src="/assets/components/playground.mjs?v={$version}"></script>
         </xsl:if>
@@ -436,7 +439,7 @@
         </div>
       </div>
       <div role="tabpanel" id="{$id}-panel-1" aria-labelledby="{$id}-tab-1">
-        <pre tabindex="0"><code data-language="{@language}">{f:code(.)}</code></pre>
+        <xsl:sequence select="f:copyable(f:pre(.))"/>
       </div>
       <div role="tabpanel" id="{$id}-panel-2" aria-labelledby="{$id}-tab-2" class="chart__diagram" data-src="{f:url(@src)}" hidden="hidden"></div>
     </ta-tabs>
@@ -450,7 +453,7 @@
           <span class="code__language">{@language}</span>
         </xsl:if>
       </figcaption>
-      <pre tabindex="0"><code data-language="{@language}">{f:code(.)}</code></pre>
+      <xsl:sequence select="f:copyable(f:pre(.))"/>
     </figure>
   </xsl:template>
 
@@ -464,7 +467,7 @@
       </p>
       <figure class="ta-code code code--output live__output" hidden="hidden">
         <figcaption class="ta-code__head"><span>output</span><span class="code__language">in your browser</span></figcaption>
-        <pre tabindex="0"><code></code></pre>
+        <xsl:sequence select="f:copyable(f:pre(()))"/>
       </figure>
     </ta-live>
   </xsl:template>
@@ -588,7 +591,10 @@
           <xsl:if test="position() gt 1"><xsl:attribute name="hidden" select="'hidden'"/></xsl:if>
           <xsl:variable name="package" select="f:package(.)"/>
           <xsl:variable name="release" select="f:releases($package)[1]"/>
-          <code class="install__command"><span class="install__prompt" aria-hidden="true">$ </span>{replace(normalize-space(.), '\{version\}', $release?version)}</code>
+          <xsl:variable name="command" as="element()">
+            <code class="install__command"><span class="install__prompt" aria-hidden="true">$ </span>{replace(normalize-space(.), '\{version\}', $release?version)}</code>
+          </xsl:variable>
+          <xsl:sequence select="f:copyable($command)"/>
           <p class="install__version">
             <span>{$package} {$release?version}, {f:date($release?date)}</span>
             <a href="{f:changelog-href($package)}">{$site/s:packages/s:changes}</a>
@@ -855,6 +861,41 @@
       <xsl:message terminate="yes">site: install commands link to the changelogs, and no page holds a changelog</xsl:message>
     </xsl:if>
     <xsl:sequence select="$page/@path || '#' || $package/@id || '-' || translate(f:releases($package)[1]?version, '.', '-')"/>
+  </xsl:function>
+
+  <!-- A code block's text: highlighted later by components/highlight.mjs
+       (its language), the live example's output written by its run. -->
+  <xsl:function name="f:pre" as="element()">
+    <xsl:param name="code" as="element(s:code)?"/>
+    <pre tabindex="0"><code><xsl:if test="$code"><xsl:attribute name="data-language" select="$code/@language"/>{f:code($code)}</xsl:if></code></pre>
+  </xsl:function>
+
+  <!-- A block of code a reader can copy (components/copy.mjs): a button
+       over its top right corner, shown on hover, focus or a tap, that copies
+       its text but what is aria-hidden (a command's prompt). Hidden until
+       the component makes it work. The icons are Lucide's (lucide-static,
+       ISC), inlined so they take the text's colour. -->
+  <xsl:function name="f:copyable" as="element()">
+    <xsl:param name="block" as="element()"/>
+    <ta-copy class="copy">
+      <xsl:sequence select="$block"/>
+      <button type="button" class="copy__button" aria-label="Copy code" title="Copy" data-done="Copied" hidden="hidden">
+        <xsl:sequence select="f:lucide('copy', 'copy__icon copy__icon--copy')"/>
+        <xsl:sequence select="f:lucide('check', 'copy__icon copy__icon--done')"/>
+      </button>
+      <span class="copy__status visually-hidden" role="status"></span>
+    </ta-copy>
+  </xsl:function>
+
+  <!-- A Lucide icon, from website/'s lucide-static (package.json). -->
+  <xsl:function name="f:lucide" as="element()" cache="yes">
+    <xsl:param name="name" as="xs:string"/>
+    <xsl:param name="class" as="xs:string"/>
+    <xsl:variable name="svg" select="doc(resolve-uri('../node_modules/lucide-static/icons/' || $name || '.svg', static-base-uri()))/*"/>
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="{$svg/@viewBox}" class="{$class}" aria-hidden="true" focusable="false">
+      <xsl:copy-of select="$svg/(@fill, @stroke, @stroke-width, @stroke-linecap, @stroke-linejoin)"/>
+      <xsl:copy-of select="$svg/*"/>
+    </svg>
   </xsl:function>
 
   <!-- ===================================================== platforms
