@@ -59,7 +59,7 @@ module Core
     # A statechart drawn: scxmljs's layout of nested boxes and orthogonal
     # routes, ported (src/diagram/diagram.h). Freestanding; not in a
     # released library.
-    Layer.new(name: 'diagram', uses: %w[base], freestanding: true, sources: %w[src/diagram/layout.c]),
+    Layer.new(name: 'diagram', uses: %w[base], freestanding: true, sources: %w[src/diagram/layout.c src/diagram/check.c]),
     # The layout as SVG (src/diagram/svg.h), written through the compiler's
     # ta_xml_writer, so compiled without the C library's headers but not
     # linked as freestanding.

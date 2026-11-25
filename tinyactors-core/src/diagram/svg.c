@@ -13,6 +13,7 @@
 #include "diagram/svg.h"
 
 #include "base/memory.h"
+#include "diagram/geometry.h"
 
 /* ---- the element's measures (view/element.ts: estimateLabel, estimateBox) ---- */
 
@@ -37,16 +38,6 @@ static uint32_t characters(ta_string_view text) { /* code points */
     return n;
 }
 
-static double ceil_of(double value) {
-    double whole = (double)(int64_t)value;
-    return whole < value ? whole + 1 : whole;
-}
-static double dmax(double a, double b) {
-    return a > b ? a : b;
-}
-static double dmin(double a, double b) {
-    return a < b ? a : b;
-}
 
 /* "event event [condition]": the condition cut at CONDITION_SHOWN characters */
 static uint32_t label_characters(const ta_diagram_transition *t) {
@@ -58,7 +49,7 @@ static uint32_t label_characters(const ta_diagram_transition *t) {
 
 static ta_diagram_size label_estimate(const ta_diagram_transition *t) {
     uint32_t n = label_characters(t);
-    return n ? (ta_diagram_size){ceil_of(n * label_character + 18), label_height} : (ta_diagram_size){0, 0};
+    return n ? (ta_diagram_size){ta_diagram_ceil(n * label_character + 18), label_height} : (ta_diagram_size){0, 0};
 }
 
 /* a portal's chip adds "→ target, target" */
@@ -131,8 +122,8 @@ ta_status ta_diagram_measure(const ta_diagram_measure_request *request, ta_diagr
             continue;
         }
         double name = characters(state->name) * name_character + 24 + (state->kind == TA_DIAGRAM_STATE_PARALLEL ? 16 : 0);
-        double w = dmax(64, dmax(name, dmin(chips[s], chips_width) + 22));
-        double rows = internal[s] ? ceil_of(dmax(chips[s], 1) / chips_width) : 0;
+        double w = ta_diagram_max(64, ta_diagram_max(name, ta_diagram_min(chips[s], chips_width) + 22));
+        double rows = internal[s] ? ta_diagram_ceil(ta_diagram_max(chips[s], 1) / chips_width) : 0;
         out->states[s] = container[s] ? (ta_diagram_size){w, 26 + rows * chip_row} : (ta_diagram_size){w, 34 + rows * chip_row};
     }
     return TA_OK;
@@ -168,28 +159,28 @@ typedef struct style_rule {
 } style_rule;
 
 static const style_rule rules[] = {
-    {"text", {{"font-family", "var(--sans)"}, {"fill", "var(--fg1)"}}},
-    {".page", {{"fill", "var(--bg)"}}},
-    {".title", {{"font-size", "15px"}, {"font-weight", "600"}}},
-    {".container", {{"fill", "var(--s2)"}, {"fill-opacity", ".55"}, {"stroke", "var(--b2)"}}},
-    {".container.even", {{"fill", "var(--s1)"}, {"fill-opacity", ".7"}}},
-    {".region", {{"fill", "none"}, {"stroke", "var(--b2)"}, {"stroke-dasharray", "4 3"}}},
-    {".leaf, .history", {{"fill", "var(--s1)"}, {"stroke", "var(--strong)"}}},
-    {".name", {{"font-size", "13px"}, {"font-weight", "600"}}},
-    {".kind", {{"font-size", "14px"}, {"font-weight", "600"}, {"fill", "var(--fg3)"}}},
-    {".mark", {{"font-family", "var(--mono)"}, {"font-size", "11px"}, {"font-weight", "600"}, {"fill", "var(--fg2)"}}},
-    {".pill", {{"fill", "var(--bg)"}, {"stroke", "var(--b2)"}}},
-    {".pill.done", {{"stroke", "var(--done)"}}},
-    {".pill.error", {{"stroke", "var(--error)"}}},
-    {".event", {{"font-family", "var(--mono)"}, {"font-size", "11px"}, {"font-weight", "500"}, {"fill", "var(--fg2)"}}},
-    {".event .done", {{"fill", "var(--done)"}}},
-    {".event .error", {{"fill", "var(--error)"}}},
-    {".event .condition", {{"fill", "var(--wait)"}, {"font-weight", "400"}}},
-    {".event .to", {{"fill", "var(--fg3)"}, {"font-weight", "400"}}},
-    {".edge", {{"fill", "none"}, {"stroke", "var(--fg4)"}, {"stroke-width", "1.25"}, {"stroke-linejoin", "round"}}},
-    {".initial-line", {{"fill", "none"}, {"stroke", "var(--fg1)"}, {"stroke-width", "1.25"}}},
-    {".arrow", {{"fill", "var(--fg4)"}}},
-    {".arrow.initial, .dot", {{"fill", "var(--fg1)"}}},
+    {"text", {{"font-family", "var(--ta-sans)"}, {"fill", "var(--ta-fg1)"}}},
+    {".ta-page", {{"fill", "var(--ta-bg)"}}},
+    {".ta-title", {{"font-size", "15px"}, {"font-weight", "600"}}},
+    {".ta-container", {{"fill", "var(--ta-s2)"}, {"fill-opacity", ".55"}, {"stroke", "var(--ta-b2)"}}},
+    {".ta-container.ta-even", {{"fill", "var(--ta-s1)"}, {"fill-opacity", ".7"}}},
+    {".ta-region", {{"fill", "none"}, {"stroke", "var(--ta-b2)"}, {"stroke-dasharray", "4 3"}}},
+    {".ta-leaf, .ta-history", {{"fill", "var(--ta-s1)"}, {"stroke", "var(--ta-strong)"}}},
+    {".ta-name", {{"font-size", "13px"}, {"font-weight", "600"}}},
+    {".ta-kind", {{"font-size", "14px"}, {"font-weight", "600"}, {"fill", "var(--ta-fg3)"}}},
+    {".ta-mark", {{"font-family", "var(--ta-mono)"}, {"font-size", "11px"}, {"font-weight", "600"}, {"fill", "var(--ta-fg2)"}}},
+    {".ta-pill", {{"fill", "var(--ta-bg)"}, {"stroke", "var(--ta-b2)"}}},
+    {".ta-pill.ta-done", {{"stroke", "var(--ta-done)"}}},
+    {".ta-pill.ta-error", {{"stroke", "var(--ta-error)"}}},
+    {".ta-event", {{"font-family", "var(--ta-mono)"}, {"font-size", "11px"}, {"font-weight", "500"}, {"fill", "var(--ta-fg2)"}}},
+    {".ta-event .ta-done", {{"fill", "var(--ta-done)"}}},
+    {".ta-event .ta-error", {{"fill", "var(--ta-error)"}}},
+    {".ta-event .ta-condition", {{"fill", "var(--ta-wait)"}, {"font-weight", "400"}}},
+    {".ta-event .ta-to", {{"fill", "var(--ta-fg3)"}, {"font-weight", "400"}}},
+    {".ta-edge", {{"fill", "none"}, {"stroke", "var(--ta-fg4)"}, {"stroke-width", "1.25"}, {"stroke-linejoin", "round"}}},
+    {".ta-initial-line", {{"fill", "none"}, {"stroke", "var(--ta-fg1)"}, {"stroke-width", "1.25"}}},
+    {".ta-arrow", {{"fill", "var(--ta-fg4)"}}},
+    {".ta-arrow.ta-initial, .ta-dot", {{"fill", "var(--ta-fg1)"}}},
 };
 
 /* ---- through the writer ---------------------------------------------------------------- */
@@ -255,12 +246,37 @@ static void numbers(ta_xml_writer *writer, const numeric *list, uint32_t count) 
     }
 }
 
+/* The root's class: every rule is written under it, and every class and variable of the
+ * drawing carries the prefix "ta-", so an SVG put inline in a page takes none of the page's
+ * styles (a page's `.container { width: 100% }` would stretch a container's box) and gives the
+ * page none of its own. */
+static const char scope[] = "tinyactors-diagram";
+
+/* `selector`, each of its comma-separated parts under the scope. */
+static void scoped_selector(ta_xml_writer *writer, const char *selector) {
+    ta_string_view all = view_of(selector);
+    uint32_t start = 0;
+    for (uint32_t i = 0; i <= all.length; i++) {
+        if (i < all.length && all.pointer[i] != ',') continue;
+        while (start < i && all.pointer[start] == ' ')
+            start++;
+        if (start > 0) text(writer, ", ");
+        text(writer, ".");
+        text(writer, scope);
+        text(writer, " ");
+        ta_xml_writer_text(writer, (ta_string_view){all.pointer + start, i - start});
+        start = i + 1;
+    }
+}
+
 static void stylesheet(ta_xml_writer *writer) {
     open_element(writer, "style");
     for (int dark = 0; dark < 2; dark++) {
-        text(writer, dark ? "\n@media (prefers-color-scheme: dark) { svg {" : "\nsvg {");
+        text(writer, dark ? "\n@media (prefers-color-scheme: dark) { ." : "\n.");
+        text(writer, scope);
+        text(writer, " {");
         for (uint32_t i = 0; i < sizeof theme / sizeof theme[0]; i++) {
-            text(writer, " --");
+            text(writer, " --ta-");
             text(writer, theme[i].name);
             text(writer, ": ");
             text(writer, dark ? theme[i].dark : theme[i].light);
@@ -270,7 +286,7 @@ static void stylesheet(ta_xml_writer *writer) {
     }
     for (uint32_t i = 0; i < sizeof rules / sizeof rules[0]; i++) {
         text(writer, "\n");
-        text(writer, rules[i].selector);
+        scoped_selector(writer, rules[i].selector);
         text(writer, " {");
         for (uint32_t j = 0; j < RULE_PROPERTIES && rules[i].properties[j].name; j++) {
             text(writer, " ");
@@ -304,6 +320,7 @@ static void marker(ta_xml_writer *writer, const char *id, const char *class_name
 ta_status ta_diagram_svg_open(ta_xml_writer *writer, ta_diagram_size page) {
     open_element(writer, "svg");
     attribute(writer, "xmlns", "http://www.w3.org/2000/svg");
+    attribute(writer, "class", scope);
     numeric size[2] = {{"width", page.w}, {"height", page.h}};
     numbers(writer, size, 2);
     number_text w, h;
@@ -321,11 +338,11 @@ ta_status ta_diagram_svg_open(ta_xml_writer *writer, ta_diagram_size page) {
     attribute(writer, "role", "img");
     stylesheet(writer);
     open_element(writer, "defs");
-    marker(writer, "arrow", "arrow");
-    marker(writer, "arrow-initial", "arrow initial");
+    marker(writer, "tinyactors-arrow", "ta-arrow");
+    marker(writer, "tinyactors-arrow-initial", "ta-arrow ta-initial");
     ta_xml_writer_close(writer);
     open_element(writer, "rect");
-    attribute(writer, "class", "page");
+    attribute(writer, "class", "ta-page");
     numeric ground[2] = {{"width", page.w}, {"height", page.h}};
     numbers(writer, ground, 2);
     return ta_xml_writer_close(writer);
@@ -388,8 +405,8 @@ static const char *event_class(ta_string_view descriptor) {
             last = (ta_string_view){descriptor.pointer + start, i - start};
             start = i + 1;
         }
-    if (same(first, "done") || same(last, "done")) return "done";
-    if (same(first, "error") || same(last, "error")) return "error";
+    if (same(first, "done") || same(last, "done")) return "ta-done";
+    if (same(first, "error") || same(last, "error")) return "ta-error";
     return 0;
 }
 
@@ -418,15 +435,15 @@ static void condition_span(svg *g, ta_string_view condition) {
             cut[length++] = ellipsis[i];
     }
     cut[length++] = ']';
-    span(g, "condition", (ta_string_view){cut, length});
+    span(g, "ta-condition", (ta_string_view){cut, length});
 }
 
 static void draw_pill(svg *g, pill p) {
     const ta_diagram_chart *chart = g->d->chart;
     const ta_diagram_transition *t = &chart->transitions[p.transition];
     const char *kind = t->events.length ? event_class(t->events) : 0;
-    rectangle(g, kind ? (kind[0] == 'd' ? "pill done" : "pill error") : "pill", p.at, p.at.h / 2);
-    open_text(g, (text_place){"event", p.at.x + 8, p.at.y + p.at.h / 2 + 4, 0});
+    rectangle(g, kind ? (kind[3] == 'd' ? "ta-pill ta-done" : "ta-pill ta-error") : "ta-pill", p.at, p.at.h / 2);
+    open_text(g, (text_place){"ta-event", p.at.x + 8, p.at.y + p.at.h / 2 + 4, 0});
     /* each descriptor coloured by its kind; the writer's line breaks between the spans read
      * as the spaces between the words */
     uint32_t start = 0;
@@ -444,7 +461,7 @@ static void draw_pill(svg *g, pill p) {
     if (t->condition.length) condition_span(g, t->condition);
     if (p.with_targets) {
         open_element(g->writer, "tspan");
-        attribute(g->writer, "class", "to");
+        attribute(g->writer, "class", "ta-to");
         text(g->writer, "\xE2\x86\x92 ");
         for (uint32_t i = 0; i < t->target_count; i++) {
             if (i) text(g->writer, ", ");
@@ -482,7 +499,7 @@ static void chips(svg *g, const ta_diagram_box *box, double top) {
             x = left;
             y += chip_row;
         }
-        open_text(g, (text_place){"mark", x, y + 14, 0});
+        open_text(g, (text_place){"ta-mark", x, y + 14, 0});
         number_text buffer;
         text(g->writer, "+");
         ta_xml_writer_text(g->writer, number_view(&buffer, targetless - INTERNAL_SHOWN));
@@ -499,29 +516,29 @@ static void draw_box(svg *g, const ta_diagram_box *box) {
     case TA_DIAGRAM_BOX_ROOT: return;
     case TA_DIAGRAM_BOX_HISTORY: {
         open_element(g->writer, "circle");
-        attribute(g->writer, "class", "history");
+        attribute(g->writer, "class", "ta-history");
         numeric a[3] = {{"cx", middle + g->dx}, {"cy", r.y + r.h / 2 + g->dy}, {"r", r.w / 2}};
         numbers(g->writer, a, 3);
         ta_xml_writer_close(g->writer);
-        open_text(g, (text_place){"mark", middle, r.y + r.h / 2 + 4, 1});
+        open_text(g, (text_place){"ta-mark", middle, r.y + r.h / 2 + 4, 1});
         text(g->writer, state->kind == TA_DIAGRAM_STATE_HISTORY_DEEP ? "H*" : "H");
         ta_xml_writer_close(g->writer);
         return;
     }
     case TA_DIAGRAM_BOX_FINAL: /* a double border, pill-shaped */
-        rectangle(g, "leaf", r, dmin(r.h, r.w) / 2);
-        rectangle(g, "leaf", (ta_diagram_rect){r.x + 2.5, r.y + 2.5, r.w - 5, r.h - 5}, dmin(r.h, r.w) / 2 - 2.5);
+        rectangle(g, "ta-leaf", r, ta_diagram_min(r.h, r.w) / 2);
+        rectangle(g, "ta-leaf", (ta_diagram_rect){r.x + 2.5, r.y + 2.5, r.w - 5, r.h - 5}, ta_diagram_min(r.h, r.w) / 2 - 2.5);
         break;
-    case TA_DIAGRAM_BOX_ATOMIC: rectangle(g, "leaf", r, 7); break;
-    case TA_DIAGRAM_BOX_REGION: rectangle(g, "region", r, 4); break;
-    default: rectangle(g, box->depth % 2 ? "container" : "container even", r, 7); break;
+    case TA_DIAGRAM_BOX_ATOMIC: rectangle(g, "ta-leaf", r, 7); break;
+    case TA_DIAGRAM_BOX_REGION: rectangle(g, "ta-region", r, 4); break;
+    default: rectangle(g, box->depth % 2 ? "ta-container" : "ta-container ta-even", r, 7); break;
     }
     int leaf = box->header == 0;
     double name_top = leaf ? 8 : 7;
     int centred = box->kind == TA_DIAGRAM_BOX_FINAL && !g->d->layout->inside_count[box->state];
-    open_text(g, (text_place){"name", centred ? middle : r.x + 11, r.y + name_top + 12, centred});
+    open_text(g, (text_place){"ta-name", centred ? middle : r.x + 11, r.y + name_top + 12, centred});
     ta_xml_writer_text(g->writer, state->name);
-    if (state->kind == TA_DIAGRAM_STATE_PARALLEL) span(g, "kind", view_of("\xE2\x88\xA5"));
+    if (state->kind == TA_DIAGRAM_STATE_PARALLEL) span(g, "ta-kind", view_of("\xE2\x88\xA5"));
     ta_xml_writer_close(g->writer);
     chips(g, box, r.y + name_top + 16 + (leaf ? 5 : 4));
 }
@@ -561,19 +578,19 @@ ta_status ta_diagram_svg(ta_xml_writer *writer, const ta_diagram_drawing *d) {
     const ta_diagram_layout *layout = d->layout;
     open_element(writer, "g");
     if (d->title.length) {
-        open_text(&g, (text_place){"title", 0, -10, 0});
+        open_text(&g, (text_place){"ta-title", 0, -10, 0});
         ta_xml_writer_text(writer, d->title);
         ta_xml_writer_close(writer);
     }
     for (uint32_t i = 0; i < layout->box_count; i++)
         draw_box(&g, &layout->boxes[i]);
     for (uint32_t i = 0; i < layout->edge_count; i++)
-        path(&g, (path_place){"edge", "url(#arrow)", layout->edges[i].first_point, layout->edges[i].point_count});
+        path(&g, (path_place){"ta-edge", "url(#tinyactors-arrow)", layout->edges[i].first_point, layout->edges[i].point_count});
     for (uint32_t i = 0; i < layout->initial_count; i++) {
         const ta_diagram_initial *m = &layout->initials[i];
-        path(&g, (path_place){"initial-line", "url(#arrow-initial)", m->first_point, m->point_count});
+        path(&g, (path_place){"ta-initial-line", "url(#tinyactors-arrow-initial)", m->first_point, m->point_count});
         open_element(writer, "circle");
-        attribute(writer, "class", "dot");
+        attribute(writer, "class", "ta-dot");
         numeric a[3] = {{"cx", m->at.x + g.dx}, {"cy", m->at.y + g.dy}, {"r", 4.5}};
         numbers(writer, a, 3);
         ta_xml_writer_close(writer);

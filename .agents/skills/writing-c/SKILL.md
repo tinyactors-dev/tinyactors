@@ -49,6 +49,12 @@ use it:
   `<style>` element's text by `ta_xml_writer_text`, which escapes it.
 - When no interface fits, the missing abstraction is the first thing to build:
   a small, typed writer with its own unit test, used by every caller.
+- Output another document may embed (SVG, HTML) takes none of the host
+  page's styles and gives it none: every class and id carries a prefix
+  (`ta-container`, `tinyactors-arrow`), every CSS rule is written under the
+  root's class, every custom property is prefixed (`--ta-fg1`). A page's
+  `.container { width: 100% }` once stretched a drawing's boxes across the
+  page, because CSS `width` overrides an SVG `<rect>`'s `width` attribute.
 - Thin adapters over an interface are fine when they only convert
   (`number_view` formats a double into a caller's buffer for
   `ta_xml_writer_attribute`); they never write output themselves.
@@ -112,6 +118,14 @@ typedef only.
   test, task or build depends on the original implementation afterwards; a
   deliberate change to the algorithm regenerates the fixtures with a task and
   the diff is reviewed.
+- Output with geometry (a layout, a drawing) has a checker of its
+  invariants, found by geometry alone: an arrow that stops short of its box
+  or starts beside it, a bent segment, a box outside its parent
+  (`ta_diagram_check`). Its unit test damages a good result in one way at a
+  time and requires exactly that fault; every chart of the corpus must pass
+  the hard invariants, and the quality faults it still has are listed in
+  its expected answer, so a new one shows in review. A defect a person
+  reports first becomes a check, then is fixed.
 - A test fixture is a `static const char name[]`, not a macro; fixture files
   in a shared scratch directory carry names no other test uses.
 

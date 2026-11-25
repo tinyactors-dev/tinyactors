@@ -249,8 +249,20 @@ tinyactors graph -f svg --chart payment shop.tai > payment.svg
 tinyactors graph -f json order.scxml | jq '.charts[0].edges[].route'
 ```
 
-The layout is checked by a corpus of charts and their expected layouts
-(`tests/diagram`, its README).
+Every answer ends with the drawing's **problems**, found by geometry alone
+(`ta_diagram_check`): `startDetached`, `endDetached` and `initialDetached`
+(an arrow that does not touch its box's drawn outline: the rectangle, a
+final's pill, a history state's circle), `notOrthogonal`, `outsideParent`
+and `boxesOverlap`, which no layout may have, and the faults the layout still
+makes, to be worked down: `notCentred` (an edge alone on a side, off its
+middle), `throughBox`, `arrowAlongSide`, `labelOverlap`, `labelOnBox` and
+`labelOnEdge`. The SVG carries its own stylesheet, scoped: its classes and
+ids are prefixed (`ta-`, `tinyactors-`) and its rules written under the
+root's class `tinyactors-diagram`, so the drawing put inline in a page takes
+none of the page's styles and gives it none.
+
+The layout is checked by a corpus of charts and their expected layouts and
+problems (`tests/diagram`, its README).
 
 ## How it is built
 

@@ -193,4 +193,49 @@ ta_status ta_diagram_layout_chart(const ta_diagram_request *request, ta_diagram_
  * three or more container borders. NULL when the arena could not grow. */
 uint8_t *ta_diagram_portals(const ta_diagram_chart *chart, ta_growable_arena *arena);
 
+/* ---- checking a layout -------------------------------------------------------------- */
+
+/* What a drawing must never show, each found by geometry alone, so a test can require none. */
+typedef enum ta_diagram_problem_kind {
+    TA_DIAGRAM_PROBLEM_START_DETACHED = 0, /* an edge's first point is not on its source's outline */
+    TA_DIAGRAM_PROBLEM_END_DETACHED = 1,   /* an edge's arrow is not on its target's outline */
+    TA_DIAGRAM_PROBLEM_NOT_ORTHOGONAL = 2, /* a segment neither horizontal nor vertical */
+    TA_DIAGRAM_PROBLEM_ARROW_ALONG_SIDE = 3, /* the last segment runs along the side it ends on, not into it */
+    TA_DIAGRAM_PROBLEM_NOT_CENTRED = 4,     /* an edge alone on a leaf's side misses the side's middle */
+    TA_DIAGRAM_PROBLEM_THROUGH_BOX = 5,    /* a segment runs through a leaf's inside (its own ends' too) */
+    TA_DIAGRAM_PROBLEM_OUTSIDE_PARENT = 6, /* a box reaches past its parent's */
+    TA_DIAGRAM_PROBLEM_BOXES_OVERLAP = 7,  /* two sibling boxes overlap */
+    TA_DIAGRAM_PROBLEM_LABEL_OVERLAP = 8,  /* a label over another edge's label (`other`: that edge) */
+    TA_DIAGRAM_PROBLEM_LABEL_ON_BOX = 9,   /* a label over a leaf (`other`: its state) */
+    TA_DIAGRAM_PROBLEM_INITIAL_DETACHED = 10, /* an initial marker's arrow is not on its state's outline */
+    TA_DIAGRAM_PROBLEM_LABEL_ON_EDGE = 11  /* a label over another edge's line (`other`: that edge) */
+} ta_diagram_problem_kind;
+
+/* A problem and what it is about: `subject` an edge's index, or a state for OUTSIDE_PARENT,
+ * BOXES_OVERLAP and INITIAL_DETACHED (the marker's target); `other` the state the problem
+ * touches (the marker's container), the other edge for LABEL_OVERLAP and LABEL_ON_EDGE, TA_NIL
+ * for none. */
+typedef struct ta_diagram_problem {
+    uint32_t kind; /* ta_diagram_problem_kind */
+    uint32_t subject, other;
+} ta_diagram_problem;
+
+typedef struct ta_diagram_check_request {
+    const ta_diagram_chart *chart;
+    const ta_diagram_layout *layout;
+    ta_growable_arena *arena;
+} ta_diagram_check_request;
+
+typedef struct ta_diagram_problems {
+    const ta_diagram_problem *list;
+    uint32_t count;
+} ta_diagram_problems;
+
+/* Every problem of a layout, edges first, then boxes, then labels. TA_ERROR_NO_MEMORY when the
+ * arena could not grow. */
+ta_status ta_diagram_check(const ta_diagram_check_request *request, ta_diagram_problems *out);
+
+/* The problem kind's name, for a report: "startDetached", "endDetached", ... */
+ta_string_view ta_diagram_problem_name(uint32_t kind);
+
 #endif

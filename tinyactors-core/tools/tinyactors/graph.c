@@ -205,6 +205,50 @@ static void edges_of(tool *t, const chart_view *c) {
     ta_report_end(report);
 }
 
+/* What the layout must never show (ta_diagram_check): each problem, the edge or the box it is
+ * about, and what it touches. A chart whose list is not empty is drawn wrong. */
+static ta_string_view edge_text(tool *t, const chart_view *c, uint32_t edge) {
+    const ta_diagram_layout *layout = &c->drawing->layout;
+    const ta_diagram_transition *transition = &c->drawing->chart.transitions[layout->edges[edge].transition];
+    tool_text text;
+    tool_text_init(t, &text);
+    tool_text_append(&text, state_id(c->view, c->chart, transition->source));
+    tool_text_append(&text, ta_string(" \xE2\x86\x92 "));
+    tool_text_append(&text, state_id(c->view, c->chart, layout->edges[edge].target));
+    if (transition->events.length) {
+        tool_text_append(&text, ta_string(" on "));
+        tool_text_append(&text, transition->events);
+    }
+    return tool_text_view(&text);
+}
+
+static ta_status problems_of(tool *t, const chart_view *c) {
+    ta_diagram_problems problems;
+    ta_diagram_check_request request = {&c->drawing->chart, &c->drawing->layout, t->arena};
+    ta_status status = ta_diagram_check(&request, &problems);
+    if (status != TA_OK) return status;
+    ta_report *report = &t->report;
+    open_list(t, "problems", "problem");
+    for (uint32_t i = 0; i < problems.count; i++) {
+        const ta_diagram_problem *problem = &problems.list[i];
+        uint32_t kind = problem->kind;
+        int state = kind == TA_DIAGRAM_PROBLEM_OUTSIDE_PARENT || kind == TA_DIAGRAM_PROBLEM_BOXES_OVERLAP ||
+                    kind == TA_DIAGRAM_PROBLEM_INITIAL_DETACHED;
+        ta_report_object(report, ta_string(""));
+        ta_report_text(report, ta_string("kind"), ta_diagram_problem_name(kind));
+        ta_report_text(report, ta_string("subject"),
+                       state ? state_id(c->view, c->chart, problem->subject) : edge_text(t, c, problem->subject));
+        ta_report_text(report, ta_string("touches"),
+                       problem->other == TA_NIL ? ta_string("")
+                       : kind == TA_DIAGRAM_PROBLEM_LABEL_OVERLAP || kind == TA_DIAGRAM_PROBLEM_LABEL_ON_EDGE
+                           ? edge_text(t, c, problem->other)
+                                                                  : state_id(c->view, c->chart, problem->other));
+        ta_report_end(report);
+    }
+    ta_report_end(report);
+    return TA_OK;
+}
+
 /* ---- graph ---------------------------------------------------------------------------------- */
 
 static void out_of_memory(tool *t) {
@@ -293,6 +337,10 @@ void tool_graph(tool *t) {
         ta_report_number(&t->report, ta_string("height"), whole(drawings[c].layout.height));
         boxes_of(t, &where);
         edges_of(t, &where);
+        if (problems_of(t, &where) != TA_OK) {
+            out_of_memory(t);
+            return;
+        }
         ta_report_end(&t->report);
     }
     ta_report_end(&t->report);

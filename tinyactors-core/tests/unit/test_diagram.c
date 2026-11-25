@@ -238,13 +238,122 @@ static void test_svg(void) {
     ta_string_view svg;
     CHECK_EQUAL(ta_xml_writer_finish(writer, &svg), TA_OK);
     CHECK(contains(svg, "&lt;paid &amp; \"done\"&gt;") || contains(svg, "&lt;paid &amp; \"done\">"));
-    CHECK(contains(svg, "<tspan class=\"condition\">[attempts &lt; 3]</tspan>"));
-    CHECK(contains(svg, "<tspan class=\"done\">done.state.fulfilment</tspan>")); /* a completion */
-    CHECK(contains(svg, "<circle class=\"history\""));
+    CHECK(contains(svg, "<tspan class=\"ta-condition\">[attempts &lt; 3]</tspan>"));
+    CHECK(contains(svg, "<tspan class=\"ta-done\">done.state.fulfilment</tspan>")); /* a completion */
+    CHECK(contains(svg, "<circle class=\"ta-history\""));
     CHECK(contains(svg, ">H</text>"));
-    CHECK(contains(svg, "<path class=\"edge\" d=\"M"));
-    CHECK(contains(svg, "--fg1: #1c1c21;"));
+    CHECK(contains(svg, "<path class=\"ta-edge\" d=\"M"));
+    CHECK(contains(svg, "--ta-fg1: #1c1c21;"));
     ta_xml_writer_free(writer);
+    ta_growable_arena_free(&a.arena);
+}
+
+/* A layout's copy that a test may damage: its boxes, edges, initials and points. */
+typedef struct damaged {
+    ta_diagram_box boxes[16];
+    ta_diagram_edge edges[16];
+    ta_diagram_initial initials[8];
+    ta_diagram_point points[256];
+    ta_diagram_layout layout;
+} damaged;
+
+static void damage_begin(damaged *d, const ta_diagram_layout *from) {
+    memcpy(d->boxes, from->boxes, sizeof(ta_diagram_box) * from->box_count);
+    memcpy(d->edges, from->edges, sizeof(ta_diagram_edge) * from->edge_count);
+    memcpy(d->initials, from->initials, sizeof(ta_diagram_initial) * from->initial_count);
+    uint32_t points = 0;
+    for (uint32_t i = 0; i < from->edge_count; i++)
+        if (from->edges[i].first_point + from->edges[i].point_count > points) points = from->edges[i].first_point + from->edges[i].point_count;
+    for (uint32_t i = 0; i < from->initial_count; i++)
+        if (from->initials[i].first_point + from->initials[i].point_count > points) points = from->initials[i].first_point + from->initials[i].point_count;
+    memcpy(d->points, from->points, sizeof(ta_diagram_point) * points);
+    d->layout = *from;
+    d->layout.boxes = d->boxes;
+    d->layout.edges = d->edges;
+    d->layout.initials = d->initials;
+    d->layout.points = d->points;
+}
+
+/* The problems of a kind the check finds in `layout`. */
+static uint32_t problems_of(test_arena *a, const ta_diagram_layout *layout, uint32_t kind) {
+    ta_diagram_check_request request = {&order, layout, &a->arena};
+    ta_diagram_problems problems;
+    if (ta_diagram_check(&request, &problems) != TA_OK) return UINT32_MAX;
+    uint32_t count = 0;
+    for (uint32_t i = 0; i < problems.count; i++)
+        count += problems.list[i].kind == kind;
+    return count;
+}
+
+static ta_diagram_box *damaged_box(damaged *d, uint32_t state) {
+    for (uint32_t i = 0; i < d->layout.box_count; i++)
+        if (d->boxes[i].state == state) return &d->boxes[i];
+    return NULL;
+}
+
+/* Each kind of fault, made in a good layout, is found, and only where it was made. */
+static void test_check(void) {
+    test_arena a;
+    arena_begin(&a, (size_t)-1);
+    drawn good;
+    CHECK_EQUAL(lay_out(&a, &order, &good), TA_OK);
+    static const uint32_t hard[] = {TA_DIAGRAM_PROBLEM_START_DETACHED, TA_DIAGRAM_PROBLEM_END_DETACHED,
+                                    TA_DIAGRAM_PROBLEM_INITIAL_DETACHED, TA_DIAGRAM_PROBLEM_NOT_ORTHOGONAL,
+                                    TA_DIAGRAM_PROBLEM_OUTSIDE_PARENT, TA_DIAGRAM_PROBLEM_BOXES_OVERLAP};
+    for (size_t i = 0; i < sizeof hard / sizeof hard[0]; i++)
+        CHECK_EQUAL(problems_of(&a, &good.layout, hard[i]), 0);
+
+    damaged d;
+    /* an arrow that starts 4px off its box */
+    damage_begin(&d, &good.layout);
+    d.points[d.edges[0].first_point].x -= 4;
+    CHECK_EQUAL(problems_of(&a, &d.layout, TA_DIAGRAM_PROBLEM_START_DETACHED), 1);
+    /* an arrow that stops 3px short of its box; with its first point moved too, a bent segment */
+    damage_begin(&d, &good.layout);
+    ta_diagram_point *last = &d.points[d.edges[0].first_point + d.edges[0].point_count - 1];
+    last->x -= 3;
+    CHECK_EQUAL(problems_of(&a, &d.layout, TA_DIAGRAM_PROBLEM_END_DETACHED), 1);
+    last->y += 5;
+    CHECK(problems_of(&a, &d.layout, TA_DIAGRAM_PROBLEM_NOT_ORTHOGONAL) >= 1);
+    /* the final's pill: an arrow at its rectangle's corner is off its curve */
+    damage_begin(&d, &good.layout);
+    for (uint32_t i = 0; i < d.layout.edge_count; i++) {
+        if (d.edges[i].target != 8) continue;
+        ta_diagram_rect r = damaged_box(&d, 8)->rect;
+        ta_diagram_point *end = &d.points[d.edges[i].first_point + d.edges[i].point_count - 1];
+        ta_diagram_point *before = end - 1;
+        *end = (ta_diagram_point){r.x, r.y + 2};
+        *before = (ta_diagram_point){r.x - 20, r.y + 2};
+        CHECK_EQUAL(problems_of(&a, &d.layout, TA_DIAGRAM_PROBLEM_END_DETACHED), 1);
+    }
+    /* an initial marker short of its state */
+    damage_begin(&d, &good.layout);
+    d.points[d.initials[0].first_point + 1].x -= 5;
+    CHECK_EQUAL(problems_of(&a, &d.layout, TA_DIAGRAM_PROBLEM_INITIAL_DETACHED), 1);
+    /* a box past its parent, and over its sibling */
+    damage_begin(&d, &good.layout);
+    damaged_box(&d, 3)->rect.x += 2000;
+    CHECK(problems_of(&a, &d.layout, TA_DIAGRAM_PROBLEM_OUTSIDE_PARENT) >= 1);
+    damage_begin(&d, &good.layout);
+    damaged_box(&d, 3)->rect = damaged_box(&d, 2)->rect;
+    CHECK(problems_of(&a, &d.layout, TA_DIAGRAM_PROBLEM_BOXES_OVERLAP) >= 1);
+    /* a route through a box: open's straight to paying, moved to run through paid */
+    damage_begin(&d, &good.layout);
+    ta_diagram_rect paid = damaged_box(&d, 8)->rect;
+    d.points[d.edges[0].first_point] = (ta_diagram_point){paid.x - 10, paid.y + paid.h / 2};
+    d.points[d.edges[0].first_point + 1] = (ta_diagram_point){paid.x + paid.w + 10, paid.y + paid.h / 2};
+    d.edges[0].point_count = 2;
+    CHECK(problems_of(&a, &d.layout, TA_DIAGRAM_PROBLEM_THROUGH_BOX) >= 1);
+    /* a label on a box */
+    damage_begin(&d, &good.layout);
+    for (uint32_t i = 0; i < d.layout.edge_count; i++)
+        if (d.edges[i].labelled) {
+            d.edges[i].label.x = damaged_box(&d, 2)->rect.x;
+            d.edges[i].label.y = damaged_box(&d, 2)->rect.y;
+            break;
+        }
+    CHECK(problems_of(&a, &d.layout, TA_DIAGRAM_PROBLEM_LABEL_ON_BOX) >= 1);
+    CHECK(ta_diagram_problem_name(TA_DIAGRAM_PROBLEM_END_DETACHED).length == 11);
     ta_growable_arena_free(&a.arena);
 }
 
@@ -255,5 +364,6 @@ int main(void) {
     RUN(test_refusals);
     RUN(test_no_memory);
     RUN(test_svg);
+    RUN(test_check);
     TEST_MAIN_END();
 }

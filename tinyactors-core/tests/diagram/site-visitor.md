@@ -20,15 +20,15 @@
 | approaching | atomic | awake | atomic | 326 | 127 | 108 | 120 |
 | greeting | atomic | awake | atomic | 869 | 94 | 99 | 58 |
 | greeted | atomic | awake | atomic | 869 | 170 | 155 | 58 |
-| asleep | atomic | here | atomic | 1155 | 161 | 218 | 58 |
-| gone | final | /scxml | final | 1494 | 160 | 64 | 34 |
+| asleep | atomic | here | atomic | 1155 | 174 | 218 | 58 |
+| gone | final | /scxml | final | 1494 | 173 | 64 | 34 |
 
 #### Edges
 
 | Source | Target | Events | Condition | Drawn as | Route |
 | --- | --- | --- | --- | --- | --- |
-| here | gone | leave |  | forward | 1387,186 1494,186 |
-| awake | asleep | hide |  | forward | 1038,171 1155,171 |
+| here | gone | leave |  | forward | 1387,190 1494,190 |
+| awake | asleep | hide |  | forward | 1038,184 1155,184 |
 | roaming | roaming | arrive |  | self | 702,224 718,224 718,250 702,250 |
 | roaming | eating | found |  | back | 625,235 605,235 605,275 306,275 306,262 164,262 |
 | roaming | approaching | greet |  | back | 625,198 575,198 575,210 433,210 |
@@ -43,7 +43,7 @@
 | approaching | greeted | greeting |  | forward | 433,200 565,200 565,287 829,287 829,183 869,183 |
 | greeting | roaming | done |  | back | 869,142 819,142 819,194 702,194 |
 | greeted | roaming | done |  | back | 869,206 849,206 849,214 702,214 |
-| asleep | awake | show |  | back | 1155,209 1038,209 |
+| asleep | awake | show |  | back | 1155,222 1038,222 |
 
 #### Inside
 
@@ -55,3 +55,11 @@
 | asleep | greeting |  |  |
 | asleep | greet |  |  |
 | asleep | arrive |  |  |
+
+#### Problems
+
+| Kind | Subject | Touches |
+| --- | --- | --- |
+| notCentred | eating → approaching on greet | approaching |
+| labelOnEdge | roaming → eating on found | eating → roaming on chewed empty |
+| labelOnEdge | roaming → greeted on greeting | approaching → greeting on near |

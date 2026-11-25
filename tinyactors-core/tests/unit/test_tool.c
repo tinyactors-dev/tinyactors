@@ -250,9 +250,32 @@ static void test_graph_layout(void) {
 
     /* the picture: well-formed, escaped, one <g> per chart, its routes as paths */
     CHECK_EQUAL(run("graph -f svg support-ticket.scxml"), 0);
-    CHECK(has("output", "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"1126.2\" height=\"350\""));
-    CHECK(has("output", "<path class=\"edge\" d=\"M375,197 L459,197 L459,209 L483,209\" marker-end=\"url(#arrow)\"/>"));
-    CHECK(has("output", "<tspan class=\"condition\">[n &lt; 3]</tspan>"));
+    CHECK(has("output", "<svg xmlns=\"http://www.w3.org/2000/svg\" class=\"tinyactors-diagram\" width=\"1126.2\""));
+    /* close leaves open's side level with closed's middle: one straight line, onto its pill */
+    CHECK(has("output", "<path class=\"ta-edge\" d=\"M946.6,197 L1030.6,197\" marker-end=\"url(#tinyactors-arrow)\"/>"));
+    CHECK(has("output", "<tspan class=\"ta-condition\">[n &lt; 3]</tspan>"));
+    /* inline in a page, the drawing takes none of its styles and gives it none: every class and
+     * id is prefixed, every rule under the root's class */
+    const char *svg = text_of("output");
+    int prefixed = 1;
+    for (const char *at = strstr(svg, "class=\""); at; at = strstr(at + 1, "class=\"")) {
+        const char *value = at + 7;
+        while (*value && *value != '"') { /* each space-separated class */
+            prefixed &= strncmp(value, "ta-", 3) == 0 || strncmp(value, "tinyactors-diagram", 18) == 0;
+            while (*value && *value != ' ' && *value != '"')
+                value++;
+            while (*value == ' ')
+                value++;
+        }
+    }
+    for (const char *at = strstr(svg, " id=\""); at; at = strstr(at + 1, " id=\""))
+        prefixed &= strncmp(at + 5, "tinyactors-", 11) == 0;
+    CHECK(prefixed);
+    const char *style_end = strstr(svg, "</style>");
+    for (const char *line = strchr(strstr(svg, "<style>"), '\n'); line && line < style_end; line = strchr(line, '\n')) {
+        line++;
+        if (line < style_end && *line != ' ') CHECK(strncmp(line, ".tinyactors-diagram ", 20) == 0 || strncmp(line, "@media", 6) == 0);
+    }
     CHECK(has("output", "H*"));
     CHECK(has("output", "@media (prefers-color-scheme: dark)"));
     CHECK(!strstr(text_of("output"), "mermaid"));
@@ -295,6 +318,16 @@ static void test_layout_corpus(void) {
         CHECK(same);
         if (!same) fprintf(stderr, "  %s: the layout is not %s (mise run diagram:expect after a deliberate change)\n",
                            entry->d_name, expected);
+        /* what may never be drawn, whatever the corpus records: an arrow off its box, a bent
+         * segment, a box outside its parent or over a sibling (the quality problems, an edge off
+         * a side's middle or a label over a line, are listed in the .md, to be worked down) */
+        static const char *const never[] = {"| startDetached |", "| endDetached |", "| initialDetached |",
+                                            "| notOrthogonal |", "| outsideParent |", "| boxesOverlap |"};
+        for (size_t i = 0; answer && i < sizeof never / sizeof never[0]; i++) {
+            int clean = strstr(answer, never[i]) == NULL;
+            CHECK(clean);
+            if (!clean) fprintf(stderr, "  %s: %s\n", entry->d_name, never[i]);
+        }
         free(answer);
         free(wanted);
         charts++;

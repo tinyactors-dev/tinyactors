@@ -7,6 +7,7 @@
 #include "diagram/diagram.h"
 
 #include "base/memory.h"
+#include "diagram/geometry.h"
 
 /* ---- the defaults (layout.ts) ---------------------------------------------------------- */
 
@@ -19,19 +20,6 @@ enum { PORTAL_BORDERS = 3 };          /* a transition crossing this many contain
 
 /* ---- small things ------------------------------------------------------------------------ */
 
-static double dmax(double a, double b) {
-    return a > b ? a : b;
-}
-static double dmin(double a, double b) {
-    return a < b ? a : b;
-}
-static double dabs(double a) {
-    return a < 0 ? -a : a;
-}
-static double ceil_of(double value) { /* for the small positive numbers a layout counts */
-    double whole = (double)(int64_t)value;
-    return whole < value ? whole + 1 : whole;
-}
 static uint32_t ceil_sqrt(uint32_t n) {
     uint32_t r = 0;
     while (r * r < n)
@@ -453,7 +441,7 @@ static size arrange_regions(layout *l, uint32_t c, const size *sizes) {
         for (uint32_t i = 0; i < columns; i++)
             column_w[i] = 0;
         for (uint32_t i = 0; i < n; i++)
-            column_w[i % columns] = dmax(column_w[i % columns], sizes[l->kids[first + i]].w);
+            column_w[i % columns] = ta_diagram_max(column_w[i % columns], sizes[l->kids[first + i]].w);
         double grid = sp->node * (columns - 1);
         for (uint32_t i = 0; i < columns; i++)
             grid += column_w[i];
@@ -465,7 +453,7 @@ static size arrange_regions(layout *l, uint32_t c, const size *sizes) {
     for (uint32_t i = 0; i < rows; i++)
         row_h[i] = 0;
     for (uint32_t i = 0; i < n; i++)
-        row_h[i / columns] = dmax(row_h[i / columns], sizes[l->kids[first + i]].h);
+        row_h[i / columns] = ta_diagram_max(row_h[i / columns], sizes[l->kids[first + i]].h);
     for (uint32_t i = 0; i < n; i++) {
         uint32_t k = l->kids[first + i], ci = i % columns, ri = i / columns;
         double x = 0, y = 0;
@@ -474,7 +462,7 @@ static size arrange_regions(layout *l, uint32_t c, const size *sizes) {
         for (uint32_t j = 0; j < ri; j++)
             y += row_h[j] + sp->node;
         /* regions fill their grid cell, so the dashed separators line up */
-        l->local[k] = (rect){x, y, dmax(sizes[k].w, column_w[ci]), dmax(sizes[k].h, row_h[ri])};
+        l->local[k] = (rect){x, y, ta_diagram_max(sizes[k].w, column_w[ci]), ta_diagram_max(sizes[k].h, row_h[ri])};
     }
     /* transitions between regions run along lanes below the grid */
     uint32_t lanes = 0;
@@ -578,13 +566,25 @@ static void settle(layout *l, container *info, uint32_t layer, const double *des
     for (uint32_t i = 0; i < info->layer_count[layer]; i++) {
         uint32_t index = layer_nodes(info, layer)[i];
         lnode *node = node_of(info, index);
-        node->y = dmax(has[index] ? desired[index] : node->y, previous_end);
+        node->y = ta_diagram_max(has[index] ? desired[index] : node->y, previous_end);
         previous_end = node->y + node->h + (node->state == TA_NIL ? l->sp.edge : l->sp.node);
     }
 }
 
 static double center(const lnode *node) {
     return node->y + node->h / 2;
+}
+
+/* Where a node's ports are centred, from its top: a container's far and near sides keep their
+ * ports clear of its header band when layers run right (ports, below), so its edges leave
+ * from the middle of what is below the header; a leaf's and a dummy's from their middle. A
+ * node aligned on its neighbours' ports, not their boxes, gets its edges straight. */
+static double port_offset(const layout *l, const lnode *node) {
+    double header = node->state != TA_NIL && !l->down ? l->containers[node->state].header : 0;
+    return header + (node->h - header) / 2;
+}
+static double port_center(const layout *l, const lnode *node) {
+    return node->y + port_offset(l, node);
 }
 
 static size arrange_layers(layout *l, uint32_t c, const size *sizes) {
@@ -699,7 +699,7 @@ static size arrange_layers(layout *l, uint32_t c, const size *sizes) {
             lnode *dummy = node_of(info, d);
             dummy->state = TA_NIL;
             dummy->w = 0;
-            dummy->h = sp->edge * dmin(3, e.weight);
+            dummy->h = sp->edge * ta_diagram_min(3, e.weight);
             dummy->layer = layer;
             made->count++;
             s.list[s.count++] = (ledge){previous, d, e.weight};
@@ -818,9 +818,9 @@ static size arrange_layers(layout *l, uint32_t c, const size *sizes) {
         if (!outgoing_set[i]) continue;
         lnode *node = node_of(info, i);
         double need = outgoing[i];
-        double room = down ? dmax(node->h, label_row) : big;
-        if (down && need + sp->label > room) label_rows[i] = ceil_of((need + sp->label) / room);
-        double want = dmin(need + sp->label, room);
+        double room = down ? ta_diagram_max(node->h, label_row) : big;
+        if (down && need + sp->label > room) label_rows[i] = ta_diagram_ceil((need + sp->label) / room);
+        double want = ta_diagram_min(need + sp->label, room);
         if (want > node->h) node->h = want;
     }
 
@@ -848,7 +848,7 @@ static size arrange_layers(layout *l, uint32_t c, const size *sizes) {
                 /* a self loop reaches into the gap after its box, its label straddling the
                  * loop's far side (down: across the loop's far side; right: beside it) */
                 if (self_loop(t, target) && na->layer < layer_count - 1)
-                    info->gap_label[na->layer] = dmax(info->gap_label[na->layer],
+                    info->gap_label[na->layer] = ta_diagram_max(info->gap_label[na->layer],
                                                       self_out * sp->edge + label_along(l, ti) / (down ? 2 : 1));
                 continue;
             }
@@ -857,13 +857,13 @@ static size arrange_layers(layout *l, uint32_t c, const size *sizes) {
                 uint32_t lo = na->layer < nb->layer ? na->layer : nb->layer;
                 uint32_t hi = na->layer < nb->layer ? nb->layer : na->layer;
                 int64_t gap = nb->layer > na->layer ? (int64_t)na->layer : (int64_t)na->layer - 1;
-                if (gap >= 0) info->gap_label[gap] = dmax(info->gap_label[gap], stacked);
+                if (gap >= 0) info->gap_label[gap] = ta_diagram_max(info->gap_label[gap], stacked);
                 for (uint32_t g = lo; g < hi; g++)
                     info->gap_channels[g]++;
             } else if (na->layer < layer_count - 1) {
                 /* same layer: a short loop through the gap after it (or the right margin) */
                 info->gap_channels[na->layer]++;
-                info->gap_label[na->layer] = dmax(info->gap_label[na->layer], stacked);
+                info->gap_label[na->layer] = ta_diagram_max(info->gap_label[na->layer], stacked);
             } else
                 info->right_margin++;
         }
@@ -876,11 +876,11 @@ static size arrange_layers(layout *l, uint32_t c, const size *sizes) {
     for (uint32_t layer = 0; layer < layer_count; layer++) {
         double w = 0;
         for (uint32_t i = 0; i < info->layer_count[layer]; i++)
-            w = dmax(w, node_of(info, layer_nodes(info, layer)[i])->w);
+            w = ta_diagram_max(w, node_of(info, layer_nodes(info, layer)[i])->w);
         info->layer_x[layer] = x;
         info->layer_w[layer] = w;
         if (layer < layer_count - 1)
-            x += w + dmax(sp->layer, info->gap_label[layer] + (info->gap_channels[layer] + 1) * sp->edge);
+            x += w + ta_diagram_max(sp->layer, info->gap_label[layer] + (info->gap_channels[layer] + 1) * sp->edge);
         else
             x += w;
     }
@@ -908,10 +908,10 @@ static size arrange_layers(layout *l, uint32_t c, const size *sizes) {
                 double sum = 0, w = 0;
                 for (uint32_t j = 0; j < count; j++) {
                     const ledge *segment = &s.list[list[j]];
-                    sum += center(node_of(info, forward ? segment->from : segment->to)) * segment->weight;
+                    sum += port_center(l, node_of(info, forward ? segment->from : segment->to)) * segment->weight;
                     w += segment->weight;
                 }
-                key[index] = sum / w - node_of(info, index)->h / 2;
+                key[index] = sum / w - port_offset(l, node_of(info, index));
             }
             settle(l, info, layer, key, has);
         }
@@ -919,7 +919,8 @@ static size arrange_layers(layout *l, uint32_t c, const size *sizes) {
     /* long-edge corridors: dummies lie on the straight line between their chain's ends */
     for (uint32_t i = 0; i < info->chain_count; i++) {
         const chain *found = &info->chains[i];
-        double y0 = center(node_of(info, l->slot[found->from])), y1 = center(node_of(info, l->slot[found->to]));
+        double y0 = port_center(l, node_of(info, l->slot[found->from]));
+        double y1 = port_center(l, node_of(info, l->slot[found->to]));
         for (uint32_t d = 0; d < found->count; d++) {
             lnode *dummy = node_of(info, found->first + d);
             double f = (double)(d + 1) / (double)(found->count + 1);
@@ -947,7 +948,7 @@ static size arrange_layers(layout *l, uint32_t c, const size *sizes) {
     }
     double min_y = big;
     for (uint32_t i = 0; i < info->node_count; i++)
-        min_y = dmin(min_y, node_of(info, i)->y);
+        min_y = ta_diagram_min(min_y, node_of(info, i)->y);
     if (!info->node_count) min_y = 0;
     /* boxes start at the beginning of their layer; dummies keep to the middle, where the corridor runs */
     double canon_h = 0;
@@ -956,7 +957,7 @@ static size arrange_layers(layout *l, uint32_t c, const size *sizes) {
         node->y -= min_y;
         node->x = info->layer_x[node->layer] +
                   (node->state == TA_NIL ? (info->layer_w[node->layer] - node->w) / 2 : 0);
-        canon_h = dmax(canon_h, node->y + node->h);
+        canon_h = ta_diagram_max(canon_h, node->y + node->h);
     }
     info->canon_h = canon_h;
     for (uint32_t i = 0; i < kid_count; i++) {
@@ -1005,7 +1006,7 @@ static void layout_containers(layout *l) {
         info->content = (point){sp->padding, info->header + sp->padding};
         size content = info->kind == CONTAINER_PARALLEL ? arrange_regions(l, c, sizes) : arrange_layers(l, c, sizes);
         double min_w = state->kind == TA_DIAGRAM_STATE_ROOT ? 0 : head.w;
-        info->whole = (size){dmax(min_w, content.w) + 2 * sp->padding, info->header + content.h + 2 * sp->padding};
+        info->whole = (size){ta_diagram_max(min_w, content.w) + 2 * sp->padding, info->header + content.h + 2 * sp->padding};
         sizes[c] = info->whole;
     }
 }
@@ -1229,16 +1230,16 @@ static void ports(router *r) {
         int has_info = info->kind != CONTAINER_NONE;
         /* on containers, keep ports clear of the header band */
         double across = has_info && !down ? info->header : 0, along = has_info && down ? info->header : 0;
-        double span = dmax(0, side == SIDE_BOTTOM ? rr.w - along : rr.h - across);
+        double span = ta_diagram_max(0, side == SIDE_BOTTOM ? rr.w - along : rr.h - across);
         double start = side == SIDE_BOTTOM ? rr.x + along : rr.y + across;
         double total = 0, loops = 0;
         uint32_t others = 0;
         int any_room = 0;
         for (uint32_t i = 0; i < count; i++) {
             attachment *a = &r->attachments[list[i]];
-            total += dmax(a->room, sp->edge);
+            total += ta_diagram_max(a->room, sp->edge);
             if (a->loop)
-                loops += dmax(a->room, sp->edge);
+                loops += ta_diagram_max(a->room, sp->edge);
             else
                 others++;
             any_room |= a->room > 0;
@@ -1252,7 +1253,7 @@ static void ports(router *r) {
             double x = start + (span - total) / 2;
             for (uint32_t i = 0; i < count; i++) {
                 attachment *a = &r->attachments[list[i]];
-                double room = shared && !a->loop ? (span - loops) / others : dmax(a->room, sp->edge);
+                double room = shared && !a->loop ? (span - loops) / others : ta_diagram_max(a->room, sp->edge);
                 a->at = x + room / 2;
                 a->slot = room;
                 x += room;
@@ -1280,14 +1281,14 @@ static void ports(router *r) {
             attachment *a = &r->attachments[list[i]];
             if (!a->arrives) continue;
             double want = a->arrives == 1 ? a->arrive_at : r->attachments[a->arrive_from].at;
-            double lo = dmax(start + inset, i > 0 ? r->attachments[list[i - 1]].at + sp->edge : -big);
-            double hi = dmin(start + span - inset, i + 1 < count ? r->attachments[list[i + 1]].at - sp->edge : big);
-            if (lo <= hi) a->at = dmin(hi, dmax(lo, want));
+            double lo = ta_diagram_max(start + inset, i > 0 ? r->attachments[list[i - 1]].at + sp->edge : -big);
+            double hi = ta_diagram_min(start + span - inset, i + 1 < count ? r->attachments[list[i + 1]].at - sp->edge : big);
+            if (lo <= hi) a->at = ta_diagram_min(hi, ta_diagram_max(lo, want));
             /* still short: the port it leaves from slides within its slot to meet it */
-            if (a->arrives == 2 && dabs(a->at - want) > 0.5 && !is_history(l, r->attachments[a->arrive_from].box)) {
+            if (a->arrives == 2 && ta_diagram_abs(a->at - want) > 0.5 && !is_history(l, r->attachments[a->arrive_from].box)) {
                 attachment *from = &r->attachments[a->arrive_from];
-                double half = dmax(0, (from->slot - sp->edge) / 2);
-                from->at = dmin(from->at + half, dmax(from->at - half, a->at));
+                double half = ta_diagram_max(0, (from->slot - sp->edge) / 2);
+                from->at = ta_diagram_min(from->at + half, ta_diagram_max(from->at - half, a->at));
             }
         }
     }
@@ -1383,10 +1384,10 @@ static void channels(router *r) {
             if (r->pendings[i].route == ROUTE_REGIONS && r->pendings[i].container == c) list[count++] = &r->pendings[i];
         for (uint32_t i = 1; i < count; i++) {
             pending *moving = list[i];
-            double moving_key = dabs(center_x(l, moving->from) - center_x(l, moving->to));
+            double moving_key = ta_diagram_abs(center_x(l, moving->from) - center_x(l, moving->to));
             uint32_t j = i;
             for (; j > 0; j--) {
-                double key = dabs(center_x(l, list[j - 1]->from) - center_x(l, list[j - 1]->to));
+                double key = ta_diagram_abs(center_x(l, list[j - 1]->from) - center_x(l, list[j - 1]->to));
                 if (key < moving_key || (key == moving_key && list[j - 1]->transition <= moving->transition)) break;
                 list[j] = list[j - 1];
             }
@@ -1430,7 +1431,7 @@ static double gutter(router *r, uint32_t parent, double y, double *offset) {
     double top = content_origin(l, parent).y - l->sp.padding / 2;
     double bottom = pr.y + pr.h - l->sp.padding / 2;
     *offset = l->sp.edge * (0.6 + (i % 3) * 0.4);
-    return dabs(y - top) <= dabs(y - bottom) ? top : bottom;
+    return ta_diagram_abs(y - top) <= ta_diagram_abs(y - bottom) ? top : bottom;
 }
 
 typedef struct way {
@@ -1518,24 +1519,24 @@ static uint32_t simplify(point *p, uint32_t count) {
     for (uint32_t i = 1; i < count; i++)
         for (int axis = 0; axis < 2; axis++) {
             double *at = axis ? &p[i].y : &p[i].x, *before = axis ? &p[i - 1].y : &p[i - 1].x;
-            double d = dabs(*at - *before);
+            double d = ta_diagram_abs(*at - *before);
             if (!(d > 0.01 && d < 1)) continue;
             double old = *at;
             for (uint32_t j = i; j < count; j++) {
                 double *v = axis ? &p[j].y : &p[j].x;
-                if (dabs(*v - old) >= 0.01) break;
+                if (ta_diagram_abs(*v - old) >= 0.01) break;
                 *v = *before;
             }
         }
     uint32_t out = 0;
     for (uint32_t i = 0; i < count; i++) {
         point q = p[i];
-        if (out && dabs(p[out - 1].x - q.x) < 0.01 && dabs(p[out - 1].y - q.y) < 0.01) continue;
+        if (out && ta_diagram_abs(p[out - 1].x - q.x) < 0.01 && ta_diagram_abs(p[out - 1].y - q.y) < 0.01) continue;
         p[out++] = q;
         while (out >= 3) {
             point a = p[out - 3], b = p[out - 2], c = p[out - 1];
-            int collinear = (dabs(a.x - b.x) < 0.01 && dabs(b.x - c.x) < 0.01) ||
-                            (dabs(a.y - b.y) < 0.01 && dabs(b.y - c.y) < 0.01);
+            int collinear = (ta_diagram_abs(a.x - b.x) < 0.01 && ta_diagram_abs(b.x - c.x) < 0.01) ||
+                            (ta_diagram_abs(a.y - b.y) < 0.01 && ta_diagram_abs(b.y - c.y) < 0.01);
             if (!collinear) break;
             p[out - 2] = p[out - 1];
             out--;
@@ -1547,7 +1548,7 @@ static uint32_t simplify(point *p, uint32_t count) {
 /* the square of the distance (the nearest segment is all that is asked) */
 static double distance_to_segment(point p, point a, point b) {
     double dx = b.x - a.x, dy = b.y - a.y, length = dx * dx + dy * dy;
-    double t = length != 0 ? dmax(0, dmin(1, ((p.x - a.x) * dx + (p.y - a.y) * dy) / length)) : 0;
+    double t = length != 0 ? ta_diagram_max(0, ta_diagram_min(1, ((p.x - a.x) * dx + (p.y - a.y) * dy) / length)) : 0;
     double ex = p.x - (a.x + t * dx), ey = p.y - (a.y + t * dy);
     return ex * ex + ey * ey;
 }
@@ -1614,7 +1615,7 @@ static void route_one(router *r, const pending *p, routed *out, points *all) {
         exit_points(r, (way){p->from, child_of(l, p->to, p->from), 1}, (point){s.x + s.w, r->attachments[p->start].at},
                     pts);
         if (l->failed) return;
-        points_push(l, pts, (point){t.x + t.w - 2, pts->data[pts->length - 1].y});
+        points_push(l, pts, (point){t.x + t.w, pts->data[pts->length - 1].y}); /* onto its border, from inside */
         break;
     }
     case ROUTE_TO_DESCENDANT: {
@@ -1629,7 +1630,7 @@ static void route_one(router *r, const pending *p, routed *out, points *all) {
         double xg = fi->kind == CONTAINER_PARALLEL
                         ? first.x - sp->edge
                         : content_origin(l, p->from).x + fi->layer_x[layer_of(l, p->from, b)] - sp->edge;
-        points_push(l, pts, (point){s.x + sp->padding / 3, gy});
+        points_push(l, pts, (point){s.x, gy}); /* from its own border */
         points_push(l, pts, (point){xg, gy});
         points_push(l, pts, (point){xg, first.y});
         for (uint32_t i = 0; i < inn.length; i++)
@@ -1640,7 +1641,7 @@ static void route_one(router *r, const pending *p, routed *out, points *all) {
         double reach = sp->edge * self_out;
         const attachment *a = &r->attachments[p->start];
         /* the loop's ends, as far apart as its label needs, within its slot */
-        double half = dmax(sp->edge / 2, dmin(label_canon(l, p->transition).h + sp->label, a->slot - sp->edge) / 2);
+        double half = ta_diagram_max(sp->edge / 2, ta_diagram_min(label_canon(l, p->transition).h + sp->label, a->slot - sp->edge) / 2);
         double ya = a->at - half, yb = a->at + half;
         points_push(l, pts, (point){s.x + s.w, ya});
         points_push(l, pts, (point){s.x + s.w + reach, ya});
@@ -1708,7 +1709,7 @@ static int is_free(const labeller *b, rect r) {
 }
 
 static double segment_length(point a, point b) {
-    return dabs(b.x - a.x) + dabs(b.y - a.y);
+    return ta_diagram_abs(b.x - a.x) + ta_diagram_abs(b.y - a.y);
 }
 
 static rect rect_at(size s, double x, double y) {
@@ -1740,8 +1741,8 @@ static rect place_label(labeller *b, const ta_diagram_spacing *sp, const point *
     }
     for (uint32_t k = 0; k < n; k++) {
         point a = pts[order[k]], z = pts[order[k] + 1];
-        int horizontal = dabs(a.y - z.y) < 0.01;
-        double room = horizontal ? dabs(z.x - a.x) - s.w : dabs(z.y - a.y) - s.h;
+        int horizontal = ta_diagram_abs(a.y - z.y) < 0.01;
+        double room = horizontal ? ta_diagram_abs(z.x - a.x) - s.w : ta_diagram_abs(z.y - a.y) - s.h;
         if (room < 4) continue;
         /* an edge between layers that runs straight from its port: the label just past the port first */
         double fractions[6] = {0.5, 0.3, 0.7, 0.15, 0.85, 0};
@@ -1756,8 +1757,8 @@ static rect place_label(labeller *b, const ta_diagram_spacing *sp, const point *
             double t = fractions[i];
             rect r = rect_at(s, a.x + (z.x - a.x) * t, a.y + (z.y - a.y) * t);
             /* keep the label inside the segment's extent */
-            if (horizontal ? r.x < dmin(a.x, z.x) || r.x + r.w > dmax(a.x, z.x)
-                           : r.y < dmin(a.y, z.y) || r.y + r.h > dmax(a.y, z.y))
+            if (horizontal ? r.x < ta_diagram_min(a.x, z.x) || r.x + r.w > ta_diagram_max(a.x, z.x)
+                           : r.y < ta_diagram_min(a.y, z.y) || r.y + r.h > ta_diagram_max(a.y, z.y))
                 continue;
             if (is_free(b, inflate(r, 2))) return r;
         }
@@ -1765,8 +1766,8 @@ static rect place_label(labeller *b, const ta_diagram_spacing *sp, const point *
     /* beside a segment, just clear of the line: either side, preferred segment first */
     for (uint32_t k = 0; k < n; k++) {
         point a = pts[order[k]], z = pts[order[k] + 1];
-        int horizontal = dabs(a.y - z.y) < 0.01;
-        double room = horizontal ? dabs(z.x - a.x) - s.w : dabs(z.y - a.y) - s.h;
+        int horizontal = ta_diagram_abs(a.y - z.y) < 0.01;
+        double room = horizontal ? ta_diagram_abs(z.x - a.x) - s.w : ta_diagram_abs(z.y - a.y) - s.h;
         if (room < 0) continue;
         double offset = (horizontal ? s.h : s.w) / 2 + 4;
         static const double fractions[3] = {0.5, 0.3, 0.7};
@@ -1782,7 +1783,7 @@ static rect place_label(labeller *b, const ta_diagram_spacing *sp, const point *
     static const int steps[10] = {1, -1, 2, -2, 3, -3, 4, -4, 5, -5};
     for (uint32_t k = 0; k < n; k++) {
         point a = pts[order[k]], z = pts[order[k] + 1];
-        int horizontal = dabs(a.y - z.y) < 0.01;
+        int horizontal = ta_diagram_abs(a.y - z.y) < 0.01;
         double mx = (a.x + z.x) / 2, my = (a.y + z.y) / 2, step = (horizontal ? s.h : s.w) + 4;
         for (uint32_t i = 0; i < 10; i++) {
             rect r = horizontal ? rect_at(s, mx, my + steps[i] * step * 0.6) : rect_at(s, mx + steps[i] * step * 0.6, my);
@@ -1793,16 +1794,81 @@ static rect place_label(labeller *b, const ta_diagram_spacing *sp, const point *
     return rect_at(s, (a.x + z.x) / 2, (a.y + z.y) / 2);
 }
 
+/* ---- ends on the drawn outline ---------------------------------------------------------- */
+
+static point transposed(point p) {
+    return (point){p.y, p.x};
+}
+
+/* Where a route's end `at`, reached along the axis-parallel segment from `from`, meets the drawn
+ * outline of a circle or a pill: moved along that segment onto the outline, on the side `from`
+ * is. An end whose line misses the shape stays (ta_diagram_check then reports it). */
+typedef struct outline_end {
+    rect box;
+    uint32_t outline;
+    point at, from;
+} outline_end;
+
+static point onto_outline(outline_end e) {
+    if (e.outline == TA_DIAGRAM_OUTLINE_RECTANGLE) return e.at;
+    int vertical = ta_diagram_abs(e.at.x - e.from.x) < 0.01;
+    if (vertical) { /* solve it as a horizontal one */
+        e.box = (rect){e.box.y, e.box.x, e.box.h, e.box.w};
+        e.at = transposed(e.at);
+        e.from = transposed(e.from);
+    }
+    ta_diagram_spine spine = ta_diagram_spine_of(e.box, e.outline);
+    double y = e.at.y, near_x, far_x;
+    if (ta_diagram_abs(spine.a.y - spine.b.y) < 0.01) { /* the spine along the line */
+        double dy = y - spine.a.y;
+        if (ta_diagram_abs(dy) > spine.radius) return vertical ? transposed(e.at) : e.at;
+        double half = ta_diagram_root(spine.radius * spine.radius - dy * dy);
+        near_x = ta_diagram_min(spine.a.x, spine.b.x) - half;
+        far_x = ta_diagram_max(spine.a.x, spine.b.x) + half;
+    } else { /* the spine across it: the round end nearest the line, or the straight sides */
+        double top = ta_diagram_min(spine.a.y, spine.b.y), bottom = ta_diagram_max(spine.a.y, spine.b.y);
+        double nearest = y < top ? top : y > bottom ? bottom : y, dy = y - nearest;
+        if (ta_diagram_abs(dy) > spine.radius) return vertical ? transposed(e.at) : e.at;
+        double half = ta_diagram_root(spine.radius * spine.radius - dy * dy);
+        near_x = spine.a.x - half;
+        far_x = spine.a.x + half;
+    }
+    point moved = {e.from.x <= (near_x + far_x) / 2 ? near_x : far_x, y};
+    return vertical ? transposed(moved) : moved;
+}
+
+/* Every route that ends at a history state's circle or a final's pill ends on it, and one that
+ * leaves a circle leaves from it: its end moved along its last segment, so the arrow touches
+ * what is drawn. */
+static void ends_onto_outlines(const layout *l, ta_diagram_layout *out, point *pts) {
+    for (uint32_t i = 0; i < out->edge_count; i++) {
+        const ta_diagram_edge *edge = &out->edges[i];
+        if (edge->point_count < 2) continue;
+        point *p = &pts[edge->first_point];
+        uint32_t last = edge->point_count - 1;
+        uint32_t target = edge->target, source = l->chart->transitions[edge->transition].source;
+        p[last] = onto_outline((outline_end){l->abs[target], ta_diagram_outline_of(box_kind(l, target)), p[last], p[last - 1]});
+        p[0] = onto_outline((outline_end){l->abs[source], ta_diagram_outline_of(box_kind(l, source)), p[0], p[1]});
+    }
+    for (uint32_t i = 0; i < out->initial_count; i++) {
+        const ta_diagram_initial *marker = &out->initials[i];
+        point *p = &pts[marker->first_point];
+        uint32_t last = marker->point_count - 1;
+        p[last] = onto_outline((outline_end){l->abs[marker->target], ta_diagram_outline_of(box_kind(l, marker->target)),
+                                             p[last], p[last - 1]});
+    }
+}
+
 /* ---- contain ------------------------------------------------------------------------------ */
 
 typedef struct extent {
     double x0, y0, x1, y1;
 } extent;
 static void extend(extent *e, rect r) {
-    e->x0 = dmin(e->x0, r.x);
-    e->y0 = dmin(e->y0, r.y);
-    e->x1 = dmax(e->x1, r.x + r.w);
-    e->y1 = dmax(e->y1, r.y + r.h);
+    e->x0 = ta_diagram_min(e->x0, r.x);
+    e->y0 = ta_diagram_min(e->y0, r.y);
+    e->x1 = ta_diagram_max(e->x1, r.x + r.w);
+    e->y1 = ta_diagram_max(e->y1, r.y + r.h);
 }
 
 /* Edges routed around a container's outside, and their labels, can reach past the root's box:
@@ -1940,7 +2006,7 @@ static void route(layout *l, ta_diagram_layout *out, ta_diagram_box *boxes) {
             uint32_t to = l->chart->targets[cs->first_initial + j];
             if (!within(l, to, c) || to == c) continue;
             rect t = canonical(l, to);
-            double ty = t.y + dmin(t.h / 2, 16);
+            double ty = t.y + ta_diagram_min(t.h / 2, 16);
             point dot = {t.x - sp->edge * 1.6 - initial_dot / 2, ty};
             ta_diagram_initial *marker = &initials[initial_count++];
             marker->container = c;
@@ -1958,6 +2024,7 @@ static void route(layout *l, ta_diagram_layout *out, ta_diagram_box *boxes) {
     out->initials = initials;
     out->initial_count = initial_count;
     out->points = canonical_points.data;
+    ends_onto_outlines(l, out, canonical_points.data);
     contain(out, boxes, edges, initials, canonical_points.data);
 }
 

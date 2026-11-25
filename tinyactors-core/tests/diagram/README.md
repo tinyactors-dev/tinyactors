@@ -11,8 +11,22 @@ This corpus is the layout's reference. The layout was ported from scxmljs's
 `layoutChart` (`@tinyactors/scxmljs` 0.3.0, `src/view/layout.ts`), and on
 2026-11-25 the port gave that implementation's layout, box for box and route
 for route, for every chart of the repository scxmljs could read (223), given
-the same sizes; the answers here were written then. Nothing here depends on
-scxmljs any more: the layout is ours, and so is its suite.
+the same sizes. It has changed since, here only: a node is aligned on its
+neighbours' ports rather than their boxes' middles (a container's ports are
+below its header), and a route ends on the outline drawn, a final's pill or
+a history state's circle. Nothing here depends on scxmljs any more: the
+layout is ours, and so is its suite.
+
+## Problems
+
+Each answer ends with its drawing's problems (`ta_diagram_check`,
+docs/cli.md's "Graph"). `test_layout_corpus` requires none of the hard ones
+in any chart: an arrow off its box (`startDetached`, `endDetached`,
+`initialDetached`), a bent segment, a box outside its parent or over a
+sibling. The others (`notCentred`, `throughBox`, `arrowAlongSide`,
+`labelOverlap`, `labelOnBox`, `labelOnEdge`) are faults the layout still
+makes; they are part of the answers, so a change that adds one shows in the
+diff, and one that removes one is progress.
 
 ## Changing the layout
 
