@@ -558,7 +558,7 @@ static void request_run_host_stats(request *r, uint32_t map) {
     host_chart_stats(r->host, charts, count);
     cbor_output_head(&r->out, CBOR_MAJOR_MAP, 3);
     request_put_key(r, "host");
-    cbor_output_head(&r->out, CBOR_MAJOR_MAP, 11);
+    cbor_output_head(&r->out, CBOR_MAJOR_MAP, 14);
     request_put_key(r, "segments");
     cbor_output_uint(&r->out, stats.segments);
     request_put_key(r, "actors");
@@ -581,6 +581,12 @@ static void request_run_host_stats(request *r, uint32_t map) {
     cbor_output_uint(&r->out, stats.retired);
     request_put_key(r, "fuelClock");
     cbor_output_uint(&r->out, stats.fuel_clock);
+    request_put_key(r, "allocatedBytes");
+    cbor_output_uint(&r->out, stats.allocated_bytes);
+    request_put_key(r, "allocatedPeak");
+    cbor_output_uint(&r->out, stats.allocated_peak);
+    request_put_key(r, "allocations");
+    cbor_output_uint(&r->out, stats.allocations);
     request_put_key(r, "pools");
     cbor_output_head(&r->out, CBOR_MAJOR_ARRAY, stats.segments);
     for (uint32_t segment = 0, n = 0; n < stats.segments; segment++) {

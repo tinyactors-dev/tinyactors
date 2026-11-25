@@ -1,7 +1,8 @@
 # Memory accounting: core's costs from its definitions, the rest from counted allocations
 
 **Status:** Accepted (2026-11-25): the maintainer decided it (section 7);
-the work has not started (section 9 is its order).
+steps 1 to 4 of section 9 are done (section 10 records where the code
+differs from this text); steps 5 to 7 are not.
 **Touches:** tinyactors-core (`tools/layout`, `mise/tasks/layout`, the
 fast pass in `mise/tasks/test`, `src/host/host.c` at creation,
 `include/tinyactors/stats.h`, `docs/requests.md` `host.stats`,
@@ -383,6 +384,9 @@ alone):
   published table leaves the column out; (c) the binding's bytes from
   its row definitions, unchecked, which misses the writers. (b) is the
   one that adds no API.
+  **Decided (the maintainer, 2026-11-25): (b).** The binding's own byte
+  count appears only in the bindings' own tests, not in the published
+  table, and no public API is added for it.
 - **O2. A binding builds `ta-layout`.** Each binding's `AGENTS.md` says
   its build compiles its extension against core's amalgamation and runs
   no core task but `amalgamate`. Compiling core's `tools/layout/layout.c`
@@ -450,3 +454,50 @@ check-acronyms` at the root.
 Steps 2 and 4 change per-host costs, not the region's layout or
 per-actor costs, so the fast pass suffices; step 7 is the release-time
 rerun the root rules ask for.
+
+## 10. As built
+
+Where the code differs from the text above, the smallest sound choice,
+recorded here.
+
+- **The layout check (step 1).** Core's `mise run test` runs `mise run
+  layout`, which gained a `hibernated` line (an actor's records; its
+  instance goes back to the slab, its strings stay) and `--json` (the
+  document of `build/debuginfo/layout.json` on stdout, nothing else).
+  `ta-layout FILE [NAME=VALUE ...]` is the other mode: FILE a compiled
+  image, or an `.scxml` document it compiles; the capacities named as the
+  host config's `system` map names them (`maxActors`, `maxEvents`,
+  `maxTimers`, `workspaces`, `maxRequests`, `outbox`, `instanceBytes`,
+  `stringBytes`, `traceBytes`, `traceContexts`, `traceRules`,
+  `tracing=true|false`); it prints one line, `region <bytes>`, the
+  region of a segment with that config, the others at their defaults.
+  One config per run, not "at N and at 0 per thing": the examples size
+  more than one pool per row (an actor's row also sizes `maxEvents`), so
+  the program measuring runs it at N and at 0 and divides, as it does
+  with two hosts. The task checks this mode too: an actor's cost from
+  the regions of a file's chart at 2^16 and 2^17 actors. **O2:**
+  `tools/layout/layout.c` includes core's headers, or the
+  amalgamation's `tinyactors.h` and `tinyactors_runtime.h` when they are
+  on the include path (`__has_include`), and calls only
+  `ta_compile_charts`, `ta_compile_image`, `ta_compile_diagnostics`,
+  `ta_compile_free`, `ta_image_open` and `ta_system_layout`. Compiled
+  with the pinned clang against `mise run //tinyactors-core:amalgamate`'s
+  output, `-Wall -Wextra -Wconversion -Werror`, with
+  `tinyactors.c` and `tinyactors_runtime.c`, it builds and gives the same
+  numbers. A binding builds it so beside its extension
+  (`Toolchain::Target.host`, the C library allowed: a program, not the
+  extension) and runs it with an image file it writes.
+- **`host.stats` (step 2).** `allocatedBytes`, `allocatedPeak` and
+  `allocations` are the host's own: `allocations` counts the blocks the
+  allocator gave (refusals not counted), the host's own block included;
+  the peak starts at `sizeof *host`. The counting allocator is
+  `config.allocator` itself, set in `host_new` (which both
+  `ta_host_create` and `ta_host_restore` call) over the environment's,
+  kept in the host as `given`. The tests read `host_stats_get` from
+  `host/host_internal.h`, since `host.stats` allocates. The protocol
+  vectors of `host.stats` (tinyactors-test) carry the three keys as
+  wildcards. The run protocol's JSON Schema
+  (`tools/tinyactors/run.schema.json`, `host.stats.result`, which has
+  `additionalProperties: false`) was left to the session building
+  `tinyactors run`: it still lacks the three keys. No test checks a
+  result against it (the server checks params only).

@@ -165,6 +165,9 @@ TEST_UNUSED static ta_status host_stats_fill(ta_host *host, ta_host_stats *out) 
     out->migrated = ask_uint(&a, m, "migrated");
     out->retired = ask_uint(&a, m, "retired");
     out->fuel_clock = ask_uint(&a, m, "fuelClock");
+    out->allocated_bytes = ask_uint(&a, m, "allocatedBytes");
+    out->allocated_peak = ask_uint(&a, m, "allocatedPeak");
+    out->allocations = ask_uint(&a, m, "allocations");
     return TA_OK;
 }
 

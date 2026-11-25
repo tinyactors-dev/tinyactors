@@ -114,7 +114,8 @@ any one item of that type at that place.
 
 Tag 39999 is unassigned in IANA's CBOR tags registry, and core never writes
 it. Wildcards stand for: an error's `message` (for people, not to match on),
-`regionBytes`, `fuel` and `fuelClock` (they move with the layout and the
+`regionBytes`, `fuel`, `fuelClock` and the host's `allocatedBytes`,
+`allocatedPeak` and `allocations` (they move with the layout and the
 interpreter), the `actors` cursor (opaque), and a generated `traceparent`.
 Everything else is pinned: system ids, the trace seed, the clock.
 

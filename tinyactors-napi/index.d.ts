@@ -1273,6 +1273,13 @@ export interface HostStatsResult {
     readonly migrated: number;
     readonly retired: number;
     readonly fuelClock: number;
+    /** What the host holds through its allocator now: its own block, the
+     * regions, the images, its effects, outputs and tables. */
+    readonly allocatedBytes: number;
+    /** The most it held at once. */
+    readonly allocatedPeak: number;
+    /** The blocks it has allocated since it was made. */
+    readonly allocations: number;
   };
   /** One entry per live segment, in segment order. */
   readonly pools: readonly SegmentPools[];

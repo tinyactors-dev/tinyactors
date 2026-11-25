@@ -16,7 +16,13 @@
  *                was never refused: nothing lost or done twice. The fast
  *                pass refuses the first allocation of segment creation, of
  *                the sends to another system and of relocation; --full
- *                refuses every allocation of the run, one per run. */
+ *                refuses every allocation of the run, one per run.
+ *   counted      the host's own count of what it holds (host.stats'
+ *                allocatedBytes, read in C: the method itself allocates)
+ *                is what the allocator outside it counts, at every step of
+ *                the workload; a host with every pool sized allocates
+ *                nothing while it spawns and runs its actors; a hibernated
+ *                actor gives its instance's slab pages back. */
 #include "../harness/harness.h"
 #include "../support/compile_util.h"
 #include <tinyactors/datamodel_ecmascript.h>
@@ -24,6 +30,7 @@
 #include "../support/host_request.h"
 #include "../support/host_config.h"
 #include "../support/host_output.h"
+#include "host/host_internal.h" /* host_stats_get, host_segment_pools: read without allocating */
 
 #include <stdlib.h>
 #include <string.h>
@@ -235,6 +242,25 @@ static void collect(workload *w, ta_host *host) {
     ta_host_effects_ack(host);
 }
 
+/* What a host holds through its allocator, by its own count. */
+static ta_host_stats counted(const ta_host *host) {
+    ta_host_stats stats;
+    stats.size = sizeof stats;
+    host_stats_get(host, &stats);
+    return stats;
+}
+
+/* The hosts' own counts are what the allocator outside them counts: the
+ * workload's host, and `host` when it is another (a restored copy). */
+static void counts_agree(const workload *w, const ta_host *host) {
+    const test_memory *m = w->memory;
+    ta_host_stats stats = counted(w->host);
+    uint64_t bytes = stats.allocated_bytes;
+    CHECK(stats.allocated_peak >= stats.allocated_bytes && stats.allocated_peak <= m->peak_bytes);
+    if (host != w->host) bytes += counted(host).allocated_bytes;
+    CHECK_EQUAL(bytes, m->live_bytes);
+}
+
 /* Run until idle; a refusal must be TA_RUN_EXHAUSTED, and TA_RUN_EXHAUSTED a refusal. */
 static void run_idle(workload *w, ta_host *host) {
     test_memory *m = w->memory;
@@ -244,6 +270,7 @@ static void run_idle(workload *w, ta_host *host) {
         collect(w, host);
         CHECK(result.status != TA_RUN_FAULT);
         CHECK_EQUAL(m->failures != before, result.status == TA_RUN_EXHAUSTED);
+        counts_agree(w, host);
         if (result.status == TA_RUN_IDLE) return;
     }
     CHECK(0 && "the host did not become idle");
@@ -404,6 +431,7 @@ static void workload_run(workload *w) {
     ta_bytes written; /* the host's, until the ack */
     RETRY(m, TA_OK, ta_host_hibernate(w->host, workers[1], &written));
     length = output_copy(written, blob, sizeof blob);
+    counts_agree(w, w->host); /* the blob's block counted while it is lent */
     ta_host_effects_ack(w->host); /* the output is copied: its batch ends */
     RETRY(m, TA_OK, ta_host_wake(w->host, workers[1], (ta_bytes){blob, length}));
     run_idle(w, w->host);
@@ -411,6 +439,7 @@ static void workload_run(workload *w) {
     uint64_t cold[8];
     ta_host_sweep(w->host, 64, (ta_uint64_array){cold, 8});
     ta_host_sweep(w->host, 64, (ta_uint64_array){cold, 8});
+    counts_agree(w, w->host);
 
     /* restore: a second host from a snapshot of this one */
     m->phase = "restore";
@@ -470,7 +499,7 @@ static void workload_run(workload *w) {
         RETRY(m, TA_OK, host_stats_fill(w->host, &a));
         RETRY(m, TA_OK, host_stats_fill(restored, &b));
         CHECK(a.actors == b.actors && a.segments == b.segments);
-        run_idle(&copy, restored);
+        run_idle(&copy, restored); /* both hosts' counts against the one allocator */
         ta_host_free(restored);
     }
     CHECK_EQUAL(m->live_blocks, live); /* a refused restore left nothing behind either */
@@ -479,6 +508,8 @@ static void workload_run(workload *w) {
     free(hs);
     free(ds);
 
+    counts_agree(w, w->host);
+    CHECK(counted(w->host).allocations <= m->count - m->failures);
     m->phase = "free";
     ta_host_free(w->host);
     w->host = NULL;
@@ -815,9 +846,153 @@ static void test_pool_is_reclaimed_with_effects_pending(void) {
     CHECK(m.live_blocks == 0 && m.bad_frees == 0);
 }
 
+/* ---- the host's own count -------------------------------------------------------------------- */
+
+enum { COUNTED_ACTORS = 4096 };
+static const char counted_chart[] =
+    SC("counted", "ecmascript",
+       "initial='s'><datamodel><data id='n' expr='0'/><data id='list' expr='[1, 2, 3]'/>"
+       "</datamodel><state id='s'><transition event='tick'><assign location='n' expr='n + 1'/>"
+       "</transition></state>");
+
+/* A host sized for COUNTED_ACTORS of the counted chart, its image added. */
+static ta_host *counted_host(test_memory *m, const ta_datamodel_binding *binding, const ta_image *image) {
+    test_host_config config;
+    memset(&config, 0, sizeof config);
+    config.size = sizeof config;
+    config.system_id = (ta_string_view){"h", 1};
+    config.system.size = sizeof config.system;
+    config.system.max_actors = COUNTED_ACTORS;
+    config.system.max_events = 2 * COUNTED_ACTORS;
+    config.datamodels = binding;
+    config.datamodel_count = 1;
+    config.allocator = memory_allocator(m);
+    ta_host *host = NULL;
+    CHECK_EQUAL(test_host_new(&config, &host), TA_OK);
+    if (host) CHECK_EQUAL(ta_host_add_image(host, ta_image_bytes(image), NULL), TA_OK);
+    return host;
+}
+
+static void run_until_idle(ta_host *host) {
+    for (int round = 0; round < 1000; round++) {
+        ta_run result = ta_host_run(host, 1000000);
+        const ta_host_effect *effects;
+        while (ta_host_effects(host, &effects))
+            ta_host_effects_ack(host);
+        if (result.status == TA_RUN_IDLE) return;
+        CHECK(result.status == TA_RUN_EFFECTS || result.status == TA_RUN_EFFECTS_FULL ||
+              result.status == TA_RUN_YIELDED);
+    }
+    CHECK(0 && "the host did not become idle");
+}
+
+/* A host whose pools are sized for its actors calls its allocator for
+ * none of them: spawning, running and an event to each are inside the
+ * region it allocated when the image was added. */
+static void test_counted_sized_host_allocates_nothing(void) {
+    size_t length = 0;
+    void *bytes = compile_chart("counted.scxml", counted_chart, NULL, &length, 0);
+    ta_image image;
+    CHECK(bytes != NULL);
+    CHECK_EQUAL(ta_image_open((ta_bytes){bytes, length}, &image), TA_OK);
+    ta_datamodel_ecmascript *ecmascript = ta_datamodel_ecmascript_new(NULL);
+    ta_datamodel_binding binding = ta_datamodel_ecmascript_binding(ecmascript);
+    test_memory m;
+    memset(&m, 0, sizeof m);
+    ta_host *host = counted_host(&m, &binding, &image);
+    if (!host) {
+        free(bytes);
+        return;
+    }
+    run_until_idle(host);
+    ta_host_stats before = counted(host);
+    uint64_t calls = m.count;
+    CHECK_EQUAL(before.allocated_bytes, m.live_bytes);
+    CHECK_EQUAL(before.allocations, m.count);
+    ta_host_chart_ref ref;
+    CHECK_EQUAL(ta_host_chart(host, (ta_string_view){"counted", 7}, &ref), TA_OK);
+    static uint64_t sessions[COUNTED_ACTORS];
+    for (uint32_t i = 0; i < COUNTED_ACTORS; i++)
+        CHECK_EQUAL(ta_host_spawn(host,
+                                  &(ta_spawn){ref.segment, ref.chart, (ta_string_view){0, 0}, 0,
+                                              (ta_string_view){0, 0}},
+                                  &sessions[i]),
+                    TA_OK);
+    run_until_idle(host);
+    for (uint32_t i = 0; i < COUNTED_ACTORS; i++) {
+        ta_event_in event;
+        memset(&event, 0, sizeof event);
+        event.size = sizeof event;
+        event.name = (ta_string_view){"tick", 4};
+        event.session = sessions[i];
+        CHECK_EQUAL(ta_host_send(host, &event), TA_OK);
+    }
+    run_until_idle(host);
+    ta_host_stats after = counted(host);
+    CHECK_EQUAL(m.count, calls);
+    CHECK_EQUAL(after.allocations, before.allocations);
+    CHECK_EQUAL(after.allocated_bytes, before.allocated_bytes);
+    CHECK_EQUAL(after.actors, COUNTED_ACTORS);
+    ta_host_free(host);
+    CHECK(m.live_blocks == 0 && m.live_bytes == 0 && m.bad_frees == 0);
+    ta_datamodel_ecmascript_free(ecmascript);
+    free(bytes);
+}
+
+/* A hibernated actor keeps its records and gives its instance back: the
+ * slab's used pages fall to what they were before its actors were
+ * spawned, while the host's count follows the blobs it lends and takes back. */
+static void test_counted_hibernation_gives_back_the_instance(void) {
+    size_t length = 0;
+    void *bytes = compile_chart("counted.scxml", counted_chart, NULL, &length, 0);
+    ta_image image;
+    CHECK(bytes != NULL);
+    CHECK_EQUAL(ta_image_open((ta_bytes){bytes, length}, &image), TA_OK);
+    ta_datamodel_ecmascript *ecmascript = ta_datamodel_ecmascript_new(NULL);
+    ta_datamodel_binding binding = ta_datamodel_ecmascript_binding(ecmascript);
+    test_memory m;
+    memset(&m, 0, sizeof m);
+    ta_host *host = counted_host(&m, &binding, &image);
+    if (!host) {
+        free(bytes);
+        return;
+    }
+    ta_system_stats empty, spawned, hibernated;
+    CHECK(host_segment_pools(host, 0, &empty));
+    ta_host_chart_ref ref;
+    CHECK_EQUAL(ta_host_chart(host, (ta_string_view){"counted", 7}, &ref), TA_OK);
+    static uint64_t sessions[COUNTED_ACTORS];
+    for (uint32_t i = 0; i < COUNTED_ACTORS; i++)
+        CHECK_EQUAL(ta_host_spawn(host,
+                                  &(ta_spawn){ref.segment, ref.chart, (ta_string_view){0, 0}, 0,
+                                              (ta_string_view){0, 0}},
+                                  &sessions[i]),
+                    TA_OK);
+    run_until_idle(host);
+    CHECK(host_segment_pools(host, 0, &spawned));
+    CHECK(spawned.slab_pages > empty.slab_pages);
+    for (uint32_t i = 0; i < COUNTED_ACTORS; i++) {
+        ta_bytes blob;
+        CHECK_EQUAL(ta_host_hibernate(host, sessions[i], &blob), TA_OK);
+        CHECK_EQUAL(counted(host).allocated_bytes, m.live_bytes);
+        ta_host_effects_ack(host);
+    }
+    CHECK(host_segment_pools(host, 0, &hibernated));
+    CHECK_EQUAL(hibernated.hibernated, COUNTED_ACTORS);
+    CHECK_EQUAL(hibernated.actors, COUNTED_ACTORS); /* the records stay */
+    CHECK_EQUAL(hibernated.slab_pages, empty.slab_pages);
+    CHECK_EQUAL(counted(host).allocated_bytes, m.live_bytes);
+    ta_host_free(host);
+    CHECK(m.live_blocks == 0 && m.live_bytes == 0 && m.bad_frees == 0);
+    ta_datamodel_ecmascript_free(ecmascript);
+    free(bytes);
+}
+
 int main(int argc, char **argv) {
     full_mode = argc > 1 && strcmp(argv[1], "--full") == 0;
     RUN(test_accounting);
+    RUN(test_counted_sized_host_allocates_nothing);
+    RUN(test_counted_hibernation_gives_back_the_instance);
     RUN(test_fixed_arena);
     RUN(test_published_effects_stay_valid);
     RUN(test_pool_is_reclaimed_with_effects_pending);

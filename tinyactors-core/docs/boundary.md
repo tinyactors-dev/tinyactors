@@ -437,7 +437,8 @@ image), with `ta_host_free`, and for every segment a failed restore left.
 ECMAScript datamodel's `chart_by_hash` compares the hash stored at attach,
 among attached charts, and never reads an idle chart's image, which the
 host may have freed. `host.stats`' `regionBytes` counts regions, not image
-copies. The binding keeps nothing.
+copies; its `allocatedBytes` counts both, and everything else the host
+holds through the environment's allocator. The binding keeps nothing.
 
 | Object | Owner | Created | Read | Ends |
 |---|---|---|---|---|

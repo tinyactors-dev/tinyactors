@@ -85,6 +85,12 @@ typedef struct ta_host_stats {
     /* the fuel clock every segment's trace records are stamped with: note it,
      * with the wall clock, before and after each ta_host_run (tinyactors/otlp.h) */
     uint64_t fuel_clock;
+    /* What the host holds through its environment's allocator now, the
+     * host's own block and its segments' regions included, the most it held
+     * at once, and the blocks it has allocated since it was made. Allocated
+     * at creation, growth and close, and by the calls that write an output
+     * (host.stats, the metrics), never per event. */
+    uint64_t allocated_bytes, allocated_peak, allocations;
 } ta_host_stats;
 
 #ifdef __cplusplus

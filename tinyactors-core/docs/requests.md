@@ -190,9 +190,18 @@ versions included. No params.
 
 Result: `{"host": {...}, "pools": [...], "charts": [...]}`:
 - `host`: `segments`, `actors`, `hibernated`, `runnable`, `migrations`,
-  `regionBytes`, `delivered`, `routed`, `migrated`, `retired`, `fuelClock`.
+  `regionBytes`, `delivered`, `routed`, `migrated`, `retired`, `fuelClock`,
+  `allocatedBytes`, `allocatedPeak`, `allocations`.
   `regionBytes` sums the live segments' regions; the host's copies of
-  their images (`ta_host_add_image`) are not in it.
+  their images (`ta_host_add_image`) are not in it. `allocatedBytes` is
+  every byte the host holds through its environment's allocator now: its
+  own block, the regions, the image copies, its effects, outputs and
+  tables; `allocatedBytes - regionBytes` is what the host holds beside
+  its regions. `allocatedPeak` is the most it held at once (a region
+  that grows is held twice while it moves), and `allocations` the blocks
+  it has allocated since it was made. The host allocates when it is made,
+  when a pool or table grows, and in the calls that write an output (this
+  method, the metrics), never per event.
 - `pools`: one map per live segment, in segment order: `segment` (its
   index, as `ta_host_add_image` returned it), then `actors`, `events`,
   `timers`, `workspaces`, `requests` and `slabBytes` (the slab of
@@ -212,7 +221,7 @@ All the numbers are unsigned integers.
 {"id": 1, "method": "host.stats"}
 → {"id": 1, "result": {"host": {"segments": 1, "actors": 1, "hibernated": 0, "runnable": 0, "migrations": 0,
    "regionBytes": 131072, "delivered": 0, "routed": 0, "migrated": 0, "retired": 0,
-   "fuelClock": 3},
+   "fuelClock": 3, "allocatedBytes": 268448, "allocatedPeak": 268448, "allocations": 9},
    "pools": [{"segment": 0, "actors": {"capacity": 64, "used": 1, "highWater": 1},
    "events": {"capacity": 256, "used": 0, "highWater": 1}, "timers": {"capacity": 64, "used": 0, "highWater": 0},
    "workspaces": {"capacity": 4, "used": 0, "highWater": 1}, "requests": {"capacity": 16, "used": 0, "highWater": 0},

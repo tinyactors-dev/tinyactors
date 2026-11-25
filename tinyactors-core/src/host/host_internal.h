@@ -140,7 +140,14 @@ typedef struct host_watch {
 } host_watch;
 
 struct ta_host {
-    host_config config;
+    host_config config; /* its allocator is the counting one over `given` (host_new) */
+    /* The allocator the environment gave, and what the host holds through
+     * it: every block but the host itself goes through config.allocator,
+     * which counts it here (host_counted_alloc, host_counted_free); the host
+     * itself is counted from the start. A reading (host.stats), not a limit:
+     * the counting changes no outcome. */
+    ta_allocator given;
+    uint64_t allocated_bytes, allocated_peak, allocations;
     /* inside ta_system_run, or inside a datamodel the host calls outside a
      * run (host_guard), where a datamodel may call back: only the inputs
      * (spawn, send, send_many, terminate) and lookups are taken, nothing

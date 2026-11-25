@@ -3593,11 +3593,23 @@
         {
           "name": "fuel_clock",
           "type": "uint64_t"
+        },
+        {
+          "name": "allocated_bytes",
+          "type": "uint64_t"
+        },
+        {
+          "name": "allocated_peak",
+          "type": "uint64_t"
+        },
+        {
+          "name": "allocations",
+          "type": "uint64_t"
         }
       ],
       "layout": {
         "x86_64": {
-          "size": 72,
+          "size": 96,
           "align": 8,
           "offsets": {
             "size": 0,
@@ -3611,11 +3623,14 @@
             "routed": 40,
             "migrated": 48,
             "retired": 56,
-            "fuel_clock": 64
+            "fuel_clock": 64,
+            "allocated_bytes": 72,
+            "allocated_peak": 80,
+            "allocations": 88
           }
         },
         "aarch64": {
-          "size": 72,
+          "size": 96,
           "align": 8,
           "offsets": {
             "size": 0,
@@ -3629,11 +3644,14 @@
             "routed": 40,
             "migrated": 48,
             "retired": 56,
-            "fuel_clock": 64
+            "fuel_clock": 64,
+            "allocated_bytes": 72,
+            "allocated_peak": 80,
+            "allocations": 88
           }
         },
         "wasm32": {
-          "size": 72,
+          "size": 96,
           "align": 8,
           "offsets": {
             "size": 0,
@@ -3647,7 +3665,10 @@
             "routed": 40,
             "migrated": 48,
             "retired": 56,
-            "fuel_clock": 64
+            "fuel_clock": 64,
+            "allocated_bytes": 72,
+            "allocated_peak": 80,
+            "allocations": 88
           }
         }
       }

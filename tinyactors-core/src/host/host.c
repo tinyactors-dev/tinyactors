@@ -34,6 +34,27 @@ void host_free(ta_host *host, void *pointer, size_t size) {
     if (pointer) host->config.allocator.free(host->config.allocator.context, pointer, size);
 }
 
+/* The host's config.allocator: the environment's, counted (ta_host). Every
+ * block the host allocates after its own goes through these, from whatever
+ * path (host_alloc, the outputs arena, the blob scratch, the session maps).
+ * Not per event: the host allocates at creation, growth and close, and in
+ * the calls that write an output. */
+static void *host_counted_alloc(void *context, size_t size, size_t align) {
+    ta_host *host = (ta_host *)context;
+    void *pointer = host->given.alloc(host->given.context, size, align);
+    if (!pointer) return pointer;
+    host->allocations++;
+    host->allocated_bytes += size;
+    if (host->allocated_bytes > host->allocated_peak) host->allocated_peak = host->allocated_bytes;
+    return pointer;
+}
+
+static void host_counted_free(void *context, void *pointer, size_t size) {
+    ta_host *host = (ta_host *)context;
+    if (pointer) host->allocated_bytes -= size;
+    host->given.free(host->given.context, pointer, size);
+}
+
 /* The host's outputs grow through its allocator, also from system code
  * (ta_actor_write_hibernation, ta_actor_write_export): this and blob_scratch
  * are the only ways to them, and both are taken by a call the caller made
@@ -427,6 +448,11 @@ static ta_status host_new(const host_config *config, ta_host **out) {
     if (!host) return TA_ERROR_NO_MEMORY;
     ta_memset(host, 0, sizeof *host);
     host->config = *config;
+    /* from here every block is counted; the host itself is the first */
+    host->given = config->allocator;
+    host->config.allocator = (ta_allocator){host, host_counted_alloc, host_counted_free};
+    host->allocations = 1;
+    host->allocated_bytes = host->allocated_peak = sizeof *host;
     /* the effective config: the defaults filled in by the code that fills
      * them for a system and an encoder, so host.config answers what runs */
     ta_system_config_normalize((const ta_image_view *)0, &config->system, &host->config.system);
@@ -625,7 +651,7 @@ void ta_host_free(ta_host *host) {
     for (uint32_t i = 0; i < host->watch_count; i++)
         rules_free(host, &host->watches[i].rules);
     host_free(host, host->watches, sizeof(host_watch) * host->watch_capacity);
-    ta_allocator allocator = host->config.allocator;
+    ta_allocator allocator = host->given;
     allocator.free(allocator.context, host, sizeof *host);
 }
 
@@ -2611,6 +2637,9 @@ void host_stats_get(const ta_host *host, ta_host_stats *o) {
     z.routed = host->routed;
     z.migrated = host->migrated;
     z.retired = host->retired;
+    z.allocated_bytes = host->allocated_bytes;
+    z.allocated_peak = host->allocated_peak;
+    z.allocations = host->allocations;
     uint32_t n = o->size && o->size < sizeof z ? o->size : (uint32_t)sizeof z;
     ta_memcpy(o, &z, n);
     o->size = n;
