@@ -265,7 +265,7 @@ def run(count=100_000, datamodel="python", tracing=True, chart=None, data=None):
             results[what] = json.loads(child.stdout)
             continue
         # a measurement that failed is a row too: what stopped it (quickjs's memory, the machine's)
-        errors = re.findall(r"^[\w.]*Error: .*$", child.stderr, re.M)
+        errors = re.findall(r"^[\w.]*Error(?:: .*)?$", child.stderr, re.M)
         reason = errors[-1] if errors else f"exit {child.returncode}"
         keys = {"actor": ["started", "handled"], "hibernated": ["hibernated"],
                 "message": ["waiting"], "delayed send": ["pending"]}[what]
