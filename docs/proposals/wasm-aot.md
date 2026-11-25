@@ -1,78 +1,113 @@
 # Compiled charts: a chart's step as WASM code, frontloaded to compile time
 
-**Status:** Sketch (2026-11-25). An outline for discussion; nothing here
-is decided or scheduled.
-**Touches:** tinyactors-core (`src/core`: a per-chart step entry and an
-internal contract for generated code; a new freestanding layer that
-lowers a chart to WASM functions; the module writer of
-[A system as a WASM module](wasm-modules.md); `tinyactors compile`),
-tinyactors-test (a differential harness and the module adapter).
+**Status:** Sketch (2026-11-25, revised the same day after the
+maintainer's direction and a refutation). An outline for discussion;
+nothing here is decided or scheduled.
+**Touches:**
+
+- tinyactors-core: a step result that hands the system an ordered list
+  of actions; a small runtime of out-of-line functions for generated
+  code; a new freestanding layer that lowers a chart to WASM functions;
+  the module writer of [A system as a WASM module](wasm-modules.md);
+  `tinyactors compile`; the datamodels' compile-time preparation;
+- tinyactors-test: a differential harness, and the module adapter in
+  compiled mode.
+
 **Depends on:** [wasm-modules.md](wasm-modules.md), steps 1 to 3 (a
 template, a writer, `--emit wasm`).
 **Not a plan:** ADRs and roadmaps win.
 
 The maintainer's request: "I want to explore a highly optimized mode
 where the charts themselves are pure WASM code, i.e. we frontload
-everything to compile time." `wasm-modules.md` section 4.3 turned
-lowering down until a staticjs datamodel exists. A later review found
-that this rests on a measurement from the Node addon, where the
-ECMAScript datamodel takes most of the time. On the null datamodel, core
-is nearly the whole cost of an event, so the question is still open.
-This proposal assumes the mode is wanted and designs it.
+everything to compile time." The maintainer's direction on the first
+draft (2026-11-25): "Null datamodel is not enough. Typed records is
+interesting, but WASM always needs to work with value handles anyways,
+matching what our actors compiler does already." So a compiled chart
+owns no data. A value is a handle the datamodel owns, as core already
+treats payloads (`ta_datamodel_vtable`: retain, release, `to_wire`,
+`from_wire`, expressions by index; `include/tinyactors/datamodel.h`),
+and as `@tinyactors/wasm` does through its datamodel import
+(`ta_web.datamodel(host, entry, slot)`,
+`tinyactors-napi/wasm/src/web.h:271`).
 
-**The short answer.** Compile the statechart, not the datamodel, and
-only for the null datamodel. The release then gets about **1.9 times
-cheaper events** in WASM (about 520 ns to about 270 ns, projected from
-measured parts). It does not get a second implementation of SCXML. The
-generated code is a fast path over the interpreter's own state:
+`wasm-modules.md` section 4.3 turned lowering down until a staticjs
+datamodel exists. A review of that proposal (2026-11-25, not recorded in
+the repository) found that its base design stands and that its driver
+profile does not, as written. It also found that the turn-down rested on
+the addon's measurement, where the datamodel dominates.
 
-- it reads and writes the same instance;
-- it calls core's own handlers for every action;
-- it burns fuel and writes trace records at the same points;
-- wherever it would have to stop mid-microstep, it writes the
-  interpreter's continuation and lets the interpreter go on.
+**The short answer.** A chart's step can be pure WASM code for every
+datamodel, with values left as handles. It is a second implementation
+of SCXML's algorithm, and must be held to the full conformance suite in
+compiled mode. W3C runs on quickjs, which a step that serves every
+datamodel now makes possible.
 
-Snapshots, blobs, migration and OTLP stay as they are. The code lives
-inside the module and adds no imports. The cost falls on the
-maintainers: the lowering must change in the same commit as core's step
-algorithm, and every change to the step gains a differential test.
-Charts on ECMAScript or Python, which are nearly all of the repository's
-charts, gain nothing worth having, and stay interpreted.
+The design that fits the request (section 3, design B) works like this:
+
+- The compiled step keeps its working sets in WASM locals and runs each
+  microstep to its end.
+- It hands the system **one ordered list of actions per microstep**
+  (raises, sends, cancels, logs, invokes), where the interpreter returns
+  to the system on every send.
+- It shares only the instance layout with the interpreter. Hibernation,
+  migration and snapshots at microstep boundaries are unchanged.
+- An actor that is mid-microstep in compiled code is not snapshotted:
+  the snapshot refuses until it reaches a boundary (section 4.4).
+
+What it buys, projected from measured parts and unverified until it is
+built:
+
+- **about 1.8 to 2 times cheaper events on the null datamodel** (about
+  520 ns to 255–280 ns in WASM);
+- **at most about 1.1 times on a quickjs chart.** There quickjs takes
+  78 % of a 3.3–3.7 us event, and core's step without its datamodel
+  calls takes 12 %.
+
+For ECMAScript, frontloading on the **datamodel's** side pays more than
+compiling the step:
+
+- quickjs bytecode compiled ahead, not on first use: the first session
+  of a chart costs 1.1 ms in WASM, the next ones 29–46 us;
+- no `_event` binding when no expression of the chart reads `_event`:
+  that binding is 31 % of the event's time on a chart that never reads
+  it.
+
+Both are measured costs. What their removal saves is not measured.
 
 ## 1. Whom it serves, what exists, who pays, what is out
 
 **First, the C embedder whose host is a WASM runtime** (wasm-modules.md
-section 1), running charts that are pure control flow: a protocol, a
-device's or a game's states, a workflow's routing whose data lives
-elsewhere. They ask what an event costs and how many fit in a frame or a
-request. **Then the capacity planner**, who sizes systems by cost per
-event. The torture chamber's charts are null-datamodel charts
-(`tools/torture/scenarios/{capacity,chaos,crowd}/charts/*.scxml`), so
-the planner's own benchmark is the mode's first workload.
+section 1): what an event costs, and how many fit in a frame or a
+request. **Then the capacity planner**, who sizes by cost per event and
+per new session. **Then the application developer on ECMAScript**, whose
+cold starts (the first session of each chart) and isolated sessions
+cost most (section 7.3).
 
 **What already answers them:** the interpreter in a module
-(wasm-modules.md 4.1). It costs 505 to 530 ns per event for the order
-chart below, of which 62 % is `ta_core_step` (section 6).
+(wasm-modules.md 4.1). In WASM it costs 505–530 ns per event on a null
+order chart and 3.3–3.7 us on a quickjs order chart (section 7).
 
 **Who pays:**
 
 | Cost | How much | Evidence |
 |---|---|---|
-| per event | for a compiled chart, about half: about 270 ns where the interpreter takes 520 ns (WASM, null datamodel, no tracing; projected from measured parts); for a chart that stays interpreted, nothing | section 6 |
-| per actor | nothing: the same instance, the same region | section 4 |
-| code size | about 50 B of WASM per transition, per chart (689 B for an 11-state order chart, whose image is 2,816 B); the image stays as well | section 6.3 |
-| core | a per-chart step entry in `ta_core` (internal, beside `serial_of` and `done_event`, `src/core/core_internal.h:132-137`), and an internal header of about 20 functions that generated code calls | section 3 |
-| a new layer | a lowering of about 2,500 to 3,500 lines of C (unverified estimate; the compiler is 3,267 lines) | section 5 |
-| API surface | one CLI option; the template's function directory, an ABI between writer and template | section 5 |
-| work in every binding | none | — |
-| maintainers | each change to the step algorithm (subphases, workspace, fuel and trace points) changes the lowering in the same commit, held by a differential test | section 3.3 |
+| per event | for a compiled chart: projected 1.8–2× less on the null datamodel, at most 1.1× less on quickjs; for an interpreted chart, nothing | section 7, projections marked |
+| per actor | nothing: the same instance and region; one pool of pending actions per segment, sized by the config | section 4 |
+| code size | about 50 B of WASM per transition, per chart, beside the image, which stays | section 7.4 |
+| core | a step result `TA_STEP_ACTIONS`; a pending-actions pool in the region (a new record type, so the layout id changes once); about 20 out-of-line runtime functions; a snapshot refusal for an actor mid-microstep in compiled code | sections 4, 6 |
+| a new layer | `src/lower`: about 3,000 to 4,500 lines of C for the whole algorithm and an encoder (unverified; the compiler is 3,267 lines) | section 6 |
+| API surface | one CLI option; one refusal of `ta_host_snapshot`; the template's function directory, an ABI between writer and template | sections 4.4, 6 |
+| work in every binding | none for the step. A snapshot can refuse with a new reason, which each binding maps to its error | section 4.4 |
+| maintainers | a second implementation of the step to keep in agreement with the first, held by the suite in compiled mode and a differential test (section 5) | — |
 
-**Out of scope:** compiling ECMAScript, Python or quickjs; native code
-(an `--emit c` path for C embedders is an open question, section 10);
-a datamodel that does not exist yet (section 2.4); imports of any kind.
+**Out of scope:** compiling ECMAScript, Python or quickjs code to WASM;
+a value model of the compiled chart's own (records with typed fields
+are at most an optimisation inside one datamodel, behind handles;
+section 2.4); native code (`--emit c` is an open question); imports.
 Release modules import nothing (ADR 0001 decision 19,
-`docs/adr/0001-packaging-and-releases.md:255`), and nothing here needs
-one. The application developer on ECMAScript or Python is not served.
+`docs/adr/0001-packaging-and-releases.md:255`). The compiled step needs
+none. A datamodel whose vtable calls an import (`@tinyactors/wasm`'s
+shape) is that template's matter, not the step's.
 
 ## 2. What "frontload everything" can mean
 
@@ -80,332 +115,436 @@ one. The application developer on ECMAScript or Python is not served.
 
 Each of these facts is checked:
 
-- **Core is the step and nothing else.** `ta_core_step` is called from
-  one place, `run_actor` (`src/system/schedule.c:134`). It returns
-  sends, cancels, invokes and the rest to the system as `TA_STEP_*`. It
-  never touches mailboxes, timers or other actors
-  (`docs/architecture.md` section 7.2). The layers run base, image,
-  core, system, and never the reverse (`tinyactors-core/AGENTS.md`).
-- **The state is the instance, and the workspace inside a microstep.**
-  The instance's configuration, history and invoke words have a layout
-  derived from the chart record (`ta_instance_layout_of`,
-  `src/core/core_internal.h:212`). A workspace holds the continuation
-  (subphase, cursors, instruction, sets; `ta_workspace`, `:236-250`).
-- **The step can stop mid-microstep.** It does so on a send that leaves
-  the system: the actor waits, `schedule.c:139-151`. It also stops for
-  invoke, uninvoke, an exhausted pool (`TA_STEP_EXHAUSTED`) and a
-  missing workspace. When the fuel runs out inside a microstep, the step
-  finishes it on debt, and yields mid-microstep only once that debt
-  reaches `overrun_max` (`exhausted`, `src/core/core.c:85`;
-  `core_internal.h:127-131`). Generated code needs the same yield
-  point, as a fallback. A snapshot can be taken while an actor waits
-  mid-microstep.
+- **Core is the step.** The step is called from one place, `run_actor`
+  (`src/system/schedule.c:134`). It returns sends, cancels, invokes and
+  the rest as `TA_STEP_*`, and the system acts on each before the next
+  call (`schedule.c:138-180`). Layers run base, image, core, system,
+  never the reverse (`tinyactors-core/AGENTS.md`).
+- **The interpreter's continuation is rich.** `ta_workspace`
+  (`src/core/core_internal.h:236-256`) holds subphase, `vm_active`,
+  `foreach_top`, instruction, `block_end`, `cursor`, `cursor2`,
+  `selected_count`, `stack_top`, `auxiliary`, `final_state`, `trace`,
+  `done_payload`, `trace_fuel` and `trace_event`. After the header come
+  the selected list, domains, the exit, entry, default-entry and
+  history-default-entry sets, a stack and `<foreach>` frames
+  (`ta_workspace_layout_of`, `:263`). The instance holds the phase, the
+  step counters and the internal queue.
+- **The step pauses in many places:**
+  - every send and cancel (the step is entered 200,003 times for 60,000
+    events and `micro` 100,002 times, section 7.2);
+  - invoke and uninvoke, one slot at a time (`core.c:1741-1754`);
+  - `TA_STEP_EXHAUSTED` retries inside `opcode_send` (`:1102-1116`,
+    `:1313`), the VM (`:1395`, `:1425`), `start_invoke` (`:1617`) and
+    the two-stage done events (`:1855-1871`);
+  - a fuel yield once the overrun reaches `overrun_max` (`exhausted`,
+    `:85`);
+  - a send that leaves the system, which parks the actor mid-microstep
+    until it is decided (`schedule.c:139-151`).
+
+  Handlers also move the instruction themselves (`opcode_send`'s
+  `instruction += 2`, `:1322`; `abort_block`, `:969`).
 - **Fuel is observable.** OTLP span times are interpolated from fuel
   stamps (`otlp_wall_of`, `src/otlp/otlp.c:317`; `ta_core_trace_fuel`,
   `src/core/trace_step.c:95`), and chart stats count fuel.
-- **The null datamodel has no data.** Its conditions are `In('id')`, and
-  it passes a quoted `<log>` literal through. It carries no event data
-  (`src/core/datamodel_null.c`). A step on it is decided by the
-  configuration, the event's name id, the internal queue and the
-  history words alone.
+- **Hibernation and export need a stable point**: idle, empty mailbox
+  and internal queue, no workspace, no children, no pending request
+  (`docs/architecture.md` section 16.1). **A snapshot** refuses only
+  during a run, with effects or outputs not acknowledged, or during a
+  migration. It takes actors mid-macrostep with their workspaces
+  (`src/host/host.c:2760-2765`). At a microstep boundary the
+  interpreter holds no workspace: it is released at the end of each
+  microstep (`core.c:2144`).
+- **Values are handles.** The datamodel owns them. Core calls the
+  vtable with expression indices, and a payload is a `uint64_t` handle
+  (`datamodel.h`). The null datamodel has no data
+  (`src/core/datamodel_null.c`).
 - **Release WASM modules import nothing** (ADR 0001 decision 19).
+
+Doc drift found on the way: `architecture.md` section 7.1 names
+subphases that do not exist (`SUBPHASE_SELECTED`,
+`SUBPHASE_HISTORY_RECORD`, `SUBPHASE_ONEXIT`, …). The code has
+`SUBPHASE_EXIT_COMPUTE`, `EXIT`, `EXIT_CODE`, `EXIT_UNINVOKE`,
+`TRANSITIONS`, `ENTRY_COMPUTE`, `ENTER`, `ENTER_CODE`, `ENTER_DEFAULT`,
+`ENTER_HISTORY`, `ENTER_FINAL` and `RUN_CODE` (`core.c:28-41`).
 
 ### 2.2 The spectrum
 
-| Level | What is frozen at compile time | What it needs | Verdict |
-|---|---|---|---|
-| **0. Facts in the image** | what the interpreter recomputes per event: `In()` resolved to a state index, static entry lists (`architecture.md` section 15: "a future optimization") | compiler and image changes, no code generation | small: resolving `In()` once saves 3 % of an event (measured); entry sets are about 11 % of the step in a profile without inlining (measured, an upper bound). Worth doing for its own sake, for every datamodel |
-| **(a) The interpreter specialised to one image** | the image's records as constants in `core.c`, dead opcodes removed | a C compiler per image on the user's machine, or a partial evaluator; neither exists | not recommended: the cost is the phase machine, the workspace and the bitset walks over a configuration known only at run time (section 6.2), which constant records do not remove. The gain is unverified |
-| **(b) The step lowered** | selection, conflicts, exit and entry sets, and executable content as WASM functions per chart; queues, timers, mailboxes, hibernation and routing stay in the runtime | a code generator in core (section 5); the template exposes core's handlers to generated code | **recommended for the null datamodel**: the lowered step runs in 14 ns where the interpreter's takes about 320 ns (measured on one chart) |
-| **(c) Tables per (configuration, event)** | the whole step for each pair: next configuration and an action list | an exhaustive search; feasible for the null datamodel, because its steps are a finite-state machine | small for real charts, at most 8.6 KB (section 2.3), but it buys nothing over (b) at run time (14 ns against the runtime's 200 ns). Its use is as an **oracle**: every pair can be checked exhaustively |
-| **(d) The datamodel compiled** | data as fields of linear memory, conditions as compares | a datamodel whose expressions are total and whose values have fixed shapes | null: done by (b). Others: section 2.4 |
-
-### 2.3 Measured: reachable configurations per chart (level c)
-
-`count.c` in the scratchpad (see Measurements) runs the analysis layer's
-breadth-first search (`ta_analysis_search_run`,
-`src/analysis/search.c`) over every distinct `.scxml` in the repository
-that compiles (195 charts), and over the W3C suite as converted for
-ECMAScript (225 tests). The search ignores events and conditions and
-takes every transition that can be taken, so a count is an upper bound
-of the configurations that can be reached. It enters history by its
-default only, so history can add configurations it does not count
-(`src/analysis/analysis.h:15-38`). "Classes" counts the elementary
-intervals that the chart's descriptors cut the event trie into, plus one
-for eventless transitions. A table entry is 8 B: the next configuration
-and an action list.
-
-| Chart | States | Transitions | Conditions | Configurations | Classes | Table |
-|---|---|---|---|---|---|---|
-| `tinyactors-napi/examples/elevator-control/charts/car.scxml` | 27 | 47 | 22 | 27 | 40 | 8,640 B |
-| `tinyactors-core/tests/diagram/document-approval.scxml` | 24 | 32 | 3 | 18 | 35 | 5,040 B |
-| `tinyactors-core/tests/diagram/order-processing.scxml` | 15 | 18 | 0 | 36 | 17 | 4,896 B |
-| `tinyactors-core/tests/diagram/checkout.scxml` | 17 | 17 | 0 | 32 | 14 | 3,584 B |
-| `copywriter/charts/annotation.scxml` | 14 | 46 | 15 | 11 | 31 | 2,728 B |
-| `tinyactors-core/tests/diagram/shopping-cart.scxml` | 11 | 43 | 20 | 9 | 27 | 1,944 B |
-| `tinyactors-core/tests/diagram/order-fulfillment.scxml` | 15 | 25 | 4 | 11 | 20 | 1,760 B |
-| the spike's order chart (section 6.1) | 11 | 12 | 1 | 12 | 14 | 1,344 B |
-
-| Population | Charts | Configurations: median, p90, max | Table: median, p90, max |
-|---|---|---|---|
-| the repository's charts | 195 | 1, 5, 36 | 64 B, 640 B, 8,640 B |
-| the W3C tests | 225 | 3, 5, 9 | 96 B, 240 B, 504 B |
-| synthetic: an order's fulfilment as *k* parallel regions of 4 states | *k* = 4, 6, 8, 10 | 256; 4,096; 65,536; 1,048,576 (1.5 s to search) | 20 KB; 459 KB; 9.4 MB; 184 MB |
-
-107 of the 195 charts have a single state below the root. In such a
-chart all the work is executable content, and lowering the statechart
-saves nothing. The configuration space grows as the product of the
-parallel regions, so tables (c) cannot be the general mode. Lowered code
-(b) grows with the chart's size, not its state space.
-
-### 2.4 Which datamodels can be compiled (level d)
-
-| Datamodel | Exists | Compiled how | Verdict |
-|---|---|---|---|
-| null | `src/core/datamodel_null.c` | `In('id')` becomes a bit test of the configuration word, `<log>`'s literal a string id; there is no data | **in scope.** Today `In()` is parsed on every evaluation: `null_condition` → `parse_in` → `ta_image_state_by_name`, 403 instructions each (measured) |
-| ECMAScript (quickjs, Node's native, Python's) | yes | not possible: the values are the engine's | out: a lowered step still calls the vtable, and core is about 5 % of a 5.2 us event on the addon (`tinyactors-napi/docs/browser.md:200-216`) |
-| staticjs | the language in `staticjs/`, as a VM; there is no staticjs datamodel | a WASM backend for staticjs itself (its values are 8-byte boxes with shared layouts, `docs/proposals/staticjs-compiler.md` section 5), so most operations still call its runtime | plausible later, as a staticjs proposal; the gain is unverified |
-| JSON (`docs/proposals/json-datamodel.md`, a sketch) | no | paths over a CBOR document could become fixed accessors only with a schema; registered functions are the application's, and would be imports (an amendment to ADR 0001 decision 19) | partial at best |
-| a typed record (`<data id="attempts" type="u32">`, a small total expression language) | no | a fixed record per chart in the instance; conditions become `i32` compares | where frontloading pays most, but a new, non-standard datamodel with a proposal of its own |
-
-The repository's charts show who this serves today. 171 name
-`ecmascript`, 75 `python`, 8 `null`, and 18 name none, which is null
-(`src/compile/scxml.c:1235`), mostly diagram fixtures. The website's
-order chart (`website/examples/order/order.scxml`) counts its payment
-attempts in data (`attempts < 3`). On the null datamodel that becomes
-states (`retrying-1`, `retrying-2`).
-
-## 3. How a compiled chart plugs into core
-
-### 3.1 Not a second implementation: a fast path over the interpreter's state
-
-These are the alternatives, and why each fails or works:
-
-- **Not a separate small runtime.** It would be a second SCXML. Queues,
-  timers, invoke, routing, hibernation and tracing would be duplicated
-  or wrapped, and the conformance suite would hold one of the two.
-- **Not "a new chart kind behind a vtable" with its own state.** A
-  layout per compiled chart would change what snapshots and blobs hold.
-  Every version would then need migration code, and the layout id would
-  no longer say what a region holds.
-- **The design: an entry per chart in `ta_core`**, checked first by
-  `ta_core_step`. The generated function has `ta_core_step`'s contract
-  exactly (`docs/architecture.md` section 7.2): the same arguments, the
-  same `TA_STEP_*`, the same instance and workspace. It handles the
-  common path, a whole microstep from a stable or eventless phase. For
-  anything else it **falls back**: it writes the interpreter's
-  continuation into the workspace (subphase, `cursor2`, instruction,
-  the exit and entry sets) and returns. The next call, or the call it
-  falls through to, interprets from there. "Anything else" means
-  `PHASE_INIT`, `PHASE_EXIT`, a cancel flag, an `<invoke>` to start, or
-  a resume into a workspace it did not write.
-
-An actor can therefore move between compiled and interpreted at any
-microstep boundary, and at any point where the step returns, because the
-two share one state. The fallback costs only speed.
-
-### 3.2 What the generated code calls
-
-Every action goes through core's own handler, so its semantics live in
-one place. The generated code calls the same functions the interpreter's
-`vm` and `micro` call (`src/core/core.c`):
-
-| Step part | The interpreter | Generated code |
+| Level | What is frozen at compile time | Verdict |
 |---|---|---|
-| bind the event, begin the macrostep | `bind_event`, `begin_macrostep` (`:567`, `:430`) | the same functions |
-| select transitions | walks active atomic states and ancestors, tests intervals, asks the datamodel (`select_transitions`, `:735`) | unrolled per state; intervals as constant compares; `In()` as a bit test; `trace_condition` at the same point |
-| remove conflicts | pairwise over domains (`remove_conflicts`, `:696`) | emitted only for the pairs whose domains nest; none when no two can (the generator proves this) |
-| exit set, onexit, uninvoke | range masks over the configuration (`micro`, `:1703-1770`) | constant masks per transition; onexit in reverse document order |
-| entry set | computed at run time with a stack in the workspace (`compute_entry`, `:886`) | constant masks per transition, from **one** function shared with the interpreter (section 3.4); history-flagged transitions call core's completion |
-| executable content | the bytecode loop (`vm`, `:1374`) | the handler per opcode (`opcode_send` `:1090`, cancel, raise, log) with constant operands; no dispatch |
-| fuel | `burn` at each candidate, state and instruction | the same units at the same points, so the fuel clock and OTLP are byte for byte the same |
-| a send, an invoke, a cancel | returns `TA_STEP_SEND` etc. to the system | the same return, after writing the continuation (section 3.1) |
-| trace records | `trace_microstep`, `trace_sent`, `trace_macrostep_end` (`src/core/trace_step.c`) | the same functions |
+| **0. Facts in the image** | static entry sets and domain masks (`architecture.md` section 15 calls them "a future optimization"); `In()` resolved to a state index, at compile time or at chart attach through the null datamodel's unused `chart_attach` slot (`datamodel_null.c:116`) | **an independent first step.** Entry sets help every datamodel's step, but only partly: they are at most 11 % of the null step in a profile without inlining. `In()` helps the null datamodel, by 3 % (measured). The lowering reads the same words, so the static sets are computed in one place |
+| **(a) The interpreter specialised to one image** | constant records, dead opcodes removed | **no**: it needs a C compiler per image, and the cost is the phase machine and bitset walks over a configuration known only at run time (section 7.2). The gain is unverified |
+| **(b) The step lowered** | selection, conflicts, exit and entry, the macrostep loop and executable content as WASM functions per chart; datamodel calls by expression index on handles | **recommended, as design B** (section 3) |
+| **(c) Tables per (configuration, event)** | the whole step per pair | for the null datamodel only, where a step has no data. Small for real charts (section 2.3), but no faster than (b) at run time, and it grows as the product of parallel regions. **Use it as a test oracle**, with the limits of section 5.2 |
+| **(d) The datamodel prepared ahead** | what the datamodel can do before the first session: quickjs bytecode, which expressions read `_event`, `In()` targets; later a staticjs datamodel that lowers its expressions to WASM behind the same handles | **recommended for each datamodel separately** (section 2.4); for quickjs it pays more than (b) |
 
-That list, about 20 functions, becomes an internal header
-(`src/core/compiled.h`). It is no public ABI: core already holds internal
-function pointers of this kind (`serial_of`, `name_of`, `done_event`,
-`core_internal.h:132-137`), and "no callbacks except the datamodel
-vtable" is about `include/tinyactors/`. Today some of these functions
-are static helpers that read the workspace (the trace helpers read
-`workspace->trace`, `trace_event`, `trace_fuel`). Making them callable
-with explicit arguments is a refactor of core, done first, and it
-changes nothing observable.
+### 2.3 Measured: reachable configurations (level c)
 
-### 3.3 Held to the conformance suite
+`configs/count.c` runs the analysis layer's search
+(`ta_analysis_search_run`, `src/analysis/search.c`) over every distinct
+compiling `.scxml` of the repository (195 charts) and the W3C suite as
+converted for ECMAScript (225). The search takes every transition
+whatever its events and conditions, so a count is an upper bound. It
+enters history by its default only, so it misses configurations that
+are restored through history (`src/analysis/analysis.h:15-38`).
+"Classes" are the elementary intervals that the chart's descriptors cut
+the event trie into, plus eventless. A table entry is 8 B.
 
-The suite says little about the null datamodel. The W3C tests are
-written for `conf:datamodel`, and only `test436` is null
-(`tinyactors-test/suites/w3c/irp/436/test436.txml`). The scenarios use
-the tests' datamodel or quickjs. Three checks hold the compiled mode
-instead:
+| Chart | States | Transitions | Configurations | Classes | Pairs | Table |
+|---|---|---|---|---|---|---|
+| `tinyactors-napi/examples/elevator-control/charts/car.scxml` | 27 | 47 | 27 | 40 | 1,080 | 8,640 B |
+| `tinyactors-core/tests/diagram/order-processing.scxml` | 15 | 18 | 36 | 17 | 612 | 4,896 B |
+| `tinyactors-core/tests/diagram/document-approval.scxml` | 24 | 32 | 18 | 35 | 630 | 5,040 B |
+| `tinyactors-core/tests/diagram/checkout.scxml` | 17 | 17 | 32 | 14 | 448 | 3,584 B |
+| the spike's null order chart (section 7.1) | 11 | 12 | 12 | 14 | 168 | 1,344 B |
 
-1. **The module adapter** (wasm-modules.md step 5) runs every suite
-   against a module whose null charts are compiled. Whatever is null in
-   it runs compiled.
-2. **An exhaustive differential test.** For each null chart in the
-   repository, the analysis layer's configurations (at most 36, section
-   2.3) are crossed with every event class (at most 40), at most 1,080
-   pairs. Each pair is stepped once interpreted and once compiled from
-   the same instance bytes, and the test compares the instance, the
-   workspace, `core->out`, the fuel and the trace journal bytes. The
-   null datamodel's step depends on nothing else, so this is a proof
-   over the reachable space (history and internal queues add state, and
-   the test seeds them). It is fast: thousands of steps.
-3. **A fallback sweep**, as the torture chamber sweeps pauses. The test
-   forces a fallback at each point where the generated code can return,
-   and checks the same results. It belongs in `--full` when it is large
-   (root `AGENTS.md`, "Where a new test goes").
-
-The spike ran the second check in a small form: 5,002 random events,
-with no configuration that differed from the interpreter's (section
-6.1).
-
-### 3.4 Generated from the same algorithm?
-
-The interpreter cannot be partially evaluated by machine, since no
-partial evaluator exists (level a). What can be shared is **every
-computation that depends only on the image**. Today the entry set is
-computed at run time (`architecture.md` section 15), and the analysis
-layer computes it again for lint (`ta_analysis_enter`,
-`src/analysis/machine.h`). Both are reimplementations of SCXML's
-`computeEntrySet`. The order of work makes one function in core compute
-a transition's static entry set and domain mask. The compiler writes the
-results into the image (level 0), and then the interpreter, the analysis
-and the lowering all read the same words. My spike computed them a third
-time in JavaScript (`lower.mjs`, `enter`). That is what the real layer
-must not do.
-
-## 4. Snapshots, hibernation, migration, versions
-
-| Object | Interpreted | Compiled | Why it holds |
+| Population | Charts | Configurations: median, p90, max | Pairs per chart, max |
 |---|---|---|---|
-| a hibernation blob | header (image hash, chart), instance words, invoke ids, datamodel bytes (`src/system/hibernate.c:1-40`) | the same bytes | the same instance layout; the null datamodel serializes nothing |
-| a snapshot | the region, layout id checked at restore (`src/system/region_layout.c:1-10`) | the same | compiled code holds no region state; the dispatch table is module data, not region |
-| a run that waits mid-microstep | the continuation in the workspace | the same continuation, written by the generated code before it returns | section 3.1; a restore in either mode resumes in the interpreter, or in compiled code that recognizes its own resume point |
-| a version | an image per segment, oldest first (wasm-modules.md 4.1) | each image carries its compiled code, keyed by the image hash | code is a cache of the image; a hash with no code runs interpreted |
-| a migration | `ta_blob_migrate` maps an instance between images by state id (`architecture.md` section 16.2) | unchanged; the new version's code runs on the migrated instance | migration reads instances, never code |
-| interpreted ↔ compiled | — | a snapshot of one restores in the other, when both come from the same template build | same layout id and same image hash; the template is the same with an empty or a filled directory |
+| the repository's charts | 195 | 1, 5, 36 | 1,080 (`car`) |
+| the W3C tests | 225 | 3, 5, 9 | 63 |
+| an order's fulfilment as *k* parallel regions of 4 states, *k* = 4, 6, 8, 10 | 4 | 256; 4,096; 65,536; 1,048,576 (the last searched in 1.5 s; a 184 MB table) | — |
 
-The layout id still differs between wasm32 and x86_64 (wasm-modules.md
-section 2.3). Compiled code changes nothing there.
+107 of the 195 charts have a single state below the root. Their step is
+selection plus executable content, so most of their cost is the
+datamodel's.
 
-### Lifetimes
+### 2.4 Datamodels: values stay handles, preparation moves ahead
+
+The compiled step calls the datamodel exactly where the interpreter
+does: `condition`, `assign`, `capture`, `log`, `bind_event`, the
+`<data>` initialisers, `<foreach>`. It calls it with the same expression
+indices, through the same binding. Nothing about values changes. What
+can move to compile time is each datamodel's own preparation:
+
+| Datamodel | What it does today | What moves ahead | Gain |
+|---|---|---|---|
+| null | parses `In('id')` on every evaluation: `null_condition` → `parse_in` → `ta_image_state_by_name`, 403 instructions each (measured) | `In()` resolved at compile time (level 0), or at `chart_attach`; the compiled step tests the configuration bit itself | 3 % of an event when cached (measured: `bench/level0.c`); free when compiled |
+| quickjs (`src/datamodel_ecmascript`) | `chart_attach` analyses the chart's scripts by compiling them in a scratch context (`analyze_script`, `script_strict`, `datamodel_ecmascript.c:1129-1247`). Each expression is compiled **on first use**, per chart in the shared realm and **per session** in the isolated realm (`get_getter`, `:297-336`). It binds `_event` before every event (`ecmascript_bind_event`) | bytecode written at `tinyactors compile` (quickjs-ng's `JS_WriteObject` with `JS_WRITE_OBJ_BYTECODE`, `third_party/quickjs-ng/quickjs.h:1261`) and read at attach; which expressions can reach `_event` (a conservative scan: `_event`, `eval`, `Function`, `globalThis`, `this`, `with`), so `bind_event` is skipped for charts that never can | measured costs it targets: the first session of a chart takes 1.1 ms in WASM against 29–46 us for the next; isolated sessions take 230–310 us each natively; `_event` binding is 31 % of the event in WASM. What removal saves is unverified (the split of the 1.1 ms between analysis, context and compiles is not measured) |
+| Node's native, Python's | the application's engine (`tinyactors-napi/AGENTS.md`, two ECMAScript datamodels) | nothing in core | none from this proposal |
+| staticjs (the language in `staticjs/`; no staticjs datamodel exists) | — | later: its own lowering of expressions to WASM functions, appended to the same module and reached through its vtable by expression index | unverified; a staticjs proposal |
+| records with typed fields | — | at most an optimisation inside one datamodel: fields in its own memory behind handles, not a value model of the chart's (the maintainer) | — |
+
+Bytecode ties the image to one quickjs build. The prepared bytes would
+be keyed by the datamodel's version and refused by any other build. The
+CLI links the same quickjs as the release's datamodel, so it can write
+them. Whether they go in the image or beside it, and how attach receives
+them (a `ta_bytes` in `ta_datamodel_chart`), is an open question.
+
+## 3. Two designs for the compiled step
+
+### 3.1 It is a second implementation of SCXML's algorithm
+
+The first draft said otherwise, and that was wrong. Whatever the code
+calls for actions, the lowering re-encodes these parts of `src/core`:
+
+- the order of selection (`select_transitions`, `core.c:735`);
+- preemption (`remove_conflicts`, `:696`);
+- the order of exit and the recording of history (`:1703-1720`);
+- default and history entry, done events and `parallel_in_final`
+  (`:1813-1880`);
+- the macrostep loop (`ta_core_step`, `:1906`).
+
+`wasm-modules.md` section 4.3 said so too. The design question is how
+little to re-encode and how to hold it (section 5), not whether it is a
+second implementation.
+
+### 3.2 Design A: a fast path bound to the interpreter's contract
+
+The first draft's design:
+
+- generated code works on the interpreter's workspace;
+- it returns on every send, cancel, invoke and refusal;
+- it writes the interpreter's continuation, every field of section 2.1,
+  so that the interpreter can resume.
+
+It keeps snapshots byte for byte only if it writes every scratch field
+as the interpreter does (`compute_entry` leaves its stack and sets in
+the workspace). It needs core's handlers out of line, though `-O2`
+inlines them today: `opcode_send` has no symbol in the build. Its gain
+comes only after it also has resume points of its own. Without them,
+the work after each pause is the interpreter's.
+
+### 3.3 Design B: own transient state, one action list per microstep (recommended)
+
+The step's sets (selected, exit, entry, defaults) live in WASM locals,
+never in memory. A microstep runs to its end without returning. Every
+action whose outcome the system decides goes into an **ordered list**:
+raise, send, cancel, log, invoke, uninvoke, a done event. That includes
+raises, because a send's routing error must land in the internal queue
+in order with them. At the end of the microstep the step returns
+`TA_STEP_ACTIONS`. The system applies the list in order with the code it
+already runs per `TA_STEP_*` (`schedule.c:138-180`).
+
+The step shares with the interpreter **only the instance layout**: the
+configuration, history, invoke words and the header's phase and queue.
+So hibernation, export and migration, which touch only stable actors,
+are unchanged. So is a snapshot taken at a microstep boundary.
+
+| | A: bound to the interpreter | B: own state, action lists |
+|---|---|---|
+| returns to the system | on every send, cancel, invoke, refusal (3.33 calls per event, section 7.2) | once per microstep, or at a `<foreach>` flush (section 4.2) |
+| what is shared with the interpreter | instance, workspace, every continuation field, handler bodies | the instance layout; the action handlers' bodies (section 6.2) |
+| snapshots | byte for byte, if every workspace field is written as the interpreter writes it | the same at boundaries; an actor mid-microstep in compiled code refuses the snapshot (4.4) |
+| an interpreter snapshot restored into compiled code | resumes in either | an actor caught mid-microstep finishes it in the interpreter, which stays in the module |
+| ABI to the template | struct offsets of `ta_core`, `ta_workspace`, the instance and `kernel_context`; the shadow stack; about 20 internal functions kept out of line | function indices only (section 6.2) |
+| semantics that move | none | a send that leaves the system is decided after the microstep, not in the middle of it. The interpreter parks the actor mid-block (`schedule.c:139-151`), so a time read later in the block differs (section 4.1) |
+| projected per event, null, WASM | about 1.15× before compiled resume points (selection alone), 1.45–1.7× after (the refutation's count) | 1.8–2× (section 7.2) |
+| what the spike measured | — | this design: the 14 ns step buffers its actions |
+
+Design B is what the maintainer asked for: the chart's step is its own
+WASM code with its own transient state. It also answers the
+refutation's main finding, that the spike timed a step doing B's work
+while the draft recommended A.
+
+## 4. Design B in detail
+
+### 4.1 The action contract
+
+`TA_STEP_ACTIONS` means: the microstep is finished, its configuration
+is written, and `core->out` holds a list of `n` actions to apply in
+order. The list lives in a **pending-actions pool** in the segment's
+region: an index array of fixed-size records, described in
+`region_layout.c` like any other pool. Its records carry what
+`core->out` carries for one action today:
+
+- for a send: its index, an evaluated name, target, type and delay, a
+  payload handle, a sendid string;
+- for a cancel: a sendid;
+- for a log: a label and text;
+- for a raise: a name id.
+
+They are data the system applies without the code that made them.
+
+| Step | The system's application | Unchanged from today |
+|---|---|---|
+| raise | push onto the internal queue | the event pool's push |
+| send | `ta_system_route_send` (timers, routing, an effect); a refused timer raises `error.execution` (`schedule.c:141-145`); a send that leaves the system parks the actor **at the boundary** until decided | the routing code |
+| cancel | `ta_system_cancel` | yes |
+| invoke, uninvoke | `ta_system_invoke` and its uninvoke; the child's handle written into the instance's invoke words | yes |
+| log, done | the effect | yes |
+
+Nothing in the rest of a microstep reads the internal queue, so
+applying raises and routing errors in list order gives the interpreter's
+queue order. A send's own evaluation errors (attributes, a target that
+`opcode_send` rejects) stay in the step, as the interpreter has them in
+core, and skip the rest of their block. **What moves:** a send that
+leaves the system is decided after its microstep. The datamodel reads
+the same time throughout one run, so a `Date` read later in the block
+sees the run's time, not the time of the run that resumes after the
+decision. Whether any W3C test observes this is unverified. The suite
+in compiled mode settles it.
+
+### 4.2 Resources, fuel, and the one pause
+
+A compiled microstep cannot stop part-way through a block, because an
+`<assign>` already done cannot be undone.
+
+- **Reservation.** Before a microstep runs, it reserves what its
+  transition set can use: pending-action records, event slots and slab
+  bytes. The lowering computes this per selected set: static strings
+  are known, and each dynamic string is bounded by
+  `TA_SYSTEM_MAX_STRING`. `opcode_send` already checks the event pool,
+  the timers and the slab's room before it evaluates anything
+  (`core.c:1102-1116`); the compiled step does the same once per
+  microstep, not once per send. When a pool refuses, the step returns
+  `TA_STEP_EXHAUSTED` before anything has run, and the host grows the
+  region as today. Reserving for dynamic strings at their bound costs
+  slab headroom. How much, for real charts, is unverified.
+- **`<foreach>` with actions.** Its count is known only at run time.
+  This is common: 66 of the 69 repository charts with a `<foreach>`
+  raise or send inside one, mostly fan-outs to members. Such a loop
+  **flushes** when its reservation runs out: the step stores a small
+  private continuation and returns `TA_STEP_ACTIONS`. The continuation
+  is the loop's instruction, the iteration, the datamodel's array
+  handle, and the masks it still needs, in a workspace of compiled
+  format. The step resumes at the next iteration. This is the only
+  place where compiled code pauses mid-microstep.
+- **Fuel.** The step charges the units the interpreter charges at the
+  same points: one per candidate transition tested, per state exited or
+  entered, per instruction, plus what the datamodel reports
+  (`architecture.md` section 7.3). These are mostly constants per path,
+  so the fuel clock and every OTLP time match. It yields only at
+  microstep boundaries and `<foreach>` flushes. A microstep with no loop
+  is not preemptible, where the interpreter yields once the overrun
+  reaches `overrun_max`. That is given up. A datamodel call is already
+  the unit of atomicity.
+- **Cancel.** The cancel flag is checked at microstep boundaries, as
+  the interpreter checks it (`core.c:1978`, `:2062`).
+
+### 4.3 Tracing and inspection
+
+Trace records are written through the same writers (`trace_step.c`'s
+step records, `trace_condition`, `trace_sent`, `trace_cancelled`,
+`trace_microstep`, `trace_macrostep_begin` and `_end`). They are called
+with explicit facts, not read from a workspace, at the same points. With
+the same fuel stamps, a run gives the same journal and so the same
+OTLP. The differential test (5.2) compares journals byte for byte.
+`inspect`, `states`, `transitions`, `disassemble`, `graph` and `diff`
+read the image, which the module keeps. `inspect` of a module adds each
+chart's mode.
+
+### 4.4 Snapshots, hibernation, migration, versions
+
+| Situation | Design B |
+|---|---|
+| an actor at a microstep boundary (idle, or between microsteps) | the instance only, as the interpreter's; a snapshot is the same bytes, and restores in either mode |
+| an actor whose list is pending (the run stopped for growth while applying it) | the list is in a described pool, so it is part of the snapshot, and any build of the same layout applies it without compiled code |
+| an actor mid-microstep in compiled code (a `<foreach>` flush) | **`ta_host_snapshot` refuses** with a status that says to run first. The actor reaches its boundary at its next turn. The alternative, describing the compiled continuation in the region, ties a snapshot to the code that wrote it. A changed row in `docs/boundary.md` ("The contract, per call"), and an open question |
+| hibernation, export | unchanged: stable actors only (`architecture.md` section 16.1) |
+| migration between versions | unchanged: `ta_blob_migrate` maps instances by state id; each version's code is keyed by its image hash, and a hash with no code runs interpreted |
+| an interpreter snapshot restored into a compiled module, an actor mid-microstep | the interpreter finishes that microstep; it stays in the module for this, and for charts that are not compiled |
+
+The pending-actions pool changes the region's types once, so the layout
+id changes once, in the commit that adds the pool, as any change of
+region types does (`region_layout.c`).
+
+### 4.5 Lifetimes
 
 | Object | Owner | Created | Read by, when | Ends | Thread |
 |---|---|---|---|---|---|
-| generated functions, directory | the module | the writer, at `tinyactors compile` | `ta_core_step`'s dispatch, every step | with the instance of the module | the instance's |
-| the image (strings, records) | the module, then the host's copy | instantiation, `ta_host_add_image` | the generated code for strings and sends, inspection, snapshots, migration | never: linear memory does not shrink | the instance's |
-| the instance | the segment's slab | spawn | the interpreter or the generated code, during a step | the actor's end | the instance's |
-| the workspace and its continuation | the segment's pool | the start of a microstep (`acquire_workspace`) | whichever mode resumes | the end of the microstep | the instance's |
-| `core->out` (a send, an invoke) | core | a step returning `TA_STEP_*` | the system, before the next step | the next step (`release_temporaries`) | the instance's |
-| effects and outputs | the host | the drain | the embedder | the ack (ADR 0012; `tinyactors-core/docs/boundary.md` section 7) | the instance's |
+| generated functions, the module's directory | the module | the writer, at `tinyactors compile` | `ta_core_step`'s dispatch | with the instance of the module | the instance's |
+| the step's sets (selected, exit, entry) | the compiled step | the microstep's start, in WASM locals | the step itself | its return | the instance's |
+| a pending-action record | the segment's pool | the step, during the microstep (reserved first) | the system, after `TA_STEP_ACTIONS`, in order | applied; or with the actor | the instance's |
+| a send's payload handle in a record | the datamodel, by handle; the record holds one reference | `capture`, in the step | the system's routing | moved into the event or released, as `core->out.payload` today | the instance's |
+| a datamodel string output (an evaluated event name, a log's text) | the datamodel, until its next call (ADR 0010) | the evaluation | copied into the slab at once (reserved) | the record's application | the instance's |
+| a `<foreach>` flush continuation | a workspace, in compiled format | the flush | the step's resume | the microstep's end | the instance's |
+| effects, outputs | the host | the drain | the embedder | the ack (ADR 0012; `tinyactors-core/docs/boundary.md` section 7) | the instance's |
 
-None of these rows differs between the two modes but the first.
+## 5. Holding a second implementation
 
-## 5. Code generation without LLVM
+### 5.1 The conformance suite in compiled mode
 
-| Option | On the user's machine | Size | Verdict |
-|---|---|---|---|
-| **core writes WASM binary directly** | nothing: the `tinyactors` binary | an encoder of about 400 lines (sections, LEB128, a function body builder); the spike's is 30 lines of JavaScript | **recommended** |
-| emit C, compile with their compiler | clang or zig with a wasm32 target | the lowering plus a C writer | out: it brings back the toolchain that wasm-modules.md removed; possible later for native embedders (section 10) |
-| emit WAT, assemble it | a WAT assembler (wabt, binaryen) | a text writer, plus a dependency | out: WAT is a debugging view; the binary is as easy to write (the spike wrote it) |
+The module adapter (wasm-modules.md step 5) runs every suite against a
+module whose charts are all compiled. That means:
 
-**Where it lives.** A new freestanding layer, `src/lower`, in
-`libtinyactors_runtime` beside `src/compile` and wasm-modules.md's
-`src/wasm_module`. It reads an image view (and the analysis layer), and
-writes function bodies through `ta_output`. It uses no recursion, and
-takes memory from the arena it is given. Its input and output follow the
-C rules: `ta_bytes` in, `ta_buffer *` out, at most three parameters.
+- the protocol vectors;
+- the scenarios;
+- **the W3C IRP suite on quickjs**, with the same skip list as
+  `ta-conform` (`tests/support/datamodel_test_w3c_skip.txt`).
 
-```c
-/* tinyactors/lower.h (sketch): which charts of an image can be compiled,
- * and the code of those that can, for a template's function directory. */
-typedef struct ta_lower_input {
-    uint32_t size;
-    uint32_t pad;
-    ta_bytes image;     /* read during the call */
-    ta_bytes directory; /* the template's custom section: core's functions by index */
-} ta_lower_input;
-/* Writes the functions and a per-chart table (compiled, or the reason it is
- * not: datamodel, unsupported content) into `out`. TA_ERROR_NO_MEMORY:
- * `length` is what it needs. TA_ERROR_INVALID: an image that does not open,
- * a directory of another ABI. */
-TA_API ta_status ta_lower_charts(const ta_lower_input *input, ta_buffer *out);
-```
+Every case must pass, as `mise run conform` requires of `ta-conform`.
+This is the main hold, and it is possible only because the step serves
+every datamodel. On the null datamodel alone, W3C has one test
+(`tinyactors-test/suites/w3c/irp/436/test436.txml`).
 
-**The module.** wasm-modules.md's writer already copies a template and
-adds a data segment. To that it adds three things:
+### 5.2 The differential test: what it covers and what it does not
 
-- the generated functions, appended to the function and code sections,
-  so no existing index moves;
-- an element segment that puts them in the template's table;
-- a directory in the descriptor's segment: image hash, chart and table
-  index.
+It runs both modes from the same instance bytes and compares:
 
-The template lists the indices of core's functions from `compiled.h` in
-a custom section, the directory the lowering reads. It is versioned with
-the template's ABI (wasm-modules.md section 9). The module imports
-nothing.
+- the instance;
+- the list of actions against the interpreter's sequence of `TA_STEP_*`;
+- the fuel;
+- the trace journal;
+- the datamodel's serialized state.
 
-**Size.** The lowering for the whole null datamodel has to handle
-history, eventless loops, `<raise>` and the internal queue, conflicts,
-done events, fallback points and resume points. That comes to about
-2,500 to 3,500 lines with the encoder and the writer's additions, which
-is unverified. The compiler (`src/compile`) is 3,267 lines.
+**Null charts:** every reachable (configuration, event class) pair the
+analysis layer finds, at most 1,080 per chart in the repository. History
+words are seeded from random walks of the interpreter, because the
+search has no valid source for them.
 
-**The CLI.**
+**ECMAScript charts:** seeded random event sequences, as the spike's,
+and the suite's cases replayed.
 
-```sh
-tinyactors compile order.scxml --emit wasm --mode compiled -o order.wasm
-tinyactors inspect order.wasm   # its template, images, and per chart: compiled or interpreted, and why
-```
+What it does not cover, because a step depends on more than its
+configuration and event:
 
-`--mode interpreted` is the default. `--mode compiled` compiles every
-chart it can and reports each one's mode in the answer, with a reason
-for those it leaves interpreted (`datamodel ecmascript`, `history` while
-the lowering lacks it). It never refuses a module for them.
-`disassemble`, `graph`, `states` and `diff` read the image, which the
-module still holds, so they are unchanged.
+| Input | Covered by instead |
+|---|---|
+| pool free counts and the reserve (`opcode_send`, `core.c:1102-1116`), slab room, workspace availability | targeted tests that refuse each reservation in turn (a sweep, in `--full` when large) |
+| fuel and `overrun_max` | runs at quanta from 1 upwards |
+| a full effect queue (`schedule.c:127`) | the system's existing tests, with compiled charts |
+| tracing rules (what is written) | the journal comparison under each detail class |
+| the cancel flag, an internal queue filled from outside (error.communication by the host), refused timers (`schedule.c:141-145`) | scenario cases, in both modes |
+| history beyond what walks reach | the scenarios' history cases (`parallel-history`) and W3C |
 
-## 6. Measurements
+So the table oracle of level (c) is evidence over the configurations,
+not a proof of the step.
+
+## 6. Code generation without LLVM
+
+### 6.1 Writing WASM
+
+| Option | On the user's machine | Verdict |
+|---|---|---|
+| **core writes WASM binary directly** | nothing: the `tinyactors` binary | **recommended.** The spike's encoder is 30 lines of JavaScript; in C, about 400 lines (unverified) |
+| emit C, compile it | clang or zig for wasm32 | out: the toolchain wasm-modules.md removed; possible later for native embedders |
+| emit WAT | an assembler | out: a debugging view only |
+
+The lowering is a new freestanding layer, `src/lower`, in
+`libtinyactors_runtime` beside `src/compile` and `src/wasm_module`. It
+reads the image view and level 0's static sets (shared with the
+interpreter and the analysis, section 2.2), and writes function bodies
+through `ta_output`. It uses no recursion. It takes `ta_bytes` in and
+fills a `ta_buffer`, with at most three parameters per function.
+`tinyactors compile --emit wasm --mode compiled` compiles every chart
+and reports each one's mode. `--mode interpreted` is the default.
+
+### 6.2 The step's runtime and its ABI
+
+The generated code touches no struct. For everything but its control
+flow it calls about 20 **runtime functions**
+(`src/core/compiled.c`), taking the core, the instance and numbers.
+Some of them:
+
+- `configuration` (the address of the instance's configuration words);
+- `begin` and `end` of a macrostep or microstep;
+- `condition`, `assign`, `capture`, `log` and `data`, each by an
+  expression index or a bytecode pc whose operands it decodes from the
+  image;
+- `action` (append a pending action), `reserve`, `flush`;
+- the trace writers.
+
+Every result is a number returned. No address of a local is taken, so
+generated functions need no shadow stack. Each runtime function wraps a
+`static inline` body that the interpreter's `vm` inlines too, so each
+action has one implementation, and the interpreter's code and speed do
+not change (unverified until built: `-O2` must still inline it into
+`vm`). The template lists the runtime functions' indices in a custom
+section, the directory the writer reads, versioned with the template's
+ABI (wasm-modules.md section 9). The writer appends the generated
+functions, adds an element segment for the template's table, and fills
+a per-chart directory (image hash, chart, table index), with no index
+renumbered. No struct offset or layout is in the writer, so
+boundary-design's rule holds: layouts are hand-written C, and only C
+touches structs.
+
+## 7. Measurements
 
 Machine: Intel Xeon @ 2.10 GHz, 4 vCPUs, Linux 6.18, Node 22.23.5, zig
 0.16.0 at `-O2`, the 0.4.0 amalgamation (`tinyactors-core/dist/`),
-2026-11-25, run one after another with nothing else running. The files
-are in
+2026-11-25, run one after another. The files are in
 `/tmp/claude-0/-home-user/48aea8a4-edf2-5799-91e9-403c27e0dc94/scratchpad/wasm-aot/`
 (`bench/`, `lowered/`, `configs/`).
 
-### 6.1 The chart and the spike
+### 7.1 The charts and the spike
 
-`bench/order.scxml`, on the null datamodel, has two parallel regions:
+- **Null:** `bench/order.scxml`, an order with two parallel regions.
+  The order runs `cart`, then `paying` on `checkout`, guarded by
+  `In('cleared')`; `paying` has a 30 s deadline, a delayed send that is
+  cancelled on exit. The risk check runs `scoring`, `cleared` and
+  `held`.
+- **quickjs:** `bench/order-es.scxml`, an order whose `item.added`
+  assigns `items` and `total`; `checkout` is guarded by `items > 0`;
+  `paying` assigns `attempts` on entry with the same deadline; a
+  declined payment assigns `problem` and `items`.
 
-- **the order:** `cart`, then `paying` on `checkout`, guarded by
-  `In('cleared')`. `paying` has a 30 s `payment.timeout`, a delayed send
-  that is cancelled on exit. From there `paid`, then `shipped`. A
-  declined payment or the timeout leads back to `cart`.
-- **the risk check:** `scoring`, `cleared` and `held`.
+A benchmark cycle is `item.added`, `checkout`, `payment.declined`.
+`bench/interp.c` and `bench/interp2.c` run one actor, with a send, a
+run, a take and an ack per event.
 
-`item.added` is a targetless transition. A benchmark cycle is
-`item.added`, `checkout` (the guard, an entry, a delayed send) and
-`payment.declined` (an exit, a cancel).
+**The lowering spike:** `lowered/lower.mjs` writes WASM binary from the
+`.tai`. Its step buffers sends and cancels as actions, which is design
+B's shape without the runtime functions. It refuses more than 32
+states, history, eventless transitions, `<raise>`, dynamic sends,
+conflicts and datamodels other than null. It ignores executable content
+in `<initial><transition>` (`core.c:1819-1824`), which the chart has
+none of. `lowered/drive.mjs` replays the interpreter's recorded 5,002
+seeded events (8 configurations, 558 sends and cancels). **No
+configuration and no count of pending timers differs from the
+interpreter's.** The simulated runtime arms the deadline on a send and
+disarms it on a cancel, and the interpreter's count comes from
+`ta_system_stats.timers`.
 
-- **The interpreter:** `bench/interp.c`, as
-  `tinyactors-napi/tools/spikes/browser/perevent.c`. One actor per
-  event: `ta_system_send`, `ta_runtime_run`, a take and an ack, with
-  tracing on or off. It was built natively, and for wasm32-wasi to run
-  in `node:wasi`.
-- **The lowering:** `lowered/lower.mjs` reads the `.tai` and writes a
-  WASM module in binary. It refuses what it does not handle: more than
-  32 states, history, eventless transitions, `<raise>`, dynamic sends, a
-  datamodel other than null, and conflicts. `lowered/drive.mjs` replays
-  the interpreter's recorded sequence (5,002 events from a seeded
-  xorshift, visiting 8 configurations, 558 sends and cancels). **No
-  configuration differs from the interpreter's.** Then it times
-  `bench(…)`, a loop inside WASM.
-
-### 6.2 Per event
+### 7.2 The null chart
 
 | Build | ns per event, the last rounds | Instructions per event (callgrind, native) |
 |---|---|---|
@@ -413,193 +552,214 @@ are in
 | interpreter, native, tracing | 505, 503, 527, 656 | 6,000 |
 | interpreter, WASM in Node, no tracing | 522, 529, 526, 505 | — |
 | interpreter, WASM in Node, tracing | 778, 836, 800, 862 | — |
-| **the lowered step alone**, WASM in Node | 14.1, 14.8, 13.8, 13.5 | — |
+| the lowered step alone (design B's work, without its runtime calls) | 14.1, 14.8, 13.8, 13.5 | — |
 
-Where the interpreter's time goes, with no tracing:
+- **The step's share:** `ta_core_step` takes 64 % natively (2,636
+  instructions per event) and 62 % in WASM (V8's sampling profiler,
+  `bench/prof.mjs`).
+- **Its calls:** it is entered 200,003 times for 60,000 events, `micro`
+  100,002 times.
+- **Its parts, exclusive, per event:** `micro` 610, `select_transitions`
+  443, `ta_core_step`'s own 414, `init_k` 414 (layouts recomputed on
+  each of 3.33 calls, `core.c:271`), `run_code` 200, the `In()` parse
+  134, `release_temporaries` 80, `trace_sent` and `trace_cancelled` 28.
+- **Outside the step:** a send's name lookup in the trie costs 279
+  instructions (7 %).
 
-| Part | Share | Evidence |
+**Projection for design B**, unverified. What stays outside the step is
+about 38 %, or 200 ns. Kept inside it:
+
+- the event's bind and release;
+- the step-counter and macrostep hooks;
+- the reservation and the appending of actions;
+- the runtime calls.
+
+That is about 300–500 instructions, 40–65 ns. With the generated 14 ns,
+an event costs **about 255–280 ns: 1.8–2× cheaper**. With tracing on,
+the records cost the same in both modes, so about 820 ns becomes about
+570 ns, 1.45×. **For design A:** about 1.15× before compiled resume
+points (selection and `In()` are about 14 % of the event), and 1.45–1.7×
+after (680–1,100 instructions kept, the refutation's count).
+
+### 7.3 The quickjs chart
+
+| Build | ns per event, last rounds | First session: spawn and its first cycle |
 |---|---|---|
-| `ta_core_step`, inclusive | 64 % natively (2,636 instructions, 3.33 calls per event); **62 % in WASM** | callgrind; V8's sampling profiler over the WASM build (`bench/prof.mjs`) |
-| of which the phase machine, `init_k`, workspace and cursors | `micro` 610, `select_transitions` 443, `ta_core_step` itself 414, `init_k` 414, `run_code` 200 instructions | callgrind, exclusive |
-| of which `In()` parsed on each evaluation | 134 per event (403 per evaluation) | callgrind: `null_condition`, `parse_in`, `ta_image_state_by_name` |
-| `ta_system_send` | 14 %, of which the event's name looked up in the trie, 279 instructions (7 %) | `ta_event_set_name` |
-| the rest of the system's run: routing, timers, the queues | about 20 % | — |
+| native, shared realm (the default) | 1,989, 2,014, 2,107, 2,319, 1,968, 1,961 | 116 us, then 18 us, 10 us |
+| native, isolated realm | 1,371, 1,467, 1,167 | 306 us, 310 us, 234 us: every session |
+| WASM in Node, shared realm | 3,532, 3,437, 3,583, 3,312, 3,306, 3,741 | 1,103 us, then 46 us, 29 us |
 
-**Projection** (WASM, no tracing). The interpreter takes 520 ns, and the
-62 % in the step is about 320 ns. Without the step, about 200 ns
-remain, and those stay in every mode. The lowered step costs 14 ns, but
-it leaves out bookkeeping that a real compiled step keeps: binding and
-releasing the event, acquiring and releasing a workspace, the macrostep
-hooks, fuel, the fallback writes. Natively that bookkeeping is about 450
-instructions, or about 57 ns at the same rate. That gives **about 270
-ns, 1.9 times cheaper**, and 212 ns (2.45 times) if the bookkeeping
-cost nothing. With tracing on, trace records cost the same in both
-modes, so about 820 ns becomes about 570 ns (1.45 times). The
-projections are unverified until step 4 of section 9 measures a real
-compiled step in the torture chamber.
+Where the WASM event goes (V8's profiler):
 
-**Level 0, measured.** `bench/level0.c`, a copy of the amalgamation
-whose `null_condition` resolves each `In()` once, saves 120 instructions
-per event (3 %). It costs nothing and helps the interpreter, but it is
-not the mode.
+| Part | Share |
+|---|---|
+| `ecmascript_assign` | 42.3 % |
+| `ecmascript_bind_event` | 30.8 % |
+| `ecmascript_condition` | 5.1 % |
+| `ta_core_step`, without its datamodel calls (59.5 − 42.3 − 5.1) | **12.1 %** |
+| `ta_system_send` | 2.5 % |
 
-### 6.3 Size
+Natively (callgrind) an event is 21,975 instructions. 81 % of them are
+quickjs's, and the other 4,141 are about the null chart's whole event.
+The chart's expressions never read `_event`.
 
-| Chart | Image | Generated module | `step` function |
+So the compiled step can save **at most about 12 % of a quickjs event,
+1.14×**, and with design B's kept work about 1.05–1.1× (a projection).
+In this mode the datamodel dominates the quickjs event. Its own
+frontloading targets the larger costs:
+
+- `_event` binding, 31 %, on a chart that never reads it;
+- the first session of a chart, 1.1 ms in WASM;
+- the isolated realm, about 250 us per session natively.
+
+What removing them saves is unverified. Tracing on quickjs was not
+measured.
+
+### 7.4 Size
+
+| Chart | Image | Generated module | `step` |
 |---|---|---|---|
-| the order (11 states, 12 transitions) | 2,816 B | 831 B | 689 B |
+| the null order (11 states, 12 transitions) | 2,816 B | 831 B | 689 B |
 | `tests/diagram/insurance-claim.scxml` (11, 13) | 2,600 B | 842 B | 700 B |
 | synthetic, 4 regions × 4 states (22, 21) | 3,680 B | 1,252 B | 1,110 B |
 | synthetic, 6 regions × 4 states (32, 31) | 5,032 B | 1,848 B | 1,706 B |
 
 The spike refused `order-processing`, `warehouse-order` and `checkout`
-(transitions in different regions can conflict), `support-ticket`
-(history) and `subscription` (ECMAScript). The real layer must handle
-the first three, and does so by falling back where needed. The
-interpreter's step functions are about 10 KB of the WASM build's 242 KB
-of code (`bench/sizes.mjs`). The interpreter stays as the fallback, so
-compiling adds code and removes none.
+(conflicts), `support-ticket` (history) and `subscription`
+(ECMAScript). The interpreter's step functions are about 10 KB of the
+WASM build's 242 KB of code. The interpreter stays, so compiling adds
+code.
 
-### 6.4 Not measured
+### 7.5 Not measured
 
-- a real compiled step: the bookkeeping cost above, the fallback, and a
-  trace journal identical to the interpreter's;
-- wasmtime or any other runtime (only Node);
-- charts with history, `<raise>` or conflicts lowered;
-- static entry lists in the image (level 0); 11 % of the step is an
-  upper bound from a profile without inlining;
+- a compiled step with its runtime calls, reservation and action
+  application, so every projection above is unverified;
+- the datamodel-side savings (bytecode ahead, `_event` skipped);
+- tracing on quickjs;
+- wasmtime;
+- slab headroom for reservations;
+- static entry sets (at most 11 % of the null step);
 - the lowering's size in C;
-- the effect of name ids on inputs (section 10).
+- whether `-O2` still inlines the shared action bodies into `vm`.
 
-## 7. What remains runtime no matter what
+## 8. What remains runtime no matter what
 
-| Part | Where it lives | Why it cannot be frontloaded |
+| Part | Where it lives | Why |
 |---|---|---|
-| mailboxes, the internal queue, the event pool | system, core's event pool | contents arrive at run time; `<raise>` pushes onto the queue in order |
-| timers (delayed sends) | system (`ta_system_route_send`, `ta_system_cancel`) | the clock enters through `ta_host_advance_time` |
+| mailboxes, the internal queue, the event pool | system, core's event pool | contents arrive at run time |
+| timers | system | the clock enters through `ta_host_advance_time` |
 | routing, segments, the transport, I/O processors | system and host | targets resolve against live sessions |
-| `<invoke>`, children, `done.invoke` | system | a child is another actor, with its own turns |
-| hibernation, migration, snapshots | system and host | they read and write instances, which do not change |
-| tracing, OTLP, metrics | core's trace helpers, system, `src/otlp` | the same records at the same points (section 3.2) |
-| the datamodel's values (other than null) | the datamodel | the engine's |
+| `<invoke>` and children | system | a child is another actor |
+| values, conditions, assignments | the datamodel, by handle and expression index | the maintainer's direction; the engine's |
+| hibernation, migration, snapshots | system and host | they read instances, which do not change |
+| tracing, OTLP, metrics | the trace writers, `src/otlp` | the same records at the same points |
 | the scheduler, fuel, the quantum | system | fairness across actors |
 
-## 8. Recommendation
+## 9. Recommendation
 
-**Level (b), for the null datamodel only, inside the module.** It
-should be a fast path that shares the interpreter's state and handlers,
-generated as WASM binary by a freestanding layer in core, with no
-compiler and no imports. Level 0 (facts in the image: `In()` resolved,
-static entry sets and domain masks) comes first. It helps every
-datamodel, and it is the one place where interpreter, analysis and
-lowering compute the same thing. Level (c) is used as the test oracle,
-not at run time. Level (a) is not built. Level (d) waits for a datamodel
-worth compiling (section 2.4).
+1. **Level 0 first, on its own:** static entry sets and domain masks in
+   the image, read by the interpreter, the analysis and the lowering;
+   `In()` resolved. It is small (up to about 14 % of a null event) and
+   helps the interpreter whatever is decided next.
+2. **Prepare the datamodel at compile time, quickjs first:** measure,
+   then remove the first-use compiles (bytecode at `tinyactors compile`)
+   and `_event` binding for charts that cannot read it. For the
+   ECMAScript charts the repository is made of, this is the larger win.
+3. **Design B for the compiled step, for every datamodel,** with the
+   full suite in compiled mode as its hold. It is worth building where
+   the step is the cost: the null datamodel (1.8–2×, projected) and,
+   later, staticjs. On quickjs it buys at most 1.1×.
 
 **What is given up:**
 
-- a second code path: every change to core's step changes the lowering
-  in the same commit, and the continuation encoding and the fuel and
-  trace points become a contract between them;
-- some freedom in the interpreter: an optimization that moves fuel or
-  trace points must move them in the lowering too;
-- code size per chart, about 50 B per transition, with the image kept;
-- nothing for ECMAScript, Python or quickjs charts, which are nearly all
-  of today's charts;
-- nothing for native embedders, until an `--emit c` path exists;
-- the gain is bounded: the system's share, about 200 ns of 520 ns, is
-  untouched. Lowering cannot make an event cheaper than routing,
-  queueing and the loop around it.
+- **a second implementation of the step**, which the maintainers keep
+  in agreement with the first: every change to the algorithm in
+  `src/core` changes the lowering in the same commit;
+- **preemption inside a microstep** with no loop;
+- **when a send that leaves the system is decided:** after its
+  microstep, not in the middle of it;
+- **snapshots of an actor mid-microstep in compiled code:** they are
+  refused;
+- **one change of region layout,** for the pending-actions pool;
+- **code size,** about 50 B per transition per chart;
+- **little for quickjs,** and nothing for Node's or Python's engines;
+- **nothing for native embedders** until an `--emit c` path exists.
 
-## 9. Order of work
+## 10. Order of work
 
 Each step is a commit that passes `mise run test` in core:
 
-1. **Level 0.** The compiler resolves `In('id')` into an expression of
-   its own kind with the state index (`TA_EXPRESSION_*` and
-   `datamodel_null.c`), and writes static entry sets and domain masks
-   into the image, which `compute_entry` reads (`architecture.md`
-   section 15). The image version changes. Test: `test_core`, `conform`,
-   and `mise run layout`, unchanged. Measured with the torture chamber.
-2. **The step entry and `compiled.h`.** A per-chart pointer in
-   `ta_core`, NULL by default. The trace helpers take their facts as
-   arguments. `tests/unit/test_compiled_step.c` writes a "compiled" step
-   for the spike's order chart by hand **in C**, plugs it in natively,
-   and runs the exhaustive differential test (section 3.3) and the
-   fallback sweep. This holds the contract before any WASM exists.
-3. **`src/lower` and its encoder**, writing WASM for the null charts it
-   can handle and leaving the rest interpreted. Test: `wasm:test` runs
-   the order chart and the torture charts compiled in Node, and repeats
-   the differential test inside WASM.
-4. **The writer merges code** (wasm-modules.md's writer, with a template
-   directory) and **`--mode compiled`**, with `inspect`. Measured: the
-   torture chamber's null scenarios, interpreted against compiled,
+1. **Level 0.**
+   - Static entry sets and domain masks in the image, read by
+     `compute_entry` and by `ta_analysis_machine_init`.
+   - `In()` resolved: an expression kind of its own, or the null
+     datamodel's `chart_attach`.
+   - The image version changes. Tested by `test_core`, `test_analysis`
+     and `conform`.
+2. **The quickjs measurements of section 7.3, split:** attach analysis,
+   context creation and compiles per expression. Then bytecode ahead
+   and the `_event` scan, each measured against the interpreter, side by
+   side.
+3. **`TA_STEP_ACTIONS` and the pending-actions pool.**
+   - The system applies lists, and the layout id changes.
+   - The runtime functions wrap the inline bodies that `vm` shares.
+   - The snapshot refusal, with its row in `boundary.md`.
+   - Tested natively, by a step for the null order chart written by
+     hand in C, under the differential harness of 5.2 and the
+     reservation sweep.
+4. **`src/lower` and its encoder**, for the null datamodel, through the
+   module writer and `--mode compiled`. The differential test runs
+   inside WASM in `wasm:test`. Measured: the null charts of the torture
+   chamber and the scale benchmark, interpreted against compiled,
    throughput and memory side by side.
-5. **Coverage:** history, eventless loops, `<raise>`, conflicts and done
-   events, each with its differential cases. Then compiled resume
-   points, so that a step that returns on a send goes on in compiled
-   code.
-6. **The module adapter's suites** against compiled modules.
+5. **Every datamodel:** datamodel calls by expression index; `<foreach>`
+   flushes; history, eventless loops, conflicts and done events.
+6. **The suite in compiled mode:** the module adapter, with protocol,
+   scenarios and W3C on quickjs. Every case must pass.
 
-## 10. Open questions for the maintainer
+## 11. Open questions for the maintainer
 
-- **Is the null datamodel enough?** The mode's users are those who
-  write pure control flow. Should a typed-record datamodel (section 2.4)
-  be proposed so that applications with counters and flags can compile
-  too?
-- **Native too?** `--emit c` of the same lowering, for C embedders with
-  a compiler, would need a public way to bind a step to a chart, and so
-  an ADR.
-- **Level 0 alone:** should resolved `In()` and static entry sets land
-  whatever the decision on compiled charts? They are measured at 3 %,
-  plus up to about 7 % (unverified).
-- **Name ids on inputs:** a send pays 279 instructions (7 %) to look its
-  name up in the trie. A module could export event-name ids, which an
-  embedder passes instead of text. That is a change to `ta_event_in`,
-  for every datamodel and outside this mode.
-- **The template's function directory:** a custom section of indices,
-  or reserved exports? Either way it is versioned with the template's
-  ABI.
+- **Snapshots:** may `ta_host_snapshot` refuse while an actor is
+  mid-microstep in compiled code? The alternative is a described
+  compiled continuation, which ties a snapshot to the code.
+- **Sends that leave the system** decided after their microstep: is
+  that acceptable, if the suite agrees?
+- **Is preparing the datamodel ahead part of this mode?** It is where
+  quickjs's time goes: bytecode in the image, or beside it, keyed by the
+  datamodel's version.
+- **Is the null datamodel's 1.8–2× worth a second implementation**, or
+  does the step wait for staticjs, where the datamodel is cheap enough
+  for the step to matter?
+- **Native too?** `--emit c` for C embedders would need a public way to
+  bind a step to a chart, and so an ADR.
+- **Name ids on inputs:** a name lookup is 7 % of a null event, for
+  every datamodel and outside this mode.
 
-## 11. Checking the recommendation
+## 12. Checking the recommendation
 
-The reasoned-analysis skill asks for a fresh agent to refute the
-recommendation against the code. **That check has not run.** This
-proposal was written by a delegated agent that has no tool to start
-another agent. The session that asked for it should run the check before
-the proposal reaches a decision, and until then the verdicts below are
-the author's own. The author's pass:
+**A fresh refutation of this revision has not run.** This proposal was
+written by a delegated agent with no tool to start another agent, so the
+session that asked for it should run one. The refutation of the first
+draft did run, through that session, and is folded in:
 
-| Claim | Check | Verdict |
-|---|---|---|
-| The null datamodel's event is mostly core | 62 % in `ta_core_step` in WASM, 64 % natively | confirmed for one chart; other charts unmeasured |
-| A lowered step agrees with the interpreter | 5,002 events, 0 configurations differ | plausible: configurations only, not effects or trace bytes; no history, raise or conflicts |
-| About 1.9 times cheaper per event | measured parts plus an instruction-count estimate of the retained bookkeeping | plausible: settled by step 4 |
-| Snapshots and blobs are unchanged | compiled code keeps the instance layout and writes the interpreter's continuation | plausible: rests on the fallback writing every workspace field, which step 2's sweep tests |
-| OTLP is unchanged | fuel and trace calls at the same points (`otlp_wall_of` reads fuel) | plausible: settled by comparing journals in step 2 |
-| Tables (c) are small for real charts | 195 + 225 charts measured; product growth shown | confirmed as upper bounds (the search over-approximates), except for configurations reached through history |
-| No imports are needed | generated code calls functions inside the module | confirmed by construction; the template's directory is new |
-| The fallback at a mid-microstep return is correct | core resumes from the workspace (`ta_core_step`, `PHASE_MICROSTEP`) | plausible: the interpreter must accept every continuation the generated code writes, which needs the sweep |
+| Finding | What changed |
+|---|---|
+| 1. The 1.9× rested on a step doing other work (200,003 step calls, kept work omitted) | design B is the one the spike timed; A's figures are restated as 1.15× before and 1.45–1.7× after resume points (7.2) |
+| 2. Only configurations compared; initial-transition content ignored; the 1,080-pair bound mixed two charts | pending timers are now compared too (0 differ); the spike's gap is stated (7.1); pairs are per chart, 1,080 being `car`'s own (2.3) |
+| 3. "Not a second implementation" was false | said plainly (3.1); held by the full suite in compiled mode (5.1) |
+| 4. The oracle is not a proof | what the differential test covers and does not, with what covers the rest (5.2) |
+| 5. The fallback continuation is far larger than drafted; snapshots not byte-identical; architecture.md 7.1 drift | design A described with its real continuation (2.1, 3.2); B avoids it; the drift noted (2.1) |
+| 6. Struct offsets and inlined handlers as a writer–template ABI | B's ABI is function indices only, wrappers over shared inline bodies (6.2) |
+| 7. The null population has no application charts; the torture charts save little | the step now serves every datamodel; the torture claim is dropped; quickjs measured (7.3) |
+| 8. The own-state design was dismissed | it is now the recommendation, with its effect contract, fuel, tracing and snapshots (3.3, 4) |
+| 9. Projections stated as results; an uncited review | marked as projections throughout; the review is named with its verdict |
 
-Changed during the pass:
+The author's own pass on this revision:
 
-- Tables (c) moved from "a mode" to "the oracle" once the lowered step
-  measured 14 ns.
-- Level 0 went from "the cheap win" to "a prerequisite", once resolving
-  `In()` measured 3 %.
-- "A new chart kind with its own layout" was dropped for the shared
-  state, because of snapshots and migration.
-
-## Glossary for this proposal
-
-When the proposal is adopted, these terms go to `GLOSSARY.md`.
-
-- **Compiled chart:** a chart whose step has WASM code in the module,
-  keyed by its image's hash; its actors run that code where it applies,
-  and the interpreter elsewhere.
-- **Lowering:** turning a chart's records and bytecode into that code
-  (`src/lower`).
-- **Fallback:** the compiled code writing the interpreter's continuation
-  and leaving the rest of the step to the interpreter.
-- **Function directory:** the template's list of the core functions
-  that generated code may call, by index.
+| Claim | Verdict |
+|---|---|
+| quickjs dominates a quickjs event in WASM (78 %; the step's own part 12 %) | confirmed for one chart; other charts unmeasured |
+| B's queue order equals the interpreter's | plausible: nothing in a microstep reads the internal queue; settled by the suite and the differential test |
+| A reservation makes a microstep atomic | plausible: the bound is per selected set without loops; slab headroom unmeasured |
+| Snapshots at boundaries are the same in both modes | plausible: the interpreter releases its workspace at the end of each microstep (`core.c:2144`); settled by comparing snapshot bytes in step 3 |
+| The datamodel's preparation pays more than the step on quickjs | plausible: the costs it targets are measured, the savings are not |
