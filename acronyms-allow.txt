@@ -94,3 +94,4 @@ windowId       copywriter/**/*                                           # chrom
 # the memory examples read that field.
 RssAnon        tinyactors-cpython/examples/memory/*                        # /proc/self/status field
 RssAnon        tinyactors-napi/examples/memory/*                           # /proc/self/status field
+RssAnon        docs/proposals/memory-accounting.md                         # /proc/self/status field

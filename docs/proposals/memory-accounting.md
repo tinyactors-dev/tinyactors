@@ -1,111 +1,111 @@
 # Memory accounting: core's costs from its definitions, the rest from counted allocations
 
-**Status:** Proposed (2026-11-25; revised the same day after an
-independent refutation, section 8).
+**Status:** Accepted (2026-11-25): the maintainer decided it (section 7);
+the work has not started (section 9 is its order).
 **Touches:** tinyactors-core (`tools/layout`, `mise/tasks/layout`, the
-fast pass in `mise/tasks/test`, `src/host/host.c` `host_new`,
-`include/tinyactors/stats.h`, `docs/requests.md` `host.stats`, possibly
-`src/otlp/otlp.c`), both bindings (`examples/memory`, `tools/measure.*`
-and the per-session tables in their `AGENTS.md`, the allocator wrapper),
-the wasm package if a binding property is added, the published tables
-(root `AGENTS.md`, "Published numbers").
-**Not a plan:** nothing here is decided or scheduled. ADRs and roadmaps win.
+fast pass in `mise/tasks/test`, `src/host/host.c` at creation,
+`include/tinyactors/stats.h`, `docs/requests.md` `host.stats`,
+`src/otlp/otlp.c`, `src/datamodel_ecmascript`), both bindings
+(`examples/memory`, the allocator they give their own tables, the
+retired `measure` tasks and the per-session tables in their
+`AGENTS.md`), the published tables (root `AGENTS.md`, "Published
+numbers").
 
 ## Summary
 
 The maintainer (2026-11-25): "our memory measurement approach is flawed,
 and we should base the core metrics on the actual data structure
-definitions and tracing allocator calls."
+definitions and tracing allocator calls", and, deciding it: **"I just
+need to be able to answer these questions based on the actual source
+code and then runtime profiles through tracing allocators"**: how much
+space an actor, a message, an event, a delayed send, a hibernated actor
+and the rest take.
 
-Today every published number per actor, message and delayed send is a
-difference of process memory, beside columns whose definitions mix
-owners. This proposal splits each row into parts with one owner each,
-and takes each part from the most exact source that already exists or
-can be added cheaply:
+So every number this project publishes about its own memory comes from
+one of two sources:
 
 | Part | Owner | Source | Exact? |
 |---|---|---|---|
-| what the host reserves for N things | core region | the definitions, through `ta_system_layout` (`carve()` over `sizeof`): `regionBytes` of a host sized for N less one sized for 0 | yes, at a given N (rounding depends on N) |
-| what the things use of it | core region | core's own pool and slab counters, already traced: `used` and `highWater` of each pool and `slabBytes` (`host.stats` `pools`) | yes |
-| everything the host allocates | core host | a counter around the host's allocator, wrapped once at creation, reported by `host.stats` | yes |
+| what the host reserves for N things | core region | the definitions, through `ta_system_layout` (`carve()` over `sizeof`), checked against the debug information in the fast pass | yes, at a given N |
+| what the things use of it | core region | core's pool and slab counters, already traced: each pool's `used` and `highWater`, `slabBytes` (`host.stats` `pools`) | yes |
+| everything the host allocates | core host | a counter around the host's allocator, wrapped once at creation; `host.stats` and OTLP report it | yes |
 | the binding's tables, arenas and datamodel writers | binding | a counter around the allocator the binding gives them | yes |
-| Python objects | engine | `tracemalloc` less the two counters above | yes for one CPython and population (spike) |
-| quickjs's heap | engine | `ta_datamodel_ecmascript_heap_bytes`, already a counting allocator | requested bytes; per-block overhead not counted |
-| V8's and JavaScriptCore's heaps | engine | measured after a forced collection, not traced | no: within about 2 % (spike) |
-| the process | — | `RssAnon` + `VmSwap` on Linux | no: informational, never asserted |
+| quickjs's heap | core's ECMAScript datamodel | its counting allocator, which will also count blocks | yes, once it counts blocks |
+| the process | — | `RssAnon` + `VmSwap` on Linux | no: one informational column, never asserted |
+
+What a chart's data costs in the application's own engine (Python
+objects on the `"python"` datamodel, V8's and JavaScriptCore's heaps on
+the native `"ecmascript"` one) is **not** measured: it is the chart's
+data in the application's engine, not a cost of tinyactors, and no
+interface of ours sees it. It is the main part of the gap between the
+process column and the sum of the rest, and the tables say so.
 
 Two findings shape the design:
 
-- **The host's allocator calls cannot give a cost per thing.** A host
-  sized up front allocates nothing while 100,000 actors are spawned
-  (spikes 2 and R1); its allocator reports capacity. Core's per-thing
-  numbers come from the definitions (reservation) and from core's own
-  pool and slab counters (use), which are already the "traced"
-  allocators of core's inside.
-- **The reservation is what a machine must hold.** A host sized for a
-  million actors is resident at creation: `RssAnon` grew by 196,435,968 B
-  for a `regionBytes` of 196,425,953 B, and by 4,096 B over the million
-  spawns (spike R2). So planning uses the reservation; "in use" from the
-  pools is a check and an operator's reading.
+- **The host's allocator calls give capacity, not a cost per thing.** A
+  host sized up front allocates nothing while 100,000 actors are spawned
+  (spikes 2 and R1). Core's cost per thing comes from the definitions
+  (reservation) and from its own pool and slab counters (use), which are
+  core's traced allocators inside its region.
+- **The reservation is what a machine holds.** A host sized for a
+  million actors is resident at creation: `RssAnon` grew 196,435,968 B
+  for a `regionBytes` of 196,425,953 B, and 4,096 B over the million
+  spawns (spike R2). Planning uses the reservation; use is a check and an
+  operator's reading.
 
 ## 1. Whom it serves, who pays, what is out of scope
 
 **First the capacity planner** (docs/roles.md: "How much memory per
 actor? ... Needs: documented costs per actor and per event"). Today the
-published row "per actor, started" on node native is 1327 B at 10,000
-actors and 501 B at 4,000,000
-(`tinyactors-napi/examples/memory/results/2026-11-20.csv`), and on
-CPython 341 B at 10,000 and 408 B at 1,000,000 (`tinyactors-cpython/README.md`,
-"Memory"): no column explains either direction. With the rows split,
-the planner reads a reservation per thing from core, the binding's and
-the engine's share per thing, and a fixed cost per host, and computes
-the machine for N.
+published "per actor, started" on node native is 1327 B at 10,000 actors
+and 501 B at 4,000,000 (`tinyactors-napi/examples/memory/results/2026-11-20.csv`),
+and on CPython 341 B at 10,000 and 408 B at 1,000,000
+(`tinyactors-cpython/README.md`, "Memory"); no column explains either.
+Afterwards the planner reads, per thing, what core reserves and uses and
+what the binding adds, a fixed cost per host, and, separately, what the
+process held in one run.
 
 **Then the maintainers** ("Did this change cost memory?"): a struct that
-grows changes `ta_system_layout`'s deltas, which the fast pass compares
-on the commit that grows it. Today nothing compares them: `mise run
-layout` is not in `mise run test` (`tinyactors-core/mise/tasks/test/_default:16-27`
-runs `Core::PROGRAMS` and one torture scenario; `ta-layout` is in
+grows changes `ta_system_layout`'s deltas, which the fast pass checks
+against the debug information on the commit that grows it. Today nothing
+does: `mise run layout` is not in `mise run test`
+(`tinyactors-core/mise/tasks/test/_default:16-27`; `ta-layout` is in
 `Core::TOOLS`, `tinyactors-core/mise/core.rb:332`).
 
-**Then the operator** ("Is it growing? Is a pool about to fill?"): the
-pools' use is in `host.stats` already (`docs/requests.md:191-200`); this
-adds the bytes the host holds through its allocator and their peak, of
-which `regionBytes` is a part. Over OTLP the operator and the
-observability backend get only the region today
-(`src/otlp/otlp.c:2279`, `tinyactors.memory`, "region"); a new metric is
-decision D1b.
+**Then the operator and the observability backend** ("Is it growing?"):
+the pools' use is in `host.stats` (`docs/requests.md:191-200`); the bytes
+the host holds through its allocator join it, and join the OTLP metrics,
+which carry only the region today (`src/otlp/otlp.c:2279`): one gauge
+per host, bounded cardinality.
 
 **Who pays:**
 
 | Who | What | How much |
 |---|---|---|
-| every host, per allocation | the counted wrapper: one indirect call and three integer operations | nothing per event: the host's allocator is called at growth, at creation and close, and once per `host.stats` or `metrics` call (`src/host/request.c:550`, `telemetry.c:215`); 0 calls in 100,000 spawns of a sized host (spikes 2, R1) |
-| core's API | three `uint64_t` in `ta_host_stats` (`stats.h:80-88`), three keys in `host.stats`; optionally one OTLP metric | a minor-version change; `ta_host_stats` has a `size` field |
-| core's fast pass | `ta-layout` built in the dev build and run once | one compile and a few dozen `ta_system_layout` calls |
-| each binding | wrap the allocator its tables, arenas and datamodel writers use; the memory example rewritten | about 20 lines of C each |
-| each binding, if D3 | one read-only property, its `docs/api-map.md` row, `index.d.ts`, `docs.h`, and **the wasm package's** own implementation (`tinyactors-napi/wasm/lib/host.mjs`, checked by `tools/parity.mjs`) | three implementations, not two |
-| the C embedder | nothing unless it reads the new stats fields | — |
+| every host, per allocation | the counted wrapper: one indirect call, three integer operations | nothing per event: the allocator is called at creation, growth, close and once per `host.stats` or `metrics` call (`src/host/request.c:550`, `telemetry.c:215`); 0 calls in 100,000 spawns of a sized host (spikes 2, R1) |
+| core's API | three `uint64_t` in `ta_host_stats` (`stats.h:80-88`), three keys in `host.stats`, one OTLP gauge, a block count beside quickjs's heap bytes | minor-version changes; `ta_host_stats` has a `size` field |
+| core's fast pass | the layout check: the layers built once more with debug information, `llvm-dwarfdump` read, `ta-layout` run | one more build of the layers per fast pass (decision D6) |
+| each binding | a counted allocator for its own blocks, no public API; the memory example rewritten; `measure` retired | about 20 lines of C each, and less code overall |
+| the C embedder | nothing unless it reads the new fields | — |
 
-**Out of scope:** what V8 and JavaScriptCore keep inside their heaps;
+**Out of scope:** the chart's data in the application's engine (above);
 glibc's per-block overhead and fragmentation; Node-API's own mallocs (a
 payload's `napi_ref`, about 96 B on node: `tinyactors-napi/docs/allocation.md`,
 finding 3); the wasm package's linear memory; the compiler's transient
-memory. These stay in the gap between accounted and process memory,
-which the tables show and explain.
+memory.
 
-## 2. What exists, and what is wrong with it
+## 2. What exists, and what was wrong with it
 
 Each item checked on 2026-11-25.
 
 **Core: `mise run layout`.** `tinyactors-core/mise/tasks/layout` builds
 the layers with debug information (`:31-34`), reads struct sizes and
-macros with the pinned `llvm-dwarfdump`, and computes the cost of one
-more of each thing as `carve()` lays it out (`COSTS`, `:61-74`). It then
-runs `ta-layout` (`tools/layout/layout.c`), which asks `ta_system_layout`
+macros with the pinned `llvm-dwarfdump`, computes the cost of one more
+of each thing as `carve()` lays it out (`COSTS`, `:61-74`), runs
+`ta-layout` (`tools/layout/layout.c`), which asks `ta_system_layout`
 (`include/tinyactors/system.h:132`) for a segment at 2^16 and 2^17 of
-each capacity and prints the difference per unit (`layout.c:58-67`); a
-mismatch fails the task (`layout:156`). Run today:
+each capacity (`layout.c:58-67`), and fails on a difference
+(`layout:156`). Run today:
 
 ```
 actor            81 B  record 48, links 16, session index 8, name index 8, generation 1
@@ -119,239 +119,214 @@ Checked against ta_system_layout (tools/layout/layout.c): actor 81 B, event 106 
 untraced-event 57 B, timer 45 B, request 41 B, outbox 256 B.
 ```
 
-This already is "core's numbers from the definitions". What is wrong:
-
-- it is not in the fast pass;
-- it has no row for a hibernated actor, and says nothing of the instance
-  slab, which a sized host reserves **for the image's largest instance
-  class, for every actor** (`src/system/system.c:65-77`): a cost per
-  image, not per chart;
-- its numbers are copied by hand into both bindings' tests
-  (`tinyactors-cpython/examples/memory/test_memory.py:37-43`,
-  `tinyactors-napi/examples/memory/test.mjs:12-18`) and into prose (the
-  capacity guide, the Python README, `website/content/guides/capacity.xml:131`).
+What was wrong: it is not in the fast pass; it has no hibernated-actor
+row; it says nothing of the instance slab, which a sized host reserves
+for the image's largest instance class for every actor
+(`src/system/system.c:65-77`, so a cost per image and per N, not per
+chart); and its numbers are copied by hand into both bindings' tests
+(`tinyactors-cpython/examples/memory/test_memory.py:37-43`,
+`tinyactors-napi/examples/memory/test.mjs:12-18`) and prose (the
+capacity guide, the Python README, `website/content/guides/capacity.xml:131`).
 
 **Core's own counters, already traced.** `ta_system_stats`
 (`include/tinyactors/stats.h:20-56`) counts each pool's `used`, capacity
-and high water, and `slab_pages` used of `slab_pages_capacity`;
-`host.stats` reports them per segment as `pools`, with `slabBytes`
-(`docs/requests.md:191-200`). These are core's internal allocators, and
-they are exact: 100,000 spawns of a one-state chart used 2,381 slab
-pages = ⌈100,000 / 42⌉, and hibernating 50,000 of them fell to 1,191
-(spike R1). That also shows a hibernated actor gives back its instance
-and keeps its records only.
+and high water, and the slab's pages; `host.stats` reports them per
+segment (`docs/requests.md:191-200`). 100,000 spawns of a one-state
+chart used 2,381 slab pages = ⌈100,000 / 42⌉; hibernating 50,000 of them
+brought it to 1,191 (spike R1): a hibernated actor gives back its
+instance and keeps its records.
 
 **The bindings' memory examples** (`tinyactors-cpython/examples/memory/main.py`,
 `tinyactors-napi/examples/memory/main.mjs`):
 
-| Column | How | What is wrong |
+| Column | How | What was wrong |
 |---|---|---|
-| memory | CPython: `RssAnon + VmSwap` (`main.py:61-73`, since `f34a0630`); node and bun: `process.memoryUsage().rss` (`main.mjs:128, 136`) | the bindings measure different things (`f34a0630` changed CPython only); it holds amortized fixed costs (node native started: 1327 B at 10,000, 501 B at 4,000,000) and behaviour no column explains; it flaked (`f34a0630`) and tests assert `resident > 0` (`test_memory.py:46-47`, `test.mjs:19-20`) |
-| heap (Python) | `tracemalloc`, started after the host is made (`main.py:143-145`) | it also holds the binding's tables and the region's growth, since `tracemalloc` sees `PyMem_RawMalloc` (spike 4; `tinyactors-cpython/tools/measure.py:14-17`) |
-| heap (node, bun) | node `heapUsed + external`, bun `heapSize + extraMemorySize` (`main.mjs:53-63`); quickjs `host.quickjsHeapBytes` (`main.mjs:131`) | node 22's `external` leaves out what the addon reports with `napi_adjust_external_memory` (spike 1; `tools/measure.mjs:18-19`), bun's includes it (spike 1, R3): the binding's tables are in no column on node and in a different one on bun; CPython has no quickjs heap reading |
-| core reserves | `regionBytes` of a host sized for N less one sized for 0, over N (`main.py:86-92, 118-119`; `main.mjs:66-72, 114`) | sound and deterministic, but "per actor, started" (199, 195, 196 B at 10,000, 100,000, 1,000,000) is 81 B of records, about 97.5 B of instance slab and 16 B of strings reserved, and no column says so; tests assert only `> 81` |
+| memory | CPython `RssAnon + VmSwap` (`main.py:61-73`, since `f34a0630`); node and bun `process.memoryUsage().rss` (`main.mjs:128, 136`) | different in each binding; it flaked (`f34a0630`); tests assert `resident > 0` (`test_memory.py:46-47`, `test.mjs:19-20`) |
+| heap | CPython `tracemalloc` (`main.py:143-145`); node `heapUsed + external`, bun `heapSize + extraMemorySize` (`main.mjs:53-63`); quickjs `host.quickjsHeapBytes` (`main.mjs:131`) | mixes owners: `tracemalloc` also sees the binding's tables and the region (spike 4); node 22's `external` leaves out the addon's `napi_adjust_external_memory` reports and bun's includes them (spikes 1, R3); CPython has no quickjs reading |
+| core reserves | `regionBytes` of a host sized for N less one sized for 0, over N (`main.py:86-92, 118-119`; `main.mjs:66-72, 114`) | sound and deterministic, but the started actor's 199, 195, 196 B (10,000, 100,000, 1,000,000) are 81 B of records, about 97.5 B of instance slab and 16 B of strings, and no column says so; tests assert `> 81` |
 | blob | the store's bytes over the saves | sound |
 
-**The `measure` tools** (`mise run measure` in both bindings) report a
-fourth definition, "region" as `regionBytes` over N
-(`tinyactors-napi/tools/measure.mjs:23-25`), the segment's fixed cost
-included. Their tables are the per-session costs in both `AGENTS.md`.
+**The `measure` tools** (`mise run measure` in both bindings) define
+"region" a fourth way, `regionBytes` over N (`tinyactors-napi/tools/measure.mjs:23-25`);
+their tables are the per-session costs in both `AGENTS.md`.
 
-**The allocators.** Not every host byte goes through `host_alloc`/`host_free`
-(`src/host/host.c:29-35`): the host struct itself (`host.c:426, 447,
-628`), the outputs arena of blobs, traces, logs and metrics
-(`host.c:436`, through `ta_growable_arena`), the blob scratch
-(`host.c:72`) and the session maps of moves and migrations (`host.c:137,
-579, 606, 1619`; `session_map.c`) use `host->config.allocator` directly.
+**The allocators.** The host allocates through `config.allocator` from
+several sites, not only `host_alloc`/`host_free` (`src/host/host.c:29-35`):
+the host struct (`host.c:426, 447, 628`), the outputs arena of blobs,
+traces, logs and metrics (`host.c:436`), the blob scratch (`host.c:72`),
+the session maps of moves and migrations (`host.c:137, 579, 606, 1619`).
 50,000 hibernations made one 16 KB allocation of the outputs arena that
 `host_alloc` never saw (spike R1). `ta_allocator.free` is given the size
 (`include/tinyactors/allocator.h:12, 27`), so a counter needs no header.
-quickjs counts its own heap (`datamodel_ecmascript.c:3551-3602`,
-requested bytes, a 16-byte header per block not counted). Core's tests
-already have counting allocators (`tests/support/counting_allocator.h`,
-`tests/unit/test_host_memory.c:36-60`).
+quickjs counts requested bytes (`datamodel_ecmascript.c:3551-3602`), not
+its 16-byte header per block. The bindings allocate their tables,
+arenas and the datamodels' kept writers through one `ta_allocator` per
+host (`tinyactors-napi/src/host.c:839-852, 60`, `src/datamodel/datamodel.c:126`,
+`rows.c:104`; `tinyactors-cpython/src/host.c:616, 679-685`,
+`src/datamodel/datamodel.c:731-742`).
 
 ## 3. The frame
 
 - **One owning thread per host** (`tinyactors-core/docs/bindings.md`,
   section 5): counters are plain integers on that thread.
-- **The host allocates only through `config.allocator`**, from several
-  call sites (section 2); base through system never allocate.
-- **A binding allocates only in its tables, arenas, host struct, the
-  datamodel's scratch arena and the datamodel's kept output writers**
-  (`tinyactors-napi/src/datamodel/datamodel.c:126`, `rows.c:104`;
-  `tinyactors-cpython/src/datamodel/datamodel.c:731-742`), through one
-  `ta_allocator` per host, enforced by the lint rule
-  `allocation-in-tables-and-host`.
-- **Allocations are not per event.** A sized host allocates at creation,
-  `add_image`, close, and per `host.stats` or `metrics` call; a grown
-  one at each relocation, of any pool (100,000 sends, 1,000 at a time,
-  relocated an events pool sized for 4,096: peak 44.5 MB for 22 MB live,
-  spike R1); tables at each doubling (allocation.md, finding 1).
-- **Engine heaps are outside the host's allocator.**
+- **The host allocates only through `config.allocator`**; base through
+  system never allocate.
+- **A binding allocates only through the allocator it keeps per host**,
+  enforced by the lint rule `allocation-in-tables-and-host`.
+- **Allocations are not per event:** creation, `add_image`, growth of a
+  pool or table, close, one per `host.stats` or `metrics` call
+  (allocation.md, finding 1; spike R1).
 
 ## 4. The design
 
 ### 4.1 Core's costs: reservation from the definitions, use from the pools
 
-**Reservation per unit.** `ta-layout` moves to `Core::PROGRAMS`, so the
-fast pass builds and runs it. It already proves the deltas divide evenly
-(`layout.c:60`); what makes it a check of the definitions is a reference
-to compare with. Two ways (decision D6):
+**The definitions in the fast pass.** Core's `mise run test` runs the
+layout check (`mise run layout`'s DWARF computation and its comparison
+with `ta-layout`), so a struct that grows is explained and checked on
+the commit that grows it. No checked-in copy of the numbers. The task
+gains:
 
-- *(a)* `tinyactors-core/docs/costs.txt`, `ta-layout`'s output for the
-  per-unit capacities (actor, event, untraced event, timer, request,
-  outbox), and `ta-layout --check` against it. A change detector: a
-  struct that grows fails the fast pass and the commit rewrites the file
-  (`mise run layout -- --write`). Its value beyond detection is one
-  source the bindings' tests read instead of copying 106, 57, 151, 102.
-- *(b)* No file: `mise run layout`'s DWARF check (parts sum to
-  `ta_system_layout`) runs in the fast pass. It explains a change, but
-  builds every layer again with debug information, and the bindings'
-  tests keep their own numbers.
+- a hibernated-actor line: its records, the instance given back;
+- `--json` on stdout of what it already writes to
+  `build/debuginfo/layout.json`, for other programs.
 
-No per-chart rows: the instance reservation is per image (the largest
-class, `system.c:65-77`) and its page rounding depends on N, so only
-`ta_system_layout` at N gives it. The bindings already ask it at N: the
-`regionBytes` difference.
+**`ta-layout` takes a configuration and an image.** Today it lays out its
+own one-state chart at 2^16 and 2^17. It gains a mode that reads an image
+file and the capacities of a measurement (`maxActors`, `maxEvents`,
+`maxTimers`, `instanceBytes`, `stringBytes`, `tracing`) and prints
+`ta_system_layout`'s region at N and at 0 per thing, the same difference
+the examples take through two hosts. Its sources use only public calls
+that the bindings' amalgamation holds (`ta_compile_charts` in
+`tinyactors_runtime.c`, `ta_system_layout` in `tinyactors.c`; checked in
+`tinyactors-napi/build/core`), so a binding builds it beside its
+extension from core's `tools/layout/layout.c` (that it compiles cleanly
+there is unverified), and runs no other core task.
 
-**Use, from core's counters.** For any chart and N, without new API:
-an actor's records are the actors pool's `used` × the actor unit; its
-instance and strings are the `slabBytes.used` delta over N; a message
-waiting is the events pool's `used` × the event unit; a hibernated
-actor's slab share is the fall of `slabBytes.used` when it hibernates.
-`mise run layout` gains a hibernated-actor line (its records, with the
-instance returned: spike R1).
+**Use, from core's counters.** For any chart and N, with no new API: an
+actor's records are the actors pool's `used` × the actor unit; its
+instance and strings, the `slabBytes.used` delta over N; a waiting
+message, the events pool's `used` × the event unit; a hibernated actor,
+its records, and the fall of `slabBytes.used` when it hibernates.
 
 ### 4.2 Counted allocations
 
-**In the host: wrap once, at creation.** `ta_host_create` (and the
-restore) wraps `config.allocator` in an internal counted allocator kept
-in the host, so every call site in section 2 counts without being
-touched; the host struct, allocated before the wrapper exists, is added
-as `sizeof *host`. `ta_host_stats` and `host.stats`'s `host` map gain
-`allocatedBytes`, `allocatedPeak` and `allocations`. With `regionBytes`
-beside them, the host's blocks outside the regions are the difference,
-and a relocation shows in the peak (spike R1: 44.5 MB peak, 22.5 MB live).
-The counter type stays internal; base gains no public API unless an
-embedder needs it (the test fixtures can keep theirs).
+**In the host.** `ta_host_create` and `ta_host_restore` wrap
+`config.allocator` once, in a counted allocator kept in the host, so
+every call site in section 2 counts untouched; the host struct, allocated
+before the wrapper exists, is added as `sizeof *host`. `ta_host_stats`
+and `host.stats`'s `host` map gain `allocatedBytes`, `allocatedPeak` and
+`allocations`; `regionBytes` beside them gives the host's blocks outside
+the regions, and a relocation shows in the peak (spike R1: 44.5 MB peak,
+22.5 MB live). The OTLP metrics gain `allocatedBytes` as a gauge beside
+the region (`src/otlp/otlp.c:2279`). The counter type is internal.
 
-`allocations` moves on every `host.stats` and `metrics` call, which
-allocate and free (`request.c:550`, `telemetry.c:215`), so a test of "no
-allocation while spawning" reads the counter in C, not through a post.
+`allocations` moves at every `host.stats` and `metrics` call, which
+allocate and free, so "no allocation while spawning" is tested in C.
+Always on: it adds no path and changes no outcome; a reading, like
+`regionBytes`, not a test hook (`tinyactors-napi/AGENTS.md`, "Refusals
+no input reaches", forbids an allocator that fails on demand).
 
-Cost: three integer operations and one indirect call per allocation;
-always on, since it adds no path and changes no outcome (it is a
-reading, like `regionBytes`; `tinyactors-napi/AGENTS.md`, "Refusals no
-input reaches", forbids an allocator that fails on demand, not a count).
+**quickjs counts blocks.** A request to core:
+`ta_datamodel_ecmascript_heap_bytes` (or a function beside it) also
+reports the blocks, so the 16-byte header per block is in the account.
+At a million started actors on node the process held 1041 B per actor
+against 598 B of quickjs heap and 196 B of core reservation (the CSV);
+how much of the 247 B the headers are is what this settles (unverified
+until then).
 
-**Alternative (D1):** no core change; each binding counts the
-allocator it gives the host's environment, as napi already reports each
-block to the engine (`tinyactors-napi/src/module.c:22, 31`). The
-examples get the number; the operator, the C embedder and OTLP do not.
-
-**OTLP (D1b).** The host's metrics export `region_bytes` only
-(`src/otlp/otlp.c:2279`). If the operator is to see the host's whole
-footprint, `allocatedBytes` joins it as a gauge (one series per host,
-bounded cardinality: docs/roles.md, the observability backend).
-
-**In each binding: its own allocations.** The binding gives its tables,
-arenas and datamodel writers a counted allocator separate from the one
-it gives the host, so the two owners never mix. Those writers keep the
-largest value ever written, so the binding's bytes are not a function
-of the tables' capacities alone: the counter is the measurement. How it
-is read is decision D3 (a property, with the wasm package as a third
-implementation; or the examples only, through a test-only path that the
-bindings' rules would have to allow).
-
-**Engine heaps.**
-
-- *Python's objects:* the `tracemalloc` delta less the deltas of the
-  host's and the binding's counters, which `PyMem_RawMalloc` also serves
-  (spike 4). Repeatable at one N (spike 3). Measurement only, as now;
-  pymalloc's arenas and pools are not counted.
-- *quickjs:* `ta_datamodel_ecmascript_heap_bytes`, as napi reads it now;
-  CPython gains the reading with D3. At a million started actors on
-  node, process memory is 1041 B against 598 B of quickjs heap and 196 B
-  of core reservation (the CSV): 247 B unaccounted, plausibly per-block
-  overhead (unverified; a block count in quickjs's counter would settle
-  it: D4).
-- *V8 and JavaScriptCore:* `heapUsed` after forced collections,
-  labelled **measured, not traced**; stable to about 2 % (spike 5).
+**In each binding: its own blocks, no public API.** The binding gives
+its tables, arenas and datamodel writers a counted allocator separate
+from the one it gives the host. The writers keep the largest value ever
+written, so the counter, not the tables' capacities, is the measurement.
+It serves the binding's tests and the memory examples only. How the
+examples, which import the public package, read it is open question O1.
 
 ### 4.3 Process memory
 
-Kept as a column, **informational, never asserted**, measured the same
-way in both bindings: `RssAnon + VmSwap` from `/proc/self/status` on
-Linux (node reads the file too), the peak elsewhere, as `f34a0630` does.
-Shown beside the accounted sum with the gap and what fills it: malloc's
-overhead per block, engine structures outside the measured heap,
-Node-API's references, and a host's and an engine's fixed costs spread
-over the population. The capacity guide keeps a process row by
-population, since a machine must hold it.
+One informational column, never asserted, measured the same way in both
+bindings: `RssAnon + VmSwap` from `/proc/self/status` on Linux (node
+reads the file too), the peak elsewhere, as `f34a0630` does. The tables
+show it beside the accounted sum and state what the gap is: **mostly the
+application's engine holding the chart's data** (Python objects, V8's or
+JavaScriptCore's heap), then malloc's overhead per block and the fixed
+costs of a host and an engine spread over the population. The capacity
+guide keeps the process row by population, since a machine must hold it.
 
 ### 4.4 Tables, programs and tests
 
-**The memory examples** become the one program per binding (D2). Every
-measurement sizes **every pool it fills** for N (actors, events, timers),
-so no relocation runs during it (spike R1). For each row and N:
+**The memory examples are the one program** per binding that makes
+these numbers (`mise run measure`, `tools/measure.*` and the per-session
+tables in both `AGENTS.md` are retired). Each measurement sizes every
+pool it fills for N, so no relocation runs during it (spike R1). Per row
+(actor started, after an event, hibernated, message waiting, delayed
+send pending) and N:
 
-| core reserved | core used | binding | engine heap | accounted | process | gap | blob |
+| core reserved | core used | host other | binding | quickjs | accounted | process | blob |
 |---|---|---|---|---|---|---|---|
 
-- *core reserved:* the `regionBytes` difference, as now (planning);
+- *core reserved:* the `regionBytes` difference (planning);
 - *core used:* from `host.stats` `pools` (4.1);
-- *binding:* the binding counter's delta over N;
-- *engine heap:* traced, counted or measured, the source named;
-- *accounted:* core reserved + binding + engine heap.
+- *host other:* the delta of `allocatedBytes - regionBytes` over N;
+- *binding:* its counter's delta over N (O1);
+- *quickjs:* heap bytes and block headers over N, on quickjs only;
+- *accounted:* the sum of the columns before it but "core used", which
+  is a part of "core reserved";
+- *process:* 4.3, with the gap's note.
 
 **Tests:**
 
 | Assertion | Where | Kind |
 |---|---|---|
-| `ta_system_layout`'s per-unit deltas equal the reference (D6) | core fast pass, `ta-layout` | equality |
-| the host's `allocatedBytes` equals an outside counting allocator's live bytes over a workload with hibernations, traces and a migration (the direct call sites included), and both are 0 after `ta_host_free` | core, `tests/unit/test_host_memory.c` | equality |
-| a host with every pool sized makes no allocation while it spawns N actors and runs, read in C | core, the same test | equality |
-| a hibernated actor returns its instance: `slab_pages` used falls by the hibernated actors' pages | core test | equality |
-| the examples' message and delayed-send rows equal the event and timer units (`ta_system_layout` is linear in those pools) | both examples | equality |
-| the started and hibernated actor's reserved core column lies between the actor unit and its most (index and page rounding depend on N) plus, for a started actor, the instance and string reservation | both examples | range |
-| the core used column of a started actor equals actors used × unit + the `slabBytes.used` delta | both examples | equality |
-| the binding counter is 0 after close | both bindings' tests | equality |
-| engine heap, process, gap | — | not asserted (D5) |
+| the types' debug information gives `ta_system_layout`'s per-unit deltas | core fast pass, the layout check | equality |
+| `allocatedBytes` equals an outside counting allocator's live bytes over a workload with hibernations, traces and a migration, and both are 0 after `ta_host_free` | core, `tests/unit/test_host_memory.c` | equality |
+| a host with every pool sized makes no allocation while it spawns and runs N actors, read in C | core, the same test | equality |
+| a hibernated actor gives back its instance: the slab's used pages fall by its pages | core test | equality |
+| the OTLP metrics carry `allocatedBytes` | core, the metrics tests | equality |
+| quickjs's block count returns to its start when its sessions go | core, `test_datamodel_ecmascript.c` | equality |
+| every row's core-reserved column equals `ta-layout`'s for the example's image and capacities | both examples | equality, no copied numbers |
+| the core-used column equals the pools' `used` × units plus the slab delta | both examples | equality |
+| the binding's counter is 0 after close | both bindings' tests | equality |
+| process | — | never asserted |
 
 **The published tables** (root `AGENTS.md`, "Published numbers"): the
-core row's source stays `mise run layout`, checked in the fast pass; the
-memory rows (both examples' READMEs, the Node capacity guide's "What an
-actor costs", the Python README's "Memory",
-`website/content/guides/capacity.xml`) show the split table with
-process memory beside it; the per-session tables in both `AGENTS.md`
-cite the examples or go with `measure` (D2). The CSV gains the columns;
-earlier CSVs stay.
+core row is `mise run layout`'s, checked in the fast pass; the memory
+rows (both examples' READMEs, the Node capacity guide's "What an actor
+costs", the Python README's "Memory", `website/content/guides/capacity.xml`)
+show the columns above with process memory beside them and the gap's
+note; the "Published numbers" table drops `measure`'s tables and says
+what reruns them.
 
 ## 5. Not chosen
 
 - **Per-thing core numbers from the allocator's calls**: a sized host
   makes none per thing (spikes 2, R1); a grown one reports its growth
   policy (255 B per actor grown from the default size, spike 2).
-- **Counting in `host_alloc`/`host_free`**: it misses the host struct,
-  the outputs arena, the blob scratch and the session maps (section 2,
-  spike R1). Wrapping the allocator once catches every site.
+- **Counting in `host_alloc`/`host_free`**: misses the host struct, the
+  outputs arena, the blob scratch and the session maps (spike R1).
+- **A checked-in copy of the layout numbers** (`costs.txt`): only a
+  change detector, and a copy; the layout check in the fast pass
+  explains a change too, and the examples ask `ta-layout` at their own N.
 - **Per-chart rows in core's table**: the reservation is per image and
   per N (`system.c:65-77`); use per chart comes from `slabBytes.used`.
-- **A test-only build**: the counter costs nothing per event and the
-  operator would lose the numbers.
+- **`tracemalloc` and the engines' heaps**: the chart's data in the
+  application's engine, which no interface of ours sees (the
+  maintainer, 2026-11-25).
+- **A public property for the binding's bytes** (for now): it would be
+  an API item with no core behind it, implemented in node, Python and
+  the wasm package (`tinyactors-napi/wasm/lib/host.mjs`,
+  `tools/parity.mjs`).
+- **A test-only build of the counter**: it costs nothing per event, and
+  the operator would lose the numbers.
 - **A header per block**: `free` is given the size.
-- **glibc's `mallinfo2`** as a column: per process, glibc only, outside
-  the bindings' allowed C library calls.
-- **Hooking V8's allocator**: Node-API and Bun expose none for the
-  managed heap.
+- **glibc's `mallinfo2`**: per process, glibc only, outside the bindings'
+  allowed C library calls.
 - **Asserting process memory in a tolerance**: its variation is the
   machine's and the engine's, not the change's.
 
 ## 6. Spikes (2026-11-25, x86_64 Linux 6.18, 4 CPUs; node 22, bun 1.4.1, CPython 3.13)
 
-Spikes 1 to 5 are the author's; R1 to R3 the refuting agent's (programs
-in the session's scratch directory, `refute-memory/`).
+Spikes 1, 2 and 4 are the author's; R1 to R3 the refuting agent's.
 
 1. **`external` and the addon's reports.** A host sized for 200,000
    actors (`regionBytes` 39,619,089): node's `external` rose 308,021 B at
@@ -360,43 +335,59 @@ in the session's scratch directory, `refute-memory/`).
    datamodel): sized, +0 B and 0 allocations during the spawns, 5
    allocations in the host's life; from the default size, 255.38 B per
    actor in 7 allocations, peak 39,694,552 B.
-3. **`tracemalloc` per actor**, `"python"` datamodel: 144.24 B at 10,000
-   (twice, identical), 144.73 at 20,000, 145.03 at 40,000.
 4. **`tracemalloc` sees the region:** +19,792,954 B traced for a host
-   whose `regionBytes` is 19,740,721.
-5. **V8's heap per actor**, two processes: 140.21 / 138.53 / 137.99 B
-   and 140.21 / 138.58 / 138.09 B at 10,000 / 20,000 / 10,000.
+   whose `regionBytes` is 19,740,721 (why the old heap column mixed
+   owners).
 - **R1.** A host sized for 100,000 actors, events pool 4,096: create and
-  image 5 calls, 22,064,200 B live; 100,000 spawns: 0 calls, `slab_pages`
-  2,381 of 3,071; 100,000 events sent 1,000 at a time: 1 relocation,
-  peak 44,529,392 B; 50,000 hibernated: 1 call (the outputs arena,
-  16 KB, outside `host_alloc`), `slab_pages` 1,191; after free, live 0,
+  image 5 calls, 22,064,200 B live; 100,000 spawns: 0 calls, slab pages
+  2,381 of 3,071; 100,000 events sent 1,000 at a time: one relocation,
+  peak 44,529,392 B; 50,000 hibernated: one call (the outputs arena,
+  16 KB, outside `host_alloc`), slab pages 1,191; after free, live 0,
   7 calls and 7 frees.
 - **R2.** A host sized for 1,000,000 actors: `regionBytes` 196,425,953,
   `RssAnon` +196,435,968 B at creation, +4,096 B over 1,000,000 spawns.
 - **R3.** Bun's `external` includes `napi_adjust_external_memory`;
   node 22's does not.
 
-## 7. Decisions for the maintainer
+## 7. Decisions (the maintainer, 2026-11-25)
 
-- **D1.** Count in core (wrap the allocator in `ta_host_create`;
-  `host.stats` gains `allocatedBytes`, `allocatedPeak`, `allocations`),
-  or only in the bindings (no core API; the operator and C embedder get
-  nothing). **D1b:** with D1, also export `allocatedBytes` over OTLP.
-- **D2.** Retire `mise run measure` and the per-session tables in both
-  `AGENTS.md` for the memory examples' split rows, or keep `measure`
-  with the same columns.
-- **D3.** How the binding's own bytes are read: a public property
-  (`host.bindingBytes`, `host.binding_bytes`; Python also
-  `quickjs_heap_bytes`), costing node, Python **and the wasm package**;
-  or no API, the examples reading the counter through a path the
-  bindings' rules would have to allow.
-- **D4.** A request to core: quickjs's counter also counts blocks.
-- **D5.** Whether the Python-object column is asserted against a value
-  recorded for the pinned CPython (spike 3), updated when the pin moves.
-- **D6.** Core's per-unit reference: a checked-in `costs.txt` that
-  `ta-layout` compares in the fast pass and the bindings' tests read
-  (a), or the DWARF task in the fast pass and no file (b).
+- **Engine heaps:** no `tracemalloc`, no Python-object, V8 or
+  JavaScriptCore column, in the design, the tables or the tests. Process
+  memory stays one informational column with the gap's note.
+- **D1:** core counts: the host wraps `config.allocator` once at
+  creation, plus `sizeof *host`; `host.stats` gains `allocatedBytes`,
+  `allocatedPeak`, `allocations`. **D1b:** `allocatedBytes` is exported
+  over OTLP too.
+- **D2:** `mise run measure` and the per-session cost tables in both
+  bindings' `AGENTS.md` are retired; the memory examples make these
+  numbers.
+- **D3:** no public binding-bytes property for now; the binding's
+  counters serve tests and examples only.
+- **D4:** core's quickjs counter counts blocks.
+- **D6:** no `costs.txt`; the layout check runs in the fast pass, and
+  the bindings take their reference from `ta-layout`, not from copied
+  numbers.
+
+**Open questions** (for the implementation to bring back, not to decide
+alone):
+
+- **O1. How the memory examples read the binding's counter without public
+  API.** The examples import the public package (`@tinyactors/node`,
+  `tinyactors`), and napi's convenience layer takes the direct layer's
+  helpers off its prototype so an application sees none
+  (`tinyactors-napi/lib/convenience.mjs:32-34`). Options: (a) an
+  undocumented accessor the convenience layer leaves in place, not in
+  `docs/api-map.md` or `index.d.ts` (in practice public, and the parity
+  check would see it); (b) the examples report the binding's bytes only
+  in the bindings' own tests, which may reach the direct layer, and the
+  published table leaves the column out; (c) the binding's bytes from
+  its row definitions, unchecked, which misses the writers. (b) is the
+  one that adds no API.
+- **O2. A binding builds `ta-layout`.** Each binding's `AGENTS.md` says
+  its build compiles its extension against core's amalgamation and runs
+  no core task but `amalgamate`. Compiling core's `tools/layout/layout.c`
+  against the same amalgamation keeps that rule, but it is a second
+  program in the binding's build; the rule's wording should say so.
 
 ## 8. Refutation
 
@@ -406,14 +397,56 @@ its own (R1 to R3). What it found, and what changed:
 
 | # | Its finding | Verdict | What changed |
 |---|---|---|---|
-| 1 | "Every host byte goes through `host_alloc`/`host_free`" is false: the host struct, the outputs arena, the blob scratch and the session maps use `config.allocator` directly; 50,000 hibernations made a 16 KB allocation `host_alloc` never saw | confirmed (`host.c:72, 137, 426, 436, 447, 579, 606, 628, 1619`; R1) | the counter wraps the allocator once at creation, plus `sizeof *host`; the public base counter is dropped; the binding-side alternative stays as D1 |
-| 2 | The ask was misread: core's internal allocators (pools, slab) are already traced in `ta_system_stats` and `host.stats` | confirmed (`stats.h:20-56`, `requests.md:191-200`; R1: 2,381 pages = ⌈100,000/42⌉, 1,191 after 50,000 hibernations) | "core used" comes from those counters for any chart, with no new API; it also settles that a hibernated actor returns its instance (was "plausible") |
-| 3 | Per-chart rows in `costs.txt` are wrong: the reservation is the image's largest instance class for every actor; and the file is only a change detector | confirmed (`system.c:65-77`) | per-chart rows dropped; the file is now an option (D6) beside running the DWARF check |
-| 4 | Equality for a started actor's core column fails: 199, 195, 196 B at 10,000, 100,000, 1,000,000, since rounding depends on N and the bindings cannot call `carve()` | confirmed (napi CSV) | that row is a range; equality kept for message and delayed send, and for "core used" |
-| 5 | `bindingBytes = capacity × stride + arenas` fails: the datamodels' kept writers also use the binding's allocator, sized by the largest value written | confirmed (napi `src/datamodel/datamodel.c:126`, `rows.c:104`; cpython `src/datamodel/datamodel.c:731-742`) | the counter is the measurement; tests assert only live 0 after close |
-| 6 | `host.stats` and `metrics` allocate per call, so `allocations` moves on every read; an unsized events pool relocates during a measurement | confirmed (`request.c:550`, `telemetry.c:215`; R1) | the no-allocation test reads the counter in C; the examples size every pool they fill |
-| 7 | Holds: a sized host makes no allocation while spawning; the reservation is what is resident (R2); 196 B = 81 + about 97.5 + 16; `tracemalloc` sees raw allocations; node's `external` leaves out the addon's reports, **bun's includes them**; the counter is not a test hook | confirmed | planning uses the reservation, "core used" is a check; spike 1's bun reading corrected from "unexplained" to "included" |
-| 8 | Missing: OTLP exports `region_bytes` only, so the operator and the backend gain nothing; the wasm package is a third implementation of any binding property | confirmed (`otlp.c:2279`; `wasm/lib/host.mjs`, `tools/parity.mjs`) | D1b added; D3 costs the wasm package |
+| 1 | Not every host byte goes through `host_alloc`/`host_free`: the host struct, the outputs arena, the blob scratch and the session maps use `config.allocator` directly; 50,000 hibernations made a 16 KB allocation `host_alloc` never saw | confirmed (`host.c:72, 137, 426, 436, 447, 579, 606, 628, 1619`; R1) | the counter wraps the allocator once at creation, plus `sizeof *host`; no public base counter |
+| 2 | Core's internal allocators (pools, slab) are already traced in `ta_system_stats` and `host.stats` | confirmed (`stats.h:20-56`, `requests.md:191-200`; R1) | "core used" comes from them for any chart, with no new API; it settles that a hibernated actor gives back its instance |
+| 3 | Per-chart rows in a cost file are wrong: the reservation is the image's largest instance class for every actor; the file is only a change detector | confirmed (`system.c:65-77`) | per-chart rows dropped; the maintainer then dropped the file (D6) |
+| 4 | Equality for a started actor's core column against fixed numbers fails: 199, 195, 196 B, since rounding depends on N | confirmed (napi CSV) | the examples ask `ta-layout` at their own N and image, so equality holds |
+| 5 | Binding bytes are not `capacity × stride + arenas`: the datamodels' kept writers use the same allocator | confirmed (napi `src/datamodel/datamodel.c:126`, `rows.c:104`; cpython `src/datamodel/datamodel.c:731-742`) | the counter is the measurement; tests assert it returns to 0 |
+| 6 | `host.stats` and `metrics` allocate per call; an unsized events pool relocates during a measurement | confirmed (`request.c:550`, `telemetry.c:215`; R1) | the no-allocation test reads the counter in C; the examples size every pool they fill |
+| 7 | Holds: a sized host makes no allocation while spawning; the reservation is resident (R2); 196 B = 81 + about 97.5 + 16; node's `external` leaves out the addon's reports, bun's includes them; the counter is not a test hook | confirmed | planning uses the reservation; spike 1's bun reading corrected |
+| 8 | OTLP exports `region_bytes` only; the wasm package is a third implementation of any binding property | confirmed (`otlp.c:2279`; `wasm/lib/host.mjs`, `tools/parity.mjs`) | D1b; D3 decided against a property for now |
 
-Still unverified: what fills quickjs's 247 B gap per actor (D4 would
-settle it).
+## 9. Order of work
+
+Each step is one commit, small and passing on its own, on `main` (root
+`AGENTS.md`, "Version control"). Before each commit: `mise run test` in
+each project the root table says the change reruns, and `mise run
+check-acronyms` at the root.
+
+1. **`test(core): the layout check runs in the fast pass`**: core's
+   `test` runs `mise run layout`'s check; the task gains the
+   hibernated-actor line and `--json`; `ta-layout` gains the image and
+   capacities mode. Runs: core, napi, cpython.
+2. **`feat(core): host.stats counts the bytes the host allocates`**: the
+   counted wrapper at `ta_host_create` and `ta_host_restore`,
+   `ta_host_stats` fields, `host.stats` keys, `docs/requests.md`, the
+   generated API description; tests in `test_host_memory.c` (the outside
+   counter, zero allocations in a sized host, the slab falling on
+   hibernation). Runs: core, napi, cpython.
+3. **`feat(core): the host's metrics export the bytes it allocates`**:
+   the OTLP gauge beside the region, its test and its row in the metrics
+   documentation. Runs: core, napi, cpython.
+4. **`feat(core): quickjs counts its blocks`** (D4), with its test.
+   Runs: core, napi, cpython.
+5. **`feat(napi): the memory example accounts each part`**: the counted
+   allocator for the binding's own blocks, `ta-layout` built beside the
+   addon (O2), `examples/memory` rewritten (sized pools, the columns,
+   `RssAnon + VmSwap`), its test by the equalities of 4.4; `mise run
+   measure`, `tools/measure.mjs` and the per-session tables of
+   `AGENTS.md` removed, and its "Tasks" and "Layout" entries. O1 decided
+   before this step. Runs: napi.
+6. **`feat(cpython): the memory example accounts each part`**: the same
+   in the Python binding, `tools/measure.py` and its task removed. Runs:
+   cpython, napi.
+7. **`docs: memory tables from the accounted examples`**: the sweep of
+   root `AGENTS.md` "Published numbers" ("How", steps 1 to 4) on one
+   machine, new CSVs beside the old ones, every table replaced whole
+   (both examples' READMEs, the Node capacity guide, the Python README,
+   `website/content/guides/capacity.xml`), and the "Published numbers"
+   table's rows updated (no `measure`). Runs: website (if its content
+   changed), and the acronym check; the commit message names the
+   programs and the machine.
+
+Steps 2 and 4 change per-host costs, not the region's layout or
+per-actor costs, so the fast pass suffices; step 7 is the release-time
+rerun the root rules ask for.

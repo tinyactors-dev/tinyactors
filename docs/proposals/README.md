@@ -22,6 +22,8 @@ Every proposal starts with a status line:
 
 - **Sketch:** an outline from a discussion. It is incomplete, and it may be wrong.
 - **Proposed:** complete enough to decide on.
+- **Accepted:** the maintainer decided it, with the decisions written in
+  the proposal; the work has not started.
 - **Adopted → links:** work started. The decisions moved into ADRs and the
   steps into a roadmap, so the proposal is no longer edited and serves as
   history.
@@ -54,4 +56,4 @@ Every proposal starts with a status line:
 | [SCXML in core: a small XML writer beside the compiler's parser](scxml-in-core.md) | Adopted → commits `bb603ff8`, `77f39f31` | tinyactors-core, tinyactors-scxml (deleted) |
 | [A debug adapter](debug-adapter.md) | Adopted, then removed (2026-09-30) for [the MCP server](mcp-server.md) | tinyactors-core (source spans, operator transitions), tinyactors-scxml, tinyactors-test, tinyactors-napi |
 | [One host, two queues](one-host-two-queues/README.md): `ta_host` as the only interface, CBOR requests, bindings regenerated from a guide | Adopted → [ADR 0009](../adr/0009-one-host-two-queues.md), superseding [ADR 0008](../adr/0008-bindings-only-do-io.md) | tinyactors-core (`host.h`, `src/link`, `src/base/json`, a new `src/base/cbor`), `bindings/` (deleted), new tinyactors-js, tinyactors-napi, tinyactors-browser, tinyactors-cpython |
-| [Memory accounting: core's costs from its definitions, the rest from counted allocations](memory-accounting.md) | Proposed | tinyactors-core (`tools/layout`, `ta_host_create`, `host.stats`, OTLP), tinyactors-napi, tinyactors-cpython (memory examples, `measure`), the published tables |
+| [Memory accounting: core's costs from its definitions, the rest from counted allocations](memory-accounting.md) | Accepted (2026-11-25) | tinyactors-core (`tools/layout`, the fast pass, `ta_host_create`, `host.stats`, OTLP, quickjs's counter), tinyactors-napi, tinyactors-cpython (memory examples; `measure` retired), the published tables |
