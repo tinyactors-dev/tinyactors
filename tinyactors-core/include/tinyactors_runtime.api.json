@@ -1,7 +1,7 @@
 {
   "format": "c-api/1",
   "header": "tinyactors_runtime.h",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "targets": [
     "x86_64",
     "aarch64",
