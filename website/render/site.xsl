@@ -421,6 +421,11 @@
     <p class="prose"><xsl:apply-templates/></p>
   </xsl:template>
 
+  <!-- A problem: what the section solves, set apart under its heading. -->
+  <xsl:template match="s:section/s:problem">
+    <p class="problem"><xsl:apply-templates/></p>
+  </xsl:template>
+
   <!-- A passage: the deep-dive voice's paragraph, set for reading at length. -->
   <xsl:template match="s:section/s:passage">
     <p class="prose passage"><xsl:apply-templates/></p>

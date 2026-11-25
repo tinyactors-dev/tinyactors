@@ -373,6 +373,7 @@
       </xs:attribute>
       <xs:assert test="(: never 'formal verification': there is no model checker :) not(contains(lower-case(normalize-space(.)), 'formal verification'))"/>
       <xs:assert test="(: a passage is the deep-dive voice, for explanation pages only :) not(.//passage) or purpose/@kind = 'explanation'"/>
+      <xs:assert test="(: a problem opens a section of an explanation page, right under its heading :) not(.//problem) or (purpose/@kind = 'explanation' and (every $p in .//problem satisfies $p/preceding-sibling::*[1][self::heading]))"/>
       <xs:assert test="(: every page but the 404 declares its purpose :) exists(purpose) or @path = '/404'"/>
       <xs:assert test="(: a section's kind differs from its page's :) every $kind in section/@kind satisfies $kind != string(purpose/@kind)"/>
     </xs:complexType>
@@ -482,6 +483,7 @@
     <xs:choice>
       <xs:element name="p" type="paragraph"/>
       <xs:element name="passage" type="passage"/>
+      <xs:element name="problem" type="problem"/>
       <xs:element ref="list"/>
       <xs:element ref="code"/>
       <xs:element ref="example"/>
@@ -863,6 +865,24 @@
       <xs:extension base="inline">
         <xs:assert test="(: at most five sentences :) count(tokenize(replace(normalize-space(.), '([.?!]) ', '$1&#10;'), '&#10;')) le 5"/>
         <xs:assert test="(: at most 32 words a sentence :) every $sentence in tokenize(replace(normalize-space(.), '([.?!]) ', '$1&#10;'), '&#10;') satisfies count(tokenize($sentence, ' ')) le 32"/>
+      </xs:extension>
+    </xs:complexContent>
+  </xs:complexType>
+
+  <xs:complexType name="problem" mixed="true">
+    <xs:annotation><xs:documentation>
+      The problem a section of an explanation page solves, stated as the
+      reader meets it: a concrete situation with its stakes ("A deploy
+      must not stop the orders already paying"), never a question. One to
+      three sentences of at most 32 words; it stands right under the
+      section's heading, and the page sets it apart. The passages after
+      it answer it.
+    </xs:documentation></xs:annotation>
+    <xs:complexContent>
+      <xs:extension base="inline">
+        <xs:assert test="(: one to three sentences :) count(tokenize(replace(normalize-space(.), '([.?!]) ', '$1&#10;'), '&#10;')) le 3"/>
+        <xs:assert test="(: at most 32 words a sentence :) every $sentence in tokenize(replace(normalize-space(.), '([.?!]) ', '$1&#10;'), '&#10;') satisfies count(tokenize($sentence, ' ')) le 32"/>
+        <xs:assert test="(: a statement, not a question :) not(contains(., '?'))"/>
       </xs:extension>
     </xs:complexContent>
   </xs:complexType>

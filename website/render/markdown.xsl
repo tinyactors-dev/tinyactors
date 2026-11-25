@@ -242,6 +242,11 @@
                           || tokenize(@src, '/')[last()] || '](' || $origin || f:url(@src) || ')'"/>
   </xsl:template>
 
+  <!-- A problem: a quoted statement under the section's heading. -->
+  <xsl:template match="s:section/s:problem" mode="md" as="xs:string">
+    <xsl:sequence select="'> ' || f:md-inline(.)"/>
+  </xsl:template>
+
   <!-- A figure: what it shows, in words. -->
   <xsl:template match="s:figure" mode="md" as="xs:string">
     <xsl:sequence select="f:md-inline(s:description)"/>

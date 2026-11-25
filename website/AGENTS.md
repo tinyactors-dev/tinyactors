@@ -48,8 +48,10 @@ rules.
   a sentence (the schema's `passage` type; only explanation pages have
   them). Its hero lede sets the context a newcomer lacks: what the thing
   is, what problem the page explains, and what the reader will be able to
-  judge after it. Each section opens with the question it answers, builds
-  the idea in passages, then shows the proof (a figure, a table, a claim
+  judge after it. Each section opens with a `<problem>`, the concrete situation it
+  solves with its stakes, as the reader meets it, never a rhetorical
+  question (the maintainer, 2026-11-25); then it builds the idea in
+  passages, which hold no questions either, then shows the proof (a figure, a table, a claim
   with its source). Terms are introduced before they are used, and each
   section ends where the next one's question starts. The rest of the
   voice holds: literal, measured, no metaphors or hype; headings stay
