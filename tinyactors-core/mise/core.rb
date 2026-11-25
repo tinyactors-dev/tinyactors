@@ -49,6 +49,10 @@ module Core
     # configuration gives it (docs/adr/0005).
     Layer.new(name: 'host', uses: %w[system otlp], freestanding: true, sources: %w[src/host/host.c src/host/telemetry.c src/host/request.c src/host/definitions.c src/host/session_map.c]),
     Layer.new(name: 'runtime', uses: %w[system compile], sources: %w[src/runtime/runtime.c src/runtime/runtime_hosted.c]),
+    # The command line, for the tools: the words read against a program's
+    # commands and options, and a report written as Markdown, JSON or XML
+    # (src/cli). Freestanding; not in a released library.
+    Layer.new(name: 'cli', uses: %w[base], freestanding: true, sources: %w[src/cli/arguments.c src/cli/report.c]),
     # The BasicHTTP Event I/O Processor's codec; the transport stays with the host.
     Layer.new(name: 'basic_http', uses: %w[base], freestanding: true, sources: %w[src/basic_http/basic_http.c]),
     # Trace records to OTLP protobuf and back: a codec, like basic_http (docs/adr/0006).
@@ -177,6 +181,8 @@ module Core
   PROGRAMS = [
     unit('test_base', 'base'),
     unit('test_status', 'base'),
+    unit('test_cli_arguments', 'cli'),
+    unit('test_cli_report', 'cli'),
     unit('test_table', 'base'),
     unit('test_session_map', 'host'),
     unit('test_growable_arena', 'base'),
