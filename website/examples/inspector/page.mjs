@@ -2,9 +2,12 @@
 // One toolbar, then three panes that fill the window and scroll on their
 // own: the navigator (segments, pools, every actor), the memory (the
 // region's map and one cell per actor slot) and the inspector (the
-// selected record field by field, its links followed with Back). On a
-// phone one pane shows at a time. decode.mjs reads the bytes; this module
-// draws them. Nothing leaves the browser.
+// selected record field by field, its links followed with Back). The
+// center pane has three views: Memory, Chart (the selected actor's chart
+// with its active states lit, and how many actors of each chart sit in
+// each state) and Traces (the spans the host retained at the capture). On
+// a phone one pane or view shows at a time. decode.mjs reads the bytes;
+// this module draws them. Nothing leaves the browser.
 import * as decode from './decode.mjs';
 
 const { decodePack, actorRecord, fieldRows, stateName, handleSlot, SnapshotError } = decode;
@@ -16,10 +19,15 @@ const ROW = 28; // the actor list's row height, in pixels
 const STATE_COLORS = ['--border-2', '--data-5', '--state-running', '--state-waiting', '--data-4', '--state-done', '--data-3'];
 const stateColor = (state) => `var(${STATE_COLORS[state] ?? '--fg-3'})`;
 const PHONE = '(max-width: 720px)';
+const CENTER = ['memory', 'chart', 'traces'];
+const SESSION_ATTRIBUTE = 'scxml.session_id';
+const ACTOR_ATTRIBUTE = 'tinyactors.actor.name';
+// The site's components, loaded when their view is first shown.
+const component = (name) => import(new URL(`/assets/components/${name}.mjs`, location.href).href);
 
 export async function mount(root) {
   injectStyle();
-  const app = el('div', { class: 'insp', 'data-view': 'actors' });
+  const app = el('div', { class: 'insp', 'data-view': 'actors', 'data-center': 'memory' });
   root.append(app);
 
   // ---- the toolbar
@@ -32,7 +40,7 @@ export async function mount(root) {
   const bar = el('header', { class: 'insp__bar' }, el('div', { class: 'insp__title' }, fileName, facts), el('div', { class: 'insp__actions' }, local, open, sample));
 
   // ---- the phone's pane switch
-  const views = [['actors', 'Actors'], ['memory', 'Memory'], ['record', 'Record']];
+  const views = [['actors', 'Actors'], ['memory', 'Memory'], ['chart', 'Chart'], ['traces', 'Traces'], ['record', 'Record']];
   const switcher = el('div', { class: 'insp__switch', role: 'tablist', 'aria-label': 'Pane' }, ...views.map(([value, label]) => {
     const button = el('button', { type: 'button', role: 'tab', 'data-view': value, 'aria-selected': String(value === 'actors') }, label);
     button.addEventListener('click', () => show(value));
@@ -41,15 +49,26 @@ export async function mount(root) {
   const show = (view) => {
     app.dataset.view = view;
     for (const button of switcher.children) button.setAttribute('aria-selected', String(button.dataset.view === view));
-    if (view === 'memory') requestAnimationFrame(() => grid.draw());
+    if (CENTER.includes(view)) showCenter(view);
     if (view === 'actors') requestAnimationFrame(() => list.draw());
   };
+  // the center pane's view: its tabs on a desktop, the pane switch on a phone
+  const showCenter = (view) => {
+    app.dataset.center = view;
+    for (const button of tabs.children) button.setAttribute('aria-selected', String(button.dataset.center === view));
+    if (view === 'memory') requestAnimationFrame(() => grid.draw());
+    if (view === 'chart') renderChart();
+    if (view === 'traces') renderTraces();
+    updateStatus();
+  };
+  const centerShown = (view) => app.dataset.center === view && (!matchMedia(PHONE).matches || app.dataset.view === view);
 
   // ---- the navigator
   const segmentsList = el('ul', { class: 'insp__segments' });
   const poolsList = el('div', { class: 'insp__pools' });
   const filter = el('input', { type: 'search', class: 'insp__filter', placeholder: 'Filter by session, state or name   /', 'aria-label': 'Filter actors', autocomplete: 'off', spellcheck: 'false' });
   const actorCount = el('span', { class: 'insp__count' });
+  const chip = el('div', { class: 'insp__chip-row', hidden: '' });
   const listHead = el('div', { class: 'insp__list-head', 'aria-hidden': 'true' }, ...['Session', 'State', 'Queued', 'Timers'].map((h) => el('span', {}, h)));
   const listScroll = el('div', { class: 'insp__list', role: 'listbox', tabindex: '0', 'aria-label': 'Actors' });
   const listSpacer = el('div', { class: 'insp__list-spacer' });
@@ -57,7 +76,7 @@ export async function mount(root) {
   const nav = el('nav', { class: 'insp__pane insp__nav', 'aria-label': 'Navigator' },
     el('section', { class: 'insp__group' }, el('h2', {}, 'Segments'), segmentsList),
     el('section', { class: 'insp__group' }, el('h2', {}, 'Pools'), poolsList),
-    el('section', { class: 'insp__group insp__group--grow' }, el('h2', {}, 'Actors ', actorCount), filter, listHead, listScroll));
+    el('section', { class: 'insp__group insp__group--grow' }, el('h2', {}, 'Actors ', actorCount), filter, chip, listHead, listScroll));
 
   // ---- the memory
   const strip = el('div', { class: 'insp__map', role: 'list' });
@@ -67,8 +86,33 @@ export async function mount(root) {
   const bands = el('tbody');
   const bandsTable = el('div', { class: 'insp__bands' }, el('table', { class: 'insp__fields' },
     el('thead', {}, el('tr', {}, ...['Offset', 'Band', 'Size'].map((h) => el('th', { scope: 'col' }, h)))), bands));
-  const center = el('section', { class: 'insp__pane insp__memory', 'aria-label': 'Memory' },
+  const memoryView = el('div', { class: 'insp__view insp__view--memory', role: 'tabpanel', 'aria-label': 'Memory' },
     el('h2', {}, 'Region'), strip, el('h2', {}, 'Actor slots'), legend, gridScroll, el('h2', {}, 'Region map'), bandsTable);
+
+  // ---- the chart: the selected actor's, and every chart's actors by state
+  const chartHead = el('div', { class: 'insp__chart-head' });
+  const diagram = el('div', { class: 'insp__diagram', hidden: '' });
+  const chartBody = el('div', { class: 'insp__chart-body' });
+  const census = el('div', { class: 'insp__census' });
+  const censusHead = el('h2', {}, 'Actors by state');
+  const chartView = el('div', { class: 'insp__view insp__view--chart', role: 'tabpanel', 'aria-label': 'Chart' },
+    chartHead, diagram, chartBody, censusHead, census);
+
+  // ---- the traces
+  const onlyActor = el('input', { type: 'checkbox' });
+  const tracesNote = el('p', { class: 'insp__muted insp__traces-note' });
+  const tracesEmpty = el('p', { class: 'insp__empty', hidden: '' });
+  const traceFrame = el('div', { class: 'insp__trace' });
+  const tracesView = el('div', { class: 'insp__view insp__view--traces', role: 'tabpanel', 'aria-label': 'Traces' },
+    el('div', { class: 'insp__traces-bar' }, el('label', { class: 'insp__toggle' }, onlyActor, 'This actor only'), tracesNote),
+    tracesEmpty, traceFrame);
+
+  const tabs = el('div', { class: 'insp__tabs', role: 'tablist', 'aria-label': 'View' }, ...[['memory', 'Memory', 'm'], ['chart', 'Chart', 'c'], ['traces', 'Traces', 't']].map(([value, label, key]) => {
+    const button = el('button', { type: 'button', role: 'tab', 'data-center': value, 'aria-selected': String(value === 'memory'), 'aria-keyshortcuts': key }, label);
+    button.addEventListener('click', () => showCenter(value));
+    return button;
+  }));
+  const center = el('section', { class: 'insp__pane insp__memory', 'aria-label': 'View' }, tabs, memoryView, chartView, tracesView);
 
   // ---- the inspector
   const crumbs = el('div', { class: 'insp__crumbs' });
@@ -88,6 +132,9 @@ export async function mount(root) {
   let shown = []; // the actors the filter keeps, by session
   let cursor = -1; // the list's highlighted row, in `shown`
   let history = []; // the inspector's trail: { pool, index }
+  let stateFilter = null; // { chart, state }: the actor list keeps the actors in that state
+  const diagrams = new Map(); // a chart's drawn diagram, by segment and chart: { frame, chart } or a promise of it
+  let traceSpans = null; // the spans the trace view was last given
   const selectedSlot = () => { const top = history[0]; return top && top.pool === 'actors' ? top.index : null; };
 
   // ---- loading
@@ -101,6 +148,9 @@ export async function mount(root) {
     }
     message.hidden = true;
     panes.hidden = false;
+    diagrams.clear();
+    stateFilter = null;
+    traceSpans = null;
     fileName.textContent = name;
     facts.replaceChildren(...[
       ['system', pack.systemID], ['library', pack.library ?? '?'], ['layout', pack.layoutID.toString(16).padStart(16, '0')],
@@ -157,6 +207,7 @@ export async function mount(root) {
   function selectSegment(next) {
     segment = next;
     history = [];
+    stateFilter = null;
     segmentsList.replaceChildren(...pack.segments.map((s) => {
       const button = el('button', { type: 'button', class: 'insp__segment', 'aria-current': String(s === segment), disabled: s.live ? null : '' },
         el('span', {}, `Segment ${s.index}`),
@@ -170,7 +221,7 @@ export async function mount(root) {
     applyFilter();
     const first = shown[0];
     if (first) openRecord({ pool: 'actors', index: first.slot }, { reset: true });
-    else { renderRecord(); grid.draw(); }
+    else { renderRecord(); grid.draw(); selectionChanged(); }
   }
 
   function drawPools() {
@@ -223,9 +274,11 @@ export async function mount(root) {
   function applyFilter() {
     const query = filter.value.trim().toLowerCase();
     const all = [...(segment?.actors ?? [])].sort((a, b) => (a.session < b.session ? -1 : a.session > b.session ? 1 : 0));
-    shown = !query ? all : all.filter((a) => [String(a.session), `slot ${a.slot}`, stateName(a.state), labelOf(a), a.eventName]
+    const inState = stateFilter ? all.filter((a) => a.chart === stateFilter.chart && a.configuration?.includes(stateFilter.state)) : all;
+    shown = !query ? inState : inState.filter((a) => [String(a.session), `slot ${a.slot}`, stateName(a.state), labelOf(a), a.eventName, chartOf(a)?.name ?? a.chartName, ...activeIDs(a)]
       .some((text) => text && String(text).toLowerCase().includes(query)));
-    actorCount.textContent = query ? `${number.format(shown.length)} of ${number.format(all.length)}` : number.format(all.length);
+    actorCount.textContent = query || stateFilter ? `${number.format(shown.length)} of ${number.format(all.length)}` : number.format(all.length);
+    drawChip();
     cursor = shown.findIndex((a) => a.slot === selectedSlot());
     listSpacer.style.height = `${shown.length * ROW}px`;
     list.draw();
@@ -369,6 +422,7 @@ export async function mount(root) {
     renderRecord();
     list.draw();
     grid.draw();
+    selectionChanged();
     updateStatus();
   }
   function goBack() {
@@ -377,6 +431,7 @@ export async function mount(root) {
     renderRecord();
     list.draw();
     grid.draw();
+    selectionChanged();
     updateStatus();
     return true;
   }
@@ -453,6 +508,12 @@ export async function mount(root) {
         el('tbody', {}, ...rows.map((row) => el('tr', { title: `${row.type}${row.kind ? ` (${row.kind})` : ''}, ${row.size} bytes` },
           el('td', { class: 'insp__num' }, `+${row.offset}`), el('td', { class: 'insp__field' }, row.name), valueCell(row))))),
     ];
+    const chart = actor && chartOf(actor);
+    if (chart) {
+      const open = el('button', { type: 'button', class: 'insp__link' }, chart.name);
+      open.addEventListener('click', () => (matchMedia(PHONE).matches ? show('chart') : showCenter('chart')));
+      parts.splice(2, 0, el('p', { class: 'insp__record-chart' }, 'Chart ', open, actor.configuration ? ` · in ${leafIDs(actor).join(', ') || 'no state'}` : ''));
+    }
     if (actor?.mailbox?.length) {
       parts.push(el('h2', {}, `Mailbox · ${actor.mailbox.length}`),
         el('ol', { class: 'insp__chain' }, ...actor.mailbox.map((index, i) => el('li', {}, el('span', { class: 'insp__muted' }, `${i + 1}.`), linkButton({ pool: 'events', index }, eventLabel(index))))));
@@ -468,16 +529,257 @@ export async function mount(root) {
     return name ? `events[${index}] · ${name}` : `events[${index}]`;
   }
 
+  // ---- charts: the segment's image decoded (segment.charts), an actor's
+  // chart by index and its active states (configuration) by state index
+  const models = new WeakMap(); // chart → { byIndex, depth }
+  function modelOf(chart) {
+    let model = models.get(chart);
+    if (!model) {
+      const byIndex = new Map((chart.states ?? []).map((state) => [state.index, state]));
+      const depth = (state) => { let d = 0; for (let p = state.parent; p !== null && p !== undefined && byIndex.has(p) && d < 64; p = byIndex.get(p).parent) d++; return d; };
+      model = { byIndex, depth: new Map([...byIndex.values()].map((state) => [state.index, depth(state)])) };
+      models.set(chart, model);
+    }
+    return model;
+  }
+  const chartsOf = (s) => (Array.isArray(s?.charts) ? s.charts : []);
+  const chartOf = (actor) => (typeof actor?.chart === 'number' ? chartsOf(segment).find((c) => c.index === actor.chart) ?? chartsOf(segment)[actor.chart] ?? null : null);
+  const stateID = (chart, index) => modelOf(chart).byIndex.get(index)?.id ?? `state ${index}`;
+  const activeIDs = (actor) => { const chart = chartOf(actor); return chart && actor.configuration ? actor.configuration.map((i) => stateID(chart, i)) : []; };
+  // the active states with no active child: the atomic leaves (one per parallel region)
+  function leaves(actor) {
+    const chart = chartOf(actor);
+    if (!chart || !actor.configuration) return [];
+    const active = new Set(actor.configuration);
+    return actor.configuration.filter((i) => !(modelOf(chart).byIndex.get(i)?.children ?? []).some((child) => active.has(child)));
+  }
+  const leafIDs = (actor) => { const chart = chartOf(actor); return chart ? leaves(actor).map((i) => stateID(chart, i)) : []; };
+  const selectedActor = () => { const slot = selectedSlot(); return slot === null ? null : segment?.actors.find((a) => a.slot === slot) ?? null; };
+
+  function selectionChanged() {
+    renderChart();
+    if (onlyActor.checked) renderTraces();
+  }
+
+  // ---- the state filter: a state's bar keeps the actors in it
+  function setStateFilter(chart, state) {
+    stateFilter = stateFilter && stateFilter.chart === chart && stateFilter.state === state ? null : { chart, state };
+    listScroll.scrollTop = 0;
+    applyFilter();
+    drawCensus();
+    if (stateFilter && matchMedia(PHONE).matches) show('actors');
+  }
+  function clearStateFilter() { stateFilter = null; applyFilter(); drawCensus(); }
+  function drawChip() {
+    const chart = stateFilter && chartsOf(segment).find((c) => c.index === stateFilter.chart);
+    chip.hidden = !chart;
+    if (!chart) { chip.replaceChildren(); return; }
+    const clear = el('button', { type: 'button', class: 'insp__chip-clear', 'aria-label': 'Show every actor' }, '×');
+    clear.addEventListener('click', clearStateFilter);
+    chip.replaceChildren(el('span', { class: 'insp__chip' }, `in ${chart.name} › ${stateID(chart, stateFilter.state)}`, clear));
+  }
+
+  // ---- the chart view
+  function renderChart() {
+    if (!centerShown('chart')) return;
+    drawCensus();
+    const charts = chartsOf(segment);
+    const actor = selectedActor();
+    const chart = actor && chartOf(actor);
+    if (!charts.length || !chart) {
+      diagram.hidden = true;
+      chartBody.replaceChildren();
+      chartHead.replaceChildren(el('p', { class: 'insp__empty' }, !segment ? 'Open a snapshot, or load the sample.'
+        : !charts.length ? 'This segment’s image describes no charts.' : !actor ? 'Pick an actor to see its chart.' : `No chart is recorded for actor ${actor.session}.`));
+      return;
+    }
+    const known = Array.isArray(actor.configuration);
+    chartHead.replaceChildren(
+      el('h3', { class: 'insp__chart-title' }, chart.name, el('span', { class: 'insp__muted' }, ` · ${titleOf({ pool: 'actors', index: actor.slot })}`)),
+      el('p', { class: 'insp__muted' }, [chart.datamodel, `${(chart.states ?? []).length} states`, `${(chart.transitions ?? []).length} transitions`].filter(Boolean).join(' · ')),
+      el('p', { class: 'insp__config' }, known
+        ? [el('span', { class: 'insp__muted' }, 'In '), ...leafIDs(actor).flatMap((id, i) => [i ? ', ' : '', el('code', { class: 'insp__leaf' }, id)]),
+          actor.configuration.length > leaves(actor).length ? el('span', { class: 'insp__muted' }, ` · active: ${activeIDs(actor).join(', ')}`) : null]
+        : el('span', { class: 'insp__muted' }, 'The snapshot holds no configuration for this actor.')));
+    const parts = [];
+    if (chart.source && !chart.failed) drawDiagram(chart, actor);
+    else { diagram.hidden = true; parts.push(el('h2', {}, 'States'), stateTree(chart, actor)); }
+    parts.push(el('h2', {}, 'Transitions out of the active states'), transitionsTable(chart, actor));
+    chartBody.replaceChildren(...parts);
+  }
+
+  // The site's diagram (live-chart.mjs over scxmljs's <scxml-view>), drawn
+  // once per chart and lit in the selected actor's states.
+  function drawDiagram(chart, actor) {
+    const key = `${segment.index}:${chart.index}`;
+    let entry = diagrams.get(key);
+    if (!entry) {
+      if (!document.querySelector('link[data-scxml-theme]')) document.head.append(el('link', { rel: 'stylesheet', href: '/vendor/scxmljs/dist/themes/tinyactors.css', 'data-scxml-theme': '' }));
+      const frame = el('div', { class: 'insp__diagram-frame', role: 'img', 'aria-label': `The ${chart.name} chart` });
+      entry = { frame, chart: null };
+      entry.ready = component('live-chart').then((module) => {
+        diagram.replaceChildren(frame);
+        entry.chart = module.liveChart(chart.source, frame);
+      }).catch(() => { chart.failed = true; diagrams.delete(key); });
+      diagrams.set(key, entry);
+    }
+    diagram.hidden = false;
+    if (diagram.firstChild !== entry.frame) diagram.replaceChildren(entry.frame);
+    entry.ready.then(() => {
+      if (chart.failed) { renderChart(); return; }
+      if (selectedActor() !== actor || !entry.chart) return;
+      entry.chart.restart();
+      if (actor.configuration) entry.chart.show(Object.fromEntries(activeIDs(actor).map((id) => [id, {}])));
+    });
+  }
+
+  // The state tree from the image, when it holds no source: nested, the
+  // active states lit, the atomic leaves emphasized.
+  function stateTree(chart, actor) {
+    const { byIndex } = modelOf(chart);
+    const active = new Set(actor.configuration ?? []);
+    const leaf = new Set(leaves(actor));
+    // The document's root (no id) is the chart itself: its children are the tree's roots.
+    const top = (chart.states ?? []).filter((state) => state.parent === null || state.parent === undefined || !byIndex.has(state.parent));
+    const roots = top.flatMap((state) => (state.id ? [state] : (state.children ?? []).map((i) => byIndex.get(i)).filter(Boolean)));
+    const node = (state) => el('li', { class: `insp__node${active.has(state.index) ? ' is-active' : ''}${leaf.has(state.index) ? ' is-leaf' : ''}` },
+      el('span', { class: 'insp__node-name' }, el('i', { 'aria-hidden': 'true' }), state.id ?? `state ${state.index}`,
+        state.kind && state.kind !== 'atomic' ? el('span', { class: 'insp__kind' }, state.kind) : null,
+        active.has(state.index) ? el('span', { class: 'insp__sr' }, ' (active)') : null),
+      (state.children ?? []).length ? el('ul', {}, ...state.children.map((i) => byIndex.get(i)).filter(Boolean).map(node)) : null);
+    return el('ul', { class: 'insp__tree' }, ...roots.map(node));
+  }
+
+  function transitionsTable(chart, actor) {
+    const active = new Set(actor.configuration ?? []);
+    const out = (chart.transitions ?? []).filter((t) => active.has(t.source));
+    if (!out.length) return el('p', { class: 'insp__empty' }, actor.configuration ? 'No transition leaves the active states.' : 'Unknown without a configuration.');
+    return el('table', { class: 'insp__fields insp__transitions' },
+      el('thead', {}, el('tr', {}, ...['From', 'Event', 'Target', 'Condition'].map((h) => el('th', { scope: 'col' }, h)))),
+      el('tbody', {}, ...out.map((t) => el('tr', {},
+        el('td', {}, stateID(chart, t.source)),
+        el('td', {}, (t.events ?? []).length ? t.events.join(' ') : el('span', { class: 'insp__muted' }, 'none')),
+        el('td', {}, (t.targets ?? []).length ? t.targets.map((i) => stateID(chart, i)).join(', ') : el('span', { class: 'insp__muted' }, 'stays')),
+        el('td', {}, t.cond ? el('code', {}, t.cond) : el('span', { class: 'insp__muted' }, '·'))))));
+  }
+
+  // Every chart of the segment: how many of its actors are in each state.
+  function drawCensus() {
+    if (!centerShown('chart')) return;
+    const charts = chartsOf(segment);
+    censusHead.hidden = !charts.length;
+    const actor = selectedActor();
+    const mine = new Set(actor?.configuration ?? []);
+    census.replaceChildren(...charts.map((chart) => {
+      const { depth } = modelOf(chart);
+      const actors = (segment.actors ?? []).filter((a) => a.chart === chart.index);
+      const counts = new Map();
+      let unknown = 0;
+      for (const a of actors) {
+        if (!Array.isArray(a.configuration)) { unknown++; continue; }
+        for (const i of a.configuration) counts.set(i, (counts.get(i) ?? 0) + 1);
+      }
+      const states = (chart.states ?? []).filter((state) => state.id && state.kind !== 'initial' && state.kind !== 'history');
+      const most = Math.max(1, ...counts.values());
+      return el('section', { class: 'insp__census-chart' },
+        el('p', { class: 'insp__census-head' }, el('strong', {}, chart.name), el('span', { class: 'insp__muted' },
+          ` · ${number.format(actors.length)} actors${unknown ? `, ${number.format(unknown)} without a configuration` : ''}`)),
+        el('div', { class: 'insp__census-rows' }, ...states.map((state) => {
+          const count = counts.get(state.index) ?? 0;
+          const pressed = stateFilter?.chart === chart.index && stateFilter?.state === state.index;
+          const row = el('button', { type: 'button', class: `insp__census-row${actor && actor.chart === chart.index && mine.has(state.index) ? ' is-mine' : ''}`,
+            'aria-pressed': String(pressed), disabled: count ? null : '', title: count ? `List the ${count} actors in ${state.id}` : `No actor is in ${state.id}`,
+            style: `--depth:${depth.get(state.index) ?? 0}` },
+          el('span', { class: 'insp__census-name' }, state.id ?? `state ${state.index}`),
+          el('span', { class: 'insp__census-bar' }, el('span', { style: `width:${(count / most) * 100}%` })),
+          el('span', { class: 'insp__num' }, number.format(count)));
+          row.addEventListener('click', () => setStateFilter(chart.index, state.index));
+          return row;
+        })));
+    }));
+  }
+
+  // ---- the traces at the capture
+  let traceView = null;
+  let traceModule = null;
+  const attribute = (span, name) => span.attributes?.[name];
+  function actorOfSpan(span) {
+    const session = attribute(span, SESSION_ATTRIBUTE);
+    const name = attribute(span, ACTOR_ATTRIBUTE);
+    const segments = [segment, ...(pack?.segments ?? []).filter((s) => s !== segment && s.live)].filter(Boolean);
+    for (const s of segments) {
+      const found = session !== undefined && session !== null ? s.actors?.find((a) => String(a.session) === String(session))
+        : typeof name === 'string' ? (() => { const all = s.actors?.filter((a) => labelOf(a) === name) ?? []; return all.length === 1 ? all[0] : null; })() : null;
+      if (found) return { segment: s, actor: found };
+    }
+    return null;
+  }
+  // The spans of one actor: those naming it, and every span under them.
+  function spansOf(spans, actor) {
+    const byID = new Map(spans.map((span) => [span.span, span]));
+    const label = labelOf(actor);
+    const names = (span) => { const session = attribute(span, SESSION_ATTRIBUTE); return session !== undefined && session !== null ? String(session) === String(actor.session) : label !== null && attribute(span, ACTOR_ATTRIBUTE) === label; };
+    const memo = new Map();
+    const keeps = (span, depth = 0) => {
+      if (memo.has(span.span)) return memo.get(span.span);
+      const parent = span.parent && byID.get(span.parent);
+      const kept = names(span) || (!!parent && depth < 256 && keeps(parent, depth + 1));
+      memo.set(span.span, kept);
+      return kept;
+    };
+    return spans.filter((span) => keeps(span));
+  }
+  const timeText = (ns) => (ns > 1e15 ? new Date(ns / 1e6).toISOString().replace('T', ' ').replace('Z', ' UTC') : traceModule.formatTime(ns));
+  async function renderTraces() {
+    if (!centerShown('traces')) return;
+    const traces = pack?.traces;
+    onlyActor.disabled = !traces;
+    if (!traces) {
+      traceFrame.hidden = true;
+      tracesNote.textContent = '';
+      tracesEmpty.hidden = false;
+      tracesEmpty.textContent = !pack ? 'Open a snapshot, or load the sample.' : 'Tracing was off for this host: the snapshot holds no spans.';
+      return;
+    }
+    traceModule ??= await component('trace-view');
+    const all = traces.spans ?? [];
+    const retained = traces.retained;
+    tracesNote.textContent = retained ? [`${number.format(Number(retained.records ?? all.length))} records`, `${bytesText(Number(retained.bytes ?? 0))} retained`,
+      `${number.format(Number(retained.lost ?? 0))} lost`, retained.from !== undefined && retained.to !== undefined ? `${timeText(Number(retained.from))} to ${timeText(Number(retained.to))}` : null].filter(Boolean).join(' · ')
+      : `${number.format(all.length)} spans`;
+    const actor = selectedActor();
+    const spans = onlyActor.checked && actor ? spansOf(all, actor) : all;
+    tracesEmpty.hidden = spans.length > 0;
+    traceFrame.hidden = !spans.length;
+    if (!spans.length) {
+      tracesEmpty.textContent = all.length ? `No span names actor ${actor?.session}.` : 'The host retained no spans at the capture.';
+      return;
+    }
+    if (!traceView) { traceView = document.createElement('ta-trace-view'); traceFrame.append(traceView); }
+    if (spans !== traceSpans && (spans.length !== traceSpans?.length || spans.some((span, i) => span !== traceSpans[i]))) traceView.spans = spans;
+    traceSpans = spans;
+  }
+  onlyActor.addEventListener('change', renderTraces);
+  traceFrame.addEventListener('click', (event) => {
+    if (!event.target.closest?.('.trace__label')) return;
+    const id = event.target.closest('.trace__row')?.dataset.span;
+    const span = traceSpans?.find((s) => s.span === id);
+    const found = span && actorOfSpan(span);
+    if (!found || found.actor.slot === selectedSlot() && found.segment === segment) return;
+    if (found.segment !== segment) selectSegment(found.segment);
+    openRecord({ pool: 'actors', index: found.actor.slot }, { reset: true });
+  });
+
   // ---- the status bar
   function updateStatus() {
     if (!segment) { status.replaceChildren(el('div', { class: 'insp__status-in' }, pack ? 'No live segment' : 'No snapshot open')); return; }
     const target = history[0];
     const pool = target && segment.pools.find((p) => p.name === target.pool);
     const parts = [`segment ${segment.index}`, `${number.format(segment.actors.length)} actors`, `${number.format(segment.slots.length)} slots`];
-    if (filter.value.trim()) parts.push(`${number.format(shown.length)} shown`);
+    if (filter.value.trim() || stateFilter) parts.push(`${number.format(shown.length)} shown`);
     if (target && pool) parts.push(`${target.pool}[${target.index}] at ${number.format(pool.offset + target.index * pool.stride)}–${number.format(pool.offset + (target.index + 1) * pool.stride - 1)}`);
     status.replaceChildren(el('div', { class: 'insp__status-in' }, ...parts.map((text) => el('span', {}, text)),
-      el('span', { class: 'insp__keys' }, el('kbd', {}, '/'), ' filter ', el('kbd', {}, 'j'), el('kbd', {}, 'k'), ' move ', el('kbd', {}, 'Esc'), ' back')));
+      el('span', { class: 'insp__keys' }, el('kbd', {}, '/'), ' filter ', el('kbd', {}, 'j'), el('kbd', {}, 'k'), ' move ', el('kbd', {}, 'Esc'), ' back ', el('kbd', {}, 'm'), el('kbd', {}, 'c'), el('kbd', {}, 't'), ' view')));
   }
 
   // ---- the keyboard
@@ -498,6 +800,7 @@ export async function mount(root) {
     }
     if (!pack) return;
     if (event.key === '/') { event.preventDefault(); if (matchMedia(PHONE).matches) show('actors'); filter.focus(); filter.select(); }
+    else if (event.key === 'm' || event.key === 'c' || event.key === 't') { event.preventDefault(); const view = { m: 'memory', c: 'chart', t: 'traces' }[event.key]; if (matchMedia(PHONE).matches) show(view); else showCenter(view); }
     else if (event.key === 'j' || (event.key === 'ArrowDown' && event.target === listScroll)) { event.preventDefault(); moveCursor(1); }
     else if (event.key === 'k' || (event.key === 'ArrowUp' && event.target === listScroll)) { event.preventDefault(); moveCursor(-1); }
     else if (event.key === 'Enter' && event.target === listScroll && shown[cursor]) { event.preventDefault(); openActor(shown[cursor], true); recordBody.querySelector('button')?.focus(); }
@@ -594,7 +897,59 @@ function injectStyle() {
 .insp__num { text-align: right; font-variant-numeric: tabular-nums; color: var(--fg-3); white-space: nowrap; }
 .insp__empty { color: var(--fg-3); font-size: 12px; padding: 12px 0; margin: 0; }
 
-.insp__memory { display: flex; flex-direction: column; padding: 12px 16px 0; overflow: hidden; }
+.insp__memory { display: flex; flex-direction: column; overflow: hidden; }
+.insp__tabs { flex: none; display: flex; gap: 2px; min-height: 36px; padding: 0 12px; border-bottom: 1px solid var(--border-1); background: var(--surface-1); }
+.insp__tabs button { height: 36px; padding: 0 10px; border: 0; border-bottom: 2px solid transparent; background: none; color: var(--fg-3); font: 500 12px var(--font-mono, monospace); cursor: pointer; }
+.insp__tabs button:hover { color: var(--fg-1); }
+.insp__tabs button[aria-selected="true"] { color: var(--fg-1); border-bottom-color: var(--accent); }
+.insp__view { display: none; flex: 1; min-height: 0; min-width: 0; }
+.insp[data-center="memory"] .insp__view--memory { display: flex; flex-direction: column; padding: 12px 16px 0; overflow: hidden; }
+.insp[data-center="chart"] .insp__view--chart, .insp[data-center="traces"] .insp__view--traces { display: block; overflow: auto; overscroll-behavior: contain; padding: 12px 16px calc(16px + var(--inset-bottom)); }
+.insp__view h2 { margin-top: 16px; }
+.insp__chart-title { margin: 0 0 2px; font: 600 15px var(--font-mono, monospace); color: var(--fg-1); }
+.insp__chart-head p { margin: 0 0 4px; }
+.insp__config { font: 12px var(--font-mono, monospace); }
+.insp__leaf { padding: 1px 5px; border-radius: 2px; background: var(--state-running-bg, var(--accent-subtle)); color: var(--fg-1); box-shadow: inset 0 0 0 1px var(--state-running); font: 600 12px var(--font-mono, monospace); }
+.insp__diagram { margin-top: 10px; border: 1px solid var(--border-1); border-radius: 2px; background: var(--surface-1); }
+.insp__diagram[hidden] { display: none; }
+.insp__diagram-frame { height: clamp(220px, 42vh, 420px); overflow: auto; display: flex; justify-content: center; align-items: flex-start; padding: 8px; }
+.insp__tree, .insp__tree ul { list-style: none; margin: 0; padding: 0; font: 12px var(--font-mono, monospace); }
+.insp__tree ul { margin-left: 9px; padding-left: 12px; border-left: 1px solid var(--border-1); }
+.insp__node-name { display: inline-flex; align-items: center; gap: 6px; padding: 2px 6px; margin: 1px 0; border-radius: 2px; color: var(--fg-3); }
+.insp__node-name i { width: 8px; height: 8px; border-radius: 50%; box-shadow: inset 0 0 0 1px var(--border-2); }
+.insp__node.is-active > .insp__node-name { color: var(--fg-1); }
+.insp__node.is-active > .insp__node-name i { background: var(--state-running); box-shadow: none; }
+.insp__node.is-leaf > .insp__node-name { background: var(--state-running-bg, var(--accent-subtle)); box-shadow: inset 0 0 0 1px var(--state-running); font-weight: 600; }
+.insp__kind { color: var(--fg-4); font-size: 11px; font-weight: 400; }
+.insp__sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
+.insp__transitions td { overflow-wrap: anywhere; }
+.insp__transitions td:first-child { width: auto; white-space: normal; }
+.insp__census { display: grid; gap: 14px; }
+.insp__census-head { margin: 0 0 4px; font: 12px var(--font-mono, monospace); }
+.insp__census-rows { display: grid; gap: 1px; }
+.insp__census-row { display: grid; grid-template-columns: minmax(80px, 34%) minmax(0, 1fr) 48px; align-items: center; gap: 8px; min-height: 24px; padding: 0 6px 0 calc(6px + var(--depth) * 12px); border: 0; border-radius: 2px;
+  background: none; color: var(--fg-2); font: 12px var(--font-mono, monospace); text-align: left; cursor: pointer; }
+.insp__census-row:hover:not(:disabled) { background: var(--surface-2); }
+.insp__census-row:disabled { cursor: default; color: var(--fg-4); }
+.insp__census-row[aria-pressed="true"] { background: var(--surface-3); color: var(--fg-1); box-shadow: inset 2px 0 0 var(--accent); }
+.insp__census-row.is-mine .insp__census-name { color: var(--fg-1); font-weight: 600; }
+.insp__census-row.is-mine .insp__census-name::after { content: " ●"; color: var(--state-running); }
+.insp__census-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.insp__census-bar { height: 10px; background: var(--bg-sunken); border: 1px solid var(--border-1); }
+.insp__census-bar span { display: block; height: 100%; background: var(--data-1); }
+.insp__chip-row { margin: -2px 0 6px; }
+.insp__chip-row[hidden] { display: none; }
+.insp__chip { display: inline-flex; align-items: center; gap: 4px; max-width: 100%; padding: 1px 2px 1px 8px; border: 1px solid var(--border-2); border-radius: 2px; background: var(--surface-2); font: 12px var(--font-mono, monospace); color: var(--fg-1); }
+.insp__chip-clear { width: 20px; height: 20px; border: 0; background: none; color: var(--fg-3); font: 14px/1 var(--font-sans, system-ui); cursor: pointer; }
+.insp__chip-clear:hover { color: var(--fg-1); }
+.insp__record-chart { font: 12px var(--font-mono, monospace); color: var(--fg-2); }
+.insp__traces-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 16px; margin-bottom: 10px; }
+.insp__toggle { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: var(--fg-1); cursor: pointer; }
+.insp__toggle input { accent-color: var(--accent); margin: 0; }
+.insp__toggle:has(input:disabled) { color: var(--fg-4); cursor: default; }
+.insp__traces-note { margin: 0; font-family: var(--font-mono, monospace); }
+.insp__trace { min-width: 0; }
+.insp__trace[hidden], .insp__empty[hidden] { display: none; }
 .insp__map { flex: none; display: flex; height: 22px; gap: 1px; margin-bottom: 14px; border: 1px solid var(--border-1); background: var(--border-1); }
 .insp__band { min-width: 3px; flex-basis: 0; background: var(--surface-2); cursor: default; }
 .insp__band--header { background: var(--fg-3); }
@@ -654,14 +1009,15 @@ function injectStyle() {
   .insp__facts dt:nth-of-type(n+2), .insp__facts dd:nth-of-type(n+2) { display: none; }
   .insp__actions { flex: 1; }
   .insp__actions .ta-btn { flex: 1; justify-content: center; }
-  .insp__switch { flex: none; display: grid; grid-template-columns: repeat(3, 1fr); gap: 2px; margin: 8px 12px; padding: 2px; border: 1px solid var(--border-1); border-radius: 2px; background: var(--bg-sunken); }
+  .insp__switch { flex: none; display: grid; grid-template-columns: repeat(5, 1fr); gap: 2px; margin: 8px 12px; padding: 2px; border: 1px solid var(--border-1); border-radius: 2px; background: var(--bg-sunken); }
   .insp__switch button { height: 30px; border: 0; border-radius: 2px; background: transparent; color: var(--fg-2); font: 500 13px var(--font-sans, system-ui); cursor: pointer; }
   .insp__switch button[aria-selected="true"] { background: var(--surface-1); color: var(--fg-1); box-shadow: 0 0 0 1px var(--border-2); }
   .insp__panes { grid-template-columns: minmax(0, 1fr); border-top: 1px solid var(--border-1); }
   .insp__pane { display: none; border: 0; }
-  .insp[data-view="actors"] .insp__nav, .insp[data-view="memory"] .insp__memory, .insp[data-view="record"] .insp__inspector { display: flex; flex-direction: column; }
+  .insp[data-view="actors"] .insp__nav, .insp[data-view="memory"] .insp__memory, .insp[data-view="chart"] .insp__memory, .insp[data-view="traces"] .insp__memory, .insp[data-view="record"] .insp__inspector { display: flex; flex-direction: column; }
+  .insp__tabs { display: none; }
+  .insp[data-center] .insp__view { padding-left: 12px; padding-right: 12px; }
   .insp[data-view="record"] .insp__inspector { display: block; }
-  .insp__memory { padding: 12px; }
   .insp__keys { display: none; }
   .insp__status { gap: 10px; }
 }`;

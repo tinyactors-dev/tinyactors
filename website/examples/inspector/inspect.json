@@ -1,10 +1,10 @@
 {
   "from": "snapshot",
-  "bytes": 321440,
+  "bytes": 336000,
   "format": 4,
   "hostFormat": 4,
   "library": "0.3.0",
-  "layoutID": "fb87ca7efbf61d87",
+  "layoutID": "92b0d14b988612f1",
   "thisLayout": true,
   "systemID": "tinyactors-run",
   "time": 4000000000,

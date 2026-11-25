@@ -1,8 +1,9 @@
 // The inspector in Node.js: decodes sample.snapshot, a snapshot pack a
 // host wrote, through the layout it describes, and prints its segments,
-// pools and actors: each actor's name, the name of each event queued in its
-// mailbox and of each delayed send, read as text through the strings the
-// layout describes. The page decodes the same bytes in the browser with the
+// pools, charts (states and transitions, read from the image) and actors:
+// each actor's name, chart and active configuration, the name of each event
+// queued in its mailbox and of each delayed send, then the spans the trace
+// records kept in the snapshot make, counted by name. The page decodes the same bytes in the browser with the
 // same module. Run: node main.mjs [file.snapshot]
 import { readFileSync, existsSync } from 'node:fs';
 import { basename } from 'node:path';

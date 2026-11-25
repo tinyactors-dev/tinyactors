@@ -1,13 +1,13 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <page xmlns="https://www.tinyactors.dev/ns/site" id="inspector" path="/inspector/">
   <title>Snapshot inspector</title>
-  <description>Open a tinyactors snapshot in your browser and read its memory: each segment's pools, every actor by state, and an actor's record and mailbox.</description>
+  <description>Open a tinyactors snapshot in your browser: each segment's memory, every actor's chart and active states, its record and mailbox, and the traces at the time of capture.</description>
   <purpose kind="reference" for="tech-lead agent-platform"/>
 
   <app>
     <name>Snapshot inspector</name>
     <playground src="../../examples/inspector/page.mjs">
-      <description>The Inspector opens a sample snapshot of 51 actors: orders and the payments they invoked. It shows each segment's memory by pool, every actor slot by state, and one actor's record field by field with its mailbox.</description>
+      <description>The Inspector opens a sample snapshot of 51 actors: orders and the payments they invoked. It shows each segment's memory by pool, an actor's chart with its active states, its record and mailbox, and the trace spans the snapshot kept.</description>
     </playground>
   </app>
 </page>
