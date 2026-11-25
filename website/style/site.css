@@ -298,33 +298,16 @@ ta-tabs { display: block; }
 .chart [role="tabpanel"][hidden] { display: none; }
 .chart pre { margin: 0; padding: var(--space-4); overflow: auto; }
 .chart pre code { font: var(--type-code); white-space: pre; }
-.chart__diagram { --chart-height: 320px; background: var(--bg-app); }
+.chart__diagram { background: var(--bg-app); }
 /* one program for several packages: the package's tabs over its files' block */
 .program__packages { display: grid; gap: var(--space-2); }
 .program__panel[hidden] { display: none; }
 .program > *, .program__packages > *, .program__files { min-width: 0; }
 .program__files pre { overflow-x: auto; }
-.chart__diagram scxml-view { display: block; }
+/* a small chart grows to fill the panel, up to 1.5 times; a large one stays within 480px */
+.chart__diagram scxml-view { display: block; --scxml-max-scale: 1.5; --scxml-height: 480px; }
 :root:not([data-theme="dark"]) scxml-view { --scxml-color-scheme: light; }
 [data-theme="dark"] scxml-view { --scxml-color-scheme: dark; }
-
-/* what a diagram's stand-in I/O processors received */
-.processors { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 1px; background: var(--border-1); border-top: 1px solid var(--border-1); }
-.processor { background: var(--surface-1); padding: var(--space-3) var(--space-4); min-width: 0; }
-.processor__head { display: flex; justify-content: space-between; align-items: baseline; gap: var(--space-3); font: var(--type-body-sm); color: var(--fg-3); margin-bottom: var(--space-2); }
-.processor__type { font: var(--type-code); color: var(--fg-1); }
-.processor__log { margin: 0; padding: 0; list-style: none; display: grid; gap: var(--space-1); max-height: 168px; overflow-y: auto; font: var(--type-body-sm); color: var(--fg-2); }
-.processor__log li { display: flex; gap: var(--space-2); align-items: baseline; min-width: 0; }
-.processor__log code { font: var(--type-code); color: var(--fg-1); }
-.processor__data { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; color: var(--fg-2) !important; }
-.processor__at { font: var(--type-code); color: var(--fg-3); min-width: 3.2em; font-variant-numeric: tabular-nums; }
-.processor__empty { color: var(--fg-3); }
-.variables[hidden] { display: none; }
-.variables__list { margin: 0; display: grid; grid-template-columns: auto minmax(0, 1fr); gap: var(--space-1) var(--space-3); font: var(--type-body-sm); }
-.variables__list dt code { font: var(--type-code); color: var(--fg-1); }
-.variables__list dd { margin: 0; min-width: 0; }
-.variables__list dd code { display: block; white-space: normal; overflow-wrap: anywhere; }
-.chart__controls { background: var(--surface-1); border-top: 1px solid var(--border-1); margin: 0; padding: var(--space-3) var(--space-4); display: flex; flex-wrap: wrap; gap: var(--space-2); align-items: center; }
 
 /* syntax: the design system's text-safe colours, which follow its theme */
 .hljs-comment, .hljs-meta { color: var(--fg-3); font-style: italic; }
