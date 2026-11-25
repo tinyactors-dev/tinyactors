@@ -256,6 +256,12 @@
     <xsl:sequence select="'> ' || f:md-inline(.)"/>
   </xsl:template>
 
+  <!-- The way to the other commands: each one, linked. -->
+  <xsl:template match="s:command-nav" mode="md" as="xs:string">
+    <xsl:variable name="page" select="$commands/ancestor::s:page"/>
+    <xsl:sequence select="string-join($cli-doc/help/commands/command/@command ! ('- [' || $cli-doc/help/@name || ' ' || . || '](' || $site/@origin || $page/@path || . || '/)'), $nl)"/>
+  </xsl:template>
+
   <!-- A demo: what it shows, the video's address, and its steps. -->
   <xsl:template match="s:demo" mode="md" as="xs:string">
     <xsl:sequence select="string-join((f:md-inline(s:description),

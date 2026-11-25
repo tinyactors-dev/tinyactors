@@ -238,7 +238,7 @@
         </xsl:when>
         <xsl:when test="not($menu)">
           <a href="{f:href(s:link[1])}">
-            <xsl:if test="s:link/@to = $current/@id">
+            <xsl:if test="f:in-group(., $current)">
               <xsl:attribute name="aria-current">page</xsl:attribute>
             </xsl:if>
             {normalize-space(@label)}
@@ -246,10 +246,11 @@
         </xsl:when>
         <xsl:otherwise>
           <details class="nav-group">
-            <xsl:if test="s:link/@to = $current/@id">
+            <xsl:if test="f:in-group(., $current)">
               <xsl:attribute name="open" select="'open'"/>
             </xsl:if>
-            <summary>{normalize-space(@label)}</summary>
+            <summary><a class="nav-group__label" href="{f:href(s:link[1])}">
+              <xsl:if test="f:in-group(., $current)"><xsl:attribute name="aria-current" select="'page'"/></xsl:if>{normalize-space(@label)}</a></summary>
             <div class="nav-group__links">
               <xsl:for-each select="s:link">
                 <xsl:call-template name="nav-link">
@@ -262,6 +263,16 @@
       </xsl:choose>
     </xsl:for-each>
   </xsl:template>
+
+  <!-- A page is in a group of the navigation when the group links to it, or
+       when its path is under the group's first page's (a command's page
+       under /cli/, a guide under /guides/). -->
+  <xsl:function name="f:in-group" as="xs:boolean">
+    <xsl:param name="group" as="element(s:group)"/>
+    <xsl:param name="current" as="element(s:page)"/>
+    <xsl:variable name="index" select="string(f:href($group/s:link[1]))"/>
+    <xsl:sequence select="$group/s:link/@to = $current/@id or ($index != '/' and starts-with(string($current/@path), $index))"/>
+  </xsl:function>
 
   <xsl:template name="nav-link">
     <xsl:param name="current" as="element(s:page)"/>
@@ -429,7 +440,7 @@
     <section id="{@id}" class="section" aria-labelledby="{@id}-heading">
       <div class="wrap">
         <header class="section__head">
-          <h2 id="{@id}-heading"><xsl:apply-templates select="s:heading/node()"/></h2>
+          <h2 id="{@id}-heading"><a class="section__anchor" href="#{@id}"><xsl:apply-templates select="s:heading/node()"/></a></h2>
         </header>
         <div class="section__body">
           <xsl:apply-templates select="* except s:heading"/>
@@ -1143,12 +1154,12 @@
         <s:purpose kind="reference" for="{$commands/@for}"/>
         <s:hero>
           <s:headline><s:code>{$cli-doc/help/@name} {$name}</s:code></s:headline>
-          <s:lede>{f:sentence($help/@summary)}</s:lede>
+          <s:lede><xsl:sequence select="f:help-text(f:sentence($help/@summary))"/></s:lede>
         </s:hero>
         <s:section id="usage">
           <s:heading>{normalize-space($commands/s:usage)}</s:heading>
           <s:code language="shell">{$help/@usage}</s:code>
-          <xsl:if test="normalize-space($help/@description)"><s:p>{$help/@description}</s:p></xsl:if>
+          <xsl:if test="normalize-space($help/@description)"><s:p><xsl:sequence select="f:help-text($help/@description)"/></s:p></xsl:if>
         </s:section>
         <xsl:if test="$help/options/option">
           <s:section id="options">
@@ -1170,7 +1181,7 @@
               <s:example>
                 <s:code language="shell">{@line}</s:code>
                 <xsl:if test="normalize-space(output)"><s:code language="text" role="output">{output}</s:code></xsl:if>
-                <xsl:if test="$caption"><s:caption>{$caption}</s:caption></xsl:if>
+                <xsl:if test="$caption"><s:caption><xsl:sequence select="f:help-text($caption)"/></s:caption></xsl:if>
               </s:example>
               <xsl:for-each select="svg">
                 <s:drawing href="{$page/@path}{@href}" alt="{../@line}" file="{@file}"/>
@@ -1188,7 +1199,7 @@
               <xsl:for-each select="$statuses">
                 <s:item>
                   <s:term><s:code>{(@status, @code)[1]}</s:code></s:term>
-                  <s:text>{f:sentence((@description, @meaning, @when, string(.))[normalize-space()][1])}</s:text>
+                  <s:text><xsl:sequence select="f:help-text(f:sentence((@description, @meaning, @when, string(.))[normalize-space()][1]))"/></s:text>
                 </s:item>
               </xsl:for-each>
             </s:list>
@@ -1210,9 +1221,43 @@
             </s:list>
           </s:section>
         </xsl:if>
+        <s:section id="commands">
+          <s:heading>{normalize-space($commands/s:all)}</s:heading>
+          <s:command-nav current="{$name}"/>
+        </s:section>
       </s:page>
     </xsl:for-each>
   </xsl:function>
+
+  <!-- A command's page ends with the way to the others: the one before and
+       the one after it in the help's order, then every command, this one
+       marked. -->
+  <xsl:template match="s:command-nav">
+    <xsl:variable name="page" select="$commands/ancestor::s:page"/>
+    <xsl:variable name="names" select="$cli-doc/help/commands/command/@command ! string()"/>
+    <xsl:variable name="at" select="index-of($names, string(@current))[1]"/>
+    <xsl:variable name="program" select="string($cli-doc/help/@name)"/>
+    <nav class="command-nav" aria-label="{normalize-space($commands/s:all)}">
+      <p class="command-nav__steps">
+        <xsl:if test="$at gt 1">
+          <a class="command-nav__step" rel="prev" href="{$page/@path}{$names[$at - 1]}/"><span aria-hidden="true">← </span><code>{$program} {$names[$at - 1]}</code></a>
+        </xsl:if>
+        <xsl:if test="$at lt count($names)">
+          <a class="command-nav__step command-nav__step--next" rel="next" href="{$page/@path}{$names[$at + 1]}/"><code>{$program} {$names[$at + 1]}</code><span aria-hidden="true"> →</span></a>
+        </xsl:if>
+      </p>
+      <ul class="command-nav__all">
+        <xsl:for-each select="$names">
+          <li>
+            <xsl:choose>
+              <xsl:when test=". = $names[$at]"><span class="command-nav__current" aria-current="page"><code>{.}</code></span></xsl:when>
+              <xsl:otherwise><a href="{$page/@path}{.}/"><code>{.}</code></a></xsl:otherwise>
+            </xsl:choose>
+          </li>
+        </xsl:for-each>
+      </ul>
+    </nav>
+  </xsl:template>
 
   <!-- Options as a list of terms: each one's names, then what it does,
        then the values it takes (the help's own words; the content's word
@@ -1225,7 +1270,7 @@
         <xsl:variable name="values" select="tokenize(@values, ',\s*')[. != '']"/>
         <s:item>
           <s:term><s:code>{@option}</s:code></s:term>
-          <s:text>{f:sentence(@description)}<xsl:if test="exists($values) and not(contains(@description, normalize-space($commands/s:values) || ':'))">
+          <s:text><xsl:sequence select="f:help-text(f:sentence(@description))"/><xsl:if test="exists($values) and not(contains(@description, normalize-space($commands/s:values) || ':'))">
               <xsl:text> </xsl:text>{normalize-space($commands/s:values)}: <xsl:for-each select="$values"><xsl:if test="position() gt 1">, </xsl:if><s:code>{.}</s:code></xsl:for-each>.</xsl:if></s:text>
         </s:item>
       </xsl:for-each>
@@ -1243,13 +1288,35 @@
       <xsl:for-each select="$cli-doc/help/commands/command">
         <s:item>
           <s:term><s:link to="{$page/@id}-{@command}"><s:code>{$cli-doc/help/@name} {@command}</s:code></s:link></s:term>
-          <s:text>{f:sentence(@summary)}</s:text>
+          <s:text><xsl:sequence select="f:help-text(f:sentence(@summary))"/></s:text>
         </s:item>
       </xsl:for-each>
     </s:list>
       </s:section>
     </xsl:variable>
     <xsl:sequence select="$blocks/*"/>
+  </xsl:function>
+
+  <!-- The placeholders the command's usage lines and options name (INPUT,
+       DIR, FORMAT, ...), which its prose refers to; "ID" is a word too. -->
+  <xsl:variable name="metavariables" as="xs:string*" select="distinct-values(
+      ($cli-doc//@usage, $cli-doc//option/@option) ! tokenize(., '[^A-Z0-9_]+')[matches(., '^[A-Z][A-Z0-9_]+$')][. != 'ID'])"/>
+
+  <!-- The help's prose with what a reader types set as code: an option
+       (a dash or two and a name, with its =VALUE), a placeholder of the usage (INPUT,
+       NAME=VALUE), a file or an extension (order.scxml, .tai) and an
+       element (<system>). -->
+  <xsl:function name="f:help-text" as="node()*">
+    <xsl:param name="text" as="xs:string"/>
+    <xsl:variable name="meta" select="if (exists($metavariables)) then string-join($metavariables, '|') else 'NO_PLACEHOLDER'"/>
+    <xsl:variable name="re" select="'(^|[\s(\[,;&quot;''])(--?[A-Za-z][A-Za-z0-9-]*(=[^\s,;)]+)?|(' || $meta || ')(=[^\s,;)]+)?(\.\.\.)?|[A-Za-z0-9_*/-]*\.(scxml|tai|jsonl|json|xml|svg|snapshot|md)|&lt;[a-z][a-z-]*&gt;)'"/>
+    <xsl:analyze-string select="$text" regex="{$re}">
+      <xsl:matching-substring>
+        <xsl:value-of select="regex-group(1)"/>
+        <s:code>{regex-group(2)}</s:code>
+      </xsl:matching-substring>
+      <xsl:non-matching-substring><xsl:value-of select="."/></xsl:non-matching-substring>
+    </xsl:analyze-string>
   </xsl:function>
 
   <!-- The content's words with "{name}" filled in. -->

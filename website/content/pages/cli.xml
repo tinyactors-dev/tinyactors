@@ -137,6 +137,7 @@
       <examples>Examples</examples>
       <exit-status>Exit status</exit-status>
       <see>Read next</see>
+      <all>Every command</all>
       <values>Values</values>
       <status>It exits with status {status}.</status>
       <related command="run"><link to="cli-protocol"/></related>

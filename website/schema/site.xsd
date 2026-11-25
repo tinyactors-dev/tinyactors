@@ -890,7 +890,8 @@
       only its own: `title`, each command page's title, with "{command}"
       for the command's name; the headings `usage`, `options`,
       `program-options` (the options every command takes), `examples`,
-      `exit-status` and `see` (the links that follow); `values`, the word
+      `exit-status` and `see` (the links that follow); `all`, the heading
+      of the way to every other command, which ends each command's page; `values`, the word
       before the values an option takes; and `status`, added to an
       example's caption when it exits with another status than 0, with
       "{status}". `for` is the command pages' audiences, as a purpose's.
@@ -912,6 +913,7 @@
         <xs:element name="examples" type="title"/>
         <xs:element name="exit-status" type="title"/>
         <xs:element name="see" type="title"/>
+        <xs:element name="all" type="title"/>
         <xs:element name="values" type="plain"/>
         <xs:element name="status" type="with-status"/>
         <xs:element name="related" minOccurs="0" maxOccurs="unbounded">
