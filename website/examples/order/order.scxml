@@ -1,0 +1,19 @@
+<scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0"
+       datamodel="ecmascript" name="order" initial="cart">
+  <datamodel><data id="total" expr="0"/></datamodel>
+  <state id="cart">
+    <transition event="add">
+      <assign location="total" expr="total + _event.data.price"/>
+    </transition>
+    <transition event="checkout" target="paying"/>
+  </state>
+  <state id="paying">
+    <onentry>
+      <send type="payments" event="charge"><param name="amount" expr="total"/></send>
+    </onentry>
+    <transition event="charged" target="paid"/>
+  </state>
+  <final id="paid">
+    <donedata><param name="total" expr="total"/></donedata>
+  </final>
+</scxml>

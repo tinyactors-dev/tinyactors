@@ -215,6 +215,19 @@
     <xsl:sequence select="string-join($blocks, $blank)"/>
   </xsl:template>
 
+  <!-- One program for several packages: each package's files under its
+       name, then the output they all print. -->
+  <xsl:template match="s:program" mode="md" as="xs:string">
+    <xsl:variable name="blocks" as="xs:string*">
+      <xsl:for-each select="s:in">
+        <xsl:sequence select="f:package(.)/@for || ':'"/>
+        <xsl:apply-templates select="s:code" mode="md"/>
+      </xsl:for-each>
+      <xsl:apply-templates select="s:code" mode="md"/>
+    </xsl:variable>
+    <xsl:sequence select="string-join($blocks, $blank)"/>
+  </xsl:template>
+
   <!-- A live example runs in the page: its button's label links there,
        and the module it runs is named beside it. -->
   <xsl:template match="s:live" mode="md" as="xs:string">

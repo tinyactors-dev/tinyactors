@@ -1,0 +1,3 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- A program's files are files that ran, under examples/: never code written in the content. expect: cvc-assertion: element 'Q{https://www.tinyactors.dev/ns/site}in' breaks the assertion '(: every file is one that ran :) -->
+<page xmlns="https://www.tinyactors.dev/ns/site" id="t" path="/t/"><title>T</title><description>A test page.</description><purpose kind="pitch" for="a"/><hero><headline>T</headline><lede>Lede.</lede></hero><section id="s"><heading>S</heading><p>Text.</p><program><in package="node"><code language="javascript" file="main.mjs">console.log(1);</code></in><code src="../../examples/order/output.txt" language="text" role="output"/></program></section></page>

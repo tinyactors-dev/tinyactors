@@ -1,0 +1,9 @@
+[project]
+name = "tinyactors-website-example-order"
+version = "0"
+description = "The home page's first program in Python: main.py. mise run test runs it and compares what it prints with output.txt."
+requires-python = ">=3.13"
+dependencies = ["tinyactors==0.4.0"]
+
+[tool.uv]
+package = false

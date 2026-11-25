@@ -79,6 +79,15 @@ A page is a hero and sections. Each section has a heading and blocks:
   Each I/O processor type the chart sends to gets a stand-in that lists
   what it received under the diagram; the reader answers by clicking a
   transition's label, and "Run again" restarts the run.
+- **One program in every language is a `<program>`.** It shows how a
+  reader's code uses tinyactors: an `<in package>` per package of
+  `site.xml` (its files as `<code src file>`, the program first, then the
+  chart it reads), then the one output they all print. The page shows one
+  package at a time, behind the install commands' tabs (the reader's
+  platform holds), and one file at a time, a chart's file followed by its
+  diagram. Its programs live in one directory under `examples/`, which
+  `mise run test` runs as `main.mjs` and, with a `pyproject.toml` and
+  `uv.lock`, as `main.py` too: each must print `output.txt`.
 - **A live example runs in the browser.** `<live src call>` names an
   export of a module under `examples/`, run by a button whose `<label>` is
   the content's. The build serves the module with `@tinyactors/wasm` at

@@ -128,7 +128,7 @@
         <link rel="stylesheet" href="/assets/site.css?v={$version}"/>
         <!-- The vendored packages by their names, as a reader's code imports them (mise/website.rb, VENDOR). -->
         <script type="importmap">{$importmap}</script>
-        <xsl:if test=".//s:install[count(s:command) gt 1] or .//s:changelog">
+        <xsl:if test=".//s:install[count(s:command) gt 1] or .//s:changelog or .//s:program">
           <script type="module" src="/assets/components/tabs.mjs?v={$version}"></script>
         </xsl:if>
         <xsl:if test=".//s:code[@language = 'scxml' and @src]">
@@ -138,7 +138,7 @@
         <xsl:if test=".//s:code[not(@role = 'output') and not(@language = 'text')]">
           <script type="module" src="/assets/components/highlight.mjs?v={$version}"></script>
         </xsl:if>
-        <xsl:if test=".//s:code[parent::s:section or parent::s:example] or .//s:live or .//s:install">
+        <xsl:if test=".//s:code[parent::s:section or parent::s:example or parent::s:program or parent::s:in] or .//s:live or .//s:install">
           <script type="module" src="/assets/components/copy.mjs?v={$version}"></script>
         </xsl:if>
         <xsl:if test=".//s:playground">
@@ -445,7 +445,7 @@
     </ta-tabs>
   </xsl:template>
 
-  <xsl:template match="s:code[parent::s:section or parent::s:example]">
+  <xsl:template match="s:code[parent::s:section or parent::s:example or parent::s:program]">
     <figure class="ta-code code{if (@role = 'output') then ' code--output' else ''}">
       <figcaption class="ta-code__head">
         <span>{if (@role = 'output') then 'output' else (@file, @language)[1]}</span>
@@ -545,6 +545,72 @@
         <p class="example__caption"><xsl:apply-templates select="s:caption/node()"/></p>
       </xsl:if>
     </div>
+  </xsl:template>
+
+  <!-- One program for several packages: a tab per package, whose choice
+       is the install commands' (data-group: the reader's platform holds),
+       and in each a tab per file, a chart's file followed by its diagram
+       (components/chart.mjs); the file tabs choose for their block only
+       (data-local). Then what the programs print. -->
+  <xsl:template match="s:program">
+    <xsl:variable name="id" select="generate-id()"/>
+    <div class="example program">
+      <ta-tabs class="program__packages">
+        <xsl:if test="count(s:in) gt 1">
+          <div role="tablist" class="ta-tabs ta-tabs--segmented" aria-label="Program for" data-group="Install for">
+            <xsl:for-each select="s:in">
+              <button type="button" role="tab" class="ta-tab" id="{$id}-tab-{position()}" aria-controls="{$id}-panel-{position()}"
+                      aria-selected="{position() = 1}" tabindex="{if (position() = 1) then 0 else -1}"><xsl:sequence select="f:platform(f:package(.))"/></button>
+            </xsl:for-each>
+          </div>
+        </xsl:if>
+        <xsl:for-each select="s:in">
+          <div class="program__panel" role="{if (count(../s:in) gt 1) then 'tabpanel' else 'group'}" id="{$id}-panel-{position()}"
+               aria-labelledby="{$id}-tab-{position()}">
+            <xsl:if test="count(../s:in) = 1"><xsl:attribute name="aria-label" select="'Program for ' || f:package(.)/@for"/></xsl:if>
+            <xsl:if test="position() gt 1"><xsl:attribute name="hidden" select="'hidden'"/></xsl:if>
+            <xsl:apply-templates select="." mode="files"/>
+          </div>
+        </xsl:for-each>
+      </ta-tabs>
+      <xsl:apply-templates select="s:code"/>
+    </div>
+  </xsl:template>
+
+  <!-- A program's files for one package, a tab each; a chart's diagram is
+       a tab after its file. -->
+  <xsl:template match="s:in" mode="files">
+    <xsl:variable name="tabs" as="map(*)*">
+      <xsl:for-each select="s:code">
+        <xsl:sequence select="map { 'id': generate-id(), 'label': string(@file), 'code': . }"/>
+        <xsl:if test="@language = 'scxml'">
+          <xsl:sequence select="map { 'id': generate-id() || '-diagram', 'label': 'Diagram', 'chart': . }"/>
+        </xsl:if>
+      </xsl:for-each>
+    </xsl:variable>
+    <ta-tabs class="ta-code code chart program__files" data-local="">
+      <div class="ta-code__head">
+        <div role="tablist" class="ta-tabs ta-tabs--segmented chart__views" aria-label="Files">
+          <xsl:for-each select="$tabs">
+            <button type="button" role="tab" class="ta-tab" id="{?id}-tab" aria-controls="{?id}-panel"
+                    aria-selected="{position() = 1}" tabindex="{if (position() = 1) then 0 else -1}">{?label}</button>
+          </xsl:for-each>
+        </div>
+      </div>
+      <xsl:for-each select="$tabs">
+        <xsl:choose>
+          <xsl:when test="exists(?chart)">
+            <div role="tabpanel" id="{?id}-panel" aria-labelledby="{?id}-tab" class="chart__diagram" data-src="{f:url(?chart/@src)}" hidden="hidden"></div>
+          </xsl:when>
+          <xsl:otherwise>
+            <div role="tabpanel" id="{?id}-panel" aria-labelledby="{?id}-tab">
+              <xsl:if test="position() gt 1"><xsl:attribute name="hidden" select="'hidden'"/></xsl:if>
+              <xsl:sequence select="f:copyable(f:pre(?code))"/>
+            </div>
+          </xsl:otherwise>
+        </xsl:choose>
+      </xsl:for-each>
+    </ta-tabs>
   </xsl:template>
 
   <!-- Claims: each a card with its statement, why, and where to check it. -->
@@ -794,7 +860,7 @@
        it. -->
 
   <xsl:function name="f:package" as="element(s:package)">
-    <xsl:param name="command" as="element(s:command)"/>
+    <xsl:param name="command" as="element()"/>
     <xsl:variable name="package" select="$site/s:packages/s:package[@id = $command/@package]"/>
     <xsl:if test="empty($package)">
       <xsl:message terminate="yes">site: {f:where($command)}: no package "{$command/@package}" in site.xml's packages</xsl:message>

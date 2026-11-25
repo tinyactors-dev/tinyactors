@@ -10,3 +10,7 @@
 # Node.js runs the examples the pages show (examples/, with the packages
 # they import from npm), the local server and wrangler, which deploys.
 node = "22"
+# Python and uv run the examples' Python programs (examples/*/main.py)
+# against the tinyactors their uv.lock pins from PyPI.
+python = "3.13"
+uv = "0.12.22"

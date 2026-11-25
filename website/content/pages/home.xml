@@ -20,6 +20,22 @@
     </actions>
   </hero>
 
+  <section id="start" answers="agent-platform.code-first">
+    <heading>Run an actor from your code</heading>
+    <p>Your program compiles a chart, spawns an order actor and sends it events. It answers the payment the order asks for:</p>
+    <program>
+      <in package="node">
+        <code src="../../examples/order/main.mjs" language="javascript" file="main.mjs"/>
+        <code src="../../examples/order/order.scxml" language="scxml" file="order.scxml"/>
+      </in>
+      <in package="python">
+        <code src="../../examples/order/main.py" language="python" file="main.py"/>
+        <code src="../../examples/order/order.scxml" language="scxml" file="order.scxml"/>
+      </in>
+      <code src="../../examples/order/output.txt" language="text" role="output"/>
+    </program>
+  </section>
+
   <section id="actors" answers="workflow-tester.written-flow">
     <heading>Deterministic behaviors</heading>
     <p>A statechart is a composable state machine of states, events and transitions. Because it isolates effects as events, your code can simulate runs in tests.</p>

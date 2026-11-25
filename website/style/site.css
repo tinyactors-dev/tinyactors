@@ -291,6 +291,11 @@ ta-tabs { display: block; }
 .chart pre { margin: 0; padding: var(--space-4); overflow: auto; }
 .chart pre code { font: var(--type-code); white-space: pre; }
 .chart__diagram { --chart-height: 320px; background: var(--bg-app); }
+/* one program for several packages: the package's tabs over its files' block */
+.program__packages { display: grid; gap: var(--space-2); }
+.program__panel[hidden] { display: none; }
+.program > *, .program__packages > *, .program__files { min-width: 0; }
+.program__files pre { overflow-x: auto; }
 .chart__diagram scxml-view { display: block; }
 :root:not([data-theme="dark"]) scxml-view { --scxml-color-scheme: light; }
 [data-theme="dark"] scxml-view { --scxml-color-scheme: dark; }

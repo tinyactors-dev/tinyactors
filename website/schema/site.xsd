@@ -465,6 +465,7 @@
       <xs:element ref="list"/>
       <xs:element ref="code"/>
       <xs:element ref="example"/>
+      <xs:element ref="program"/>
       <xs:element ref="claims"/>
       <xs:element ref="install"/>
       <xs:element ref="actions"/>
@@ -636,6 +637,37 @@
         <xs:element ref="code" maxOccurs="unbounded"/>
         <xs:element name="caption" type="inline" minOccurs="0"/>
       </xs:sequence>
+    </xs:complexType>
+  </xs:element>
+
+  <xs:element name="program">
+    <xs:annotation><xs:documentation>
+      One program, written for several packages of site.xml's `packages`:
+      how a reader's code uses tinyactors, not how a chart is written. Each
+      `in` is the program for one package (`package`, its id), as its files:
+      the program first, then what it reads (the chart). Every file is a
+      `code` with `src` and `file`, under examples/, where `mise run test`
+      runs each language's program and compares what it prints with the
+      one output the block ends with. The page shows one package at a time,
+      behind tabs whose choice is the install commands' (the reader's
+      platform holds), and one file at a time behind tabs of its own.
+    </xs:documentation></xs:annotation>
+    <xs:complexType>
+      <xs:sequence>
+        <xs:element name="in" maxOccurs="unbounded">
+          <xs:complexType>
+            <xs:sequence>
+              <xs:element ref="code" maxOccurs="unbounded"/>
+            </xs:sequence>
+            <xs:attribute name="package" type="xs:NCName" use="required"/>
+            <xs:assert test="(: every file is one that ran :) every $code in *:code satisfies ($code/@src and $code/@file and not($code/@role = 'output') and not($code/@lines))"/>
+            <xs:assert test="(: one file of each name :) count(distinct-values(*:code/@file)) = count(*:code)"/>
+          </xs:complexType>
+        </xs:element>
+        <xs:element ref="code"/>
+      </xs:sequence>
+      <xs:assert test="(: one program per package :) count(distinct-values(*:in/@package)) = count(*:in)"/>
+      <xs:assert test="(: it ends with what the programs print :) *:code[last()]/@role = 'output'"/>
     </xs:complexType>
   </xs:element>
 

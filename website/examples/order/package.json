@@ -1,0 +1,10 @@
+{
+  "name": "tinyactors-website-example-order",
+  "private": true,
+  "type": "module",
+  "main": "main.mjs",
+  "description": "The home page's first program: an order actor, in Node.js (main.mjs) and Python (main.py). mise run test runs both and compares what each prints with output.txt.",
+  "dependencies": {
+    "@tinyactors/node": "0.4.0"
+  }
+}
