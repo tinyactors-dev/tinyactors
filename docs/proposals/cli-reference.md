@@ -1,12 +1,18 @@
 # The command on the website: a reference from its own help, and its voice
 
-**Status:** Sketch (2026-11-25). The voice definition below was written by
+**Status:** Accepted for the voice (decided 2026-11-25 on the maintainer's
+instruction to finish the CLI section); a sketch for the website's
+reference pages. The voice definition below was written by
 Gemini (gemini-4-hydrogen, thinking high) from the site's voice, the
 copywriting skill, the command's help and a survey of eleven CLI reference
 sites, in two passes: a draft, then a revision against eight review findings
 (contradictory period rules, two rewrites that bent facts, a wrong
-placeholder). Nothing here is applied yet; the maintainer decides the
-points under "Decisions for the maintainer".
+placeholder). Every point under "Decisions for the maintainer" is decided
+the recommended way, and `tinyactors help` follows the voice: summaries,
+descriptions, option texts, captioned examples and per-command exit
+statuses in `program.c` (`ta_cli_example`, `ta_cli_exit_status` in
+`src/cli/arguments.h`). The website's pages from the help are not built
+yet.
 **Touches:** `website/` (content, schema, render, build), `copywriter/`
 (a second voice), `tinyactors-core/tools/tinyactors/program.c` (the help
 text, examples with captions), `tinyactors-core/docs/cli.md`.
@@ -36,8 +42,9 @@ text, examples with captions), `tinyactors-core/docs/cli.md`.
    "migration" answer), charts (`fmt`, `graph -f svg`).
 4. **The schema already has the page shape:** `<reference>` (no hero, a
    headline, then blocks) and the page kind `reference`.
-5. **The help's Markdown wraps a description holding `<` in one code span**
-   (`tinyactors help compile` prints its whole description in backticks).
+5. **The help's Markdown wrapped a description holding `<` in one code span**
+   (`tinyactors help compile` printed its whole description in backticks).
+   Fixed by the voice: descriptions hold no literal markup.
 
 ## The reference comes from the command
 
@@ -52,9 +59,11 @@ options as a definition list, examples, exit status. The words come only
 from the command, so the terminal and the site cannot disagree, and the
 copywriter's export for those pages is a change to `program.c`.
 
-Two things the help lacks: a caption per example (today an example is a
-bare command line) and a per-command exit status (today in `docs/cli.md`
-only). Both would become fields of the command table in `program.c`.
+The help now carries both things it lacked: a caption per example (an
+example is `{caption, command}` in every format) and a per-command exit
+status (`exitStatus`, a list of `{code, meaning}`, for each command that
+exits with more than a usage error), fields of the command table in
+`program.c`.
 
 ## Voice definition
 
@@ -127,6 +136,19 @@ The voice: short, literal and consistent across terminal and web.
 ---
 
 ## Decisions for the maintainer
+
+**Decided 2026-11-25 on the maintainer's instruction to finish the CLI
+section, each the recommended way:** descriptions hold no literal markup
+(`system manifest`, `SCXML charts`), so the renderer stays as it is;
+imperative summaries in sentence case for all 18 commands and the program;
+sentence case in terminal help too; the fixed clauses `Values:` (only
+glossed choices; the Values column carries the rest), `Default:` and
+`Repeatable.`; a caption on every example in `tinyactors help`; an `Exit
+status` section per command (codes 1 and 3, and `run`'s 0; 2 is the usage
+error every command shares). The copy was drafted by Gemini
+(gemini-4-hydrogen, thinking high), checked line by line against the
+program's code, and reviewed by a second Gemini pass. The one-page-per-command
+website reference waits for the website's build.
 
 - **Backtick wrapping on `<` in Markdown help:** in `cli-help.md`, the program's Markdown help wraps `compile` and `graph` descriptions in backticks because they contain `<system>` or `<scxml>`, turning the whole paragraph into one code span. Decide whether the voice should avoid literal markup in descriptions (writing `system manifest` and `SCXML charts`) or the renderer should escape or inline-code only the tag.
 - **Imperative summaries everywhere:** convert all 18 command summaries to imperative verb phrases ("Show...", "List...", "Compare...") instead of mixing verbs with noun phrases. Alternative: keep noun phrases for read-only commands.
