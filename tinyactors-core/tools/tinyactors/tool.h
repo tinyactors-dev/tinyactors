@@ -160,7 +160,16 @@ typedef struct tool_charts {
     uint32_t count;
     const uint8_t *selected;
 } tool_charts;
-ta_status tool_select_charts(tool *t, const tool_image *image, tool_charts *out);
+typedef enum tool_selection_flags {
+    /* a name no chart of this image has is no error: diff selects by name
+     * across two images, and says itself when neither has it */
+    TOOL_SELECT_NAMES_ELSEWHERE = 1u << 0
+} tool_selection_flags;
+typedef struct tool_selection {
+    const tool_image *image;
+    uint32_t flags; /* tool_selection_flags */
+} tool_selection;
+ta_status tool_select_charts(tool *t, tool_selection selection, tool_charts *out);
 /* The options every command that reads inputs starts its table with, and
  * those after them in each command's table (program.c). */
 typedef enum tool_input_option {
@@ -188,6 +197,7 @@ typedef struct tool_opened {
 typedef struct tool_open_request {
     uint32_t count;
     const ta_string_view *paths;
+    uint32_t flags; /* tool_selection_flags */
 } tool_open_request;
 ta_status tool_open(tool *t, tool_open_request request, tool_opened *out);
 

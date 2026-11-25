@@ -221,7 +221,8 @@ void tool_report_diagnostics(tool *t, const tool_image *image) {
     ta_report_end(report);
 }
 
-ta_status tool_select_charts(tool *t, const tool_image *image, tool_charts *out) {
+ta_status tool_select_charts(tool *t, tool_selection selection, tool_charts *out) {
+    const tool_image *image = selection.image;
     ta_image_info info;
     info.size = sizeof info;
     ta_image_get_info(&image->image, &info);
@@ -235,6 +236,7 @@ ta_status tool_select_charts(tool *t, const tool_image *image, tool_charts *out)
         if (value->option.scope != TA_CLI_SCOPE_COMMAND || value->option.option != TOOL_OPTION_CHART)
             continue;
         uint32_t chart = ta_image_chart_by_name(&image->image, value->text);
+        if (chart == TA_NIL && (selection.flags & TOOL_SELECT_NAMES_ELSEWHERE)) continue;
         if (chart == TA_NIL) {
             tool_text text;
             tool_text_init(t, &text);
@@ -264,5 +266,5 @@ ta_status tool_open(tool *t, tool_open_request request, tool_opened *out) {
         if (t->exit == TOOL_EXIT_REFUSED) tool_report_diagnostics(t, &out->image);
         return status;
     }
-    return tool_select_charts(t, &out->image, &out->charts);
+    return tool_select_charts(t, (tool_selection){&out->image, request.flags}, &out->charts);
 }

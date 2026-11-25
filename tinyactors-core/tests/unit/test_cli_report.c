@@ -476,13 +476,13 @@ static void test_no_memory(void) {
 /* Names as words in Markdown: an acronym stays in capitals. */
 static void test_acronyms_in_names(void) {
     test_document document;
-    document_begin(&document, "otlpExporter", 0);
+    document_begin(&document, "orderSummary", 0);
     ta_report_number(&document.report, S("sessionID"), 1);
     ta_report_number(&document.report, S("bootActors"), 2);
-    ta_report_number(&document.report, S("httpURLPath"), 3);
+    ta_report_number(&document.report, S("paymentURLPath"), 3);
     CHECK(document_is(&document, TA_REPORT_MARKDOWN,
-                      EXPECT("# Otlp exporter\n\n- **Session ID**: 1\n- **Boot actors**: 2\n"
-                             "- **Http URL path**: 3\n")));
+                      EXPECT("# Order summary\n\n- **Session ID**: 1\n- **Boot actors**: 2\n"
+                             "- **Payment URL path**: 3\n")));
     document_end(&document);
 }
 

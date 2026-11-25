@@ -178,6 +178,60 @@ static void test_help_and_version(void) {
     CHECK(has("output", "- **Program**: tinyactors"));
 }
 
+/* An order with its executable content: a foreach, a condition, sends. */
+#define FULFILLMENT                                                                                \
+    "<scxml " NS " datamodel='ecmascript' name='fulfillment' initial='packing'>\n"                 \
+    "<datamodel><data id='items' expr='[]'/><data id='count' expr='0'/></datamodel>\n"             \
+    "<parallel id='packing'><state id='boxes'><onentry>"                                           \
+    "<foreach array='items' item='item'><assign location='count' expr='count + 1'/></foreach>"     \
+    "<if cond='count &gt; 10'><send event='parcel.heavy' delay='30s'/>"                            \
+    "<else/><log label='parcel' expr='count'/></if></onentry>"                                     \
+    "<transition event='packed' target='shipped'/></state>"                                        \
+    "<state id='labels'><transition event='printed'/></state></parallel>\n"                       \
+    "<final id='shipped'/></scxml>\n"
+
+static void test_disassemble_and_graph(void) {
+    CHECK(fixture_write("fulfillment.scxml", FULFILLMENT));
+    CHECK_EQUAL(run("disassemble fulfillment.scxml"), 0);
+    CHECK(has("output", "| onentry boxes | block |"));
+    CHECK(has("output", "| foreach | `items` as `item` until "));
+    CHECK(has("output", "| assign | `count` = `count + 1` |"));
+    CHECK(has("output", "| jump-if-false | unless `count > 10` to "));
+    CHECK(has("output", "| send | event parcel.heavy to itself after 30000000000ns |"));
+    CHECK(has("output", "| log | label parcel `count` |"));
+    CHECK_EQUAL(run("graph fulfillment.scxml"), 0);
+    CHECK(has("output", "```mermaid\nstateDiagram-v2\n"));
+    CHECK(has("output", "state \"boxes\" as s2"));
+    CHECK(has("output", "    --\n")); /* the parallel state's regions */
+    CHECK(has("output", "s2 --> s4 : packed"));
+    CHECK_EQUAL(run("graph -f json fulfillment.scxml"), 0);
+    CHECK(has("output", "\"source\": \"boxes\""));
+    CHECK(has("output", "\"target\": \"shipped\""));
+}
+
+static void test_diff(void) {
+    write_charts();
+    CHECK_EQUAL(run("compile order.scxml -o order.tai"), 0);
+    /* the next version: paying is now settling, and the order keeps a currency */
+    CHECK(fixture_write("order-next.scxml",
+                        "<scxml " NS " datamodel='ecmascript' name='order' initial='open'>\n"
+                        "<datamodel><data id='total' expr='0'/><data id='currency' expr=\"'EUR'\"/></datamodel>\n"
+                        "<state id='open'><transition event='checkout' target='settling'/></state>\n"
+                        "<state id='settling'><invoke id='pay' src='payment.scxml'/>\n"
+                        "<transition event='done.invoke.pay' target='paid'/></state>\n"
+                        "<final id='paid'/></scxml>\n"));
+    CHECK_EQUAL(run("diff order.tai order.scxml"), 0);
+    CHECK(has("output", "- **Identical**: yes"));
+    CHECK_EQUAL(run("diff --exit-code order.tai order.scxml"), 0);
+    CHECK_EQUAL(run("diff -f json --exit-code order.tai order-next.scxml"), 1);
+    CHECK(has("output", "\"statesAdded\": \"settling\""));
+    CHECK(has("output", "\"statesRemoved\": \"paying\""));
+    CHECK(has("output", "\"dataAdded\": \"currency\""));
+    CHECK(has("output", "one in a state the new version removed is completed to a legal configuration"));
+    CHECK_EQUAL(run("diff --chart shipment order.tai order-next.scxml"), 2);
+    CHECK(has("errors", "no chart 'shipment' in either image"));
+}
+
 int main(void) {
     RUN(test_compile_and_inspect);
     RUN(test_a_system);
@@ -185,6 +239,8 @@ int main(void) {
     RUN(test_the_charts_records);
     RUN(test_refusals);
     RUN(test_the_command_line);
+    RUN(test_disassemble_and_graph);
+    RUN(test_diff);
     RUN(test_help_and_version);
     TEST_MAIN_END();
 }

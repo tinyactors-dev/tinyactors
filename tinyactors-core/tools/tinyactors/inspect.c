@@ -6,7 +6,7 @@
 #define T TA_CLI_TEXT
 
 static tool_open_request arguments_of(const tool *t) {
-    tool_open_request request = {t->parsed->argument_count, t->parsed->arguments};
+    tool_open_request request = {t->parsed->argument_count, t->parsed->arguments, 0};
     return request;
 }
 
