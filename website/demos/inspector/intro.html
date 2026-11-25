@@ -1,0 +1,62 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Support desk</title>
+<!-- The demo's first scene: the system, and the workbench running it. The
+     recorder serves it beside the built site, with logs.json (the run's
+     escalation lines) next to it, and calls play(). -->
+<link rel="stylesheet" href="/assets/site.css">
+<style>
+body{margin:0;background:var(--bg-app);color:var(--fg-1);font-family:var(--font-sans);height:100vh;display:grid;grid-template-rows:auto 1fr;}
+header{padding:28px 40px 8px}
+h1{font:400 40px/1.1 var(--font-serif);margin:0 0 6px;letter-spacing:-.02em}
+.sub{color:var(--fg-2);font-size:16px;max-width:900px}
+main{display:grid;grid-template-columns:1fr 1.25fr;gap:24px;padding:16px 40px 40px;min-height:0}
+.panel{border:1px solid var(--border-1);background:var(--surface-1);border-radius:2px;padding:18px;min-height:0;overflow:hidden;display:flex;flex-direction:column}
+.label{font:500 11px/1 var(--font-mono);letter-spacing:.12em;text-transform:uppercase;color:var(--fg-3);margin-bottom:12px}
+.chart{font:13px/1.55 var(--font-mono);white-space:pre;color:var(--fg-1)}
+.chart b{color:var(--accent-fg);font-weight:500}
+.term{background:var(--surface-code);font:13px/1.6 var(--font-mono);flex:1;overflow:hidden;padding:14px;border:1px solid var(--code-border)}
+.term div{white-space:pre-wrap;opacity:0;transition:opacity .25s}
+.term div.on{opacity:1}
+.p{color:var(--accent-fg)} .m{color:var(--fg-3)} .w{color:var(--state-waiting)}
+</style></head><body>
+<header><h1>A support desk, 120 tickets</h1>
+<div class="sub">Each ticket is an actor running the <b>ticket</b> chart. Each open ticket invokes an <b>sla</b> chart that sends <code>sla.breached</code> to its ticket when its deadline passes: 15 minutes for urgent, an hour for high, four hours for normal.</div></header>
+<main>
+<section class="panel"><div class="label">ticket.scxml, its states</div><div class="chart">new
+  └─ ticket.opened → <b>triage</b>
+triage
+  └─ ticket.triaged → <b>open</b>
+<b>open</b>  invokes sla (deadline by priority)
+  ├─ sla.breached → escalations + 1, log
+  ├─ ticket.resolved → resolved
+  ├─ unassigned ─ agent.assigned → working
+  ├─ working ─ agent.replied → waiting_on_customer
+  └─ waiting_on_customer
+       ├─ customer.replied → working
+       └─ after 2 h: customer.nudge
+resolved
+  ├─ customer.replied → open
+  └─ after 24 h: ticket.autoclose → closed
+closed (final)</div></section>
+<section class="panel"><div class="label">tinyactors run: the workbench, a simulated clock</div><div class="term" id="term"></div></section>
+</main>
+<script type="module">
+const { logs, bytes, layout } = await (await fetch('run.json')).json();
+const script = [
+ ['p', '$ tinyactors run --config config.json < desk.jsonl'],
+ ['m', 'run.addImage  ticket.scxml, sla.scxml'],
+ ['m', 'run.spawn × 120  ticket-4101 … ticket-4220'],
+ ['m', 'run.send ticket.opened × 120, ticket.triaged × 110, agent.assigned × 95'],
+ ['m', 'run.advanceTime 1200s · run.turn'],
+ ['m', 'run.send agent.replied × 70 · run.advanceTime 2700s'],
+ ...logs.slice(0, 9).map((t) => ['w', 'effect.log  escalation  ' + t]),
+ ['m', 'run.send customer.replied × 40, agent.replied × 30, ticket.resolved × 22'],
+ ['m', 'run.advanceTime 1800s · run.turn'],
+ ['m', 'run.send customer.replied × 8   (left waiting in mailboxes)'],
+ ['m', 'run.hibernate × 6'],
+ ['p', `run.snapshot  → desk.snapshot   ${(bytes / 1048576).toFixed(1)} MB   layout ${layout}`],
+];
+const term = document.getElementById('term');
+for (const [c, t] of script) { const d = document.createElement('div'); d.className = c; d.textContent = t; term.append(d); }
+window.play = async () => { for (const d of term.children) { d.classList.add('on'); await new Promise((r) => setTimeout(r, d.className === 'w' ? 450 : 900)); } };
+window.ready = true;
+</script></body></html>

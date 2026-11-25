@@ -1,0 +1,637 @@
+{"jsonrpc": "2.0", "id": 1, "method": "run.addImage", "params": {"sources": [{"name": "ticket.scxml", "text": "<scxml xmlns=\"http://www.w3.org/2005/07/scxml\" version=\"1.0\" datamodel=\"ecmascript\" name=\"ticket\" initial=\"new\">\n  <datamodel>\n    <data id=\"customer\" expr=\"''\"/>\n    <data id=\"subject\" expr=\"''\"/>\n    <data id=\"priority\" expr=\"'normal'\"/>\n    <data id=\"agent\" expr=\"null\"/>\n    <data id=\"replies\" expr=\"0\"/>\n    <data id=\"escalations\" expr=\"0\"/>\n  </datamodel>\n  <state id=\"new\">\n    <transition event=\"ticket.opened\" target=\"triage\">\n      <assign location=\"customer\" expr=\"_event.data.customer\"/>\n      <assign location=\"subject\" expr=\"_event.data.subject\"/>\n    </transition>\n  </state>\n  <state id=\"triage\">\n    <transition event=\"ticket.triaged\" target=\"open\">\n      <assign location=\"priority\" expr=\"_event.data.priority\"/>\n    </transition>\n  </state>\n  <state id=\"open\" initial=\"unassigned\">\n    <invoke id=\"sla\" src=\"sla.scxml\">\n      <param name=\"minutes\" expr=\"priority === 'urgent' ? 15 : priority === 'high' ? 60 : 240\"/>\n    </invoke>\n    <transition event=\"sla.breached\">\n      <assign location=\"escalations\" expr=\"escalations + 1\"/>\n      <log label=\"escalation\" expr=\"subject + ' for ' + customer + ' breached its ' + priority + ' SLA'\"/>\n    </transition>\n    <transition event=\"ticket.resolved\" target=\"resolved\"/>\n    <state id=\"unassigned\">\n      <transition event=\"agent.assigned\" target=\"working\">\n        <assign location=\"agent\" expr=\"_event.data.agent\"/>\n      </transition>\n    </state>\n    <state id=\"working\">\n      <transition event=\"agent.replied\" target=\"waiting_on_customer\">\n        <assign location=\"replies\" expr=\"replies + 1\"/>\n      </transition>\n    </state>\n    <state id=\"waiting_on_customer\">\n      <onentry><send id=\"nudge\" event=\"customer.nudge\" delay=\"7200s\"/></onentry>\n      <transition event=\"customer.replied\" target=\"working\">\n        <cancel sendid=\"nudge\"/>\n      </transition>\n      <transition event=\"customer.nudge\">\n        <log label=\"nudge\" expr=\"'reminding ' + customer\"/>\n      </transition>\n    </state>\n  </state>\n  <state id=\"resolved\">\n    <onentry><send id=\"autoclose\" event=\"ticket.autoclose\" delay=\"86400s\"/></onentry>\n    <transition event=\"customer.replied\" target=\"open\"/>\n    <transition event=\"ticket.autoclose\" target=\"closed\"/>\n  </state>\n  <final id=\"closed\"/>\n</scxml>"}, {"name": "sla.scxml", "text": "<scxml xmlns=\"http://www.w3.org/2005/07/scxml\" version=\"1.0\" datamodel=\"ecmascript\" name=\"sla\" initial=\"running\">\n  <datamodel><data id=\"minutes\" expr=\"240\"/></datamodel>\n  <state id=\"running\">\n    <onentry><send id=\"deadline\" event=\"deadline\" delayexpr=\"(minutes * 60) + 's'\"/></onentry>\n    <transition event=\"deadline\" target=\"breached\"/>\n  </state>\n  <state id=\"breached\">\n    <onentry><send target=\"#_parent\" event=\"sla.breached\"/></onentry>\n  </state>\n</scxml>"}]}}
+{"jsonrpc": "2.0", "id": 2, "method": "run.spawn", "params": {"chart": "ticket", "name": "ticket-4101"}}
+{"jsonrpc": "2.0", "id": 3, "method": "run.spawn", "params": {"chart": "ticket", "name": "ticket-4102"}}
+{"jsonrpc": "2.0", "id": 4, "method": "run.spawn", "params": {"chart": "ticket", "name": "ticket-4103"}}
+{"jsonrpc": "2.0", "id": 5, "method": "run.spawn", "params": {"chart": "ticket", "name": "ticket-4104"}}
+{"jsonrpc": "2.0", "id": 6, "method": "run.spawn", "params": {"chart": "ticket", "name": "ticket-4105"}}
+{"jsonrpc": "2.0", "id": 7, "method": "run.spawn", "params": {"chart": "ticket", "name": "ticket-4106"}}
+{"jsonrpc": "2.0", "id": 8, "method": "run.spawn", "params": {"chart": "ticket", "name": "ticket-4107"}}
+{"jsonrpc": "2.0", "id": 9, "method": "run.spawn", "params": {"chart": "ticket", "name": "ticket-4108"}}
+{"jsonrpc": "2.0", "id": 10, "method": "run.spawn", "params": {"chart": "ticket", "name": "ticket-4109"}}
+{"jsonrpc": "2.0", "id": 11, "method": "run.spawn", "params": {"chart": "ticket", "name": "ticket-4110"}}
+{"jsonrpc": "2.0", "id": 12, "method": "run.spawn", "params": {"chart": "ticket", "name": "ticket-4111"}}
+{"jsonrpc": "2.0", "id": 13, "method": "run.spawn", "params": {"chart": "ticket", "name": "ticket-4112"}}
+{"jsonrpc": "2.0", "id": 14, "method": "run.spawn", "params": {"chart": "ticket", "name": "ticket-4113"}}
+{"jsonrpc": "2.0", "id": 15, "method": "run.spawn", "params": {"chart": "ticket", "name": "ticket-4114"}}
+{"jsonrpc": "2.0", "id": 16, "method": "run.spawn", "params": {"chart": "ticket", "name": "ticket-4115"}}
+{"jsonrpc": "2.0", "id": 17, "method": "run.spawn", "params": {"chart": "ticket", "name": "ticket-4116"}}
+{"jsonrpc": "2.0", "id": 18, "method": "run.spawn", "params": {"chart": "ticket", "name": "ticket-4117"}}
+{"jsonrpc": "2.0", "id": 19, "method": "run.spawn", "params": {"chart": "ticket", "name": "ticket-4118"}}
+{"jsonrpc": "2.0", "id": 20, "method": "run.spawn", "params": {"chart": "ticket", "name": "ticket-4119"}}
+{"jsonrpc": "2.0", "id": 21, "method": "run.spawn", "params": {"chart": "ticket", "name": "ticket-4120"}}
+{"jsonrpc": "2.0", "id": 22, "method": "run.spawn", "params": {"chart": "ticket", "name": "ticket-4121"}}
+{"jsonrpc": "2.0", "id": 23, "method": "run.spawn", "params": {"chart": "ticket", "name": "ticket-4122"}}
+{"jsonrpc": "2.0", "id": 24, "method": "run.spawn", "params": {"chart": "ticket", "name": "ticket-4123"}}
+{"jsonrpc": "2.0", "id": 25, "method": "run.spawn", "params": {"chart": "ticket", "name": "ticket-4124"}}
+{"jsonrpc": "2.0", "id": 26, "method": "run.spawn", "params": {"chart": "ticket", "name": "ticket-4125"}}
+{"jsonrpc": "2.0", "id": 27, "method": "run.spawn", "params": {"chart": "ticket", "name": "ticket-4126"}}
+{"jsonrpc": "2.0", "id": 28, "method": "run.spawn", "params": {"chart": "ticket", "name": "ticket-4127"}}
+{"jsonrpc": "2.0", "id": 29, "method": "run.spawn", "params": {"chart": "ticket", "name": "ticket-4128"}}
+{"jsonrpc": "2.0", "id": 30, "method": "run.spawn", "params": {"chart": "ticket", "name": "ticket-4129"}}
+{"jsonrpc": "2.0", "id": 31, "method": "run.spawn", "params": {"chart": "ticket", "name": "ticket-4130"}}
+{"jsonrpc": "2.0", "id": 32, "method": "run.spawn", "params": {"chart": "ticket", "name": "ticket-4131"}}
+{"jsonrpc": "2.0", "id": 33, "method": "run.spawn", "params": {"chart": "ticket", "name": "ticket-4132"}}
+{"jsonrpc": "2.0", "id": 34, "method": "run.spawn", "params": {"chart": "ticket", "name": "ticket-4133"}}
+{"jsonrpc": "2.0", "id": 35, "method": "run.spawn", "params": {"chart": "ticket", "name": "ticket-4134"}}
+{"jsonrpc": "2.0", "id": 36, "method": "run.spawn", "params": {"chart": "ticket", "name": "ticket-4135"}}
+{"jsonrpc": "2.0", "id": 37, "method": "run.spawn", "params": {"chart": "ticket", "name": "ticket-4136"}}
+{"jsonrpc": "2.0", "id": 38, "method": "run.spawn", "params": {"chart": "ticket", "name": "ticket-4137"}}
+{"jsonrpc": "2.0", "id": 39, "method": "run.spawn", "params": {"chart": "ticket", "name": "ticket-4138"}}
+{"jsonrpc": "2.0", "id": 40, "method": "run.spawn", "params": {"chart": "ticket", "name": "ticket-4139"}}
+{"jsonrpc": "2.0", "id": 41, "method": "run.spawn", "params": {"chart": "ticket", "name": "ticket-4140"}}
+{"jsonrpc": "2.0", "id": 42, "method": "run.spawn", "params": {"chart": "ticket", "name": "ticket-4141"}}
+{"jsonrpc": "2.0", "id": 43, "method": "run.spawn", "params": {"chart": "ticket", "name": "ticket-4142"}}
+{"jsonrpc": "2.0", "id": 44, "method": "run.spawn", "params": {"chart": "ticket", "name": "ticket-4143"}}
+{"jsonrpc": "2.0", "id": 45, "method": "run.spawn", "params": {"chart": "ticket", "name": "ticket-4144"}}
+{"jsonrpc": "2.0", "id": 46, "method": "run.spawn", "params": {"chart": "ticket", "name": "ticket-4145"}}
+{"jsonrpc": "2.0", "id": 47, "method": "run.spawn", "params": {"chart": "ticket", "name": "ticket-4146"}}
+{"jsonrpc": "2.0", "id": 48, "method": "run.spawn", "params": {"chart": "ticket", "name": "ticket-4147"}}
+{"jsonrpc": "2.0", "id": 49, "method": "run.spawn", "params": {"chart": "ticket", "name": "ticket-4148"}}
+{"jsonrpc": "2.0", "id": 50, "method": "run.spawn", "params": {"chart": "ticket", "name": "ticket-4149"}}
+{"jsonrpc": "2.0", "id": 51, "method": "run.spawn", "params": {"chart": "ticket", "name": "ticket-4150"}}
+{"jsonrpc": "2.0", "id": 52, "method": "run.spawn", "params": {"chart": "ticket", "name": "ticket-4151"}}
+{"jsonrpc": "2.0", "id": 53, "method": "run.spawn", "params": {"chart": "ticket", "name": "ticket-4152"}}
+{"jsonrpc": "2.0", "id": 54, "method": "run.spawn", "params": {"chart": "ticket", "name": "ticket-4153"}}
+{"jsonrpc": "2.0", "id": 55, "method": "run.spawn", "params": {"chart": "ticket", "name": "ticket-4154"}}
+{"jsonrpc": "2.0", "id": 56, "method": "run.spawn", "params": {"chart": "ticket", "name": "ticket-4155"}}
+{"jsonrpc": "2.0", "id": 57, "method": "run.spawn", "params": {"chart": "ticket", "name": "ticket-4156"}}
+{"jsonrpc": "2.0", "id": 58, "method": "run.spawn", "params": {"chart": "ticket", "name": "ticket-4157"}}
+{"jsonrpc": "2.0", "id": 59, "method": "run.spawn", "params": {"chart": "ticket", "name": "ticket-4158"}}
+{"jsonrpc": "2.0", "id": 60, "method": "run.spawn", "params": {"chart": "ticket", "name": "ticket-4159"}}
+{"jsonrpc": "2.0", "id": 61, "method": "run.spawn", "params": {"chart": "ticket", "name": "ticket-4160"}}
+{"jsonrpc": "2.0", "id": 62, "method": "run.spawn", "params": {"chart": "ticket", "name": "ticket-4161"}}
+{"jsonrpc": "2.0", "id": 63, "method": "run.spawn", "params": {"chart": "ticket", "name": "ticket-4162"}}
+{"jsonrpc": "2.0", "id": 64, "method": "run.spawn", "params": {"chart": "ticket", "name": "ticket-4163"}}
+{"jsonrpc": "2.0", "id": 65, "method": "run.spawn", "params": {"chart": "ticket", "name": "ticket-4164"}}
+{"jsonrpc": "2.0", "id": 66, "method": "run.spawn", "params": {"chart": "ticket", "name": "ticket-4165"}}
+{"jsonrpc": "2.0", "id": 67, "method": "run.spawn", "params": {"chart": "ticket", "name": "ticket-4166"}}
+{"jsonrpc": "2.0", "id": 68, "method": "run.spawn", "params": {"chart": "ticket", "name": "ticket-4167"}}
+{"jsonrpc": "2.0", "id": 69, "method": "run.spawn", "params": {"chart": "ticket", "name": "ticket-4168"}}
+{"jsonrpc": "2.0", "id": 70, "method": "run.spawn", "params": {"chart": "ticket", "name": "ticket-4169"}}
+{"jsonrpc": "2.0", "id": 71, "method": "run.spawn", "params": {"chart": "ticket", "name": "ticket-4170"}}
+{"jsonrpc": "2.0", "id": 72, "method": "run.spawn", "params": {"chart": "ticket", "name": "ticket-4171"}}
+{"jsonrpc": "2.0", "id": 73, "method": "run.spawn", "params": {"chart": "ticket", "name": "ticket-4172"}}
+{"jsonrpc": "2.0", "id": 74, "method": "run.spawn", "params": {"chart": "ticket", "name": "ticket-4173"}}
+{"jsonrpc": "2.0", "id": 75, "method": "run.spawn", "params": {"chart": "ticket", "name": "ticket-4174"}}
+{"jsonrpc": "2.0", "id": 76, "method": "run.spawn", "params": {"chart": "ticket", "name": "ticket-4175"}}
+{"jsonrpc": "2.0", "id": 77, "method": "run.spawn", "params": {"chart": "ticket", "name": "ticket-4176"}}
+{"jsonrpc": "2.0", "id": 78, "method": "run.spawn", "params": {"chart": "ticket", "name": "ticket-4177"}}
+{"jsonrpc": "2.0", "id": 79, "method": "run.spawn", "params": {"chart": "ticket", "name": "ticket-4178"}}
+{"jsonrpc": "2.0", "id": 80, "method": "run.spawn", "params": {"chart": "ticket", "name": "ticket-4179"}}
+{"jsonrpc": "2.0", "id": 81, "method": "run.spawn", "params": {"chart": "ticket", "name": "ticket-4180"}}
+{"jsonrpc": "2.0", "id": 82, "method": "run.spawn", "params": {"chart": "ticket", "name": "ticket-4181"}}
+{"jsonrpc": "2.0", "id": 83, "method": "run.spawn", "params": {"chart": "ticket", "name": "ticket-4182"}}
+{"jsonrpc": "2.0", "id": 84, "method": "run.spawn", "params": {"chart": "ticket", "name": "ticket-4183"}}
+{"jsonrpc": "2.0", "id": 85, "method": "run.spawn", "params": {"chart": "ticket", "name": "ticket-4184"}}
+{"jsonrpc": "2.0", "id": 86, "method": "run.spawn", "params": {"chart": "ticket", "name": "ticket-4185"}}
+{"jsonrpc": "2.0", "id": 87, "method": "run.spawn", "params": {"chart": "ticket", "name": "ticket-4186"}}
+{"jsonrpc": "2.0", "id": 88, "method": "run.spawn", "params": {"chart": "ticket", "name": "ticket-4187"}}
+{"jsonrpc": "2.0", "id": 89, "method": "run.spawn", "params": {"chart": "ticket", "name": "ticket-4188"}}
+{"jsonrpc": "2.0", "id": 90, "method": "run.spawn", "params": {"chart": "ticket", "name": "ticket-4189"}}
+{"jsonrpc": "2.0", "id": 91, "method": "run.spawn", "params": {"chart": "ticket", "name": "ticket-4190"}}
+{"jsonrpc": "2.0", "id": 92, "method": "run.spawn", "params": {"chart": "ticket", "name": "ticket-4191"}}
+{"jsonrpc": "2.0", "id": 93, "method": "run.spawn", "params": {"chart": "ticket", "name": "ticket-4192"}}
+{"jsonrpc": "2.0", "id": 94, "method": "run.spawn", "params": {"chart": "ticket", "name": "ticket-4193"}}
+{"jsonrpc": "2.0", "id": 95, "method": "run.spawn", "params": {"chart": "ticket", "name": "ticket-4194"}}
+{"jsonrpc": "2.0", "id": 96, "method": "run.spawn", "params": {"chart": "ticket", "name": "ticket-4195"}}
+{"jsonrpc": "2.0", "id": 97, "method": "run.spawn", "params": {"chart": "ticket", "name": "ticket-4196"}}
+{"jsonrpc": "2.0", "id": 98, "method": "run.spawn", "params": {"chart": "ticket", "name": "ticket-4197"}}
+{"jsonrpc": "2.0", "id": 99, "method": "run.spawn", "params": {"chart": "ticket", "name": "ticket-4198"}}
+{"jsonrpc": "2.0", "id": 100, "method": "run.spawn", "params": {"chart": "ticket", "name": "ticket-4199"}}
+{"jsonrpc": "2.0", "id": 101, "method": "run.spawn", "params": {"chart": "ticket", "name": "ticket-4200"}}
+{"jsonrpc": "2.0", "id": 102, "method": "run.spawn", "params": {"chart": "ticket", "name": "ticket-4201"}}
+{"jsonrpc": "2.0", "id": 103, "method": "run.spawn", "params": {"chart": "ticket", "name": "ticket-4202"}}
+{"jsonrpc": "2.0", "id": 104, "method": "run.spawn", "params": {"chart": "ticket", "name": "ticket-4203"}}
+{"jsonrpc": "2.0", "id": 105, "method": "run.spawn", "params": {"chart": "ticket", "name": "ticket-4204"}}
+{"jsonrpc": "2.0", "id": 106, "method": "run.spawn", "params": {"chart": "ticket", "name": "ticket-4205"}}
+{"jsonrpc": "2.0", "id": 107, "method": "run.spawn", "params": {"chart": "ticket", "name": "ticket-4206"}}
+{"jsonrpc": "2.0", "id": 108, "method": "run.spawn", "params": {"chart": "ticket", "name": "ticket-4207"}}
+{"jsonrpc": "2.0", "id": 109, "method": "run.spawn", "params": {"chart": "ticket", "name": "ticket-4208"}}
+{"jsonrpc": "2.0", "id": 110, "method": "run.spawn", "params": {"chart": "ticket", "name": "ticket-4209"}}
+{"jsonrpc": "2.0", "id": 111, "method": "run.spawn", "params": {"chart": "ticket", "name": "ticket-4210"}}
+{"jsonrpc": "2.0", "id": 112, "method": "run.spawn", "params": {"chart": "ticket", "name": "ticket-4211"}}
+{"jsonrpc": "2.0", "id": 113, "method": "run.spawn", "params": {"chart": "ticket", "name": "ticket-4212"}}
+{"jsonrpc": "2.0", "id": 114, "method": "run.spawn", "params": {"chart": "ticket", "name": "ticket-4213"}}
+{"jsonrpc": "2.0", "id": 115, "method": "run.spawn", "params": {"chart": "ticket", "name": "ticket-4214"}}
+{"jsonrpc": "2.0", "id": 116, "method": "run.spawn", "params": {"chart": "ticket", "name": "ticket-4215"}}
+{"jsonrpc": "2.0", "id": 117, "method": "run.spawn", "params": {"chart": "ticket", "name": "ticket-4216"}}
+{"jsonrpc": "2.0", "id": 118, "method": "run.spawn", "params": {"chart": "ticket", "name": "ticket-4217"}}
+{"jsonrpc": "2.0", "id": 119, "method": "run.spawn", "params": {"chart": "ticket", "name": "ticket-4218"}}
+{"jsonrpc": "2.0", "id": 120, "method": "run.spawn", "params": {"chart": "ticket", "name": "ticket-4219"}}
+{"jsonrpc": "2.0", "id": 121, "method": "run.spawn", "params": {"chart": "ticket", "name": "ticket-4220"}}
+{"jsonrpc": "2.0", "id": 122, "method": "run.turn", "params": {}}
+{"jsonrpc": "2.0", "id": 123, "method": "run.send", "params": {"target": 1, "event": "ticket.opened", "data": {"customer": "Fairhaven School", "subject": "Export to CSV times out"}}}
+{"jsonrpc": "2.0", "id": 124, "method": "run.send", "params": {"target": 2, "event": "ticket.opened", "data": {"customer": "Granite Labs", "subject": "Invoice shows the wrong VAT"}}}
+{"jsonrpc": "2.0", "id": 125, "method": "run.send", "params": {"target": 3, "event": "ticket.opened", "data": {"customer": "Birchwood Clinic", "subject": "Cannot reset password"}}}
+{"jsonrpc": "2.0", "id": 126, "method": "run.send", "params": {"target": 4, "event": "ticket.opened", "data": {"customer": "Fairhaven School", "subject": "Invoice shows the wrong VAT"}}}
+{"jsonrpc": "2.0", "id": 127, "method": "run.send", "params": {"target": 5, "event": "ticket.opened", "data": {"customer": "Dunmore Energy", "subject": "Invoice shows the wrong VAT"}}}
+{"jsonrpc": "2.0", "id": 128, "method": "run.send", "params": {"target": 6, "event": "ticket.opened", "data": {"customer": "Birchwood Clinic", "subject": "SSO login loops"}}}
+{"jsonrpc": "2.0", "id": 129, "method": "run.send", "params": {"target": 7, "event": "ticket.opened", "data": {"customer": "Granite Labs", "subject": "Cannot reset password"}}}
+{"jsonrpc": "2.0", "id": 130, "method": "run.send", "params": {"target": 8, "event": "ticket.opened", "data": {"customer": "Dunmore Energy", "subject": "Cannot reset password"}}}
+{"jsonrpc": "2.0", "id": 131, "method": "run.send", "params": {"target": 9, "event": "ticket.opened", "data": {"customer": "Granite Labs", "subject": "Invoice shows the wrong VAT"}}}
+{"jsonrpc": "2.0", "id": 132, "method": "run.send", "params": {"target": 10, "event": "ticket.opened", "data": {"customer": "Birchwood Clinic", "subject": "Webhook stopped firing"}}}
+{"jsonrpc": "2.0", "id": 133, "method": "run.send", "params": {"target": 11, "event": "ticket.opened", "data": {"customer": "Acme Freight", "subject": "SSO login loops"}}}
+{"jsonrpc": "2.0", "id": 134, "method": "run.send", "params": {"target": 12, "event": "ticket.opened", "data": {"customer": "Acme Freight", "subject": "Webhook stopped firing"}}}
+{"jsonrpc": "2.0", "id": 135, "method": "run.send", "params": {"target": 13, "event": "ticket.opened", "data": {"customer": "Acme Freight", "subject": "Export to CSV times out"}}}
+{"jsonrpc": "2.0", "id": 136, "method": "run.send", "params": {"target": 14, "event": "ticket.opened", "data": {"customer": "Elm Street Bakery", "subject": "SSO login loops"}}}
+{"jsonrpc": "2.0", "id": 137, "method": "run.send", "params": {"target": 15, "event": "ticket.opened", "data": {"customer": "Calder Books", "subject": "Cannot reset password"}}}
+{"jsonrpc": "2.0", "id": 138, "method": "run.send", "params": {"target": 16, "event": "ticket.opened", "data": {"customer": "Elm Street Bakery", "subject": "Export to CSV times out"}}}
+{"jsonrpc": "2.0", "id": 139, "method": "run.send", "params": {"target": 17, "event": "ticket.opened", "data": {"customer": "Birchwood Clinic", "subject": "Webhook stopped firing"}}}
+{"jsonrpc": "2.0", "id": 140, "method": "run.send", "params": {"target": 18, "event": "ticket.opened", "data": {"customer": "Fairhaven School", "subject": "Cannot reset password"}}}
+{"jsonrpc": "2.0", "id": 141, "method": "run.send", "params": {"target": 19, "event": "ticket.opened", "data": {"customer": "Birchwood Clinic", "subject": "Invoice shows the wrong VAT"}}}
+{"jsonrpc": "2.0", "id": 142, "method": "run.send", "params": {"target": 20, "event": "ticket.opened", "data": {"customer": "Dunmore Energy", "subject": "Report missing last week"}}}
+{"jsonrpc": "2.0", "id": 143, "method": "run.send", "params": {"target": 21, "event": "ticket.opened", "data": {"customer": "Granite Labs", "subject": "Seat limit reached"}}}
+{"jsonrpc": "2.0", "id": 144, "method": "run.send", "params": {"target": 22, "event": "ticket.opened", "data": {"customer": "Harbor Insurance", "subject": "Report missing last week"}}}
+{"jsonrpc": "2.0", "id": 145, "method": "run.send", "params": {"target": 23, "event": "ticket.opened", "data": {"customer": "Fairhaven School", "subject": "Refund not received"}}}
+{"jsonrpc": "2.0", "id": 146, "method": "run.send", "params": {"target": 24, "event": "ticket.opened", "data": {"customer": "Dunmore Energy", "subject": "Export to CSV times out"}}}
+{"jsonrpc": "2.0", "id": 147, "method": "run.send", "params": {"target": 25, "event": "ticket.opened", "data": {"customer": "Dunmore Energy", "subject": "Cannot reset password"}}}
+{"jsonrpc": "2.0", "id": 148, "method": "run.send", "params": {"target": 26, "event": "ticket.opened", "data": {"customer": "Elm Street Bakery", "subject": "Report missing last week"}}}
+{"jsonrpc": "2.0", "id": 149, "method": "run.send", "params": {"target": 27, "event": "ticket.opened", "data": {"customer": "Fairhaven School", "subject": "Report missing last week"}}}
+{"jsonrpc": "2.0", "id": 150, "method": "run.send", "params": {"target": 28, "event": "ticket.opened", "data": {"customer": "Elm Street Bakery", "subject": "Cannot reset password"}}}
+{"jsonrpc": "2.0", "id": 151, "method": "run.send", "params": {"target": 29, "event": "ticket.opened", "data": {"customer": "Birchwood Clinic", "subject": "SSO login loops"}}}
+{"jsonrpc": "2.0", "id": 152, "method": "run.send", "params": {"target": 30, "event": "ticket.opened", "data": {"customer": "Calder Books", "subject": "Seat limit reached"}}}
+{"jsonrpc": "2.0", "id": 153, "method": "run.send", "params": {"target": 31, "event": "ticket.opened", "data": {"customer": "Calder Books", "subject": "Report missing last week"}}}
+{"jsonrpc": "2.0", "id": 154, "method": "run.send", "params": {"target": 32, "event": "ticket.opened", "data": {"customer": "Granite Labs", "subject": "Invoice shows the wrong VAT"}}}
+{"jsonrpc": "2.0", "id": 155, "method": "run.send", "params": {"target": 33, "event": "ticket.opened", "data": {"customer": "Birchwood Clinic", "subject": "Seat limit reached"}}}
+{"jsonrpc": "2.0", "id": 156, "method": "run.send", "params": {"target": 34, "event": "ticket.opened", "data": {"customer": "Fairhaven School", "subject": "Seat limit reached"}}}
+{"jsonrpc": "2.0", "id": 157, "method": "run.send", "params": {"target": 35, "event": "ticket.opened", "data": {"customer": "Harbor Insurance", "subject": "Report missing last week"}}}
+{"jsonrpc": "2.0", "id": 158, "method": "run.send", "params": {"target": 36, "event": "ticket.opened", "data": {"customer": "Birchwood Clinic", "subject": "Cannot reset password"}}}
+{"jsonrpc": "2.0", "id": 159, "method": "run.send", "params": {"target": 37, "event": "ticket.opened", "data": {"customer": "Elm Street Bakery", "subject": "Report missing last week"}}}
+{"jsonrpc": "2.0", "id": 160, "method": "run.send", "params": {"target": 38, "event": "ticket.opened", "data": {"customer": "Birchwood Clinic", "subject": "Invoice shows the wrong VAT"}}}
+{"jsonrpc": "2.0", "id": 161, "method": "run.send", "params": {"target": 39, "event": "ticket.opened", "data": {"customer": "Elm Street Bakery", "subject": "Report missing last week"}}}
+{"jsonrpc": "2.0", "id": 162, "method": "run.send", "params": {"target": 40, "event": "ticket.opened", "data": {"customer": "Elm Street Bakery", "subject": "SSO login loops"}}}
+{"jsonrpc": "2.0", "id": 163, "method": "run.send", "params": {"target": 41, "event": "ticket.opened", "data": {"customer": "Fairhaven School", "subject": "Invoice shows the wrong VAT"}}}
+{"jsonrpc": "2.0", "id": 164, "method": "run.send", "params": {"target": 42, "event": "ticket.opened", "data": {"customer": "Harbor Insurance", "subject": "Seat limit reached"}}}
+{"jsonrpc": "2.0", "id": 165, "method": "run.send", "params": {"target": 43, "event": "ticket.opened", "data": {"customer": "Calder Books", "subject": "Cannot reset password"}}}
+{"jsonrpc": "2.0", "id": 166, "method": "run.send", "params": {"target": 44, "event": "ticket.opened", "data": {"customer": "Harbor Insurance", "subject": "Invoice shows the wrong VAT"}}}
+{"jsonrpc": "2.0", "id": 167, "method": "run.send", "params": {"target": 45, "event": "ticket.opened", "data": {"customer": "Dunmore Energy", "subject": "Refund not received"}}}
+{"jsonrpc": "2.0", "id": 168, "method": "run.send", "params": {"target": 46, "event": "ticket.opened", "data": {"customer": "Calder Books", "subject": "Webhook stopped firing"}}}
+{"jsonrpc": "2.0", "id": 169, "method": "run.send", "params": {"target": 47, "event": "ticket.opened", "data": {"customer": "Granite Labs", "subject": "SSO login loops"}}}
+{"jsonrpc": "2.0", "id": 170, "method": "run.send", "params": {"target": 48, "event": "ticket.opened", "data": {"customer": "Harbor Insurance", "subject": "Cannot reset password"}}}
+{"jsonrpc": "2.0", "id": 171, "method": "run.send", "params": {"target": 49, "event": "ticket.opened", "data": {"customer": "Calder Books", "subject": "Report missing last week"}}}
+{"jsonrpc": "2.0", "id": 172, "method": "run.send", "params": {"target": 50, "event": "ticket.opened", "data": {"customer": "Granite Labs", "subject": "Refund not received"}}}
+{"jsonrpc": "2.0", "id": 173, "method": "run.send", "params": {"target": 51, "event": "ticket.opened", "data": {"customer": "Calder Books", "subject": "SSO login loops"}}}
+{"jsonrpc": "2.0", "id": 174, "method": "run.send", "params": {"target": 52, "event": "ticket.opened", "data": {"customer": "Elm Street Bakery", "subject": "SSO login loops"}}}
+{"jsonrpc": "2.0", "id": 175, "method": "run.send", "params": {"target": 53, "event": "ticket.opened", "data": {"customer": "Fairhaven School", "subject": "SSO login loops"}}}
+{"jsonrpc": "2.0", "id": 176, "method": "run.send", "params": {"target": 54, "event": "ticket.opened", "data": {"customer": "Dunmore Energy", "subject": "Export to CSV times out"}}}
+{"jsonrpc": "2.0", "id": 177, "method": "run.send", "params": {"target": 55, "event": "ticket.opened", "data": {"customer": "Birchwood Clinic", "subject": "Export to CSV times out"}}}
+{"jsonrpc": "2.0", "id": 178, "method": "run.send", "params": {"target": 56, "event": "ticket.opened", "data": {"customer": "Calder Books", "subject": "Webhook stopped firing"}}}
+{"jsonrpc": "2.0", "id": 179, "method": "run.send", "params": {"target": 57, "event": "ticket.opened", "data": {"customer": "Dunmore Energy", "subject": "Invoice shows the wrong VAT"}}}
+{"jsonrpc": "2.0", "id": 180, "method": "run.send", "params": {"target": 58, "event": "ticket.opened", "data": {"customer": "Harbor Insurance", "subject": "Export to CSV times out"}}}
+{"jsonrpc": "2.0", "id": 181, "method": "run.send", "params": {"target": 59, "event": "ticket.opened", "data": {"customer": "Elm Street Bakery", "subject": "Refund not received"}}}
+{"jsonrpc": "2.0", "id": 182, "method": "run.send", "params": {"target": 60, "event": "ticket.opened", "data": {"customer": "Acme Freight", "subject": "Export to CSV times out"}}}
+{"jsonrpc": "2.0", "id": 183, "method": "run.send", "params": {"target": 61, "event": "ticket.opened", "data": {"customer": "Granite Labs", "subject": "Seat limit reached"}}}
+{"jsonrpc": "2.0", "id": 184, "method": "run.send", "params": {"target": 62, "event": "ticket.opened", "data": {"customer": "Fairhaven School", "subject": "Export to CSV times out"}}}
+{"jsonrpc": "2.0", "id": 185, "method": "run.send", "params": {"target": 63, "event": "ticket.opened", "data": {"customer": "Acme Freight", "subject": "Report missing last week"}}}
+{"jsonrpc": "2.0", "id": 186, "method": "run.send", "params": {"target": 64, "event": "ticket.opened", "data": {"customer": "Granite Labs", "subject": "SSO login loops"}}}
+{"jsonrpc": "2.0", "id": 187, "method": "run.send", "params": {"target": 65, "event": "ticket.opened", "data": {"customer": "Granite Labs", "subject": "SSO login loops"}}}
+{"jsonrpc": "2.0", "id": 188, "method": "run.send", "params": {"target": 66, "event": "ticket.opened", "data": {"customer": "Birchwood Clinic", "subject": "Report missing last week"}}}
+{"jsonrpc": "2.0", "id": 189, "method": "run.send", "params": {"target": 67, "event": "ticket.opened", "data": {"customer": "Granite Labs", "subject": "Invoice shows the wrong VAT"}}}
+{"jsonrpc": "2.0", "id": 190, "method": "run.send", "params": {"target": 68, "event": "ticket.opened", "data": {"customer": "Dunmore Energy", "subject": "Cannot reset password"}}}
+{"jsonrpc": "2.0", "id": 191, "method": "run.send", "params": {"target": 69, "event": "ticket.opened", "data": {"customer": "Dunmore Energy", "subject": "Report missing last week"}}}
+{"jsonrpc": "2.0", "id": 192, "method": "run.send", "params": {"target": 70, "event": "ticket.opened", "data": {"customer": "Calder Books", "subject": "Cannot reset password"}}}
+{"jsonrpc": "2.0", "id": 193, "method": "run.send", "params": {"target": 71, "event": "ticket.opened", "data": {"customer": "Fairhaven School", "subject": "Invoice shows the wrong VAT"}}}
+{"jsonrpc": "2.0", "id": 194, "method": "run.send", "params": {"target": 72, "event": "ticket.opened", "data": {"customer": "Birchwood Clinic", "subject": "Invoice shows the wrong VAT"}}}
+{"jsonrpc": "2.0", "id": 195, "method": "run.send", "params": {"target": 73, "event": "ticket.opened", "data": {"customer": "Calder Books", "subject": "Cannot reset password"}}}
+{"jsonrpc": "2.0", "id": 196, "method": "run.send", "params": {"target": 74, "event": "ticket.opened", "data": {"customer": "Fairhaven School", "subject": "Invoice shows the wrong VAT"}}}
+{"jsonrpc": "2.0", "id": 197, "method": "run.send", "params": {"target": 75, "event": "ticket.opened", "data": {"customer": "Birchwood Clinic", "subject": "Webhook stopped firing"}}}
+{"jsonrpc": "2.0", "id": 198, "method": "run.send", "params": {"target": 76, "event": "ticket.opened", "data": {"customer": "Granite Labs", "subject": "Export to CSV times out"}}}
+{"jsonrpc": "2.0", "id": 199, "method": "run.send", "params": {"target": 77, "event": "ticket.opened", "data": {"customer": "Elm Street Bakery", "subject": "Seat limit reached"}}}
+{"jsonrpc": "2.0", "id": 200, "method": "run.send", "params": {"target": 78, "event": "ticket.opened", "data": {"customer": "Fairhaven School", "subject": "Report missing last week"}}}
+{"jsonrpc": "2.0", "id": 201, "method": "run.send", "params": {"target": 79, "event": "ticket.opened", "data": {"customer": "Birchwood Clinic", "subject": "Cannot reset password"}}}
+{"jsonrpc": "2.0", "id": 202, "method": "run.send", "params": {"target": 80, "event": "ticket.opened", "data": {"customer": "Harbor Insurance", "subject": "Report missing last week"}}}
+{"jsonrpc": "2.0", "id": 203, "method": "run.send", "params": {"target": 81, "event": "ticket.opened", "data": {"customer": "Harbor Insurance", "subject": "Report missing last week"}}}
+{"jsonrpc": "2.0", "id": 204, "method": "run.send", "params": {"target": 82, "event": "ticket.opened", "data": {"customer": "Elm Street Bakery", "subject": "Cannot reset password"}}}
+{"jsonrpc": "2.0", "id": 205, "method": "run.send", "params": {"target": 83, "event": "ticket.opened", "data": {"customer": "Calder Books", "subject": "Cannot reset password"}}}
+{"jsonrpc": "2.0", "id": 206, "method": "run.send", "params": {"target": 84, "event": "ticket.opened", "data": {"customer": "Fairhaven School", "subject": "Refund not received"}}}
+{"jsonrpc": "2.0", "id": 207, "method": "run.send", "params": {"target": 85, "event": "ticket.opened", "data": {"customer": "Harbor Insurance", "subject": "Export to CSV times out"}}}
+{"jsonrpc": "2.0", "id": 208, "method": "run.send", "params": {"target": 86, "event": "ticket.opened", "data": {"customer": "Acme Freight", "subject": "Webhook stopped firing"}}}
+{"jsonrpc": "2.0", "id": 209, "method": "run.send", "params": {"target": 87, "event": "ticket.opened", "data": {"customer": "Fairhaven School", "subject": "Export to CSV times out"}}}
+{"jsonrpc": "2.0", "id": 210, "method": "run.send", "params": {"target": 88, "event": "ticket.opened", "data": {"customer": "Acme Freight", "subject": "Refund not received"}}}
+{"jsonrpc": "2.0", "id": 211, "method": "run.send", "params": {"target": 89, "event": "ticket.opened", "data": {"customer": "Birchwood Clinic", "subject": "Refund not received"}}}
+{"jsonrpc": "2.0", "id": 212, "method": "run.send", "params": {"target": 90, "event": "ticket.opened", "data": {"customer": "Fairhaven School", "subject": "Export to CSV times out"}}}
+{"jsonrpc": "2.0", "id": 213, "method": "run.send", "params": {"target": 91, "event": "ticket.opened", "data": {"customer": "Fairhaven School", "subject": "Webhook stopped firing"}}}
+{"jsonrpc": "2.0", "id": 214, "method": "run.send", "params": {"target": 92, "event": "ticket.opened", "data": {"customer": "Fairhaven School", "subject": "Webhook stopped firing"}}}
+{"jsonrpc": "2.0", "id": 215, "method": "run.send", "params": {"target": 93, "event": "ticket.opened", "data": {"customer": "Dunmore Energy", "subject": "Webhook stopped firing"}}}
+{"jsonrpc": "2.0", "id": 216, "method": "run.send", "params": {"target": 94, "event": "ticket.opened", "data": {"customer": "Granite Labs", "subject": "Webhook stopped firing"}}}
+{"jsonrpc": "2.0", "id": 217, "method": "run.send", "params": {"target": 95, "event": "ticket.opened", "data": {"customer": "Dunmore Energy", "subject": "Report missing last week"}}}
+{"jsonrpc": "2.0", "id": 218, "method": "run.send", "params": {"target": 96, "event": "ticket.opened", "data": {"customer": "Fairhaven School", "subject": "Invoice shows the wrong VAT"}}}
+{"jsonrpc": "2.0", "id": 219, "method": "run.send", "params": {"target": 97, "event": "ticket.opened", "data": {"customer": "Acme Freight", "subject": "Refund not received"}}}
+{"jsonrpc": "2.0", "id": 220, "method": "run.send", "params": {"target": 98, "event": "ticket.opened", "data": {"customer": "Harbor Insurance", "subject": "Refund not received"}}}
+{"jsonrpc": "2.0", "id": 221, "method": "run.send", "params": {"target": 99, "event": "ticket.opened", "data": {"customer": "Dunmore Energy", "subject": "Seat limit reached"}}}
+{"jsonrpc": "2.0", "id": 222, "method": "run.send", "params": {"target": 100, "event": "ticket.opened", "data": {"customer": "Harbor Insurance", "subject": "Seat limit reached"}}}
+{"jsonrpc": "2.0", "id": 223, "method": "run.send", "params": {"target": 101, "event": "ticket.opened", "data": {"customer": "Fairhaven School", "subject": "Cannot reset password"}}}
+{"jsonrpc": "2.0", "id": 224, "method": "run.send", "params": {"target": 102, "event": "ticket.opened", "data": {"customer": "Dunmore Energy", "subject": "Cannot reset password"}}}
+{"jsonrpc": "2.0", "id": 225, "method": "run.send", "params": {"target": 103, "event": "ticket.opened", "data": {"customer": "Dunmore Energy", "subject": "Report missing last week"}}}
+{"jsonrpc": "2.0", "id": 226, "method": "run.send", "params": {"target": 104, "event": "ticket.opened", "data": {"customer": "Dunmore Energy", "subject": "Seat limit reached"}}}
+{"jsonrpc": "2.0", "id": 227, "method": "run.send", "params": {"target": 105, "event": "ticket.opened", "data": {"customer": "Dunmore Energy", "subject": "Report missing last week"}}}
+{"jsonrpc": "2.0", "id": 228, "method": "run.send", "params": {"target": 106, "event": "ticket.opened", "data": {"customer": "Acme Freight", "subject": "Report missing last week"}}}
+{"jsonrpc": "2.0", "id": 229, "method": "run.send", "params": {"target": 107, "event": "ticket.opened", "data": {"customer": "Fairhaven School", "subject": "Cannot reset password"}}}
+{"jsonrpc": "2.0", "id": 230, "method": "run.send", "params": {"target": 108, "event": "ticket.opened", "data": {"customer": "Birchwood Clinic", "subject": "SSO login loops"}}}
+{"jsonrpc": "2.0", "id": 231, "method": "run.send", "params": {"target": 109, "event": "ticket.opened", "data": {"customer": "Dunmore Energy", "subject": "Report missing last week"}}}
+{"jsonrpc": "2.0", "id": 232, "method": "run.send", "params": {"target": 110, "event": "ticket.opened", "data": {"customer": "Calder Books", "subject": "SSO login loops"}}}
+{"jsonrpc": "2.0", "id": 233, "method": "run.send", "params": {"target": 111, "event": "ticket.opened", "data": {"customer": "Fairhaven School", "subject": "Cannot reset password"}}}
+{"jsonrpc": "2.0", "id": 234, "method": "run.send", "params": {"target": 112, "event": "ticket.opened", "data": {"customer": "Granite Labs", "subject": "Report missing last week"}}}
+{"jsonrpc": "2.0", "id": 235, "method": "run.send", "params": {"target": 113, "event": "ticket.opened", "data": {"customer": "Granite Labs", "subject": "Cannot reset password"}}}
+{"jsonrpc": "2.0", "id": 236, "method": "run.send", "params": {"target": 114, "event": "ticket.opened", "data": {"customer": "Calder Books", "subject": "Export to CSV times out"}}}
+{"jsonrpc": "2.0", "id": 237, "method": "run.send", "params": {"target": 115, "event": "ticket.opened", "data": {"customer": "Calder Books", "subject": "Invoice shows the wrong VAT"}}}
+{"jsonrpc": "2.0", "id": 238, "method": "run.send", "params": {"target": 116, "event": "ticket.opened", "data": {"customer": "Calder Books", "subject": "Report missing last week"}}}
+{"jsonrpc": "2.0", "id": 239, "method": "run.send", "params": {"target": 117, "event": "ticket.opened", "data": {"customer": "Calder Books", "subject": "Report missing last week"}}}
+{"jsonrpc": "2.0", "id": 240, "method": "run.send", "params": {"target": 118, "event": "ticket.opened", "data": {"customer": "Fairhaven School", "subject": "Export to CSV times out"}}}
+{"jsonrpc": "2.0", "id": 241, "method": "run.send", "params": {"target": 119, "event": "ticket.opened", "data": {"customer": "Calder Books", "subject": "Invoice shows the wrong VAT"}}}
+{"jsonrpc": "2.0", "id": 242, "method": "run.send", "params": {"target": 120, "event": "ticket.opened", "data": {"customer": "Acme Freight", "subject": "Cannot reset password"}}}
+{"jsonrpc": "2.0", "id": 243, "method": "run.turn", "params": {}}
+{"jsonrpc": "2.0", "id": 244, "method": "run.send", "params": {"target": 1, "event": "ticket.triaged", "data": {"priority": "normal"}}}
+{"jsonrpc": "2.0", "id": 245, "method": "run.send", "params": {"target": 2, "event": "ticket.triaged", "data": {"priority": "normal"}}}
+{"jsonrpc": "2.0", "id": 246, "method": "run.send", "params": {"target": 3, "event": "ticket.triaged", "data": {"priority": "normal"}}}
+{"jsonrpc": "2.0", "id": 247, "method": "run.send", "params": {"target": 4, "event": "ticket.triaged", "data": {"priority": "normal"}}}
+{"jsonrpc": "2.0", "id": 248, "method": "run.send", "params": {"target": 5, "event": "ticket.triaged", "data": {"priority": "normal"}}}
+{"jsonrpc": "2.0", "id": 249, "method": "run.send", "params": {"target": 6, "event": "ticket.triaged", "data": {"priority": "high"}}}
+{"jsonrpc": "2.0", "id": 250, "method": "run.send", "params": {"target": 7, "event": "ticket.triaged", "data": {"priority": "high"}}}
+{"jsonrpc": "2.0", "id": 251, "method": "run.send", "params": {"target": 8, "event": "ticket.triaged", "data": {"priority": "high"}}}
+{"jsonrpc": "2.0", "id": 252, "method": "run.send", "params": {"target": 9, "event": "ticket.triaged", "data": {"priority": "high"}}}
+{"jsonrpc": "2.0", "id": 253, "method": "run.send", "params": {"target": 10, "event": "ticket.triaged", "data": {"priority": "normal"}}}
+{"jsonrpc": "2.0", "id": 254, "method": "run.send", "params": {"target": 11, "event": "ticket.triaged", "data": {"priority": "high"}}}
+{"jsonrpc": "2.0", "id": 255, "method": "run.send", "params": {"target": 12, "event": "ticket.triaged", "data": {"priority": "normal"}}}
+{"jsonrpc": "2.0", "id": 256, "method": "run.send", "params": {"target": 13, "event": "ticket.triaged", "data": {"priority": "high"}}}
+{"jsonrpc": "2.0", "id": 257, "method": "run.send", "params": {"target": 14, "event": "ticket.triaged", "data": {"priority": "normal"}}}
+{"jsonrpc": "2.0", "id": 258, "method": "run.send", "params": {"target": 15, "event": "ticket.triaged", "data": {"priority": "high"}}}
+{"jsonrpc": "2.0", "id": 259, "method": "run.send", "params": {"target": 16, "event": "ticket.triaged", "data": {"priority": "normal"}}}
+{"jsonrpc": "2.0", "id": 260, "method": "run.send", "params": {"target": 17, "event": "ticket.triaged", "data": {"priority": "normal"}}}
+{"jsonrpc": "2.0", "id": 261, "method": "run.send", "params": {"target": 18, "event": "ticket.triaged", "data": {"priority": "normal"}}}
+{"jsonrpc": "2.0", "id": 262, "method": "run.send", "params": {"target": 19, "event": "ticket.triaged", "data": {"priority": "normal"}}}
+{"jsonrpc": "2.0", "id": 263, "method": "run.send", "params": {"target": 20, "event": "ticket.triaged", "data": {"priority": "normal"}}}
+{"jsonrpc": "2.0", "id": 264, "method": "run.send", "params": {"target": 21, "event": "ticket.triaged", "data": {"priority": "normal"}}}
+{"jsonrpc": "2.0", "id": 265, "method": "run.send", "params": {"target": 22, "event": "ticket.triaged", "data": {"priority": "normal"}}}
+{"jsonrpc": "2.0", "id": 266, "method": "run.send", "params": {"target": 23, "event": "ticket.triaged", "data": {"priority": "normal"}}}
+{"jsonrpc": "2.0", "id": 267, "method": "run.send", "params": {"target": 24, "event": "ticket.triaged", "data": {"priority": "urgent"}}}
+{"jsonrpc": "2.0", "id": 268, "method": "run.send", "params": {"target": 25, "event": "ticket.triaged", "data": {"priority": "normal"}}}
+{"jsonrpc": "2.0", "id": 269, "method": "run.send", "params": {"target": 26, "event": "ticket.triaged", "data": {"priority": "high"}}}
+{"jsonrpc": "2.0", "id": 270, "method": "run.send", "params": {"target": 27, "event": "ticket.triaged", "data": {"priority": "urgent"}}}
+{"jsonrpc": "2.0", "id": 271, "method": "run.send", "params": {"target": 28, "event": "ticket.triaged", "data": {"priority": "normal"}}}
+{"jsonrpc": "2.0", "id": 272, "method": "run.send", "params": {"target": 29, "event": "ticket.triaged", "data": {"priority": "high"}}}
+{"jsonrpc": "2.0", "id": 273, "method": "run.send", "params": {"target": 30, "event": "ticket.triaged", "data": {"priority": "normal"}}}
+{"jsonrpc": "2.0", "id": 274, "method": "run.send", "params": {"target": 31, "event": "ticket.triaged", "data": {"priority": "normal"}}}
+{"jsonrpc": "2.0", "id": 275, "method": "run.send", "params": {"target": 32, "event": "ticket.triaged", "data": {"priority": "normal"}}}
+{"jsonrpc": "2.0", "id": 276, "method": "run.send", "params": {"target": 33, "event": "ticket.triaged", "data": {"priority": "high"}}}
+{"jsonrpc": "2.0", "id": 277, "method": "run.send", "params": {"target": 34, "event": "ticket.triaged", "data": {"priority": "normal"}}}
+{"jsonrpc": "2.0", "id": 278, "method": "run.send", "params": {"target": 35, "event": "ticket.triaged", "data": {"priority": "normal"}}}
+{"jsonrpc": "2.0", "id": 279, "method": "run.send", "params": {"target": 36, "event": "ticket.triaged", "data": {"priority": "normal"}}}
+{"jsonrpc": "2.0", "id": 280, "method": "run.send", "params": {"target": 37, "event": "ticket.triaged", "data": {"priority": "high"}}}
+{"jsonrpc": "2.0", "id": 281, "method": "run.send", "params": {"target": 38, "event": "ticket.triaged", "data": {"priority": "normal"}}}
+{"jsonrpc": "2.0", "id": 282, "method": "run.send", "params": {"target": 39, "event": "ticket.triaged", "data": {"priority": "high"}}}
+{"jsonrpc": "2.0", "id": 283, "method": "run.send", "params": {"target": 40, "event": "ticket.triaged", "data": {"priority": "high"}}}
+{"jsonrpc": "2.0", "id": 284, "method": "run.send", "params": {"target": 41, "event": "ticket.triaged", "data": {"priority": "normal"}}}
+{"jsonrpc": "2.0", "id": 285, "method": "run.send", "params": {"target": 42, "event": "ticket.triaged", "data": {"priority": "normal"}}}
+{"jsonrpc": "2.0", "id": 286, "method": "run.send", "params": {"target": 43, "event": "ticket.triaged", "data": {"priority": "normal"}}}
+{"jsonrpc": "2.0", "id": 287, "method": "run.send", "params": {"target": 44, "event": "ticket.triaged", "data": {"priority": "normal"}}}
+{"jsonrpc": "2.0", "id": 288, "method": "run.send", "params": {"target": 45, "event": "ticket.triaged", "data": {"priority": "normal"}}}
+{"jsonrpc": "2.0", "id": 289, "method": "run.send", "params": {"target": 46, "event": "ticket.triaged", "data": {"priority": "normal"}}}
+{"jsonrpc": "2.0", "id": 290, "method": "run.send", "params": {"target": 47, "event": "ticket.triaged", "data": {"priority": "normal"}}}
+{"jsonrpc": "2.0", "id": 291, "method": "run.send", "params": {"target": 48, "event": "ticket.triaged", "data": {"priority": "normal"}}}
+{"jsonrpc": "2.0", "id": 292, "method": "run.send", "params": {"target": 49, "event": "ticket.triaged", "data": {"priority": "normal"}}}
+{"jsonrpc": "2.0", "id": 293, "method": "run.send", "params": {"target": 50, "event": "ticket.triaged", "data": {"priority": "normal"}}}
+{"jsonrpc": "2.0", "id": 294, "method": "run.send", "params": {"target": 51, "event": "ticket.triaged", "data": {"priority": "normal"}}}
+{"jsonrpc": "2.0", "id": 295, "method": "run.send", "params": {"target": 52, "event": "ticket.triaged", "data": {"priority": "normal"}}}
+{"jsonrpc": "2.0", "id": 296, "method": "run.send", "params": {"target": 53, "event": "ticket.triaged", "data": {"priority": "normal"}}}
+{"jsonrpc": "2.0", "id": 297, "method": "run.send", "params": {"target": 54, "event": "ticket.triaged", "data": {"priority": "normal"}}}
+{"jsonrpc": "2.0", "id": 298, "method": "run.send", "params": {"target": 55, "event": "ticket.triaged", "data": {"priority": "normal"}}}
+{"jsonrpc": "2.0", "id": 299, "method": "run.send", "params": {"target": 56, "event": "ticket.triaged", "data": {"priority": "normal"}}}
+{"jsonrpc": "2.0", "id": 300, "method": "run.send", "params": {"target": 57, "event": "ticket.triaged", "data": {"priority": "normal"}}}
+{"jsonrpc": "2.0", "id": 301, "method": "run.send", "params": {"target": 58, "event": "ticket.triaged", "data": {"priority": "high"}}}
+{"jsonrpc": "2.0", "id": 302, "method": "run.send", "params": {"target": 59, "event": "ticket.triaged", "data": {"priority": "normal"}}}
+{"jsonrpc": "2.0", "id": 303, "method": "run.send", "params": {"target": 60, "event": "ticket.triaged", "data": {"priority": "normal"}}}
+{"jsonrpc": "2.0", "id": 304, "method": "run.send", "params": {"target": 61, "event": "ticket.triaged", "data": {"priority": "normal"}}}
+{"jsonrpc": "2.0", "id": 305, "method": "run.send", "params": {"target": 62, "event": "ticket.triaged", "data": {"priority": "high"}}}
+{"jsonrpc": "2.0", "id": 306, "method": "run.send", "params": {"target": 63, "event": "ticket.triaged", "data": {"priority": "high"}}}
+{"jsonrpc": "2.0", "id": 307, "method": "run.send", "params": {"target": 64, "event": "ticket.triaged", "data": {"priority": "normal"}}}
+{"jsonrpc": "2.0", "id": 308, "method": "run.send", "params": {"target": 65, "event": "ticket.triaged", "data": {"priority": "urgent"}}}
+{"jsonrpc": "2.0", "id": 309, "method": "run.send", "params": {"target": 66, "event": "ticket.triaged", "data": {"priority": "high"}}}
+{"jsonrpc": "2.0", "id": 310, "method": "run.send", "params": {"target": 67, "event": "ticket.triaged", "data": {"priority": "urgent"}}}
+{"jsonrpc": "2.0", "id": 311, "method": "run.send", "params": {"target": 68, "event": "ticket.triaged", "data": {"priority": "normal"}}}
+{"jsonrpc": "2.0", "id": 312, "method": "run.send", "params": {"target": 69, "event": "ticket.triaged", "data": {"priority": "normal"}}}
+{"jsonrpc": "2.0", "id": 313, "method": "run.send", "params": {"target": 70, "event": "ticket.triaged", "data": {"priority": "normal"}}}
+{"jsonrpc": "2.0", "id": 314, "method": "run.send", "params": {"target": 71, "event": "ticket.triaged", "data": {"priority": "high"}}}
+{"jsonrpc": "2.0", "id": 315, "method": "run.send", "params": {"target": 72, "event": "ticket.triaged", "data": {"priority": "normal"}}}
+{"jsonrpc": "2.0", "id": 316, "method": "run.send", "params": {"target": 73, "event": "ticket.triaged", "data": {"priority": "normal"}}}
+{"jsonrpc": "2.0", "id": 317, "method": "run.send", "params": {"target": 74, "event": "ticket.triaged", "data": {"priority": "high"}}}
+{"jsonrpc": "2.0", "id": 318, "method": "run.send", "params": {"target": 75, "event": "ticket.triaged", "data": {"priority": "normal"}}}
+{"jsonrpc": "2.0", "id": 319, "method": "run.send", "params": {"target": 76, "event": "ticket.triaged", "data": {"priority": "normal"}}}
+{"jsonrpc": "2.0", "id": 320, "method": "run.send", "params": {"target": 77, "event": "ticket.triaged", "data": {"priority": "high"}}}
+{"jsonrpc": "2.0", "id": 321, "method": "run.send", "params": {"target": 78, "event": "ticket.triaged", "data": {"priority": "normal"}}}
+{"jsonrpc": "2.0", "id": 322, "method": "run.send", "params": {"target": 79, "event": "ticket.triaged", "data": {"priority": "high"}}}
+{"jsonrpc": "2.0", "id": 323, "method": "run.send", "params": {"target": 80, "event": "ticket.triaged", "data": {"priority": "normal"}}}
+{"jsonrpc": "2.0", "id": 324, "method": "run.send", "params": {"target": 81, "event": "ticket.triaged", "data": {"priority": "normal"}}}
+{"jsonrpc": "2.0", "id": 325, "method": "run.send", "params": {"target": 82, "event": "ticket.triaged", "data": {"priority": "normal"}}}
+{"jsonrpc": "2.0", "id": 326, "method": "run.send", "params": {"target": 83, "event": "ticket.triaged", "data": {"priority": "high"}}}
+{"jsonrpc": "2.0", "id": 327, "method": "run.send", "params": {"target": 84, "event": "ticket.triaged", "data": {"priority": "normal"}}}
+{"jsonrpc": "2.0", "id": 328, "method": "run.send", "params": {"target": 85, "event": "ticket.triaged", "data": {"priority": "normal"}}}
+{"jsonrpc": "2.0", "id": 329, "method": "run.send", "params": {"target": 86, "event": "ticket.triaged", "data": {"priority": "high"}}}
+{"jsonrpc": "2.0", "id": 330, "method": "run.send", "params": {"target": 87, "event": "ticket.triaged", "data": {"priority": "high"}}}
+{"jsonrpc": "2.0", "id": 331, "method": "run.send", "params": {"target": 88, "event": "ticket.triaged", "data": {"priority": "high"}}}
+{"jsonrpc": "2.0", "id": 332, "method": "run.send", "params": {"target": 89, "event": "ticket.triaged", "data": {"priority": "normal"}}}
+{"jsonrpc": "2.0", "id": 333, "method": "run.send", "params": {"target": 90, "event": "ticket.triaged", "data": {"priority": "urgent"}}}
+{"jsonrpc": "2.0", "id": 334, "method": "run.send", "params": {"target": 91, "event": "ticket.triaged", "data": {"priority": "normal"}}}
+{"jsonrpc": "2.0", "id": 335, "method": "run.send", "params": {"target": 92, "event": "ticket.triaged", "data": {"priority": "normal"}}}
+{"jsonrpc": "2.0", "id": 336, "method": "run.send", "params": {"target": 93, "event": "ticket.triaged", "data": {"priority": "urgent"}}}
+{"jsonrpc": "2.0", "id": 337, "method": "run.send", "params": {"target": 94, "event": "ticket.triaged", "data": {"priority": "high"}}}
+{"jsonrpc": "2.0", "id": 338, "method": "run.send", "params": {"target": 95, "event": "ticket.triaged", "data": {"priority": "normal"}}}
+{"jsonrpc": "2.0", "id": 339, "method": "run.send", "params": {"target": 96, "event": "ticket.triaged", "data": {"priority": "normal"}}}
+{"jsonrpc": "2.0", "id": 340, "method": "run.send", "params": {"target": 97, "event": "ticket.triaged", "data": {"priority": "urgent"}}}
+{"jsonrpc": "2.0", "id": 341, "method": "run.send", "params": {"target": 98, "event": "ticket.triaged", "data": {"priority": "normal"}}}
+{"jsonrpc": "2.0", "id": 342, "method": "run.send", "params": {"target": 99, "event": "ticket.triaged", "data": {"priority": "normal"}}}
+{"jsonrpc": "2.0", "id": 343, "method": "run.send", "params": {"target": 100, "event": "ticket.triaged", "data": {"priority": "normal"}}}
+{"jsonrpc": "2.0", "id": 344, "method": "run.send", "params": {"target": 101, "event": "ticket.triaged", "data": {"priority": "high"}}}
+{"jsonrpc": "2.0", "id": 345, "method": "run.send", "params": {"target": 102, "event": "ticket.triaged", "data": {"priority": "high"}}}
+{"jsonrpc": "2.0", "id": 346, "method": "run.send", "params": {"target": 103, "event": "ticket.triaged", "data": {"priority": "urgent"}}}
+{"jsonrpc": "2.0", "id": 347, "method": "run.send", "params": {"target": 104, "event": "ticket.triaged", "data": {"priority": "normal"}}}
+{"jsonrpc": "2.0", "id": 348, "method": "run.send", "params": {"target": 105, "event": "ticket.triaged", "data": {"priority": "high"}}}
+{"jsonrpc": "2.0", "id": 349, "method": "run.send", "params": {"target": 106, "event": "ticket.triaged", "data": {"priority": "high"}}}
+{"jsonrpc": "2.0", "id": 350, "method": "run.send", "params": {"target": 107, "event": "ticket.triaged", "data": {"priority": "normal"}}}
+{"jsonrpc": "2.0", "id": 351, "method": "run.send", "params": {"target": 108, "event": "ticket.triaged", "data": {"priority": "normal"}}}
+{"jsonrpc": "2.0", "id": 352, "method": "run.send", "params": {"target": 109, "event": "ticket.triaged", "data": {"priority": "normal"}}}
+{"jsonrpc": "2.0", "id": 353, "method": "run.send", "params": {"target": 110, "event": "ticket.triaged", "data": {"priority": "high"}}}
+{"jsonrpc": "2.0", "id": 354, "method": "run.turn", "params": {}}
+{"jsonrpc": "2.0", "id": 355, "method": "run.send", "params": {"target": 1, "event": "agent.assigned", "data": {"agent": "jonas"}}}
+{"jsonrpc": "2.0", "id": 356, "method": "run.send", "params": {"target": 2, "event": "agent.assigned", "data": {"agent": "tomas"}}}
+{"jsonrpc": "2.0", "id": 357, "method": "run.send", "params": {"target": 3, "event": "agent.assigned", "data": {"agent": "ines"}}}
+{"jsonrpc": "2.0", "id": 358, "method": "run.send", "params": {"target": 4, "event": "agent.assigned", "data": {"agent": "maya"}}}
+{"jsonrpc": "2.0", "id": 359, "method": "run.send", "params": {"target": 5, "event": "agent.assigned", "data": {"agent": "ines"}}}
+{"jsonrpc": "2.0", "id": 360, "method": "run.send", "params": {"target": 6, "event": "agent.assigned", "data": {"agent": "maya"}}}
+{"jsonrpc": "2.0", "id": 361, "method": "run.send", "params": {"target": 7, "event": "agent.assigned", "data": {"agent": "jonas"}}}
+{"jsonrpc": "2.0", "id": 362, "method": "run.send", "params": {"target": 8, "event": "agent.assigned", "data": {"agent": "tomas"}}}
+{"jsonrpc": "2.0", "id": 363, "method": "run.send", "params": {"target": 9, "event": "agent.assigned", "data": {"agent": "maya"}}}
+{"jsonrpc": "2.0", "id": 364, "method": "run.send", "params": {"target": 10, "event": "agent.assigned", "data": {"agent": "ines"}}}
+{"jsonrpc": "2.0", "id": 365, "method": "run.send", "params": {"target": 11, "event": "agent.assigned", "data": {"agent": "maya"}}}
+{"jsonrpc": "2.0", "id": 366, "method": "run.send", "params": {"target": 12, "event": "agent.assigned", "data": {"agent": "maya"}}}
+{"jsonrpc": "2.0", "id": 367, "method": "run.send", "params": {"target": 13, "event": "agent.assigned", "data": {"agent": "ines"}}}
+{"jsonrpc": "2.0", "id": 368, "method": "run.send", "params": {"target": 14, "event": "agent.assigned", "data": {"agent": "maya"}}}
+{"jsonrpc": "2.0", "id": 369, "method": "run.send", "params": {"target": 15, "event": "agent.assigned", "data": {"agent": "jonas"}}}
+{"jsonrpc": "2.0", "id": 370, "method": "run.send", "params": {"target": 16, "event": "agent.assigned", "data": {"agent": "maya"}}}
+{"jsonrpc": "2.0", "id": 371, "method": "run.send", "params": {"target": 17, "event": "agent.assigned", "data": {"agent": "ines"}}}
+{"jsonrpc": "2.0", "id": 372, "method": "run.send", "params": {"target": 18, "event": "agent.assigned", "data": {"agent": "maya"}}}
+{"jsonrpc": "2.0", "id": 373, "method": "run.send", "params": {"target": 19, "event": "agent.assigned", "data": {"agent": "tomas"}}}
+{"jsonrpc": "2.0", "id": 374, "method": "run.send", "params": {"target": 20, "event": "agent.assigned", "data": {"agent": "maya"}}}
+{"jsonrpc": "2.0", "id": 375, "method": "run.send", "params": {"target": 21, "event": "agent.assigned", "data": {"agent": "ines"}}}
+{"jsonrpc": "2.0", "id": 376, "method": "run.send", "params": {"target": 22, "event": "agent.assigned", "data": {"agent": "tomas"}}}
+{"jsonrpc": "2.0", "id": 377, "method": "run.send", "params": {"target": 23, "event": "agent.assigned", "data": {"agent": "ines"}}}
+{"jsonrpc": "2.0", "id": 378, "method": "run.send", "params": {"target": 24, "event": "agent.assigned", "data": {"agent": "jonas"}}}
+{"jsonrpc": "2.0", "id": 379, "method": "run.send", "params": {"target": 25, "event": "agent.assigned", "data": {"agent": "maya"}}}
+{"jsonrpc": "2.0", "id": 380, "method": "run.send", "params": {"target": 26, "event": "agent.assigned", "data": {"agent": "jonas"}}}
+{"jsonrpc": "2.0", "id": 381, "method": "run.send", "params": {"target": 27, "event": "agent.assigned", "data": {"agent": "maya"}}}
+{"jsonrpc": "2.0", "id": 382, "method": "run.send", "params": {"target": 28, "event": "agent.assigned", "data": {"agent": "jonas"}}}
+{"jsonrpc": "2.0", "id": 383, "method": "run.send", "params": {"target": 29, "event": "agent.assigned", "data": {"agent": "ines"}}}
+{"jsonrpc": "2.0", "id": 384, "method": "run.send", "params": {"target": 30, "event": "agent.assigned", "data": {"agent": "maya"}}}
+{"jsonrpc": "2.0", "id": 385, "method": "run.send", "params": {"target": 31, "event": "agent.assigned", "data": {"agent": "jonas"}}}
+{"jsonrpc": "2.0", "id": 386, "method": "run.send", "params": {"target": 32, "event": "agent.assigned", "data": {"agent": "jonas"}}}
+{"jsonrpc": "2.0", "id": 387, "method": "run.send", "params": {"target": 33, "event": "agent.assigned", "data": {"agent": "ines"}}}
+{"jsonrpc": "2.0", "id": 388, "method": "run.send", "params": {"target": 34, "event": "agent.assigned", "data": {"agent": "ines"}}}
+{"jsonrpc": "2.0", "id": 389, "method": "run.send", "params": {"target": 35, "event": "agent.assigned", "data": {"agent": "jonas"}}}
+{"jsonrpc": "2.0", "id": 390, "method": "run.send", "params": {"target": 36, "event": "agent.assigned", "data": {"agent": "ines"}}}
+{"jsonrpc": "2.0", "id": 391, "method": "run.send", "params": {"target": 37, "event": "agent.assigned", "data": {"agent": "tomas"}}}
+{"jsonrpc": "2.0", "id": 392, "method": "run.send", "params": {"target": 38, "event": "agent.assigned", "data": {"agent": "jonas"}}}
+{"jsonrpc": "2.0", "id": 393, "method": "run.send", "params": {"target": 39, "event": "agent.assigned", "data": {"agent": "ines"}}}
+{"jsonrpc": "2.0", "id": 394, "method": "run.send", "params": {"target": 40, "event": "agent.assigned", "data": {"agent": "ines"}}}
+{"jsonrpc": "2.0", "id": 395, "method": "run.send", "params": {"target": 41, "event": "agent.assigned", "data": {"agent": "maya"}}}
+{"jsonrpc": "2.0", "id": 396, "method": "run.send", "params": {"target": 42, "event": "agent.assigned", "data": {"agent": "ines"}}}
+{"jsonrpc": "2.0", "id": 397, "method": "run.send", "params": {"target": 43, "event": "agent.assigned", "data": {"agent": "maya"}}}
+{"jsonrpc": "2.0", "id": 398, "method": "run.send", "params": {"target": 44, "event": "agent.assigned", "data": {"agent": "maya"}}}
+{"jsonrpc": "2.0", "id": 399, "method": "run.send", "params": {"target": 45, "event": "agent.assigned", "data": {"agent": "maya"}}}
+{"jsonrpc": "2.0", "id": 400, "method": "run.send", "params": {"target": 46, "event": "agent.assigned", "data": {"agent": "jonas"}}}
+{"jsonrpc": "2.0", "id": 401, "method": "run.send", "params": {"target": 47, "event": "agent.assigned", "data": {"agent": "tomas"}}}
+{"jsonrpc": "2.0", "id": 402, "method": "run.send", "params": {"target": 48, "event": "agent.assigned", "data": {"agent": "jonas"}}}
+{"jsonrpc": "2.0", "id": 403, "method": "run.send", "params": {"target": 49, "event": "agent.assigned", "data": {"agent": "tomas"}}}
+{"jsonrpc": "2.0", "id": 404, "method": "run.send", "params": {"target": 50, "event": "agent.assigned", "data": {"agent": "maya"}}}
+{"jsonrpc": "2.0", "id": 405, "method": "run.send", "params": {"target": 51, "event": "agent.assigned", "data": {"agent": "tomas"}}}
+{"jsonrpc": "2.0", "id": 406, "method": "run.send", "params": {"target": 52, "event": "agent.assigned", "data": {"agent": "tomas"}}}
+{"jsonrpc": "2.0", "id": 407, "method": "run.send", "params": {"target": 53, "event": "agent.assigned", "data": {"agent": "tomas"}}}
+{"jsonrpc": "2.0", "id": 408, "method": "run.send", "params": {"target": 54, "event": "agent.assigned", "data": {"agent": "ines"}}}
+{"jsonrpc": "2.0", "id": 409, "method": "run.send", "params": {"target": 55, "event": "agent.assigned", "data": {"agent": "jonas"}}}
+{"jsonrpc": "2.0", "id": 410, "method": "run.send", "params": {"target": 56, "event": "agent.assigned", "data": {"agent": "jonas"}}}
+{"jsonrpc": "2.0", "id": 411, "method": "run.send", "params": {"target": 57, "event": "agent.assigned", "data": {"agent": "ines"}}}
+{"jsonrpc": "2.0", "id": 412, "method": "run.send", "params": {"target": 58, "event": "agent.assigned", "data": {"agent": "jonas"}}}
+{"jsonrpc": "2.0", "id": 413, "method": "run.send", "params": {"target": 59, "event": "agent.assigned", "data": {"agent": "jonas"}}}
+{"jsonrpc": "2.0", "id": 414, "method": "run.send", "params": {"target": 60, "event": "agent.assigned", "data": {"agent": "tomas"}}}
+{"jsonrpc": "2.0", "id": 415, "method": "run.send", "params": {"target": 61, "event": "agent.assigned", "data": {"agent": "ines"}}}
+{"jsonrpc": "2.0", "id": 416, "method": "run.send", "params": {"target": 62, "event": "agent.assigned", "data": {"agent": "maya"}}}
+{"jsonrpc": "2.0", "id": 417, "method": "run.send", "params": {"target": 63, "event": "agent.assigned", "data": {"agent": "jonas"}}}
+{"jsonrpc": "2.0", "id": 418, "method": "run.send", "params": {"target": 64, "event": "agent.assigned", "data": {"agent": "maya"}}}
+{"jsonrpc": "2.0", "id": 419, "method": "run.send", "params": {"target": 65, "event": "agent.assigned", "data": {"agent": "maya"}}}
+{"jsonrpc": "2.0", "id": 420, "method": "run.send", "params": {"target": 66, "event": "agent.assigned", "data": {"agent": "ines"}}}
+{"jsonrpc": "2.0", "id": 421, "method": "run.send", "params": {"target": 67, "event": "agent.assigned", "data": {"agent": "tomas"}}}
+{"jsonrpc": "2.0", "id": 422, "method": "run.send", "params": {"target": 68, "event": "agent.assigned", "data": {"agent": "jonas"}}}
+{"jsonrpc": "2.0", "id": 423, "method": "run.send", "params": {"target": 69, "event": "agent.assigned", "data": {"agent": "maya"}}}
+{"jsonrpc": "2.0", "id": 424, "method": "run.send", "params": {"target": 70, "event": "agent.assigned", "data": {"agent": "maya"}}}
+{"jsonrpc": "2.0", "id": 425, "method": "run.send", "params": {"target": 71, "event": "agent.assigned", "data": {"agent": "tomas"}}}
+{"jsonrpc": "2.0", "id": 426, "method": "run.send", "params": {"target": 72, "event": "agent.assigned", "data": {"agent": "ines"}}}
+{"jsonrpc": "2.0", "id": 427, "method": "run.send", "params": {"target": 73, "event": "agent.assigned", "data": {"agent": "jonas"}}}
+{"jsonrpc": "2.0", "id": 428, "method": "run.send", "params": {"target": 74, "event": "agent.assigned", "data": {"agent": "ines"}}}
+{"jsonrpc": "2.0", "id": 429, "method": "run.send", "params": {"target": 75, "event": "agent.assigned", "data": {"agent": "maya"}}}
+{"jsonrpc": "2.0", "id": 430, "method": "run.send", "params": {"target": 76, "event": "agent.assigned", "data": {"agent": "tomas"}}}
+{"jsonrpc": "2.0", "id": 431, "method": "run.send", "params": {"target": 77, "event": "agent.assigned", "data": {"agent": "jonas"}}}
+{"jsonrpc": "2.0", "id": 432, "method": "run.send", "params": {"target": 78, "event": "agent.assigned", "data": {"agent": "jonas"}}}
+{"jsonrpc": "2.0", "id": 433, "method": "run.send", "params": {"target": 79, "event": "agent.assigned", "data": {"agent": "ines"}}}
+{"jsonrpc": "2.0", "id": 434, "method": "run.send", "params": {"target": 80, "event": "agent.assigned", "data": {"agent": "tomas"}}}
+{"jsonrpc": "2.0", "id": 435, "method": "run.send", "params": {"target": 81, "event": "agent.assigned", "data": {"agent": "maya"}}}
+{"jsonrpc": "2.0", "id": 436, "method": "run.send", "params": {"target": 82, "event": "agent.assigned", "data": {"agent": "ines"}}}
+{"jsonrpc": "2.0", "id": 437, "method": "run.send", "params": {"target": 83, "event": "agent.assigned", "data": {"agent": "ines"}}}
+{"jsonrpc": "2.0", "id": 438, "method": "run.send", "params": {"target": 84, "event": "agent.assigned", "data": {"agent": "ines"}}}
+{"jsonrpc": "2.0", "id": 439, "method": "run.send", "params": {"target": 85, "event": "agent.assigned", "data": {"agent": "ines"}}}
+{"jsonrpc": "2.0", "id": 440, "method": "run.send", "params": {"target": 86, "event": "agent.assigned", "data": {"agent": "jonas"}}}
+{"jsonrpc": "2.0", "id": 441, "method": "run.send", "params": {"target": 87, "event": "agent.assigned", "data": {"agent": "maya"}}}
+{"jsonrpc": "2.0", "id": 442, "method": "run.send", "params": {"target": 88, "event": "agent.assigned", "data": {"agent": "ines"}}}
+{"jsonrpc": "2.0", "id": 443, "method": "run.send", "params": {"target": 89, "event": "agent.assigned", "data": {"agent": "jonas"}}}
+{"jsonrpc": "2.0", "id": 444, "method": "run.send", "params": {"target": 90, "event": "agent.assigned", "data": {"agent": "ines"}}}
+{"jsonrpc": "2.0", "id": 445, "method": "run.send", "params": {"target": 91, "event": "agent.assigned", "data": {"agent": "jonas"}}}
+{"jsonrpc": "2.0", "id": 446, "method": "run.send", "params": {"target": 92, "event": "agent.assigned", "data": {"agent": "maya"}}}
+{"jsonrpc": "2.0", "id": 447, "method": "run.send", "params": {"target": 93, "event": "agent.assigned", "data": {"agent": "ines"}}}
+{"jsonrpc": "2.0", "id": 448, "method": "run.send", "params": {"target": 94, "event": "agent.assigned", "data": {"agent": "tomas"}}}
+{"jsonrpc": "2.0", "id": 449, "method": "run.send", "params": {"target": 95, "event": "agent.assigned", "data": {"agent": "maya"}}}
+{"jsonrpc": "2.0", "id": 450, "method": "run.turn", "params": {}}
+{"jsonrpc": "2.0", "id": 451, "method": "run.advanceTime", "params": {"by": "1200s"}}
+{"jsonrpc": "2.0", "id": 452, "method": "run.turn", "params": {}}
+{"jsonrpc": "2.0", "id": 453, "method": "run.send", "params": {"target": 1, "event": "agent.replied"}}
+{"jsonrpc": "2.0", "id": 454, "method": "run.send", "params": {"target": 2, "event": "agent.replied"}}
+{"jsonrpc": "2.0", "id": 455, "method": "run.send", "params": {"target": 3, "event": "agent.replied"}}
+{"jsonrpc": "2.0", "id": 456, "method": "run.send", "params": {"target": 4, "event": "agent.replied"}}
+{"jsonrpc": "2.0", "id": 457, "method": "run.send", "params": {"target": 5, "event": "agent.replied"}}
+{"jsonrpc": "2.0", "id": 458, "method": "run.send", "params": {"target": 6, "event": "agent.replied"}}
+{"jsonrpc": "2.0", "id": 459, "method": "run.send", "params": {"target": 7, "event": "agent.replied"}}
+{"jsonrpc": "2.0", "id": 460, "method": "run.send", "params": {"target": 8, "event": "agent.replied"}}
+{"jsonrpc": "2.0", "id": 461, "method": "run.send", "params": {"target": 9, "event": "agent.replied"}}
+{"jsonrpc": "2.0", "id": 462, "method": "run.send", "params": {"target": 10, "event": "agent.replied"}}
+{"jsonrpc": "2.0", "id": 463, "method": "run.send", "params": {"target": 11, "event": "agent.replied"}}
+{"jsonrpc": "2.0", "id": 464, "method": "run.send", "params": {"target": 12, "event": "agent.replied"}}
+{"jsonrpc": "2.0", "id": 465, "method": "run.send", "params": {"target": 13, "event": "agent.replied"}}
+{"jsonrpc": "2.0", "id": 466, "method": "run.send", "params": {"target": 14, "event": "agent.replied"}}
+{"jsonrpc": "2.0", "id": 467, "method": "run.send", "params": {"target": 15, "event": "agent.replied"}}
+{"jsonrpc": "2.0", "id": 468, "method": "run.send", "params": {"target": 16, "event": "agent.replied"}}
+{"jsonrpc": "2.0", "id": 469, "method": "run.send", "params": {"target": 17, "event": "agent.replied"}}
+{"jsonrpc": "2.0", "id": 470, "method": "run.send", "params": {"target": 18, "event": "agent.replied"}}
+{"jsonrpc": "2.0", "id": 471, "method": "run.send", "params": {"target": 19, "event": "agent.replied"}}
+{"jsonrpc": "2.0", "id": 472, "method": "run.send", "params": {"target": 20, "event": "agent.replied"}}
+{"jsonrpc": "2.0", "id": 473, "method": "run.send", "params": {"target": 21, "event": "agent.replied"}}
+{"jsonrpc": "2.0", "id": 474, "method": "run.send", "params": {"target": 22, "event": "agent.replied"}}
+{"jsonrpc": "2.0", "id": 475, "method": "run.send", "params": {"target": 23, "event": "agent.replied"}}
+{"jsonrpc": "2.0", "id": 476, "method": "run.send", "params": {"target": 24, "event": "agent.replied"}}
+{"jsonrpc": "2.0", "id": 477, "method": "run.send", "params": {"target": 25, "event": "agent.replied"}}
+{"jsonrpc": "2.0", "id": 478, "method": "run.send", "params": {"target": 26, "event": "agent.replied"}}
+{"jsonrpc": "2.0", "id": 479, "method": "run.send", "params": {"target": 27, "event": "agent.replied"}}
+{"jsonrpc": "2.0", "id": 480, "method": "run.send", "params": {"target": 28, "event": "agent.replied"}}
+{"jsonrpc": "2.0", "id": 481, "method": "run.send", "params": {"target": 29, "event": "agent.replied"}}
+{"jsonrpc": "2.0", "id": 482, "method": "run.send", "params": {"target": 30, "event": "agent.replied"}}
+{"jsonrpc": "2.0", "id": 483, "method": "run.send", "params": {"target": 31, "event": "agent.replied"}}
+{"jsonrpc": "2.0", "id": 484, "method": "run.send", "params": {"target": 32, "event": "agent.replied"}}
+{"jsonrpc": "2.0", "id": 485, "method": "run.send", "params": {"target": 33, "event": "agent.replied"}}
+{"jsonrpc": "2.0", "id": 486, "method": "run.send", "params": {"target": 34, "event": "agent.replied"}}
+{"jsonrpc": "2.0", "id": 487, "method": "run.send", "params": {"target": 35, "event": "agent.replied"}}
+{"jsonrpc": "2.0", "id": 488, "method": "run.send", "params": {"target": 36, "event": "agent.replied"}}
+{"jsonrpc": "2.0", "id": 489, "method": "run.send", "params": {"target": 37, "event": "agent.replied"}}
+{"jsonrpc": "2.0", "id": 490, "method": "run.send", "params": {"target": 38, "event": "agent.replied"}}
+{"jsonrpc": "2.0", "id": 491, "method": "run.send", "params": {"target": 39, "event": "agent.replied"}}
+{"jsonrpc": "2.0", "id": 492, "method": "run.send", "params": {"target": 40, "event": "agent.replied"}}
+{"jsonrpc": "2.0", "id": 493, "method": "run.send", "params": {"target": 41, "event": "agent.replied"}}
+{"jsonrpc": "2.0", "id": 494, "method": "run.send", "params": {"target": 42, "event": "agent.replied"}}
+{"jsonrpc": "2.0", "id": 495, "method": "run.send", "params": {"target": 43, "event": "agent.replied"}}
+{"jsonrpc": "2.0", "id": 496, "method": "run.send", "params": {"target": 44, "event": "agent.replied"}}
+{"jsonrpc": "2.0", "id": 497, "method": "run.send", "params": {"target": 45, "event": "agent.replied"}}
+{"jsonrpc": "2.0", "id": 498, "method": "run.send", "params": {"target": 46, "event": "agent.replied"}}
+{"jsonrpc": "2.0", "id": 499, "method": "run.send", "params": {"target": 47, "event": "agent.replied"}}
+{"jsonrpc": "2.0", "id": 500, "method": "run.send", "params": {"target": 48, "event": "agent.replied"}}
+{"jsonrpc": "2.0", "id": 501, "method": "run.send", "params": {"target": 49, "event": "agent.replied"}}
+{"jsonrpc": "2.0", "id": 502, "method": "run.send", "params": {"target": 50, "event": "agent.replied"}}
+{"jsonrpc": "2.0", "id": 503, "method": "run.send", "params": {"target": 51, "event": "agent.replied"}}
+{"jsonrpc": "2.0", "id": 504, "method": "run.send", "params": {"target": 52, "event": "agent.replied"}}
+{"jsonrpc": "2.0", "id": 505, "method": "run.send", "params": {"target": 53, "event": "agent.replied"}}
+{"jsonrpc": "2.0", "id": 506, "method": "run.send", "params": {"target": 54, "event": "agent.replied"}}
+{"jsonrpc": "2.0", "id": 507, "method": "run.send", "params": {"target": 55, "event": "agent.replied"}}
+{"jsonrpc": "2.0", "id": 508, "method": "run.send", "params": {"target": 56, "event": "agent.replied"}}
+{"jsonrpc": "2.0", "id": 509, "method": "run.send", "params": {"target": 57, "event": "agent.replied"}}
+{"jsonrpc": "2.0", "id": 510, "method": "run.send", "params": {"target": 58, "event": "agent.replied"}}
+{"jsonrpc": "2.0", "id": 511, "method": "run.send", "params": {"target": 59, "event": "agent.replied"}}
+{"jsonrpc": "2.0", "id": 512, "method": "run.send", "params": {"target": 60, "event": "agent.replied"}}
+{"jsonrpc": "2.0", "id": 513, "method": "run.send", "params": {"target": 61, "event": "agent.replied"}}
+{"jsonrpc": "2.0", "id": 514, "method": "run.send", "params": {"target": 62, "event": "agent.replied"}}
+{"jsonrpc": "2.0", "id": 515, "method": "run.send", "params": {"target": 63, "event": "agent.replied"}}
+{"jsonrpc": "2.0", "id": 516, "method": "run.send", "params": {"target": 64, "event": "agent.replied"}}
+{"jsonrpc": "2.0", "id": 517, "method": "run.send", "params": {"target": 65, "event": "agent.replied"}}
+{"jsonrpc": "2.0", "id": 518, "method": "run.send", "params": {"target": 66, "event": "agent.replied"}}
+{"jsonrpc": "2.0", "id": 519, "method": "run.send", "params": {"target": 67, "event": "agent.replied"}}
+{"jsonrpc": "2.0", "id": 520, "method": "run.send", "params": {"target": 68, "event": "agent.replied"}}
+{"jsonrpc": "2.0", "id": 521, "method": "run.send", "params": {"target": 69, "event": "agent.replied"}}
+{"jsonrpc": "2.0", "id": 522, "method": "run.send", "params": {"target": 70, "event": "agent.replied"}}
+{"jsonrpc": "2.0", "id": 523, "method": "run.turn", "params": {}}
+{"jsonrpc": "2.0", "id": 524, "method": "run.advanceTime", "params": {"by": "2700s"}}
+{"jsonrpc": "2.0", "id": 525, "method": "run.turn", "params": {}}
+{"jsonrpc": "2.0", "id": 526, "method": "run.send", "params": {"target": 1, "event": "customer.replied"}}
+{"jsonrpc": "2.0", "id": 527, "method": "run.send", "params": {"target": 2, "event": "customer.replied"}}
+{"jsonrpc": "2.0", "id": 528, "method": "run.send", "params": {"target": 3, "event": "customer.replied"}}
+{"jsonrpc": "2.0", "id": 529, "method": "run.send", "params": {"target": 4, "event": "customer.replied"}}
+{"jsonrpc": "2.0", "id": 530, "method": "run.send", "params": {"target": 5, "event": "customer.replied"}}
+{"jsonrpc": "2.0", "id": 531, "method": "run.send", "params": {"target": 6, "event": "customer.replied"}}
+{"jsonrpc": "2.0", "id": 532, "method": "run.send", "params": {"target": 7, "event": "customer.replied"}}
+{"jsonrpc": "2.0", "id": 533, "method": "run.send", "params": {"target": 8, "event": "customer.replied"}}
+{"jsonrpc": "2.0", "id": 534, "method": "run.send", "params": {"target": 9, "event": "customer.replied"}}
+{"jsonrpc": "2.0", "id": 535, "method": "run.send", "params": {"target": 10, "event": "customer.replied"}}
+{"jsonrpc": "2.0", "id": 536, "method": "run.send", "params": {"target": 11, "event": "customer.replied"}}
+{"jsonrpc": "2.0", "id": 537, "method": "run.send", "params": {"target": 12, "event": "customer.replied"}}
+{"jsonrpc": "2.0", "id": 538, "method": "run.send", "params": {"target": 13, "event": "customer.replied"}}
+{"jsonrpc": "2.0", "id": 539, "method": "run.send", "params": {"target": 14, "event": "customer.replied"}}
+{"jsonrpc": "2.0", "id": 540, "method": "run.send", "params": {"target": 15, "event": "customer.replied"}}
+{"jsonrpc": "2.0", "id": 541, "method": "run.send", "params": {"target": 16, "event": "customer.replied"}}
+{"jsonrpc": "2.0", "id": 542, "method": "run.send", "params": {"target": 17, "event": "customer.replied"}}
+{"jsonrpc": "2.0", "id": 543, "method": "run.send", "params": {"target": 18, "event": "customer.replied"}}
+{"jsonrpc": "2.0", "id": 544, "method": "run.send", "params": {"target": 19, "event": "customer.replied"}}
+{"jsonrpc": "2.0", "id": 545, "method": "run.send", "params": {"target": 20, "event": "customer.replied"}}
+{"jsonrpc": "2.0", "id": 546, "method": "run.send", "params": {"target": 21, "event": "customer.replied"}}
+{"jsonrpc": "2.0", "id": 547, "method": "run.send", "params": {"target": 22, "event": "customer.replied"}}
+{"jsonrpc": "2.0", "id": 548, "method": "run.send", "params": {"target": 23, "event": "customer.replied"}}
+{"jsonrpc": "2.0", "id": 549, "method": "run.send", "params": {"target": 24, "event": "customer.replied"}}
+{"jsonrpc": "2.0", "id": 550, "method": "run.send", "params": {"target": 25, "event": "customer.replied"}}
+{"jsonrpc": "2.0", "id": 551, "method": "run.send", "params": {"target": 26, "event": "customer.replied"}}
+{"jsonrpc": "2.0", "id": 552, "method": "run.send", "params": {"target": 27, "event": "customer.replied"}}
+{"jsonrpc": "2.0", "id": 553, "method": "run.send", "params": {"target": 28, "event": "customer.replied"}}
+{"jsonrpc": "2.0", "id": 554, "method": "run.send", "params": {"target": 29, "event": "customer.replied"}}
+{"jsonrpc": "2.0", "id": 555, "method": "run.send", "params": {"target": 30, "event": "customer.replied"}}
+{"jsonrpc": "2.0", "id": 556, "method": "run.send", "params": {"target": 31, "event": "customer.replied"}}
+{"jsonrpc": "2.0", "id": 557, "method": "run.send", "params": {"target": 32, "event": "customer.replied"}}
+{"jsonrpc": "2.0", "id": 558, "method": "run.send", "params": {"target": 33, "event": "customer.replied"}}
+{"jsonrpc": "2.0", "id": 559, "method": "run.send", "params": {"target": 34, "event": "customer.replied"}}
+{"jsonrpc": "2.0", "id": 560, "method": "run.send", "params": {"target": 35, "event": "customer.replied"}}
+{"jsonrpc": "2.0", "id": 561, "method": "run.send", "params": {"target": 36, "event": "customer.replied"}}
+{"jsonrpc": "2.0", "id": 562, "method": "run.send", "params": {"target": 37, "event": "customer.replied"}}
+{"jsonrpc": "2.0", "id": 563, "method": "run.send", "params": {"target": 38, "event": "customer.replied"}}
+{"jsonrpc": "2.0", "id": 564, "method": "run.send", "params": {"target": 39, "event": "customer.replied"}}
+{"jsonrpc": "2.0", "id": 565, "method": "run.send", "params": {"target": 40, "event": "customer.replied"}}
+{"jsonrpc": "2.0", "id": 566, "method": "run.turn", "params": {}}
+{"jsonrpc": "2.0", "id": 567, "method": "run.send", "params": {"target": 1, "event": "agent.replied"}}
+{"jsonrpc": "2.0", "id": 568, "method": "run.send", "params": {"target": 2, "event": "agent.replied"}}
+{"jsonrpc": "2.0", "id": 569, "method": "run.send", "params": {"target": 3, "event": "agent.replied"}}
+{"jsonrpc": "2.0", "id": 570, "method": "run.send", "params": {"target": 4, "event": "agent.replied"}}
+{"jsonrpc": "2.0", "id": 571, "method": "run.send", "params": {"target": 5, "event": "agent.replied"}}
+{"jsonrpc": "2.0", "id": 572, "method": "run.send", "params": {"target": 6, "event": "agent.replied"}}
+{"jsonrpc": "2.0", "id": 573, "method": "run.send", "params": {"target": 7, "event": "agent.replied"}}
+{"jsonrpc": "2.0", "id": 574, "method": "run.send", "params": {"target": 8, "event": "agent.replied"}}
+{"jsonrpc": "2.0", "id": 575, "method": "run.send", "params": {"target": 9, "event": "agent.replied"}}
+{"jsonrpc": "2.0", "id": 576, "method": "run.send", "params": {"target": 10, "event": "agent.replied"}}
+{"jsonrpc": "2.0", "id": 577, "method": "run.send", "params": {"target": 11, "event": "agent.replied"}}
+{"jsonrpc": "2.0", "id": 578, "method": "run.send", "params": {"target": 12, "event": "agent.replied"}}
+{"jsonrpc": "2.0", "id": 579, "method": "run.send", "params": {"target": 13, "event": "agent.replied"}}
+{"jsonrpc": "2.0", "id": 580, "method": "run.send", "params": {"target": 14, "event": "agent.replied"}}
+{"jsonrpc": "2.0", "id": 581, "method": "run.send", "params": {"target": 15, "event": "agent.replied"}}
+{"jsonrpc": "2.0", "id": 582, "method": "run.send", "params": {"target": 16, "event": "agent.replied"}}
+{"jsonrpc": "2.0", "id": 583, "method": "run.send", "params": {"target": 17, "event": "agent.replied"}}
+{"jsonrpc": "2.0", "id": 584, "method": "run.send", "params": {"target": 18, "event": "agent.replied"}}
+{"jsonrpc": "2.0", "id": 585, "method": "run.send", "params": {"target": 19, "event": "agent.replied"}}
+{"jsonrpc": "2.0", "id": 586, "method": "run.send", "params": {"target": 20, "event": "agent.replied"}}
+{"jsonrpc": "2.0", "id": 587, "method": "run.send", "params": {"target": 21, "event": "agent.replied"}}
+{"jsonrpc": "2.0", "id": 588, "method": "run.send", "params": {"target": 22, "event": "agent.replied"}}
+{"jsonrpc": "2.0", "id": 589, "method": "run.send", "params": {"target": 23, "event": "agent.replied"}}
+{"jsonrpc": "2.0", "id": 590, "method": "run.send", "params": {"target": 24, "event": "agent.replied"}}
+{"jsonrpc": "2.0", "id": 591, "method": "run.send", "params": {"target": 25, "event": "agent.replied"}}
+{"jsonrpc": "2.0", "id": 592, "method": "run.send", "params": {"target": 26, "event": "agent.replied"}}
+{"jsonrpc": "2.0", "id": 593, "method": "run.send", "params": {"target": 27, "event": "agent.replied"}}
+{"jsonrpc": "2.0", "id": 594, "method": "run.send", "params": {"target": 28, "event": "agent.replied"}}
+{"jsonrpc": "2.0", "id": 595, "method": "run.send", "params": {"target": 29, "event": "agent.replied"}}
+{"jsonrpc": "2.0", "id": 596, "method": "run.send", "params": {"target": 30, "event": "agent.replied"}}
+{"jsonrpc": "2.0", "id": 597, "method": "run.turn", "params": {}}
+{"jsonrpc": "2.0", "id": 598, "method": "run.send", "params": {"target": 1, "event": "ticket.resolved"}}
+{"jsonrpc": "2.0", "id": 599, "method": "run.send", "params": {"target": 2, "event": "ticket.resolved"}}
+{"jsonrpc": "2.0", "id": 600, "method": "run.send", "params": {"target": 3, "event": "ticket.resolved"}}
+{"jsonrpc": "2.0", "id": 601, "method": "run.send", "params": {"target": 4, "event": "ticket.resolved"}}
+{"jsonrpc": "2.0", "id": 602, "method": "run.send", "params": {"target": 5, "event": "ticket.resolved"}}
+{"jsonrpc": "2.0", "id": 603, "method": "run.send", "params": {"target": 6, "event": "ticket.resolved"}}
+{"jsonrpc": "2.0", "id": 604, "method": "run.send", "params": {"target": 7, "event": "ticket.resolved"}}
+{"jsonrpc": "2.0", "id": 605, "method": "run.send", "params": {"target": 8, "event": "ticket.resolved"}}
+{"jsonrpc": "2.0", "id": 606, "method": "run.send", "params": {"target": 9, "event": "ticket.resolved"}}
+{"jsonrpc": "2.0", "id": 607, "method": "run.send", "params": {"target": 10, "event": "ticket.resolved"}}
+{"jsonrpc": "2.0", "id": 608, "method": "run.send", "params": {"target": 11, "event": "ticket.resolved"}}
+{"jsonrpc": "2.0", "id": 609, "method": "run.send", "params": {"target": 12, "event": "ticket.resolved"}}
+{"jsonrpc": "2.0", "id": 610, "method": "run.send", "params": {"target": 13, "event": "ticket.resolved"}}
+{"jsonrpc": "2.0", "id": 611, "method": "run.send", "params": {"target": 14, "event": "ticket.resolved"}}
+{"jsonrpc": "2.0", "id": 612, "method": "run.send", "params": {"target": 15, "event": "ticket.resolved"}}
+{"jsonrpc": "2.0", "id": 613, "method": "run.send", "params": {"target": 16, "event": "ticket.resolved"}}
+{"jsonrpc": "2.0", "id": 614, "method": "run.send", "params": {"target": 17, "event": "ticket.resolved"}}
+{"jsonrpc": "2.0", "id": 615, "method": "run.send", "params": {"target": 18, "event": "ticket.resolved"}}
+{"jsonrpc": "2.0", "id": 616, "method": "run.send", "params": {"target": 19, "event": "ticket.resolved"}}
+{"jsonrpc": "2.0", "id": 617, "method": "run.send", "params": {"target": 20, "event": "ticket.resolved"}}
+{"jsonrpc": "2.0", "id": 618, "method": "run.send", "params": {"target": 21, "event": "ticket.resolved"}}
+{"jsonrpc": "2.0", "id": 619, "method": "run.send", "params": {"target": 22, "event": "ticket.resolved"}}
+{"jsonrpc": "2.0", "id": 620, "method": "run.turn", "params": {}}
+{"jsonrpc": "2.0", "id": 621, "method": "run.advanceTime", "params": {"by": "1800s"}}
+{"jsonrpc": "2.0", "id": 622, "method": "run.turn", "params": {}}
+{"jsonrpc": "2.0", "id": 623, "method": "run.send", "params": {"target": 61, "event": "customer.replied"}}
+{"jsonrpc": "2.0", "id": 624, "method": "run.send", "params": {"target": 62, "event": "customer.replied"}}
+{"jsonrpc": "2.0", "id": 625, "method": "run.send", "params": {"target": 63, "event": "customer.replied"}}
+{"jsonrpc": "2.0", "id": 626, "method": "run.send", "params": {"target": 64, "event": "customer.replied"}}
+{"jsonrpc": "2.0", "id": 627, "method": "run.send", "params": {"target": 65, "event": "customer.replied"}}
+{"jsonrpc": "2.0", "id": 628, "method": "run.send", "params": {"target": 66, "event": "customer.replied"}}
+{"jsonrpc": "2.0", "id": 629, "method": "run.send", "params": {"target": 67, "event": "customer.replied"}}
+{"jsonrpc": "2.0", "id": 630, "method": "run.send", "params": {"target": 68, "event": "customer.replied"}}
+{"jsonrpc": "2.0", "id": 631, "method": "run.hibernate", "params": {"session": 1}}
+{"jsonrpc": "2.0", "id": 632, "method": "run.hibernate", "params": {"session": 2}}
+{"jsonrpc": "2.0", "id": 633, "method": "run.hibernate", "params": {"session": 3}}
+{"jsonrpc": "2.0", "id": 634, "method": "run.hibernate", "params": {"session": 4}}
+{"jsonrpc": "2.0", "id": 635, "method": "run.hibernate", "params": {"session": 5}}
+{"jsonrpc": "2.0", "id": 636, "method": "run.hibernate", "params": {"session": 6}}
+{"jsonrpc": "2.0", "id": 637, "method": "run.snapshot", "params": {"path": "desk.snapshot"}}

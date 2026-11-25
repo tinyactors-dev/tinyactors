@@ -165,6 +165,8 @@ module Website
     FileUtils.cp_r(DESIGN.join('assets/fonts'), assets.join('fonts'))
     # The content's images (an author's portrait), served at /assets/images/.
     FileUtils.cp_r(CONTENT.join('images'), assets.join('images')) if CONTENT.join('images').directory?
+    # The demos' videos and posters (mise run demo), served at /assets/videos/.
+    FileUtils.cp_r(CONTENT.join('videos'), assets.join('videos')) if CONTENT.join('videos').directory?
     FileUtils.mkdir_p(assets.join('platforms'))
     ROOT.glob('icons/platforms/*.svg').each { |file| FileUtils.cp(file, assets.join('platforms')) }
     {

@@ -146,6 +146,25 @@
     <problem>A process crashes during peak traffic while actors hold in-progress orders in memory and thousands of idle sessions sit waiting for events. Without a way to persist individual actors or dump a whole host safely, a restart loses live state or risks restoring incompatible memory bytes.</problem>
     <passage>A crash loses everything held only in memory, so only data written to your application's store survives. To persist idle actors individually, hibernation serializes an actor's state into a blob stored by your application. That actor's 81-byte record remains in the region so events and timers still locate it, and the next event wakes it.</passage>
     <passage>To capture the entire host at once, a snapshot writes every segment's region, the compiled images, system id, and host time. A snapshot also stores datamodel state and a description of its memory layout with a hashed layout id. When restoring, the host checks that layout id and refuses a snapshot from a different layout instead of misreading bytes. Because the layout description travels with the bytes, the Inspector page and CLI can read snapshots without running the engine. For inspecting the C core itself rather than a saved snapshot, the page closes with Atlas.</passage>
+    <demo src="../videos/inspector.mp4" poster="../videos/inspector.jpg">
+      <description>A support desk of 120 tickets runs in the workbench on a simulated clock and is written to a snapshot. The Inspector then opens that snapshot in the browser: its memory, a ticket's record and queued event, its chart with the active states, and the trace history up to the capture.</description>
+      <step at="0:01">A support desk in tinyactors: 120 tickets, each an actor running a statechart, each open ticket watched by an invoked SLA timer.</step>
+      <step at="0:07">The workbench, tinyactors run, drives it on a simulated clock: tickets open, get triaged, assigned and answered; urgent ones breach their SLA.</step>
+      <step at="0:26">Last, run.snapshot writes the whole host to desk.snapshot: every segment’s memory, the chart images, the trace history, and a description of its own layout.</step>
+      <step at="0:33">The Inspector reads a snapshot in this browser tab, using only the layout description the file carries. Nothing is uploaded.</step>
+      <step at="0:40">desk.snapshot: 208 actors, the 120 tickets and the SLA timers they invoked, in one segment of 1.8 MB. Library and layout id come from the file.</step>
+      <step at="0:45">The segment’s region, byte for byte: the system header, then each pool, its generations, the indexes, the slab pages and the trace journal.</step>
+      <step at="0:51">One cell per actor slot, coloured by state: idle, runnable with an event waiting, hibernated to the store.</step>
+      <step at="0:56">Find a ticket by name. ticket-4161 has a customer reply waiting in its mailbox.</step>
+      <step at="0:59">Its 48-byte record, field by field: links are slots of other pools, strings are read from the slab and the image.</step>
+      <step at="1:05">The queued event: customer.replied, its name read from the chart image’s event table.</step>
+      <step at="1:12">Its chart, decoded from the image in the snapshot, with the active states lit: open › waiting_on_customer.</step>
+      <step at="1:17">The transitions out of the active states, and how many tickets sit in each state across the host.</step>
+      <step at="1:23">Click a state to list its tickets: the 35 that an agent is working on.</step>
+      <step at="1:28">The trace history the snapshot kept: 3,709 records, spans as OpenTelemetry names them, from the spawn to the capture.</step>
+      <step at="1:35">Only the selected ticket: its spawn, every macrostep and microstep, each event that moved it.</step>
+      <step at="1:44">And Atlas, on the Architecture page: the same ta_actor record, drawn from the build’s debug information, byte for byte.</step>
+    </demo>
     <claims>
       <claim>
         <statement>Snapshots are raw region memory</statement>

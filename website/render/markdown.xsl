@@ -247,6 +247,13 @@
     <xsl:sequence select="'> ' || f:md-inline(.)"/>
   </xsl:template>
 
+  <!-- A demo: what it shows, the video's address, and its steps. -->
+  <xsl:template match="s:demo" mode="md" as="xs:string">
+    <xsl:sequence select="string-join((f:md-inline(s:description),
+                                       'Video: ' || $site/@origin || replace(@src, '^\.\./videos/', '/assets/videos/'),
+                                       string-join(s:step ! ('- ' || @at || ' ' || f:md-inline(.)), $nl)), $blank)"/>
+  </xsl:template>
+
   <!-- A figure: what it shows, in words. -->
   <xsl:template match="s:figure" mode="md" as="xs:string">
     <xsl:sequence select="f:md-inline(s:description)"/>

@@ -1,8 +1,8 @@
-237 types, 1005 functions
-  base: 31 types, 191 functions
+242 types, 1013 functions
+  base: 31 types, 196 functions
   trace: 9 types, 34 functions
   core: 41 types, 141 functions
-  system: 46 types, 209 functions
+  system: 51 types, 212 functions
   host: 58 types, 249 functions
   image: 15 types, 35 functions
   compile: 37 types, 146 functions

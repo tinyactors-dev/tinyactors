@@ -1,0 +1,80 @@
+#!/usr/bin/env ruby
+#MISE description="Record a video demo (website/demos/<name>/) into content/videos/<name>.mp4 and its poster, and print its steps for the page's <demo>"
+#MISE depends=["build"]
+#USAGE arg "<name>" help="The demo: a directory of website/demos (inspector)"
+# vim:ft=ruby
+
+# A demo is a recording made by a program, never by hand. For `inspector`:
+#
+# 1. The workbench, tinyactors run, of the working tree's core
+#    (tinyactors-core's dev build), runs desk.jsonl with config.json and
+#    writes desk.snapshot; run.json keeps its escalation log lines, the
+#    snapshot's size and layout id for the first scene (intro.html).
+# 2. The built site is served with the demo's files under /demo/<name>/,
+#    and record.mjs plays the flow in Chromium (the environment's
+#    Playwright), writing a WebM and steps.json: each caption and its time.
+# 3. ffmpeg encodes content/videos/<name>.mp4 (H.264, faststart) and takes
+#    the poster at a third of the video; the steps are printed as the
+#    <step> elements of the page's <demo>, to paste when the timing moved.
+require 'json'
+require 'socket'
+require 'tmpdir'
+require_relative '../website'
+
+name = ENV['usage_name'] || ARGV.first || Website.fail!('which demo? (website/demos/<name>)')
+demo = Website::ROOT.join('demos', name)
+Website.fail!("no demo #{demo}") unless demo.join('record.mjs').file?
+core = Website::REPO.join('tinyactors-core')
+Website.run('mise', 'run', 'build', chdir: core)
+cli = core.join('build/dev/bin/tinyactors')
+
+Dir.mktmpdir('demo') do |dir|
+  dir = Pathname.new(dir)
+  out = dir.join('run.jsonl')
+  system(cli.to_s, 'run', '--config', demo.join('config.json').to_s, in: demo.join('desk.jsonl').to_s,
+                                                                     out: out.to_s, chdir: dir.to_s) or Website.fail!('tinyactors run failed')
+  snapshot = dir.join('desk.snapshot')
+  Website.fail!('the run wrote no snapshot') unless snapshot.file?
+  lines = out.readlines.map { |line| JSON.parse(line) }
+  logs = lines.select { |line| line['method'] == 'effect.log' }.map { |line| line.dig('params', 'text') }
+  inspect, ok = Website.capture(cli, 'inspect', '-f', 'json', snapshot)
+  Website.fail!("tinyactors inspect failed:\n#{inspect}") unless ok
+  layout = inspect[/"layoutID"\s*:\s*"([0-9a-f]+)"/, 1]
+
+  served = Website::SITE.join('demo', name)
+  FileUtils.mkdir_p(served)
+  FileUtils.cp(demo.join('intro.html'), served)
+  served.join('run.json').write(JSON.generate({ logs: logs, bytes: snapshot.size, layout: layout }))
+
+  port = TCPServer.open('localhost', 0) { |server| server.addr[1] }
+  server = spawn('node', Website::ROOT.join('tools/serve.mjs').to_s, Website::SITE.to_s, port.to_s, out: File::NULL)
+  begin
+    50.times do
+      break if (TCPSocket.new('localhost', port).close || true rescue false) # rubocop:disable Style/RescueModifier
+
+      sleep 0.2
+    end
+    raw = dir.join('raw')
+    Website.run('node', demo.join('record.mjs'), "http://localhost:#{port}", raw, snapshot)
+  ensure
+    Process.kill('TERM', server)
+    Process.wait(server)
+    FileUtils.rm_rf(served)
+  end
+
+  webm = raw.glob('*.webm').first || Website.fail!('the recorder wrote no video')
+  videos = Website::CONTENT.join('videos')
+  FileUtils.mkdir_p(videos)
+  mp4 = videos.join("#{name}.mp4")
+  Website.run('ffmpeg', '-v', 'error', '-y', '-i', webm, '-c:v', 'libx264', '-preset', 'slow', '-crf', '24',
+              '-pix_fmt', 'yuv420p', '-movflags', '+faststart', '-an', mp4)
+  duration, = Website.capture('ffprobe', '-v', 'error', '-show_entries', 'format=duration', '-of', 'csv=p=0', mp4)
+  Website.run('ffmpeg', '-v', 'error', '-y', '-ss', (Float(duration) / 3).round(1), '-i', mp4, '-frames:v', '1',
+              '-q:v', '3', videos.join("#{name}.jpg"))
+  steps = JSON.parse(raw.join('steps.json').read)
+  puts "demo: #{mp4.relative_path_from(Website::ROOT)} (#{mp4.size / 1024} KB, #{Float(duration).round} s); its steps:"
+  steps.each do |step|
+    text = step['text'].gsub('&', '&amp;').gsub('<', '&lt;')
+    puts format('      <step at="%<m>d:%<s>02d">%<text>s</step>', m: step['at'] / 60, s: step['at'] % 60, text: text)
+  end
+end

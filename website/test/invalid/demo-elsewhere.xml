@@ -1,0 +1,3 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- A demo's video is the site's own, from content/videos. expect: cvc-assertion: element 'Q{https://www.tinyactors.dev/ns/site}demo' breaks the assertion '(: a video from content/videos :) -->
+<page xmlns="https://www.tinyactors.dev/ns/site" id="t" path="/t/"><title>T</title><description>A test page.</description><purpose kind="pitch" for="a"/><hero><headline>T</headline><lede>Lede.</lede></hero><section id="s"><heading>S</heading><demo src="https://example.com/v.mp4" poster="https://example.com/v.jpg"><description>A demo.</description><step at="0:00">Start.</step></demo></section></page>

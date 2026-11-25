@@ -494,6 +494,7 @@
       <xs:element ref="live"/>
       <xs:element ref="table"/>
       <xs:element ref="figure"/>
+      <xs:element ref="demo"/>
       <xs:element ref="playground"/>
       <xs:element ref="changelog"/>
     </xs:choice>
@@ -515,6 +516,41 @@
       </xs:sequence>
       <xs:attribute name="src" type="path" use="required"/>
       <xs:assert test="(: a drawing from content/images :) matches(@src, '^\.\./images/[a-z0-9-]+\.svg$')"/>
+    </xs:complexType>
+  </xs:element>
+
+  <xs:element name="demo">
+    <xs:annotation><xs:documentation>
+      A video demo: a recording of tinyactors doing something end to end,
+      made by a program in the repository (website/demos/NAME/, `mise run
+      demo NAME`), never filmed by hand. `src` is the MP4 under
+      content/videos/ and `poster` its still; `description` says what the
+      video shows (its caption, and what a reader without video reads),
+      and each `step` is a moment of it: `at` its time (m:ss), the text what
+      the video says then. The steps are the transcript: the page lists
+      them, each one seeking the video, and the Markdown keeps them.
+    </xs:documentation></xs:annotation>
+    <xs:complexType>
+      <xs:sequence>
+        <xs:element name="description" type="inline"/>
+        <xs:element name="step" maxOccurs="unbounded">
+          <xs:complexType mixed="true">
+            <xs:complexContent>
+              <xs:extension base="inline">
+                <xs:attribute name="at" use="required">
+                  <xs:simpleType>
+                    <xs:restriction base="xs:string"><xs:pattern value="[0-9]+:[0-5][0-9]"/></xs:restriction>
+                  </xs:simpleType>
+                </xs:attribute>
+              </xs:extension>
+            </xs:complexContent>
+          </xs:complexType>
+        </xs:element>
+      </xs:sequence>
+      <xs:attribute name="src" type="path" use="required"/>
+      <xs:attribute name="poster" type="path" use="required"/>
+      <xs:assert test="(: a video from content/videos :) matches(@src, '^\.\./videos/[a-z0-9-]+\.mp4$')"/>
+      <xs:assert test="(: its poster beside it :) @poster = replace(@src, '\.mp4$', '.jpg')"/>
     </xs:complexType>
   </xs:element>
 

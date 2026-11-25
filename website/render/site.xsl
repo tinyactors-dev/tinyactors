@@ -142,6 +142,9 @@
         <xsl:if test=".//s:code[parent::s:section or parent::s:example or parent::s:program or parent::s:in] or .//s:live or .//s:install">
           <script type="module" src="/assets/components/copy.mjs?v={$version}"></script>
         </xsl:if>
+        <xsl:if test=".//s:demo">
+          <script type="module" src="/assets/components/demo.mjs?v={$version}"></script>
+        </xsl:if>
         <xsl:if test=".//s:playground">
           <script type="module" src="/assets/components/playground.mjs?v={$version}"></script>
         </xsl:if>
@@ -577,6 +580,26 @@
         </xsl:for-each>
       </div>
       <figcaption class="figure__caption" id="{$id}"><xsl:apply-templates select="s:description/node()"/></figcaption>
+    </figure>
+  </xsl:template>
+
+  <!-- A demo: the video, its caption, and its steps, each seeking the
+       video (components/demo.mjs; without scripts, the times read as text). -->
+  <xsl:template match="s:demo">
+    <figure class="demo">
+      <ta-demo class="demo__frame">
+        <video class="demo__video" controls="controls" preload="metadata" playsinline="playsinline"
+               src="{replace(@src, '^\.\./videos/', '/assets/videos/')}"
+               poster="{replace(@poster, '^\.\./videos/', '/assets/videos/')}"></video>
+        <ol class="demo__steps">
+          <xsl:for-each select="s:step">
+            <xsl:variable name="seconds" select="xs:integer(substring-before(@at, ':')) * 60 + xs:integer(substring-after(@at, ':'))"/>
+            <li><button type="button" class="demo__at" data-at="{$seconds}"><xsl:value-of select="@at"/></button>
+              <span class="demo__text"><xsl:apply-templates/></span></li>
+          </xsl:for-each>
+        </ol>
+      </ta-demo>
+      <figcaption class="demo__caption"><xsl:apply-templates select="s:description/node()"/></figcaption>
     </figure>
   </xsl:template>
 
