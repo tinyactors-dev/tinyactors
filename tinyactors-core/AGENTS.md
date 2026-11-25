@@ -19,7 +19,10 @@ programs and the builds (`dev`: ASan/UBSan at -O1; `release`; `wasi`).
   `check:freestanding`, `api --check` (after `amalgamate`), `wasm:test`,
   `conform`, `check:wasm`, `run:schema` (the run protocol's JSON
   Schema and the schema generator's fixtures against json_schemer, pinned
-  in `tools/tinyactors/schema/Gemfile.lock`) and `layout`; `--full` adds `torture:test` and `check:cross`. Each also runs on its own.
+  in `tools/tinyactors/schema/Gemfile.lock`) and `run:conform` (the
+  conformance suite against `tinyactors run`, through
+  `tests/conform/run_adapter.rb`, a client of its JSON-RPC run as a
+  binding) and `layout`; `--full` adds `torture:test` and `check:cross`. Each also runs on its own.
 - `mise run check:freestanding` must pass for any change under
   `src/{base,image,core,system}`; `mise run check:wasm` builds the tests for
   wasm32-wasi and runs them under wasmtime.

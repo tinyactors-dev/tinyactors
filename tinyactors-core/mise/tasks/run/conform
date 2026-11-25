@@ -1,0 +1,60 @@
+#!/usr/bin/env ruby
+#MISE description="The conformance suite (tinyactors-test) against tinyactors run, through its JSON-RPC protocol: tests/conform/run_adapter.rb as a binding, on quickjs in both realms"
+#MISE depends=["build"]
+# vim:ft=ruby
+
+# Each run is `mise run //tinyactors-test:run -- ruby tests/conform/run_adapter.rb
+# <tinyactors> --kind binding <options>`: the adapter starts a server per
+# host and drives it with run.* calls (tests/conform/run_adapter.rb). It is
+# a binding, not the reference: the server offers no call that evaluates an
+# expression outside a chart (value.encode) and no allocator that refuses
+# on demand (host.post's refuse), so those cases are skipped, as for the
+# bindings (../tinyactors-test/docs/driver.md, "Kinds").
+#
+# Every case must pass but those in KNOWN, which fail because of what the
+# protocol is, each with its reason; a known case that passes fails the
+# task too, so the list stays true.
+
+require_relative '../../core'
+require 'open3'
+
+KNOWN = {
+  'protocol config.txt "systemID"' =>
+    'the server gives a config without systemID its own, tinyactors-run (docs/cli.md, "Startup"), so core never ' \
+    'sees the config core refuses'
+}.freeze
+
+adapter = Core::ROOT.join('tests/conform/run_adapter.rb').to_s
+server = Core.program_path('dev', 'tinyactors').to_s
+# - quickjs, auto realm: every suite;
+# - quickjs, isolated realms: scenarios and W3C.
+runs = {
+  'quickjs' => [],
+  'quickjs isolated' => %w[--suite scenarios --suite w3c --realm isolated]
+}
+
+failed = []
+runs.each do |name, options|
+  started = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+  output, = Open3.capture2e('mise', 'run', '//tinyactors-test:run', '--', 'ruby', adapter, server, '--kind', 'binding',
+                            *options, chdir: Core::ROOT.to_s)
+  seconds = Process.clock_gettime(Process::CLOCK_MONOTONIC) - started
+  failures = output.lines.grep(/\Afail /).map { |line| line.delete_prefix('fail ').strip }
+  # a known failure is not counted against a suite that passed something
+  summary = output.lines.grep(/\A(protocol|scenarios|w3c): \d+ pass/).map(&:strip)
+  proves_nothing = output.lines.grep(/\AFAIL /)
+  unexpected = failures - KNOWN.keys
+  passed = KNOWN.keys.select { |known| output.lines.any? { |line| line.strip == "pass #{known}" } }
+  if unexpected.empty? && passed.empty? && proves_nothing.empty? && !summary.empty?
+    known = failures & KNOWN.keys
+    puts "ok   run conform #{name}: #{summary.join('; ')}#{known.empty? ? '' : " (#{known.size} known)"} in " \
+         "#{format('%.1f', seconds)} s"
+    next
+  end
+
+  failed << name
+  puts "FAIL run conform #{name} (#{options.join(' ')})"
+  puts "     known, but passes now: drop it from KNOWN in mise/tasks/run/conform: #{passed.join(', ')}" unless passed.empty?
+  puts output.lines.reject { |line| line.start_with?('pass ') }.last(60).join
+end
+abort "tinyactors-core: the suite failed against tinyactors run: #{failed.join(', ')}" unless failed.empty?

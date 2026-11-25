@@ -1851,6 +1851,63 @@ outline left a choice:
   spans of traces the watch had sampled, even of macrosteps that come
   later in them (a delayed send's); whether that is meant is unverified.
 
+**Step 10** (2026-11-25): the conformance adapter,
+`tinyactors-core/tests/conform/run_adapter.rb`, run by `mise run
+run:conform`, which core's `test` runs after `run:schema`. It passes the
+whole suite (every milestone, M1 to M5: there is no larger set for
+`--full`): protocol 91 pass and 1 known failure, scenarios 10, W3C 191 on
+quickjs in the auto realm, and scenarios and W3C again in isolated realms,
+in about 20 s. Where the outline left a choice:
+
+- **One server per host.** `host.create` starts `tinyactors run --config`
+  with the driver's config as JSON (its `ioProcessors` list written as the
+  map), `scenario.run` and `w3c.run` one each; `host.free` and the end of
+  a case close its input. A config the server refuses at startup is
+  answered from the line it writes on standard error (core's error as
+  JSON, converted back to CBOR).
+- **Values cross as CBOR**: `paramsCBOR`, `cbor`, and `run.post`'s message
+  as the runner gave them, so the bytes the runner compares are core's;
+  a send's data comes back as its `cbor` twin when the server writes one,
+  else its JSON as CBOR again. `host.post` is `run.post`, so the adapter
+  needs no typed methods: the vectors' reply bytes are core's own.
+- **CBOR in Ruby** is the suite's codec (`tinyactors-test/lib/cbor.rb`),
+  JSON the standard library's: no gem. The adapters' lint
+  (`tinyactors-test/lint`) has rules for JavaScript and Python only; it
+  passes the Ruby file without checking it.
+- **`hold` where a sender must wait for its answer**: `w3c.run` turns with
+  `hold` and answers BasicHTTP's sends before the next turn acks (W3C 201
+  and 577 failed when the answer came after the ack: the sender's next
+  `<send>` came first), and the vectors' `host.run` fails a send to a
+  config's I/O processor while held, as a binding's processor fails it in
+  its handler. Scenarios turn without `hold`: their environment has no
+  I/O processor.
+- **BasicHTTP's POST is written in Ruby**, after
+  `src/basic_http/basic_http.c` (`ta_http_encode_post`,
+  `ta_http_parse_request`): the server offers no HTTP codec, as the
+  bindings do (`encodeHTTPPost`). A gap only for this test environment.
+- **`src` documents are files**: `scenario.run` and `w3c.run` write every
+  document into the server's directory and add images with `files`, since
+  `sources` compiles every source as a chart (W3C's `.txt` documents are
+  not charts) and its resolver matches a `src` by its exact name. A
+  `src="file:x.txt"` is read relative to the naming file, so each document
+  is written under its name and under `file:` and its name.
+- **A server fix:** a config's `systemID` that is not text was refused by
+  the server with its own message ("systemID is a string"), not core's
+  error (`config.txt`, "systemID is text"). It now goes to core as it is,
+  and so does an empty one; `--system` with either is the usage error
+  of a config that names another system. `test_tool`
+  (`test_run_schema`) checks both.
+- **Known failure, the protocol's:** `config.txt` "systemID" (a config
+  without one) fails because the server supplies `tinyactors-run` (3.2),
+  so core never sees the config it refuses. `mise/tasks/run/conform`
+  lists it with this reason and fails when it passes or when anything
+  else fails.
+- **Not reachable, as for every binding:** `value.encode` (no call
+  evaluates an expression outside a chart) and `host.post`'s `refuse` (no
+  allocator that refuses on demand), so the run is `--kind binding`, not
+  `reference`. A REQUEST is answered `TA_ERROR_INVALID` by the server, as
+  the bindings answer it; the suite's `invoke` scenario passes with it.
+
 ## 8. Decisions
 
 The maintainer settled every open question (2026-11-25); none is left.

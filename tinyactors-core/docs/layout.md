@@ -167,6 +167,8 @@ implementation of that layer). Layer dependency rules are in
 │   └── tarun/                 ◻ runner CLI: image + scripted events + simulated time -> trace
 │
 ├── tests/
+│   ├── conform/               ✅ batch.rb (ta-conform's posts); run_adapter.rb, the suite's adapter over
+│   │                             tinyactors run's JSON-RPC, run as a binding (mise run run:conform)
 │   ├── harness/harness.h      ✅ dependency-free test macros
 │   ├── run/                   ✅ tinyactors run's transcripts: client and server lines, checked byte
 │   │                             for byte (test_tool) and against the schema (run:schema)

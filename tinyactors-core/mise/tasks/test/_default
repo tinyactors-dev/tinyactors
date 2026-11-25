@@ -50,11 +50,12 @@ puts "tinyactors-core: #{runs.size + alone.size} test programs pass"
 # tests the release's wasm modules; `conform` runs the conformance suite
 # (tinyactors-test) against ta-conform; `run:schema` checks the run
 # protocol's JSON Schema and the schema generator's fixtures with a 2020-12
-# validator; `layout` checks what one more of each thing costs in a
-# segment's region, from the types' debug information, against
-# ta_system_layout, so a struct that grows is explained on the commit that
-# grows it.
+# validator; `run:conform` runs the conformance suite against `tinyactors
+# run` through its JSON-RPC protocol (tests/conform/run_adapter.rb);
+# `layout` checks what one more of each thing costs in a segment's region,
+# from the types' debug information, against ta_system_layout, so a struct
+# that grows is explained on the commit that grows it.
 tasks = [%w[lint], %w[check:freestanding], %w[api --check], %w[wasm:test], %w[conform], %w[check:wasm], %w[run:schema],
-         %w[layout]]
+         %w[run:conform], %w[layout]]
 tasks += [%w[torture:test], %w[check:cross]] if full
 tasks.each { |task| Core.run('mise', 'run', *task) }
