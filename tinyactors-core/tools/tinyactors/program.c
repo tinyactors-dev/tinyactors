@@ -156,7 +156,7 @@ static const ta_cli_option run_options[] = {
 
 static const ta_string_view compile_examples[] = {
     T("compile order.scxml payment.scxml -o order.tai"),
-    T("compile --system system.xml -o system.tai"),
+    T("compile system.xml -o system.tai"),
     T("compile order.scxml --emit c --symbol order_image -o order_image.c"),
     T("compile order.scxml -o - | tinyactors inspect -")};
 static const ta_string_view check_examples[] = {T("check charts/*.scxml"),
