@@ -42,7 +42,7 @@ implementation of that layer). Layer dependency rules are in
 │   ├── base/                  freestanding building blocks (§2)
 │   │   ├── config.h           ✅ portability macros, TA_ASSERT, ta_pointer_add
 │   │   ├── memory.h           ✅ memcpy/memset/memmove builtins, local memcmp (no libc symbols)
-│   │   ├── format.h           ✅ decimal numbers and bounded text (ta_format_u64, ta_text)
+│   │   ├── format.h           ✅ decimal numbers and bounded text (ta_format_u64, ta_text); a double and a string as JSON writes them (ta_format_double, ta_format_quoted)
 │   │   ├── arena.[ch]         ✅ bump arena + measure mode
 │   │   ├── pool.[ch]          ✅ fixed-stride pool, u32 indices, generation handles, lazy init, copy
 │   │   ├── slab.[ch]          ✅ page-based half-step size classes (instances, dynamic strings)

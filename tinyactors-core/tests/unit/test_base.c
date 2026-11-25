@@ -1,4 +1,5 @@
 /* Unit tests for ta_base building blocks. */
+#include <stdlib.h>
 #include <string.h>
 
 #include "../harness/harness.h"
@@ -326,6 +327,126 @@ static void test_text(void) {
     CHECK(text.overflow && text.length == 0);
 }
 
+/* An allocator that gives `budget` blocks, then refuses (for the outputs'
+ * growth). */
+typedef struct format_heap {
+    uint32_t budget;
+} format_heap;
+
+static void *format_alloc(void *context, size_t size, size_t align) {
+    format_heap *heap = (format_heap *)context;
+    (void)align;
+    if (!heap->budget) return NULL;
+    heap->budget--;
+    return malloc(size);
+}
+
+static void format_free(void *context, void *pointer, size_t size) {
+    (void)context;
+    (void)size;
+    free(pointer);
+}
+
+/* `value` through ta_format_double into a room of 64 bytes: its text is
+ * `expected`. */
+static int format_double_is(double value, const char *expected) {
+    char room[64];
+    ta_output out = ta_output_over((ta_buffer){room, sizeof room, 0}, NULL);
+    ta_format_double(&out, value);
+    int same = ta_output_fits(&out) && out.length == strlen(expected) &&
+               memcmp(room, expected, out.length) == 0;
+    if (!same) fprintf(stderr, "  ta_format_double: %.17g gave '%.*s', not '%s'\n", value,
+                       (int)(out.length < sizeof room ? out.length : sizeof room), room, expected);
+    return same;
+}
+
+/* ta_format_double: the shortest decimal that reads back, a point or an
+ * exponent, the signs and the values JSON has no number for. */
+static void test_format_double(void) {
+    static const struct {
+        double value;
+        const char *text;
+    } cases[] = {
+        {0.0, "0.0"},
+        {-0.0, "-0.0"},
+        {1.0, "1.0"},
+        {-1.5, "-1.5"},
+        {0.1, "0.1"},
+        {0.30000000000000004, "0.30000000000000004"},
+        {100.0, "100.0"},
+        {123456789012.0, "123456789012.0"},
+        {1e20, "100000000000000000000.0"},
+        {1e21, "1.0e+21"},
+        {1e22, "1.0e+22"},
+        {1e-5, "0.00001"},
+        {1e-6, "0.000001"},
+        {1.5e-7, "1.5e-7"},
+        {1e300, "1.0e+300"},
+        {1.7976931348623157e308, "1.7976931348623157e+308"},
+        {2.2250738585072014e-308, "2.2250738585072014e-308"},
+        {5e-324, "5.0e-324"},
+        {9007199254740993.0, "9007199254740992.0"},
+        {__builtin_inf(), "Infinity"},
+        {-__builtin_inf(), "-Infinity"},
+        {__builtin_nan(""), "NaN"},
+    };
+    for (size_t i = 0; i < sizeof cases / sizeof cases[0]; i++)
+        CHECK(format_double_is(cases[i].value, cases[i].text));
+}
+
+/* ta_format_quoted: every byte below 0x20 escaped, the short escapes where
+ * JSON has them, everything else as it is. */
+static void test_format_quoted(void) {
+    char text[0x20 + 4];
+    for (uint32_t i = 0; i < 0x20; i++)
+        text[i] = (char)i;
+    memcpy(text + 0x20, "\"\\\x7f\xc3", 4);
+    char room[256];
+    ta_output out = ta_output_over((ta_buffer){room, sizeof room, 0}, NULL);
+    ta_format_quoted(&out, (ta_string_view){text, sizeof text});
+    static const char expected[] =
+        "\"\\u0000\\u0001\\u0002\\u0003\\u0004\\u0005\\u0006\\u0007\\b\\t\\n\\u000b\\f\\r"
+        "\\u000e\\u000f\\u0010\\u0011\\u0012\\u0013\\u0014\\u0015\\u0016\\u0017\\u0018\\u0019"
+        "\\u001a\\u001b\\u001c\\u001d\\u001e\\u001f\\\"\\\\\x7f\xc3\"";
+    CHECK(ta_output_fits(&out) && out.length == sizeof expected - 1 &&
+          memcmp(room, expected, out.length) == 0);
+    out = ta_output_over((ta_buffer){room, sizeof room, 0}, NULL);
+    ta_format_quoted(&out, (ta_string_view){"", 0});
+    CHECK(out.length == 2 && memcmp(room, "\"\"", 2) == 0);
+}
+
+/* Both write into an output that grows through its allocator; when it
+ * cannot grow, what fits is written and the length goes on counting. */
+static void test_format_output(void) {
+    static const char long_text[] = "a text long enough to grow the output past its room\n";
+    static const char expected[] = "\"a text long enough to grow the output past its room\\n\"";
+    format_heap heap = {1};
+    ta_allocator allocator = {&heap, format_alloc, format_free};
+    char room[8];
+    ta_output out = ta_output_over((ta_buffer){room, sizeof room, 0}, &allocator);
+    ta_format_quoted(&out, (ta_string_view){long_text, sizeof long_text - 1});
+    CHECK(ta_output_fits(&out) && out.length == sizeof expected - 1 &&
+          memcmp(out.bytes, expected, out.length) == 0);
+    ta_format_double(&out, 0.25);
+    CHECK(ta_output_fits(&out) && memcmp(out.bytes + sizeof expected - 1, "0.25", 4) == 0);
+    ta_output_free(&out);
+    /* every budget: refused at each growth, the room holds the first bytes */
+    for (uint32_t budget = 0; budget < 4; budget++) {
+        heap.budget = budget;
+        out = ta_output_over((ta_buffer){room, sizeof room, 0}, budget ? &allocator : NULL);
+        ta_format_quoted(&out, (ta_string_view){long_text, sizeof long_text - 1});
+        ta_format_double(&out, 1e-7);
+        CHECK_EQUAL(out.length, sizeof expected - 1 + 6);
+        if (ta_output_fits(&out)) {
+            CHECK(memcmp(out.bytes, expected, sizeof expected - 1) == 0 &&
+                  memcmp(out.bytes + sizeof expected - 1, "1.0e-7", 6) == 0);
+        } else {
+            CHECK(memcmp(out.bytes, expected, out.capacity) == 0);
+        }
+        ta_output_free(&out);
+    }
+}
+
 /* ta_memmove: overlapping either way, and the freestanding fallback's
  * direction choice through the same macro. */
 static void test_memmove(void) {
@@ -348,6 +469,9 @@ int main(void) {
     RUN(test_slab);
     RUN(test_format_u64);
     RUN(test_text);
+    RUN(test_format_double);
+    RUN(test_format_quoted);
+    RUN(test_format_output);
     RUN(test_memmove);
     TEST_MAIN_END();
 }

@@ -316,28 +316,16 @@ static void put_integer(ta_output *out, const ta_cbor_item *item) {
     ta_output_write(out, digits, ta_format_u64(digits, item->value + 1u));
 }
 
-/* A float as diagnostic notation writes it, the shortest decimal that
- * reads back as it: the double encoded alone and written so. */
-typedef struct value_float_text {
-    char text[40];
-    uint32_t length;
-} value_float_text;
-
-static void value_float(uint64_t bits, value_float_text *out) {
-    unsigned char encoded[9];
-    encoded[0] = 0xFB; /* major 7, a double */
-    for (uint32_t i = 0; i < 8; i++)
-        encoded[1 + i] = (unsigned char)(bits >> (56 - 8 * i));
-    ta_buffer room = {out->text, sizeof out->text, 0};
-    out->length = ta_cbor_diagnostic((ta_bytes){encoded, sizeof encoded}, &room) == TA_OK
-                      ? (uint32_t)room.length
-                      : 0;
+/* A float's bits as the double they are. */
+static double value_double(uint64_t bits) {
+    double value;
+    ta_memcpy(&value, &bits, sizeof value);
+    return value;
 }
 
-/* NaN, Infinity and -Infinity, which JSON has no number for. */
-static int value_float_is_number(const value_float_text *number) {
-    char first = number->length ? number->text[0] : 'N';
-    return first != 'N' && first != 'I' && !(first == '-' && number->length > 1 && number->text[1] == 'I');
+/* 0 for NaN, Infinity and -Infinity, which JSON has no number for. */
+static int value_float_is_number(uint64_t bits) {
+    return ((bits >> 52) & 0x7FFu) != 0x7FFu;
 }
 
 static void put_hexadecimal(ta_output *out, ta_bytes bytes) {
@@ -350,36 +338,6 @@ static void put_hexadecimal(ta_output *out, ta_bytes bytes) {
 }
 
 /* ---- JSON -------------------------------------------------------------- */
-
-static void json_string(ta_output *out, ta_string_view text) {
-    report_span span = {text, 0, 0};
-    put_byte(out, '"');
-    for (uint32_t i = 0; i < text.length; i++) {
-        unsigned char byte = (unsigned char)text.pointer[i];
-        if (byte != '"' && byte != '\\' && byte >= 0x20) continue;
-        span.end = i;
-        put_span(out, span);
-        span.start = i + 1;
-        if (byte == '"')
-            put_literal(out, "\\\"");
-        else if (byte == '\\')
-            put_literal(out, "\\\\");
-        else if (byte == '\n')
-            put_literal(out, "\\n");
-        else if (byte == '\t')
-            put_literal(out, "\\t");
-        else if (byte == '\r')
-            put_literal(out, "\\r");
-        else {
-            put_literal(out, "\\u00");
-            put_byte(out, report_hex_digits[byte >> 4]);
-            put_byte(out, report_hex_digits[byte & 0xF]);
-        }
-    }
-    span.end = text.length;
-    put_span(out, span);
-    put_byte(out, '"');
-}
 
 typedef struct report_frame {
     const ta_report_node *node, *cursor;
@@ -402,7 +360,7 @@ static void json_scalar(ta_output *out, const ta_cbor_item *item) {
         put_integer(out, item);
         break;
     case TA_CBOR_TEXT:
-        json_string(out, (ta_string_view){(const char *)item->bytes.pointer, (uint32_t)item->bytes.length});
+        ta_format_quoted(out, (ta_string_view){(const char *)item->bytes.pointer, (uint32_t)item->bytes.length});
         break;
     case TA_CBOR_BYTES:
         put_literal(out, "{\"bytes\": \"");
@@ -410,11 +368,9 @@ static void json_scalar(ta_output *out, const ta_cbor_item *item) {
         put_literal(out, "\"}");
         break;
     case TA_CBOR_FLOAT: {
-        value_float_text number;
-        value_float(item->value, &number);
-        int plain = value_float_is_number(&number);
+        int plain = value_float_is_number(item->value);
         if (!plain) put_literal(out, "{\"float\": \"");
-        ta_output_write(out, number.text, number.length);
+        ta_format_double(out, value_double(item->value));
         if (!plain) put_literal(out, "\"}");
         break;
     }
@@ -435,7 +391,7 @@ static void json_scalar(ta_output *out, const ta_cbor_item *item) {
 static void json_cbor(ta_output *out, const ta_report_node *node) {
     if (!value_keys_plain(node->value)) {
         put_literal(out, "{\"diagnostic\": ");
-        json_string(out, node->text);
+        ta_format_quoted(out, node->text);
         put_byte(out, '}');
         return;
     }
@@ -487,7 +443,7 @@ static void json_value(ta_output *out, const ta_report_node *node) {
         put_literal(out, node->first ? "[" : "[]");
         break;
     default:
-        json_string(out, node->text);
+        ta_format_quoted(out, node->text);
         break; /* a text, a block */
     }
 }
@@ -512,7 +468,7 @@ static void json_render(const ta_report *report, ta_output *out) {
         put_byte(out, '\n');
         put_repeat(out, ' ', count * REPORT_INDENT);
         if (frame->node->kind == REPORT_OBJECT) {
-            json_string(out, child->name);
+            ta_format_quoted(out, child->name);
             put_literal(out, ": ");
         }
         json_value(out, child);
@@ -592,10 +548,8 @@ static void xml_scalar(ta_output *out, const ta_cbor_item *item) {
         put_literal(out, "</bytes>");
         break;
     case TA_CBOR_FLOAT: {
-        value_float_text number;
-        value_float(item->value, &number);
         put_literal(out, "<float>");
-        ta_output_write(out, number.text, number.length);
+        ta_format_double(out, value_double(item->value));
         put_literal(out, "</float>");
         break;
     }

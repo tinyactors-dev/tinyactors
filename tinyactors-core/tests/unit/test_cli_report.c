@@ -236,14 +236,14 @@ static void test_escaping(void) {
     CHECK(document_is(
         &document, TA_REPORT_JSON,
         EXPECT("{\n"
-               "  \"note\": \"a\\\"b\\\\c<d>&e\\n\\t\\r\\u0001\\u001F\\u0000z \xc3\xa9\",\n"
+               "  \"note\": \"a\\\"b\\\\c<d>&e\\n\\t\\r\\u0001\\u001f\\u0000z \xc3\xa9\",\n"
                "  \"lines\": [\n"
                "    {\n"
                "      \"memo\": \"a|b\\nc\"\n"
                "    }\n"
                "  ],\n"
                "  \"notes\": [\n"
-               "    \"a\\\"b\\\\c<d>&e\\n\\t\\r\\u0001\\u001F\\u0000z \xc3\xa9\"\n"
+               "    \"a\\\"b\\\\c<d>&e\\n\\t\\r\\u0001\\u001f\\u0000z \xc3\xa9\"\n"
                "  ]\n"
                "}\n")));
     CHECK(document_is(
