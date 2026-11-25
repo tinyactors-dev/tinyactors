@@ -92,7 +92,7 @@ static void sleep_until(ta_time deadline) {
 void host_run(host *h, host_handler *handle) {
     for (;;) {
         drain(h, handle);
-        ta_host_advance_time(h->host, (ta_host_time){ta_runtime_now_ns(), 0}); /* timers fire as it passes */
+        ta_host_advance_time(h->host, (ta_system_time){ta_runtime_now_ns(), 0}); /* timers fire as it passes */
         ta_run run = ta_host_run(h->host, 10000);
         drain(h, handle);
         if (run.status == TA_RUN_FAULT) return;
