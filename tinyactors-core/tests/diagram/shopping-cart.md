@@ -77,21 +77,4 @@
 
 #### Problems
 
-| Kind | Subject | Touches |
-| --- | --- | --- |
-| labelOnEdge | checkingOut → compensating on error.communication | checkingOut → compensating on confirm.refused |
-| labelOnEdge | checkingOut → compensating on error.communication | checkingOut → compensating on checkout.timeout |
-| labelOnEdge | checkingOut → compensating on error.communication | checkingOut → compensating on cancel |
-| labelOnEdge | checkingOut → compensating on error.communication | reserving → compensating on reserve.refused |
-| labelOnEdge | checkingOut → compensating on error.communication | reserving → compensating on error.communication |
-| labelOnEdge | checkingOut → compensating on error.communication | reserving → compensating on reserving.timeout |
-| labelOnEdge | checkingOut → compensating on error.communication | reserving → compensating on cancel |
-| labelOnEdge | checkingOut → compensating on checkout.timeout | shopping → compensating on cancel |
-| labelOnEdge | checkingOut → compensating on checkout.timeout | checkingOut → compensating on confirm.refused |
-| labelOnEdge | checkingOut → compensating on checkout.timeout | checkingOut → compensating on error.communication |
-| labelOnEdge | checkingOut → compensating on checkout.timeout | checkingOut → compensating on cancel |
-| labelOnEdge | checkingOut → compensating on checkout.timeout | reserving → compensating on reserve.refused |
-| labelOnEdge | reserving → compensating on error.communication | reserving → compensating on reserve.refused |
-| labelOnEdge | reserving → compensating on error.communication | reserving → compensating on reserving.timeout |
-| labelOnEdge | reserving → compensating on error.communication | reserving → compensating on cancel |
-| labelOnEdge | reserving → compensating on error.communication | reserving → checkingOut |
+_none_

@@ -59,4 +59,3 @@
 | notCentred | starting → stale | stale |
 | notCentred | running → finished on done.state.dispatch | finished |
 | notCentred | spawning → drained | drained |
-| labelOnEdge | starting → running | starting → running |

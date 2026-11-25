@@ -77,8 +77,4 @@
 
 #### Problems
 
-| Kind | Subject | Touches |
-| --- | --- | --- |
-| labelOnEdge | legalReviewing → revising on legal.changes | revising → legalWasAt on resubmit |
-| labelOnEdge | revising → review on resubmit | revising → financeWasAt on resubmit |
-| labelOnEdge | archiving → archiveRetry on error.communication | archiveRetry → archiving on archive.retry |
+_none_

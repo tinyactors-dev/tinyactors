@@ -65,12 +65,6 @@
 | --- | --- | --- |
 | notCentred | fulfilment → delivered on done.invoke.ship | delivered |
 | notCentred | picking → cancelling on cancel | cancelling |
-| labelOnEdge | validating → failed | validating → failed |
-| labelOnEdge | charging → fulfilment on done.invoke.charge | charging → refunding on payment.timeout payment.error |
-| labelOverlap | charging → failed on payment.declined | backoff → charging on payment.retry |
-| labelOverlap | charging → backoff on payment.timeout payment.error | backoff → charging on payment.retry |
-| labelOnEdge | charging → backoff on payment.timeout payment.error | charging → refunding on payment.timeout payment.error |
-| labelOnEdge | charging → backoff on payment.timeout payment.error | backoff → charging on payment.retry |
-| labelOnEdge | charging → refunding on payment.timeout payment.error | payment → refunding on cancel |
-| labelOnEdge | backoff → charging on payment.retry | charging → backoff on payment.timeout payment.error |
+| labelOnEdge | backoff → charging on payment.retry | charging → failed on payment.declined |
 | labelOnEdge | requesting → waiting on error.communication | waiting → requesting on refund.retry |
+| labelOnEdge | waiting → requesting on refund.retry | requesting → failed on refunded |

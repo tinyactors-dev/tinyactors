@@ -6,13 +6,13 @@
 
 - **Name**: user
 - **Width**: 926
-- **Height**: 207
+- **Height**: 202
 
 #### Boxes
 
 | State | Kind | Parent | Drawn as | X | Y | Width | Height |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| /scxml | compound |  | root | 0 | 0 | 926 | 207 |
+| /scxml | compound |  | root | 0 | 0 | 926 | 202 |
 | offline | atomic | /scxml | atomic | 277 | 114 | 77 | 34 |
 | online | compound | /scxml | compound | 536 | 14 | 376 | 160 |
 | active | atomic | online | atomic | 620 | 102 | 99 | 58 |
@@ -60,7 +60,4 @@
 
 #### Problems
 
-| Kind | Subject | Touches |
-| --- | --- | --- |
-| labelOnEdge | online → reconnecting on connection.lost | reconnecting → resume on connect |
-| labelOnEdge | reconnecting → offline on disconnect | reconnecting → offline on grace.over |
+_none_

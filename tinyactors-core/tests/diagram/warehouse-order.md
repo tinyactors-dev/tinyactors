@@ -6,46 +6,46 @@
 
 - **Name**: warehouse-order
 - **Width**: 1195
-- **Height**: 462
+- **Height**: 463
 
 #### Boxes
 
 | State | Kind | Parent | Drawn as | X | Y | Width | Height |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| /scxml | compound |  | root | 0 | 0 | 1195 | 462 |
-| received | atomic | /scxml | atomic | 40 | 142 | 85 | 84 |
-| held | atomic | /scxml | atomic | 253 | 14 | 64 | 34 |
-| fulfilling | parallel | /scxml | parallel | 253 | 66 | 328 | 330 |
-| picking | compound | fulfilling | region | 267 | 106 | 300 | 88 |
-| locating | atomic | picking | atomic | 307 | 146 | 85 | 34 |
-| picked | atomic | picking | atomic | 476 | 146 | 70 | 34 |
-| invoicing | compound | fulfilling | region | 267 | 212 | 300 | 140 |
-| drafting | atomic | invoicing | atomic | 307 | 252 | 85 | 34 |
-| issued | atomic | invoicing | atomic | 483 | 252 | 70 | 34 |
-| backorder | atomic | invoicing | atomic | 307 | 304 | 92 | 34 |
-| packing | compound | /scxml | compound | 672 | 149 | 509 | 140 |
-| weighing | atomic | packing | atomic | 712 | 233 | 85 | 34 |
-| boxing | atomic | packing | atomic | 905 | 213 | 70 | 34 |
-| labelled | atomic | packing | atomic | 1082 | 213 | 85 | 34 |
-| shipped | final | /scxml | final | 253 | 414 | 77 | 34 |
+| /scxml | compound |  | root | 0 | 0 | 1195 | 463 |
+| received | atomic | /scxml | atomic | 40 | 143 | 85 | 84 |
+| held | atomic | /scxml | atomic | 253 | 15 | 64 | 34 |
+| fulfilling | parallel | /scxml | parallel | 253 | 67 | 328 | 330 |
+| picking | compound | fulfilling | region | 267 | 107 | 300 | 88 |
+| locating | atomic | picking | atomic | 307 | 147 | 85 | 34 |
+| picked | atomic | picking | atomic | 476 | 147 | 70 | 34 |
+| invoicing | compound | fulfilling | region | 267 | 213 | 300 | 140 |
+| drafting | atomic | invoicing | atomic | 307 | 253 | 85 | 34 |
+| issued | atomic | invoicing | atomic | 483 | 253 | 70 | 34 |
+| backorder | atomic | invoicing | atomic | 307 | 305 | 92 | 34 |
+| packing | compound | /scxml | compound | 672 | 150 | 509 | 140 |
+| weighing | atomic | packing | atomic | 712 | 234 | 85 | 34 |
+| boxing | atomic | packing | atomic | 905 | 214 | 70 | 34 |
+| labelled | atomic | packing | atomic | 1082 | 214 | 85 | 34 |
+| shipped | final | /scxml | final | 253 | 415 | 77 | 34 |
 
 #### Edges
 
 | Source | Target | Events | Condition | Drawn as | Route |
 | --- | --- | --- | --- | --- | --- |
 | received | fulfilling | accept |  | forward | 125,193 253,193 |
-| received | shipped | express |  | forward | 125,213 213,213 213,423 255,423 |
+| received | shipped | express |  | forward | 125,214 213,214 213,423 255,423 |
 | received | held | hold |  | forward | 125,156 233,156 233,27 253,27 |
-| held | received | release |  | back | 253,38 243,38 243,172 125,172 |
-| fulfilling | boxing | packed |  | forward | 581,244 662,244 662,224 905,224 |
-| locating | picked | found |  | forward | 392,163 476,163 |
-| locating | backorder | short |  | back | 335,180 335,369 338,369 338,338 |
-| picked | picking | recount |  | toAncestor | 545,163 567,163 |
-| drafting | issued | issue |  | forward | 392,269 483,269 |
-| backorder | locating | restock |  | back | 368,338 368,379 363,379 363,180 |
-| weighing | boxing | weighed |  | forward | 797,244 885,244 885,237 905,237 |
+| held | received | release |  | back | 253,39 243,39 243,173 125,173 |
+| fulfilling | boxing | packed |  | forward | 581,245 662,245 662,225 905,225 |
+| locating | picked | found |  | forward | 392,164 476,164 |
+| locating | backorder | short |  | back | 335,181 335,370 338,370 338,339 |
+| picked | picking | recount |  | toAncestor | 545,164 567,164 |
+| drafting | issued | issue |  | forward | 392,270 483,270 |
+| backorder | locating | restock |  | back | 368,339 368,380 363,380 363,181 |
+| weighing | boxing | weighed |  | forward | 797,244 885,244 885,238 905,238 |
 | boxing | labelled | boxed |  | forward | 974,227 1082,227 |
-| labelled | weighing | relabel |  | back | 1082,237 1072,237 1072,270 895,270 895,256 797,256 |
+| labelled | weighing | relabel |  | back | 1082,238 1072,238 1072,271 895,271 895,256 797,256 |
 
 #### Inside
 
@@ -63,5 +63,3 @@
 | throughBox | backorder → locating on restock | drafting |
 | throughBox | backorder → locating on restock | backorder |
 | notCentred | boxing → labelled on boxed | boxing |
-| labelOnEdge | held → received on release | received → held on hold |
-| labelOnBox | picked → picking on recount | picked |

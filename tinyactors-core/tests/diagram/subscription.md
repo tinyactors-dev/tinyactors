@@ -6,13 +6,13 @@
 
 - **Name**: subscription
 - **Width**: 1622
-- **Height**: 251
+- **Height**: 242
 
 #### Boxes
 
 | State | Kind | Parent | Drawn as | X | Y | Width | Height |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| /scxml | compound |  | root | 0 | 0 | 1622 | 251 |
+| /scxml | compound |  | root | 0 | 0 | 1622 | 242 |
 | subscription | compound | /scxml | compound | 40 | 14 | 1136 | 214 |
 | active | atomic | subscription | atomic | 80 | 122 | 148 | 58 |
 | paused | atomic | subscription | atomic | 431 | 102 | 70 | 34 |
@@ -52,4 +52,4 @@
 | Kind | Subject | Touches |
 | --- | --- | --- |
 | notCentred | grace → suspended on grace.over | grace |
-| labelOnEdge | charging → grace on payment.declined | charging → cancelled on payment.declined |
+| labelOnEdge | pastDue → charging on card.updated | charging → suspended on payment.declined |

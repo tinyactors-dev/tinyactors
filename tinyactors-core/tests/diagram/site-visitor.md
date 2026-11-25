@@ -61,5 +61,3 @@
 | Kind | Subject | Touches |
 | --- | --- | --- |
 | notCentred | eating → approaching on greet | approaching |
-| labelOnEdge | roaming → eating on found | eating → roaming on chewed empty |
-| labelOnEdge | roaming → greeted on greeting | approaching → greeting on near |

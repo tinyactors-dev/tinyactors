@@ -1692,19 +1692,66 @@ static int overlaps(rect a, rect b) {
 static rect inflate(rect r, double d) {
     return (rect){r.x - d, r.y - d, r.w + 2 * d, r.h + 2 * d};
 }
+/* 1 when the axis-parallel segment a-b passes through the inside of `r` */
+static int segment_through(rect r, point a, point b) {
+    double x0 = ta_diagram_min(a.x, b.x), x1 = ta_diagram_max(a.x, b.x);
+    double y0 = ta_diagram_min(a.y, b.y), y1 = ta_diagram_max(a.y, b.y);
+    return x0 < r.x + r.w && r.x < x1 && y0 < r.y + r.h && r.y < y1;
+}
+
+static const double clearance = 2; /* between a label and what it must not touch */
+
+/* How strictly a place must be free: of other edges' lines too, and inside the container its
+ * edge runs in, or only of labels and boxes. */
+typedef enum label_tier { TIER_CLEAR = 0, TIER_LINES_ALLOWED = 1, TIERS = 2 } label_tier;
 
 typedef struct labeller {
-    rect *obstacles;
+    const ta_diagram_spacing *sp;
+    rect *obstacles; /* the leaves */
     uint32_t obstacle_count;
+    rect *bands; /* the containers' header bands: their own margin is room enough */
+    uint32_t band_count;
     rect *placed;
     uint32_t placed_count;
+    const point *points;          /* every route's canonical points */
+    const ta_diagram_edge *edges; /* every route, its points among `points` */
+    uint32_t edge_count;
+    uint32_t transition; /* the label's own: its routes may run under it */
+    int bounded;         /* 1: at TIER_CLEAR the label stays inside `bound` */
+    rect bound;          /* the innermost container but the root holding both ends of its edge */
+    uint32_t tier;       /* a label_tier */
+    uint32_t *order;     /* scratch: the segments of the route, in the order they are tried */
 } labeller;
 
+/* A route to label: its points, the segment its label prefers, its kind and the label's size. */
+typedef struct label_route {
+    const point *points;
+    uint32_t count, prefer, kind;
+    size size;
+} label_route;
+
+/* 1 when a label at `r` keeps clear of the placed labels, the leaves and the header bands, and
+ * at TIER_CLEAR of other edges' lines and inside its bound, by a margin of `clearance` (none
+ * from a band) */
 static int is_free(const labeller *b, rect r) {
+    rect wide = inflate(r, clearance);
     for (uint32_t i = 0; i < b->placed_count; i++)
-        if (overlaps(b->placed[i], r)) return 0;
+        if (overlaps(b->placed[i], wide)) return 0;
     for (uint32_t i = 0; i < b->obstacle_count; i++)
-        if (overlaps(b->obstacles[i], r)) return 0;
+        if (overlaps(b->obstacles[i], wide)) return 0;
+    for (uint32_t i = 0; i < b->band_count; i++)
+        if (overlaps(b->bands[i], r)) return 0;
+    if (b->tier == TIER_LINES_ALLOWED) return 1;
+    if (b->bounded && (r.x < b->bound.x || r.y < b->bound.y || r.x + r.w > b->bound.x + b->bound.w ||
+                       r.y + r.h > b->bound.y + b->bound.h))
+        return 0;
+    for (uint32_t i = 0; i < b->edge_count; i++) {
+        const ta_diagram_edge *edge = &b->edges[i];
+        if (edge->transition == b->transition) continue;
+        const point *p = &b->points[edge->first_point];
+        for (uint32_t k = 1; k < edge->point_count; k++)
+            if (segment_through(wide, p[k - 1], p[k])) return 0;
+    }
     return 1;
 }
 
@@ -1716,12 +1763,10 @@ static rect rect_at(size s, double x, double y) {
     return (rect){x - s.w / 2, y - s.h / 2, s.w, s.h};
 }
 
-/* Where a label goes: on its own route — the preferred segment first, then the others, sliding
- * along each; only then stepping aside. */
-static rect place_label(labeller *b, const ta_diagram_spacing *sp, const point *pts, uint32_t count, uint32_t prefer,
-                        size s, uint32_t kind, uint32_t *order) {
-    uint32_t segments = count - 1;
-    /* the preferred segment, then the ones next to it along the route, longer ones first among equals */
+/* the preferred segment, then the ones next to it along the route, longer ones first among equals */
+static uint32_t segment_order(const labeller *b, const label_route *route) {
+    const point *pts = route->points;
+    uint32_t segments = route->count - 1, prefer = route->prefer, *order = b->order;
     uint32_t n = 0;
     order[n++] = prefer;
     for (uint32_t i = 0; i < segments; i++)
@@ -1739,28 +1784,44 @@ static rect place_label(labeller *b, const ta_diagram_spacing *sp, const point *
         }
         order[j] = moving;
     }
+    return n;
+}
+
+/* Where along a segment a label slides to, the `i`th try from 1: its middle, then in twentieths
+ * either side of it, the side nearer the segment's start first. */
+enum { slides = 19 };
+static double slide(uint32_t i) {
+    double away = (double)(i / 2) * 0.05;
+    return i % 2 ? 0.5 + away : 0.5 - away;
+}
+
+/* Where a label goes, at the labeller's tier: on its own route — the preferred segment first,
+ * then the others, sliding along each; then beside a segment; only then stepping aside. 0 when
+ * no place is free. */
+static int place_at_tier(const labeller *b, const label_route *route, rect *chosen) {
+    const point *pts = route->points;
+    size s = route->size;
+    uint32_t n = segment_order(b, route);
+    const uint32_t *order = b->order;
     for (uint32_t k = 0; k < n; k++) {
         point a = pts[order[k]], z = pts[order[k] + 1];
         int horizontal = ta_diagram_abs(a.y - z.y) < 0.01;
         double room = horizontal ? ta_diagram_abs(z.x - a.x) - s.w : ta_diagram_abs(z.y - a.y) - s.h;
         if (room < 4) continue;
         /* an edge between layers that runs straight from its port: the label just past the port first */
-        double fractions[6] = {0.5, 0.3, 0.7, 0.15, 0.85, 0};
-        uint32_t fraction_count = 5, start = 0;
-        if (order[k] == 0 && horizontal && (kind == TA_DIAGRAM_EDGE_FORWARD || kind == TA_DIAGRAM_EDGE_BACK)) {
-            for (uint32_t i = 5; i > 0; i--)
-                fractions[i] = fractions[i - 1];
-            fractions[0] = (s.w / 2 + 2 * sp->label) / segment_length(a, z);
-            fraction_count = 6;
-        }
-        for (uint32_t i = start; i < fraction_count; i++) {
-            double t = fractions[i];
+        int past_port = order[k] == 0 && horizontal &&
+                        (route->kind == TA_DIAGRAM_EDGE_FORWARD || route->kind == TA_DIAGRAM_EDGE_BACK);
+        for (uint32_t i = past_port ? 0 : 1; i <= slides; i++) {
+            double t = i == 0 ? (s.w / 2 + 2 * b->sp->label) / segment_length(a, z) : slide(i);
             rect r = rect_at(s, a.x + (z.x - a.x) * t, a.y + (z.y - a.y) * t);
             /* keep the label inside the segment's extent */
             if (horizontal ? r.x < ta_diagram_min(a.x, z.x) || r.x + r.w > ta_diagram_max(a.x, z.x)
                            : r.y < ta_diagram_min(a.y, z.y) || r.y + r.h > ta_diagram_max(a.y, z.y))
                 continue;
-            if (is_free(b, inflate(r, 2))) return r;
+            if (is_free(b, r)) {
+                *chosen = r;
+                return 1;
+            }
         }
     }
     /* beside a segment, just clear of the line: either side, preferred segment first */
@@ -1770,28 +1831,54 @@ static rect place_label(labeller *b, const ta_diagram_spacing *sp, const point *
         double room = horizontal ? ta_diagram_abs(z.x - a.x) - s.w : ta_diagram_abs(z.y - a.y) - s.h;
         if (room < 0) continue;
         double offset = (horizontal ? s.h : s.w) / 2 + 4;
-        static const double fractions[3] = {0.5, 0.3, 0.7};
-        for (uint32_t i = 0; i < 3; i++) {
-            double mx = a.x + (z.x - a.x) * fractions[i], my = a.y + (z.y - a.y) * fractions[i];
+        for (uint32_t i = 1; i <= slides; i++) {
+            double mx = a.x + (z.x - a.x) * slide(i), my = a.y + (z.y - a.y) * slide(i);
             for (int side = 1; side >= -1; side -= 2) {
                 rect r = horizontal ? rect_at(s, mx, my + side * offset) : rect_at(s, mx + side * offset, my);
-                if (is_free(b, inflate(r, 2))) return r;
+                if (is_free(b, r)) {
+                    *chosen = r;
+                    return 1;
+                }
             }
         }
     }
-    /* step aside from a segment, closest first: the preferred one, then the others */
+    /* step aside from a segment, closest first: the preferred one, then the others, a step of
+     * about half a label's height at a time (beside a vertical one, from just clear of it),
+     * sliding along it at each distance */
     static const int steps[10] = {1, -1, 2, -2, 3, -3, 4, -4, 5, -5};
     for (uint32_t k = 0; k < n; k++) {
         point a = pts[order[k]], z = pts[order[k] + 1];
         int horizontal = ta_diagram_abs(a.y - z.y) < 0.01;
-        double mx = (a.x + z.x) / 2, my = (a.y + z.y) / 2, step = (horizontal ? s.h : s.w) + 4;
+        double unit = (s.h + 4) * 0.6, beside = horizontal ? 0 : s.w / 2 + 4 - unit;
+        double length = segment_length(a, z), along = horizontal ? s.w : s.h;
+        double beyond = length > 0 && along > length ? (along / 2 - 4) / length : 0;
         for (uint32_t i = 0; i < 10; i++) {
-            rect r = horizontal ? rect_at(s, mx, my + steps[i] * step * 0.6) : rect_at(s, mx + steps[i] * step * 0.6, my);
-            if (is_free(b, inflate(r, 2))) return r;
+            int step = steps[i];
+            double across = (step < 0 ? -1 : 1) * (beside + (step < 0 ? -step : step) * unit);
+            /* along it; then, for a segment shorter than the label, just past either end */
+            for (uint32_t j = 1; j <= slides + 2; j++) {
+                double t = j <= slides ? slide(j) : j == slides + 1 ? 1 + beyond : -beyond;
+                double mx = a.x + (z.x - a.x) * t, my = a.y + (z.y - a.y) * t;
+                rect r = horizontal ? rect_at(s, mx, my + across) : rect_at(s, mx + across, my);
+                if (is_free(b, r)) {
+                    *chosen = r;
+                    return 1;
+                }
+            }
         }
     }
-    point a = pts[prefer], z = pts[prefer + 1];
-    return rect_at(s, (a.x + z.x) / 2, (a.y + z.y) / 2);
+    return 0;
+}
+
+/* Where a label goes: clear of other edges' lines, and inside the container its edge runs in,
+ * when any place is; else clear of labels and boxes only; else at its preferred segment's
+ * middle. */
+static rect place_label(labeller *b, const label_route *route) {
+    rect chosen;
+    for (b->tier = TIER_CLEAR; b->tier < TIERS; b->tier++)
+        if (place_at_tier(b, route, &chosen)) return chosen;
+    point a = route->points[route->prefer], z = route->points[route->prefer + 1];
+    return rect_at(route->size, (a.x + z.x) / 2, (a.y + z.y) / 2);
 }
 
 /* ---- ends on the drawn outline ---------------------------------------------------------- */
@@ -1963,11 +2050,17 @@ static void route(layout *l, ta_diagram_layout *out, ta_diagram_box *boxes) {
     }
 
     /* ── 5. labels (canonical) ── */
-    labeller b = {0, 0, 0, 0};
+    labeller b;
+    ta_memset(&b, 0, sizeof b);
+    b.sp = sp;
     b.obstacles = take(l, sizeof(rect), l->n + 1);
+    b.bands = take(l, sizeof(rect), l->n + 1);
     b.placed = take(l, sizeof(rect), r.pending_count + 1);
+    b.points = canonical_points.data;
+    b.edges = edges;
+    b.edge_count = r.pending_count;
     uint8_t *labelled = take(l, sizeof(uint8_t), l->chart->transition_count + 1);
-    uint32_t *order = take(l, sizeof(uint32_t), canonical_points.length + 1);
+    b.order = take(l, sizeof(uint32_t), canonical_points.length + 1);
     if (l->failed) return;
     for (uint32_t i = 0; i < l->n; i++) {
         uint32_t s = l->walk[i];
@@ -1977,7 +2070,7 @@ static void route(layout *l, ta_diagram_layout *out, ta_diagram_box *boxes) {
         if (info->kind == CONTAINER_NONE)
             b.obstacles[b.obstacle_count++] = tr(a, down);
         else if (info->header > 0)
-            b.obstacles[b.obstacle_count++] = tr((rect){a.x, a.y, a.w, info->header}, down);
+            b.bands[b.band_count++] = tr((rect){a.x, a.y, a.w, info->header}, down);
     }
     /* self loops first: their label has one place (on the loop); the others can slide along their edges */
     for (int pass = 0; pass < 2; pass++)
@@ -1987,8 +2080,15 @@ static void route(layout *l, ta_diagram_layout *out, ta_diagram_box *boxes) {
             size real = label_size(l, edge->transition);
             if (!(real.w > 0 && real.h > 0) || labelled[edge->transition] || all_routed[i].count < 2) continue;
             labelled[edge->transition] = 1;
-            rect chosen = place_label(&b, sp, &canonical_points.data[all_routed[i].first], all_routed[i].count,
-                                      all_routed[i].prefer, label_canon(l, edge->transition), edge->kind, order);
+            b.transition = edge->transition;
+            /* the innermost container but the root holding both ends */
+            uint32_t source = l->chart->transitions[edge->transition].source, holder = parent_of(l, source);
+            while (holder != TA_NIL && !within(l, edge->target, holder))
+                holder = parent_of(l, holder);
+            b.bounded = holder != TA_NIL && holder != 0;
+            if (b.bounded) b.bound = canonical(l, holder);
+            rect chosen = place_label(&b, &(label_route){&canonical_points.data[all_routed[i].first], all_routed[i].count,
+                                                         all_routed[i].prefer, edge->kind, label_canon(l, edge->transition)});
             b.placed[b.placed_count++] = chosen;
             edge->labelled = 1;
             edge->label = tr(chosen, down);

@@ -70,8 +70,3 @@
 | notCentred | attempting → succeeded on result.ok | succeeded |
 | arrowAlongSide | failing → ended | ended |
 | notCentred | failing → ended | ended |
-| labelOnEdge | active → ended on cancel | runEnded → ended |
-| labelOnEdge | attempting → failing on error.communication | attempting → failing on attempt.timeout |
-| labelOnEdge | succeeded → ended | succeeded → ended |
-| labelOnEdge | runEnded → ended | active → ended on cancel |
-| labelOnEdge | runEnded → ended | succeeded → ended |

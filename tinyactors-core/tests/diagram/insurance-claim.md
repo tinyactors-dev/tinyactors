@@ -48,4 +48,3 @@
 | Kind | Subject | Touches |
 | --- | --- | --- |
 | notCentred | assessing → closed on withdraw | closed |
-| labelOnEdge | checking → paid on settle | checking → appeal on appeal |
