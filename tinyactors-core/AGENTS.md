@@ -58,6 +58,9 @@ programs and the builds (`dev`: ASan/UBSan at -O1; `release`; `wasi`).
 
 ## Hard rules
 
+- **Load the `writing-c` skill (the root's `.agents/skills/writing-c`)
+  before writing or changing any C here**, sources and tests alike.
+
 - `src/base`, `src/image`, `src/core`, `src/system` are **freestanding**:
   only `<stddef.h>`/`<stdint.h>` and project headers. No libc, malloc, threads,
   clock, filesystem, recursion, or blocking.

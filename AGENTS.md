@@ -232,6 +232,16 @@ decided yet; this section is replaced when it is.
   keep the edit to those lines, and say in your report which of its files
   you touched.
 
+## Writing C
+
+**Load the `writing-c` skill (`.agents/skills/writing-c`) before writing,
+porting or reviewing any C** here: core's layers and tools, the bindings'
+C, tinyxml, tinyparse. It holds the rules the compiler and the lints do not
+check: constants as enums or `static const`, never `#define`; output through
+`ta_xml_writer`, `ta_report` or `ta_output`, never hand-made writers or
+markup in string literals; memory from arenas by lifetime, with no fixed
+buffer that truncates; and tests the repository owns.
+
 ## At most three parameters
 
 A function in `tinyactors-core`'s public headers takes at most three
