@@ -36,12 +36,12 @@ static uint64_t ta_web_nanoseconds(double value) {
 
 /* The host's clocks now (ta_web.clock): the ticks of the monotonic clock
  * plus the restore's offset, and the wall clock, which never goes back. */
-static ta_host_time ta_web_now(ta_web_host *host) {
+static ta_system_time ta_web_now(ta_web_host *host) {
     uint64_t monotonic = ta_web_nanoseconds(ta_web_import_clock(host->id, 0));
     uint64_t wall = ta_web_nanoseconds(ta_web_import_clock(host->id, 1));
     if (wall < host->wall) wall = host->wall;
     host->wall = wall;
-    return (ta_host_time){ta_web_ticks(host, monotonic) + host->ticks_offset, wall};
+    return (ta_system_time){ta_web_ticks(host, monotonic) + host->ticks_offset, wall};
 }
 
 /* Both clocks, and quickjs's (its Date reads the real wall clock, which a

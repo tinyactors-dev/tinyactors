@@ -152,7 +152,7 @@ struct ta_system {
      * the highest handed out, are handed out from then on (ta_system_config,
      * last_serial) */
     uint32_t serials_exported;
-    uint64_t now, sequence, next_serial, serial_high;
+    uint64_t now, wall_ns, sequence, next_serial, serial_high; /* now: ta_system_time.monotonic */
     uint64_t stats_delivered, stats_fuel, stats_turns, stats_timers, stats_spawned,
         stats_traces_started, stats_traces_sampled; /* ta_system_stats */
     /* tracing (docs/adr/0006): the journal and the context pool (carved only

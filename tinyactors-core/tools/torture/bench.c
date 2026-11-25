@@ -460,7 +460,7 @@ static int system_create(const char *name, ta_source *source, uint32_t n,
         return -1;
     }
     ta_host_advance_time(system->host,
-                         (ta_host_time){(ta_time)(B.now * 1000), ta_runtime_now_ns()});
+                         (ta_system_time){(ta_time)(B.now * 1000), ta_runtime_now_ns()});
     if (system_add_version(system, source, n, message, capacity) < 0) {
         ta_host_free(system->host);
         ta_datamodel_ecmascript_free(system->ecmascript);
@@ -2164,13 +2164,13 @@ static void run_systems(void) {
         bench_system *system = &B.system[i];
         if (!system->live) continue;
         ta_host_advance_time(system->host,
-                             (ta_host_time){(ta_time)(B.now * 1000), ta_runtime_now_ns()});
+                             (ta_system_time){(ta_time)(B.now * 1000), ta_runtime_now_ns()});
         if (!system->busy && system->deadline > (uint64_t)(B.now * 1000)) continue;
         uint64_t t = ta_runtime_now_ns();
         ta_run result = ta_host_run(system->host, BUDGET);
         if (system->trace_mode == TRACE_OTLP) /* the run's records end at this wall time */
             ta_host_advance_time(system->host,
-                                 (ta_host_time){(ta_time)(B.now * 1000), ta_runtime_now_ns()});
+                                 (ta_system_time){(ta_time)(B.now * 1000), ta_runtime_now_ns()});
         trace_drain(system);
         system->busy_ms += (double)(ta_runtime_now_ns() - t) / 1e6;
         system->busy = 0; /* operations of this batch may make it busy again */

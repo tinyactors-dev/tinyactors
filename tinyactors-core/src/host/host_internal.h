@@ -174,6 +174,7 @@ struct ta_host {
     /* session -> segment, for sessions living outside their own range */
     session_map moved;
     ta_time now;
+    uint64_t now_wall_ns; /* the last ta_host_advance_time's wall clock, for new segments */
     /* effects of the current batch; effects and effect_strings have effect_capacity entries */
     ta_host_effect *effects;
     const ta_host_effect *published_effects; /* frozen until ack, including across growth */

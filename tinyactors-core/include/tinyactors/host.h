@@ -252,18 +252,13 @@ TA_API ta_status ta_host_terminate(ta_host *h, uint64_t session);
 TA_API ta_status ta_host_resume(ta_host *h, const ta_resume *resume);
 
 /* ---- running ------------------------------------------------------------------ */
-/* The host's clocks: `monotonic` drives timers, deadlines and TTLs (the
- * unit of <send delay>, as ta_system_advance_time); `wall_ns` is the time
- * of day, nanoseconds since the Unix epoch, that span times are
- * interpolated from (0: unknown). Neither goes back. */
-typedef struct ta_host_time {
-    ta_time monotonic;
-    uint64_t wall_ns;
-} ta_host_time;
-/* Move every segment's clock. With an encoder, the trace records written since the last
- * call are stamped between its wall time and this one: call it before each
- * run. */
-TA_API void ta_host_advance_time(ta_host *h, ta_host_time now);
+/* Move every segment's clocks (ta_system_time: `monotonic` drives timers,
+ * deadlines and TTLs; `wall_ns` is the time of day that span times are
+ * interpolated from and that a datamodel on the host's clock reads, 0:
+ * unknown; neither goes back). With an encoder, the trace records written
+ * since the last call are stamped between its wall time and this one: call
+ * it before each run. */
+TA_API void ta_host_advance_time(ta_host *h, ta_system_time now);
 /* Run segments with work for up to `budget` fuel in total, deliver sends
  * between them, advance migrations, free retired segments.
  * With an open effect batch, or from a guarded call, return TA_RUN_FAULT,

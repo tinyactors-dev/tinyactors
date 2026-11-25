@@ -539,7 +539,7 @@ static void ta_python_drain(ta_python_host *host) {         /* one batch at a ti
 static ta_python_next ta_python_turn(ta_python_host *host) {
     ta_python_drain(host);                                  /* what inputs and posts appended:
                                                                a pending reply needs no run */
-    ta_host_advance_time(host->h, ta_python_now(host));     /* ta_host_time: ticks at host.config's
+    ta_host_advance_time(host->h, ta_python_now(host));     /* ta_system_time: ticks at host.config's
                                                                rate, wall ns */
     for (;;) {
         ta_run run = ta_host_run(host->h, TA_PYTHON_BUDGET); /* bounded: fuel per call */
@@ -563,7 +563,7 @@ static ta_python_next ta_python_turn(ta_python_host *host) {
 ```
 
 `ta_run` and the statuses are `tinyactors-core/include/tinyactors/system.h:196-218`,
-`ta_host_time` is `host.h:205-208`. `ta_host_run` refuses while a batch
+`ta_system_time` is `system.h`'s. `ta_host_run` refuses while a batch
 is open (`TA_RUN_FAULT`, detail `TA_ERROR_STATE`), which the drain before each run rules out. There is no nested
 drain: Python code a handler runs may call the `Host` to add inputs, post
 or read views; it never takes or acks.

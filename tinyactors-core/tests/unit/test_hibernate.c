@@ -195,7 +195,7 @@ static void test_timer_wakes_actor(void) {
     size_t length = hibernate(&t, a, &status);
     CHECK_EQUAL(status, TA_OK); /* a pending delayed send stays resident */
     wakes_seen = 0;
-    ta_system_advance_time(t.system, 100);
+    ta_system_advance_time(t.system, (ta_system_time){100, 0});
     run_all(&t);
     CHECK_EQUAL(wakes_seen, 1);
     CHECK_EQUAL(ta_actor_wake(t.system, a, (ta_bytes){blob, length}), TA_OK);

@@ -4006,6 +4006,52 @@
       "kind": "opaque",
       "fields": []
     },
+    "ta_datamodel_time": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "monotonic",
+          "type": "ta_time"
+        },
+        {
+          "name": "ticks_per_second",
+          "type": "uint64_t"
+        },
+        {
+          "name": "wall_ns",
+          "type": "uint64_t"
+        }
+      ],
+      "layout": {
+        "x86_64": {
+          "size": 24,
+          "align": 8,
+          "offsets": {
+            "monotonic": 0,
+            "ticks_per_second": 8,
+            "wall_ns": 16
+          }
+        },
+        "aarch64": {
+          "size": 24,
+          "align": 8,
+          "offsets": {
+            "monotonic": 0,
+            "ticks_per_second": 8,
+            "wall_ns": 16
+          }
+        },
+        "wasm32": {
+          "size": 24,
+          "align": 8,
+          "offsets": {
+            "monotonic": 0,
+            "ticks_per_second": 8,
+            "wall_ns": 16
+          }
+        }
+      }
+    },
     "ta_event_view": {
       "kind": "struct",
       "fields": [
@@ -5478,6 +5524,45 @@
             "used": 8,
             "detail": 12,
             "next_deadline": 16
+          }
+        }
+      }
+    },
+    "ta_system_time": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "monotonic",
+          "type": "ta_time"
+        },
+        {
+          "name": "wall_ns",
+          "type": "uint64_t"
+        }
+      ],
+      "layout": {
+        "x86_64": {
+          "size": 16,
+          "align": 8,
+          "offsets": {
+            "monotonic": 0,
+            "wall_ns": 8
+          }
+        },
+        "aarch64": {
+          "size": 16,
+          "align": 8,
+          "offsets": {
+            "monotonic": 0,
+            "wall_ns": 8
+          }
+        },
+        "wasm32": {
+          "size": 16,
+          "align": 8,
+          "offsets": {
+            "monotonic": 0,
+            "wall_ns": 8
           }
         }
       }
@@ -7689,45 +7774,6 @@
         }
       }
     },
-    "ta_host_time": {
-      "kind": "struct",
-      "fields": [
-        {
-          "name": "monotonic",
-          "type": "ta_time"
-        },
-        {
-          "name": "wall_ns",
-          "type": "uint64_t"
-        }
-      ],
-      "layout": {
-        "x86_64": {
-          "size": 16,
-          "align": 8,
-          "offsets": {
-            "monotonic": 0,
-            "wall_ns": 8
-          }
-        },
-        "aarch64": {
-          "size": 16,
-          "align": 8,
-          "offsets": {
-            "monotonic": 0,
-            "wall_ns": 8
-          }
-        },
-        "wasm32": {
-          "size": 16,
-          "align": 8,
-          "offsets": {
-            "monotonic": 0,
-            "wall_ns": 8
-          }
-        }
-      }
-    },
     "ta_host_effect": {
       "kind": "struct",
       "fields": [
@@ -9167,6 +9213,23 @@
       "implemented": true
     },
     {
+      "name": "ta_datamodel_environment_time",
+      "returns": "ta_status",
+      "params": [
+        {
+          "name": "environment",
+          "type": "const ta_datamodel_environment *"
+        },
+        {
+          "name": "out",
+          "type": "ta_datamodel_time *"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
       "name": "ta_datamodel_null",
       "returns": "const ta_datamodel_vtable *",
       "params": [],
@@ -9316,7 +9379,7 @@
         },
         {
           "name": "now",
-          "type": "ta_host_time"
+          "type": "ta_system_time"
         }
       ],
       "public": true,
@@ -10981,7 +11044,7 @@
         },
         {
           "name": "now",
-          "type": "ta_time"
+          "type": "ta_system_time"
         }
       ],
       "public": true,

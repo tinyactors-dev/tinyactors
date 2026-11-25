@@ -2352,3 +2352,11 @@ const ta_image *ta_datamodel_environment_image(const ta_datamodel_environment *e
 uint32_t ta_datamodel_environment_chart(const ta_datamodel_environment *environment) {
     return environment->instance->chart;
 }
+ta_status ta_datamodel_environment_time(const ta_datamodel_environment *environment,
+                                        ta_datamodel_time *out) {
+    if (!environment) return TA_ERROR_STATE;
+    out->monotonic = environment->core->trace_now;
+    out->ticks_per_second = environment->core->ticks_per_second;
+    out->wall_ns = environment->core->wall_ns;
+    return TA_OK;
+}

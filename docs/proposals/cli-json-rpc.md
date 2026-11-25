@@ -1168,7 +1168,7 @@ command is `tool_serve`):
 
 ```c
 typedef struct tool_clock {
-    ta_host_time now;
+    ta_system_time now;
     uint64_t ticks_per_second; /* host.config's, read once */
 } tool_clock;
 

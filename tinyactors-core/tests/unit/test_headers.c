@@ -35,6 +35,21 @@ ABI_CHECK(offsetof(ta_datamodel_ecmascript_config, realm) >
 ABI_CHECK(offsetof(ta_datamodel_ecmascript_config, abort_flag) >
               offsetof(ta_datamodel_ecmascript_config, realm),
           ecmascript_config_abort_last);
+ABI_CHECK(offsetof(ta_datamodel_ecmascript_config, random_seed) >
+                  offsetof(ta_datamodel_ecmascript_config, abort_flag) &&
+              offsetof(ta_datamodel_ecmascript_config, random_seed) % 8 == 0,
+          ecmascript_config_seed_after_abort);
+ABI_CHECK(offsetof(ta_datamodel_ecmascript_config, clock) ==
+              offsetof(ta_datamodel_ecmascript_config, random_seed) + 8,
+          ecmascript_config_clock_last);
+ABI_CHECK(sizeof(((ta_datamodel_ecmascript_config *)0)->clock) == 4, ecmascript_config_clock_u32);
+ABI_CHECK(TA_DATAMODEL_ECMASCRIPT_CLOCK_ENGINE == 0 && TA_DATAMODEL_ECMASCRIPT_CLOCK_HOST == 1,
+          ecmascript_clock_values);
+ABI_CHECK(sizeof(ta_system_time) == 16 && offsetof(ta_system_time, wall_ns) == 8,
+          system_time_two_clocks);
+ABI_CHECK(sizeof(ta_datamodel_time) == 24 && offsetof(ta_datamodel_time, ticks_per_second) == 8 &&
+              offsetof(ta_datamodel_time, wall_ns) == 16,
+          datamodel_time_layout);
 ABI_CHECK(offsetof(ta_compile_options, size) == 0, compile_options_size_first);
 ABI_CHECK(offsetof(ta_resolve_request, scratch) == 2 * sizeof(ta_string_view),
           resolve_request_scratch_last);

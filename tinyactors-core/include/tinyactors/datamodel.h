@@ -31,6 +31,19 @@ TA_API void ta_datamodel_environment_charge(ta_datamodel_environment *environmen
                                             uint32_t fuel); /* report expensive work */
 TA_API const ta_image *ta_datamodel_environment_image(const ta_datamodel_environment *environment);
 TA_API uint32_t ta_datamodel_environment_chart(const ta_datamodel_environment *environment);
+/* The system's clocks during an evaluation, as its last ta_system_advance_time
+ * set them: `monotonic` in ticks of `ticks_per_second` (the system's config),
+ * `wall_ns` the time of day in nanoseconds since the Unix epoch (0 when the
+ * embedder gives none). Within one run every read gives the same time.
+ * TA_ERROR_STATE outside an evaluation: a NULL environment, which the
+ * entries that run outside a step get. */
+typedef struct ta_datamodel_time {
+    ta_time monotonic;
+    uint64_t ticks_per_second;
+    uint64_t wall_ns;
+} ta_datamodel_time;
+TA_API ta_status ta_datamodel_environment_time(const ta_datamodel_environment *environment,
+                                               ta_datamodel_time *out);
 
 /* Borrowed view of an event for binding `_event`. The strings are valid only
  * during the bind_event call (copy what you need). `data` stays valid until

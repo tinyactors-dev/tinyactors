@@ -204,7 +204,7 @@ static const char *test_run(w3c_test *test) {
         }
         if (run.status == TA_RUN_IDLE) {
             if (run.next_deadline == UINT64_MAX) break;
-            ta_host_advance_time(test->host, (ta_host_time){run.next_deadline, 0});
+            ta_host_advance_time(test->host, (ta_system_time){run.next_deadline, 0});
         }
     }
     return outcome ? outcome : "timeout";

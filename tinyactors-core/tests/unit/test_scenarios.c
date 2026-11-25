@@ -224,17 +224,17 @@ static void s07_delayed_send(void) {
     peer_setup(&t, &a, &b);
     tsys_run(&t, 100000, 5);
     t.log[0] = 0;
-    ta_system_advance_time(t.system, 1000);
+    ta_system_advance_time(t.system, (ta_system_time){1000, 0});
     tsys_send(&t, a, "arm", NULL);
     tsys_send(&t, a, "arm2", NULL);
     ta_run result = ta_system_run(t.system, 100000);
     tsys_drain(&t);
     CHECK_EQUAL(result.next_deadline, 3000); /* 2 s at 1000 ticks/s, armed at t=1000 */
     CHECK_EQUAL(t.system->timers.used, 1);   /* t2 was cancelled */
-    ta_system_advance_time(t.system, 2999);
+    ta_system_advance_time(t.system, (ta_system_time){2999, 0});
     tsys_run(&t, 100000, 5);
     CHECK(strcmp(t.log, "") == 0);
-    ta_system_advance_time(t.system, 3000);
+    ta_system_advance_time(t.system, (ta_system_time){3000, 0});
     tsys_run(&t, 100000, 5);
     CHECK(strcmp(t.log, "later=B;") == 0);
     CHECK_EQUAL(ta_system_next_deadline(t.system), UINT64_MAX);

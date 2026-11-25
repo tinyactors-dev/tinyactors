@@ -169,7 +169,7 @@ static void world_open(world *w, int telemetry) {
     CHECK_EQUAL(ta_host_spawn(w->host, &spawn, &w->session), TA_OK);
     spawn.name = (ta_string_view){"h", 1};
     CHECK_EQUAL(ta_host_spawn(w->host, &spawn, &w->other), TA_OK);
-    ta_host_advance_time(w->host, (ta_host_time){1, 1700000000000000000ull});
+    ta_host_advance_time(w->host, (ta_system_time){1, 1700000000000000000ull});
     run_once(w);
 }
 

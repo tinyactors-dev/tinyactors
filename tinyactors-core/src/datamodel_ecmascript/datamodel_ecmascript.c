@@ -116,6 +116,13 @@ struct ta_datamodel_ecmascript {
     ta_datamodel_environment
         *environment; /* of the vtable call in progress (NULL outside one): JS work is charged */
     const volatile int *abort_flag; /* the host's "stop now" (ta_datamodel_ecmascript_config) */
+    /* Math.random's xorshift64* state, one per datamodel (0: the engine's
+     * own, per context), and the clock Date and performance.now() read
+     * (ta_datamodel_ecmascript_config); `time` is the system's clocks as the
+     * last evaluation read them */
+    uint64_t random_state;
+    uint32_t time_source; /* a ta_datamodel_ecmascript_clock */
+    ta_datamodel_time time;
     size_t stack_size;              /* the engine's stack limit (bytes) */
     /* where the last to_wire, serialize or payload_serialize was written: the
      * view it gave is valid until the next call (datamodel.h); it keeps the
@@ -728,6 +735,137 @@ static JSValue js_in(JSContext *context, JSValueConst this_value, int argc, JSVa
                       state != TA_NIL && ta_datamodel_environment_in(instance->environment, state));
 }
 
+/* ---- Math.random, Date and performance.now() on request -------------------------------
+ * The engine seeds Math.random from the time of day per context and reads the
+ * machine's clocks for Date and performance.now(), with no hook for either
+ * (quickjs-ng 0.17.0). So, when the config asks, every context that runs a
+ * chart's code gets replacements: a Math.random drawing from the datamodel's
+ * one generator, and a Date and performance.now() reading the system's
+ * clocks through the environment of the evaluation in progress. */
+
+/* quickjs's own generator (xorshift64*), with its state in the datamodel */
+static uint64_t random_next(uint64_t *state) {
+    uint64_t x = *state;
+    x ^= x >> 12;
+    x ^= x << 25;
+    x ^= x >> 27;
+    *state = x;
+    return x * 0x2545F4914F6CDD1Dull;
+}
+
+/* The first state from a seed (splitmix64's mix), so that nearby seeds start
+ * far apart; never 0, which xorshift never leaves. */
+static uint64_t random_state_of(uint64_t seed) {
+    uint64_t z = seed + 0x9E3779B97F4A7C15ull;
+    z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9ull;
+    z = (z ^ (z >> 27)) * 0x94D049BB133111EBull;
+    z ^= z >> 31;
+    return z ? z : 0x9E3779B97F4A7C15ull;
+}
+
+static ta_datamodel_ecmascript *datamodel_of(JSContext *context) {
+    return (ta_datamodel_ecmascript *)JS_GetRuntimeOpaque(JS_GetRuntime(context));
+}
+
+/* 2^-53: the 53 high bits of a draw as a double in [0, 1) */
+static const double random_unit = 1.0 / 9007199254740992.0;
+
+static JSValue js_random(JSContext *context, JSValueConst this_value, int argc,
+                         JSValueConst *argv) {
+    (void)this_value, (void)argc, (void)argv;
+    uint64_t bits = random_next(&datamodel_of(context)->random_state);
+    return JS_NewFloat64(context, (double)(bits >> 11) * random_unit);
+}
+
+/* The system's clocks as the evaluation in progress reads them; outside one,
+ * what the last evaluation read. */
+static ta_datamodel_time clock_now(ta_datamodel_ecmascript *ecmascript) {
+    ta_datamodel_time time;
+    if (ecmascript->environment &&
+        ta_datamodel_environment_time(ecmascript->environment, &time) == TA_OK)
+        ecmascript->time = time;
+    return ecmascript->time;
+}
+
+/* Date.now(): the wall clock in whole milliseconds since the epoch */
+static JSValue js_wall_now(JSContext *context, JSValueConst this_value, int argc,
+                           JSValueConst *argv) {
+    (void)this_value, (void)argc, (void)argv;
+    ta_datamodel_time time = clock_now(datamodel_of(context));
+    return JS_NewFloat64(context, (double)(time.wall_ns / 1000000u));
+}
+
+/* performance.now(): the monotonic clock in milliseconds */
+static JSValue js_monotonic_now(JSContext *context, JSValueConst this_value, int argc,
+                                JSValueConst *argv) {
+    (void)this_value, (void)argc, (void)argv;
+    ta_datamodel_time time = clock_now(datamodel_of(context));
+    double milliseconds = time.ticks_per_second ? (double)time.monotonic * 1000.0 /
+                                                      (double)time.ticks_per_second
+                                                : 0.0;
+    return JS_NewFloat64(context, milliseconds);
+}
+
+/* Installs what it is given: Math.random; a `performance` whose now() is
+ * `monotonic` and whose timeOrigin is 0 (the engine's `now` cannot be
+ * redefined, and its timeOrigin is the machine's time); and a Date whose call
+ * without arguments, call as a function and Date.now() read `wall`, over the
+ * intrinsic Date.prototype (instanceof and every method hold). Each property
+ * keeps the builtin's attributes. */
+static const char CLOCKS_JS[] =
+    "(function (random, wall, monotonic) {\n"
+    "'use strict';\n"
+    "const property = (value) => ({ value, writable: true, enumerable: false, configurable: true });\n"
+    "if (random) Object.defineProperty(Math, 'random', property(random));\n"
+    "if (monotonic) {\n"
+    "  const clock = {};\n"
+    "  Object.defineProperty(clock, 'now', { value: monotonic, enumerable: true });\n"
+    "  Object.defineProperty(clock, 'timeOrigin', { value: 0, enumerable: true });\n"
+    "  Object.defineProperty(globalThis, 'performance', { ...property(clock), enumerable: true });\n"
+    "}\n"
+    "if (!wall) return;\n"
+    "const Intrinsic = Date;\n"
+    "const Clocked = function Date(...values) {\n"
+    "  if (new.target === undefined) return Intrinsic.prototype.toString.call(new Intrinsic(wall()));\n"
+    "  return Reflect.construct(Intrinsic, values.length ? values : [wall()], new.target);\n"
+    "};\n"
+    "Object.defineProperty(Clocked, 'length', { value: 7, writable: false, enumerable: false, configurable: true });\n"
+    "Object.defineProperty(Clocked, 'prototype', { value: Intrinsic.prototype, writable: false, enumerable: false, configurable: false });\n"
+    "Object.defineProperty(Clocked, 'now', property(wall));\n"
+    "Object.defineProperty(Clocked, 'UTC', property(Intrinsic.UTC));\n"
+    "Object.defineProperty(Clocked, 'parse', property(Intrinsic.parse));\n"
+    "Object.defineProperty(Intrinsic.prototype, 'constructor', property(Clocked));\n"
+    "Object.defineProperty(globalThis, 'Date', property(Clocked));\n"
+    "})";
+
+enum { CLOCKS_ARGUMENTS = 3 };
+
+/* The replacements the config asks for, in `context` (before the shared realm
+ * is frozen). 1 when done or none is asked, 0 if out of memory. */
+static int clocks_install(ta_datamodel_ecmascript *ecmascript, JSContext *context) {
+    int host_clock = ecmascript->time_source == TA_DATAMODEL_ECMASCRIPT_CLOCK_HOST;
+    if (!ecmascript->random_state && !host_clock) return 1;
+    JSValue install =
+        JS_Eval(context, CLOCKS_JS, sizeof CLOCKS_JS - 1, "<clocks>", JS_EVAL_TYPE_GLOBAL);
+    if (JS_IsException(install)) {
+        clear_exception(context);
+        return 0;
+    }
+    JSValue arguments[CLOCKS_ARGUMENTS] = {
+        ecmascript->random_state ? JS_NewCFunction(context, js_random, "random", 0)
+                                 : JS_UNDEFINED,
+        host_clock ? JS_NewCFunction(context, js_wall_now, "now", 0) : JS_UNDEFINED,
+        host_clock ? JS_NewCFunction(context, js_monotonic_now, "now", 0) : JS_UNDEFINED};
+    JSValue result = JS_Call(context, install, JS_UNDEFINED, CLOCKS_ARGUMENTS, arguments);
+    int installed = !JS_IsException(result);
+    if (!installed) clear_exception(context);
+    JS_FreeValue(context, result);
+    for (uint32_t i = 0; i < CLOCKS_ARGUMENTS; i++)
+        JS_FreeValue(context, arguments[i]);
+    JS_FreeValue(context, install);
+    return installed;
+}
+
 /* ---- what a chart's <script>s declare at the top level ---------------------------------
  * Shared-realm scripts run as a strict function body, so `var` and top-level
  * let/const/function/class would become locals instead of session globals
@@ -1194,6 +1332,10 @@ static JSContext *shared_realm(ta_datamodel_ecmascript *ecmascript) {
     JSValue g = JS_GetGlobalObject(context);
     JS_DefinePropertyValueStr(context, g, "In", JS_NewCFunction(context, js_in, "In", 1), 0);
     JS_FreeValue(context, g);
+    if (!clocks_install(ecmascript, context)) {
+        JS_FreeContext(context);
+        return NULL;
+    }
     static const char lock[] = "Object.freeze(globalThis);";
     JSValue r = JS_Eval(context, XML_PRELUDE, sizeof XML_PRELUDE - 1, "<xml>", JS_EVAL_TYPE_GLOBAL);
     if (!JS_IsException(r)) {
@@ -1366,6 +1508,14 @@ static int instance_realm(ta_datamodel_ecmascript *ecmascript, ecmascript_instan
                               JS_NewCFunction(instance->context, js_in, "In", 1),
                               JS_PROP_CONFIGURABLE);
     JS_FreeValue(instance->context, g);
+    if (!clocks_install(ecmascript, instance->context)) {
+        JS_FreeContext(instance->context);
+        free(instance->getter);
+        free(instance->setter);
+        instance->context = NULL;
+        instance->getter = instance->setter = NULL;
+        return 0;
+    }
     return 1;
 }
 
@@ -3457,7 +3607,26 @@ const ta_datamodel_vtable *ta_datamodel_ecmascript_vtable(void) {
     return &ecmascript_vtable;
 }
 
+/* The fields the caller's struct holds (by its size, the fields up to realm
+ * in any), copied; then every default, here and nowhere else: a field 0
+ * keeps the engine's behaviour or the documented default. */
+static ta_datamodel_ecmascript_config config_normalize(const ta_datamodel_ecmascript_config *config) {
+    ta_datamodel_ecmascript_config effective;
+    memset(&effective, 0, sizeof effective);
+    if (config) {
+        size_t size = config->size;
+        if (size < offsetof(ta_datamodel_ecmascript_config, realm)) /* before realm: always read */
+            size = offsetof(ta_datamodel_ecmascript_config, realm);
+        memcpy(&effective, config, size < sizeof effective ? size : sizeof effective);
+    }
+    effective.size = (uint32_t)sizeof effective;
+    if (!effective.max_ops) effective.max_ops = TA_DATAMODEL_ECMASCRIPT_MAX_OPS_DEFAULT;
+    if (!effective.stack_limit) effective.stack_limit = JS_DEFAULT_STACK_SIZE;
+    return effective;
+}
+
 ta_datamodel_ecmascript *ta_datamodel_ecmascript_new(const ta_datamodel_ecmascript_config *config) {
+    ta_datamodel_ecmascript_config effective = config_normalize(config);
     ta_datamodel_ecmascript *ecmascript = (ta_datamodel_ecmascript *)calloc(1, sizeof *ecmascript);
     if (!ecmascript) return NULL;
     static const JSMallocFunctions mf = {ecmascript_alloc_calloc, ecmascript_alloc_malloc,
@@ -3468,22 +3637,25 @@ ta_datamodel_ecmascript *ta_datamodel_ecmascript_new(const ta_datamodel_ecmascri
         free(ecmascript);
         return NULL;
     }
-    ecmascript->max_ops = config && config->max_ops ? config->max_ops : TA_DATAMODEL_ECMASCRIPT_MAX_OPS_DEFAULT;
-    ta_datamodel_ecmascript_set_memory_limit(ecmascript, config ? config->memory_limit : 0);
-    ecmascript->stack_size =
-        config && config->stack_limit ? config->stack_limit : JS_DEFAULT_STACK_SIZE;
+    ecmascript->max_ops = effective.max_ops;
+    ta_datamodel_ecmascript_set_memory_limit(ecmascript, effective.memory_limit);
+    ecmascript->stack_size = effective.stack_limit;
     JS_SetMaxStackSize(ecmascript->runtime, ecmascript->stack_size);
     JS_SetInterruptHandler(ecmascript->runtime, interrupt, ecmascript);
-    if (config &&
-        config->size >= offsetof(ta_datamodel_ecmascript_config, realm) + sizeof config->realm)
-        ecmascript->realm = config->realm;
-    if (config && config->size >= offsetof(ta_datamodel_ecmascript_config, abort_flag) +
-                                      sizeof config->abort_flag)
-        ecmascript->abort_flag = config->abort_flag;
+    ecmascript->realm = effective.realm;
+    ecmascript->abort_flag = effective.abort_flag;
+    ecmascript->random_state = effective.random_seed ? random_state_of(effective.random_seed) : 0;
+    ecmascript->time_source = effective.clock;
     JS_SetRuntimeOpaque(ecmascript->runtime, ecmascript);
-    ecmascript->auxiliary = JS_NewContext(ecmascript->runtime);
     ecmascript->base = ecmascript->explain = JS_UNDEFINED;
     ecmascript->payload_free = ecmascript->iteration_free = ecmascript->free_slot = NONE;
+    ecmascript->auxiliary = JS_NewContext(ecmascript->runtime);
+    if (!ecmascript->auxiliary || !clocks_install(ecmascript, ecmascript->auxiliary)) {
+        if (ecmascript->auxiliary) JS_FreeContext(ecmascript->auxiliary);
+        JS_FreeRuntime(ecmascript->runtime);
+        free(ecmascript);
+        return NULL;
+    }
     return ecmascript;
 }
 
@@ -3610,6 +3782,8 @@ ta_status ta_datamodel_ecmascript_snapshot(ta_datamodel_ecmascript *ecmascript, 
     JS_SetPropertyStr(context, o, "i", instances);
     JS_SetPropertyStr(context, o, "p", pays);
     JS_SetPropertyStr(context, o, "t", iters);
+    if (ecmascript->random_state) /* the seeded generator goes on after a restore */
+        JS_SetPropertyStr(context, o, "r", JS_NewBigUint64(context, ecmascript->random_state));
     if (status == TA_OK) {
         size_t sz = 0;
         uint8_t *bytes = write_obj(ecmascript, context, o, &sz); /* what is written can be read */
@@ -3825,6 +3999,14 @@ ta_status ta_datamodel_ecmascript_restore(ta_datamodel_ecmascript *ecmascript, t
             ecmascript->iterations[i].count = ecmascript->iteration_free;
             ecmascript->iteration_free = i;
         }
+    /* the seeded generator's state: a datamodel seeded too goes on from it */
+    JSValue random = JS_GetPropertyStr(context, o, "r");
+    uint64_t random_state = 0;
+    if (status == TA_OK && ecmascript->random_state && JS_IsBigInt(random) &&
+        JS_ToBigUint64(context, &random_state, random) == 0 && random_state)
+        ecmascript->random_state = random_state;
+    clear_exception(context);
+    JS_FreeValue(context, random);
     JS_FreeValue(context, instances);
     JS_FreeValue(context, pays);
     JS_FreeValue(context, iters);

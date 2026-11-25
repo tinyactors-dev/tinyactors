@@ -66,7 +66,7 @@ static void run_once(world *w) {
 }
 
 static void advance(world *w, ta_time monotonic) {
-    ta_host_advance_time(w->host, (ta_host_time){monotonic, 1700000000000000000ull + monotonic});
+    ta_host_advance_time(w->host, (ta_system_time){monotonic, 1700000000000000000ull + monotonic});
 }
 
 /* Version one with an actor, version two linked (one is retired, its actor

@@ -100,10 +100,10 @@ uint64_t ta_python_ticks_after(const ta_python_host *host, uint64_t nanoseconds)
     return back < nanoseconds ? ticks + 1 : ticks;
 }
 
-static ta_host_time ta_python_now(ta_python_host *host) {
+static ta_system_time ta_python_now(ta_python_host *host) {
     if (host->clock != Py_None) { /* the simulated time is the wall clock too */
         uint64_t nanoseconds = ta_python_clock_now(host->clock);
-        return (ta_host_time){ta_python_ticks(host, (ta_python_rate){nanoseconds, ta_python_billion}) + host->ticks_offset,
+        return (ta_system_time){ta_python_ticks(host, (ta_python_rate){nanoseconds, ta_python_billion}) + host->ticks_offset,
                               nanoseconds};
     }
     uint64_t wall = 0;
@@ -116,7 +116,7 @@ static ta_host_time ta_python_now(ta_python_host *host) {
         PyErr_Clear(); /* 0: unknown (host.h) */
         wall = 0;
     }
-    return (ta_host_time){ta_python_ticks(host, (ta_python_rate){ta_runtime_now_ns(), ta_python_billion}) + host->ticks_offset,
+    return (ta_system_time){ta_python_ticks(host, (ta_python_rate){ta_runtime_now_ns(), ta_python_billion}) + host->ticks_offset,
                           wall};
 }
 

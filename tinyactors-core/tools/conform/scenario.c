@@ -279,7 +279,7 @@ static int step_advance(scenario *run, const scenario_step *step) {
     const ta_cbor_token *ticks = &run->call->document.tokens[step->value];
     if (ticks->kind != TA_CBOR_UINT) return malformed(run, step->index, "advance takes ticks");
     run->now += (ta_time)ticks->value;
-    ta_host_advance_time(run->host, (ta_host_time){run->now, 0});
+    ta_host_advance_time(run->host, (ta_system_time){run->now, 0});
     return 1;
 }
 

@@ -381,7 +381,7 @@ static int system_new(world *w, int k, uint64_t first_serial) {
                                           0},
                        &w->systems[i].system) != TA_OK)
         return -1;
-    ta_system_advance_time(w->systems[i].system, w->now);
+    ta_system_advance_time(w->systems[i].system, (ta_system_time){w->now, 0});
     return i;
 }
 
@@ -575,9 +575,9 @@ static void world_send(world *w, const char *root, const char *event_name, const
 
 static void world_advance(world *w, ta_time dt) {
     w->now += dt;
-    if (w->host) ta_host_advance_time(w->host, (ta_host_time){w->now, 0});
+    if (w->host) ta_host_advance_time(w->host, (ta_system_time){w->now, 0});
     for (int i = 0; !w->host && i < w->system_count; i++)
-        ta_system_advance_time(w->systems[i].system, w->now);
+        ta_system_advance_time(w->systems[i].system, (ta_system_time){w->now, 0});
 }
 
 /* the host world's live segments as w->systems (for inspection) */
@@ -1105,7 +1105,7 @@ static void world_init_host(world *w, const char *label) {
     CHECK_EQUAL(test_host_new(&config, &w->host), TA_OK);
     CHECK_EQUAL(ta_host_add_image(w->host, ta_image_bytes(&test_images[0]), &segment), TA_OK);
     w->segment_image[segment] = 0;
-    ta_host_advance_time(w->host, (ta_host_time){0, 0});
+    ta_host_advance_time(w->host, (ta_system_time){0, 0});
 }
 
 static void world_init(world *w, const char *label) {
@@ -1219,7 +1219,7 @@ static int mini_system(mini *m, uint64_t first_serial) {
             &(ta_system_setup){{m->memory, length}, &m->image, &config, &m->binding, 1, 0},
             &m->system) != TA_OK)
         return 0;
-    ta_system_advance_time(m->system, m->now);
+    ta_system_advance_time(m->system, (ta_system_time){m->now, 0});
     return 1;
 }
 
@@ -1287,7 +1287,7 @@ static void mini_send(mini *m, uint32_t a, const char *event_name) {
 
 static void mini_advance(mini *m, ta_time dt) {
     m->now += dt;
-    ta_system_advance_time(m->system, m->now);
+    ta_system_advance_time(m->system, (ta_system_time){m->now, 0});
     mini_run(m);
 }
 

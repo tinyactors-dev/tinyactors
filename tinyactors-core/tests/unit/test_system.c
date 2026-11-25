@@ -340,7 +340,7 @@ static void test_timer_exhaustion(void) {
     t.memory = memory2;
     t.system = s2;
     CHECK_EQUAL(tsys_run(&t, 100000, 10), TA_RUN_IDLE);
-    ta_system_advance_time(t.system, 10);
+    ta_system_advance_time(t.system, (ta_system_time){10, 0});
     tsys_run(&t, 100000, 10);
     CHECK(strcmp(tsys_config(&t, a), "a") == 0); /* no error.execution */
     CHECK(strcmp(tsys_var(&t, a, "n"), "3") == 0);

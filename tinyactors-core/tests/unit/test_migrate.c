@@ -153,8 +153,8 @@ static void run(world *w) {
 
 static void advance(world *w, ta_time ms) {
     w->now += ms;
-    ta_system_advance_time(w->system[0], w->now);
-    ta_system_advance_time(w->system[1], w->now);
+    ta_system_advance_time(w->system[0], (ta_system_time){w->now, 0});
+    ta_system_advance_time(w->system[1], (ta_system_time){w->now, 0});
     run(w);
 }
 

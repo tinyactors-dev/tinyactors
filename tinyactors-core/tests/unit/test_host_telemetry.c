@@ -136,7 +136,7 @@ static void ping(world *w, uint32_t count) {
 }
 
 static void advance(world *w, ta_time monotonic) {
-    ta_host_advance_time(w->host, (ta_host_time){monotonic, 1700000000000000000ull + monotonic});
+    ta_host_advance_time(w->host, (ta_system_time){monotonic, 1700000000000000000ull + monotonic});
 }
 
 static uint32_t span_count(const void *bytes, size_t length) {

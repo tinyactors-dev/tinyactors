@@ -212,7 +212,7 @@ static void clock_advance(conform *state, conform_call *call, conform_result *re
     ta_host *host = host_of(state, call);
     int64_t monotonic = 0, wall = 0;
     if (!host || !conform_integer(call, "monotonic", &monotonic) || !conform_integer(call, "wallNs", &wall)) return;
-    ta_host_advance_time(host, (ta_host_time){(ta_time)monotonic, (uint64_t)wall});
+    ta_host_advance_time(host, (ta_system_time){(ta_time)monotonic, (uint64_t)wall});
 }
 
 /* The sends to the host's transport of the batch ta_host_effects

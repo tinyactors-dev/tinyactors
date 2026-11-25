@@ -200,6 +200,8 @@ static void rebind(ta_system *system, const ta_image *image) {
     core->contexts = tracing ? &system->contexts : (ta_pool *)0;
     core->trace_clock = system->fuel_clock;
     core->trace_now = system->now;
+    core->wall_ns = system->wall_ns;
+    core->ticks_per_second = system->config.ticks_per_second;
     ta_system_trace_policy_apply(system);
 }
 

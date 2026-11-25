@@ -9,6 +9,14 @@
   ],
   "constants": [
     {
+      "name": "TA_DATAMODEL_ECMASCRIPT_CLOCK_ENGINE",
+      "value": 0
+    },
+    {
+      "name": "TA_DATAMODEL_ECMASCRIPT_CLOCK_HOST",
+      "value": 1
+    },
+    {
       "name": "TA_DATAMODEL_ECMASCRIPT_MAX_OPS_DEFAULT",
       "value": 10000
     },
@@ -56,11 +64,19 @@
         {
           "name": "abort_flag",
           "type": "const volatile int *"
+        },
+        {
+          "name": "random_seed",
+          "type": "uint64_t"
+        },
+        {
+          "name": "clock",
+          "type": "uint32_t"
         }
       ],
       "layout": {
         "x86_64": {
-          "size": 40,
+          "size": 56,
           "align": 8,
           "offsets": {
             "size": 0,
@@ -68,11 +84,13 @@
             "memory_limit": 8,
             "stack_limit": 16,
             "realm": 24,
-            "abort_flag": 32
+            "abort_flag": 32,
+            "random_seed": 40,
+            "clock": 48
           }
         },
         "aarch64": {
-          "size": 40,
+          "size": 56,
           "align": 8,
           "offsets": {
             "size": 0,
@@ -80,22 +98,33 @@
             "memory_limit": 8,
             "stack_limit": 16,
             "realm": 24,
-            "abort_flag": 32
+            "abort_flag": 32,
+            "random_seed": 40,
+            "clock": 48
           }
         },
         "wasm32": {
-          "size": 24,
-          "align": 4,
+          "size": 40,
+          "align": 8,
           "offsets": {
             "size": 0,
             "max_ops": 4,
             "memory_limit": 8,
             "stack_limit": 12,
             "realm": 16,
-            "abort_flag": 20
+            "abort_flag": 20,
+            "random_seed": 24,
+            "clock": 32
           }
         }
       }
+    },
+    "ta_datamodel_ecmascript_clock": {
+      "kind": "enum",
+      "constants": [
+        "TA_DATAMODEL_ECMASCRIPT_CLOCK_ENGINE",
+        "TA_DATAMODEL_ECMASCRIPT_CLOCK_HOST"
+      ]
     }
   },
   "functions": [

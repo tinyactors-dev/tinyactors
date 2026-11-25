@@ -299,7 +299,7 @@ static void test_delayed_send(void) {
     tsys_run(&t, 10000, 5);
     CHECK_EQUAL(send_traced(&t, a, "go", PARENT), TA_OK);
     tsys_run(&t, 10000, 5);
-    ta_system_advance_time(t.system, 2000);
+    ta_system_advance_time(t.system, (ta_system_time){2000, 0});
     tsys_run(&t, 10000, 5);
     collect(&t);
     uint64_t s = session_of(&t, a);
@@ -340,7 +340,7 @@ static void test_delayed_send(void) {
               !(spawned->flags & TA_TRACE_FLAG_SAMPLED));
     forget();
     CHECK_EQUAL(ta_system_trace_set(t.system, sampling(1, 1)), TA_OK); /* sample everything again */
-    ta_system_advance_time(t.system, 2000);
+    ta_system_advance_time(t.system, (ta_system_time){2000, 0});
     tsys_run(&t, 10000, 5);
     collect(&t);
     /* the delayed send kept its unsampled trace (docs/adr/0007): the ratio
@@ -539,7 +539,7 @@ static void test_relocation(void) {
     free(t.memory);
     t.memory = memory;
     t.system = moved;
-    ta_system_advance_time(t.system, 2000);
+    ta_system_advance_time(t.system, (ta_system_time){2000, 0});
     tsys_run(&t, 10000, 5);
     collect(&t);
     uint64_t s = session_of(&t, a);
@@ -657,7 +657,7 @@ static void test_export_adopt(void) {
     length = written.length;
     uint32_t adopted = 0;
     CHECK_EQUAL(ta_system_adopt(u.system, (ta_bytes){blob, length}, &adopted), TA_OK);
-    ta_system_advance_time(u.system, 2000);
+    ta_system_advance_time(u.system, (ta_system_time){2000, 0});
     tsys_run(&u, 10000, 5);
     collect(&u);
     const ta_trace_record *tick = find(TA_TRACE_MACROSTEP_BEGIN, 1, ~(uint64_t)0, "tick");
@@ -854,7 +854,7 @@ static void test_rules(void) {
     chain_round(&t);
     CHECK_EQUAL(count_kind(TA_TRACE_MACROSTEP_BEGIN), 0); /* the bucket is empty */
     forget();
-    ta_system_advance_time(t.system, 2 * config.ticks_per_second);
+    ta_system_advance_time(t.system, (ta_system_time){2 * config.ticks_per_second, 0});
     chain_round(&t);
     CHECK(count_kind(TA_TRACE_MACROSTEP_BEGIN) > 0);
     forget();

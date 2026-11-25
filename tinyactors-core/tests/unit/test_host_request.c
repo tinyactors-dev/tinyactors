@@ -123,7 +123,7 @@ static void world_close(world *w) {
 static void settle(world *w) {
     ta_run result;
     do {
-        ta_host_advance_time(w->host, (ta_host_time){0, 1700000000000000000ull});
+        ta_host_advance_time(w->host, (ta_system_time){0, 1700000000000000000ull});
         result = ta_host_run(w->host, 1000000);
         const ta_host_effect *effects;
         ta_host_effects(w->host, &effects);
@@ -164,7 +164,7 @@ static void world_ask(world *w, host_ask *a, const char *method) {
 static void settle_at(world *w, uint64_t now) {
     ta_run result;
     do {
-        ta_host_advance_time(w->host, (ta_host_time){now, 1700000000000000000ull});
+        ta_host_advance_time(w->host, (ta_system_time){now, 1700000000000000000ull});
         result = ta_host_run(w->host, 1000000);
         const ta_host_effect *effects;
         ta_host_effects(w->host, &effects);

@@ -183,6 +183,8 @@ quickjs (`ta_datamodel_ecmascript_new`,
 | `max_ops` | `TA_DATAMODEL_ECMASCRIPT_MAX_OPS_DEFAULT`, 10,000 (the engine checks every 10,000 operations: about 10^8 operations, a second or two of a busy loop) | the engine's interrupt checks one evaluation may make |
 | `memory_limit` | `TA_DATAMODEL_ECMASCRIPT_MEMORY_LIMIT_DEFAULT`, 1 GiB; `SIZE_MAX`: none | bytes of the whole engine, every actor of the host together |
 | `stack_limit` | the engine's | bytes of native stack for JavaScript |
+| `random_seed` | 0: the engine's own seeding, from the time of day per context | `Math.random`: any other value draws from one generator per datamodel, so the same seed and inputs draw the same numbers |
+| `clock` | `TA_DATAMODEL_ECMASCRIPT_CLOCK_ENGINE`: the machine's clocks | `Date` and `performance.now()`: `TA_DATAMODEL_ECMASCRIPT_CLOCK_HOST` reads the clocks given to `ta_host_advance_time` (the local-time methods still follow `TZ`) |
 
 An evaluation past `max_ops` or `memory_limit` fails with
 `error.execution`, its data's `reason` `"fuel"` or `"memory"`, and the

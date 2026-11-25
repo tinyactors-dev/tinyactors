@@ -33,7 +33,7 @@ decision has to be made. Everything else in this document follows from them.
 | C10 | Precomputed entry sets (speed) vs. image size on flash. | Entry sets are stored as **sparse sorted state lists**, not per-transition bitsets (transition_count × state_count bits explodes). History-dependent targets fall back to a bounded iterative algorithm. Exit sets and conflicts need **no storage at all** (§3.6). |
 | C11 | A separate, independently usable kernel (`ta_core`) vs. not duplicating queue/event code in two public APIs. | `ta_core` is a **pure resumable step function** that *returns* sends/invokes/cancels as step results instead of performing them. `ta_system` is the only public runtime API; a single interpreter is a system with `max_actors = 1` (≈ 200 bytes overhead). `tinyactors/core.h` is public but marked "advanced". |
 | C12 | Small ABI vs. batching & zero-copy views. | A small set of functions (`system.h`, `host.h`). Batch entry points take arrays of fixed-layout structs (`ta_event_in[]`, `ta_effect[]`), each beginning with `uint32_t size` for forward compatibility. Views are borrowed `{pointer, length}` with one documented lifetime rule (§11.3). |
-| C13 | Determinism vs. host time. | Time only moves when the host calls `ta_system_advance_time(now)`. Timer ties break by a monotonic sequence number. Same image + same inputs + same datamodel ⇒ same trace. |
+| C13 | Determinism vs. host time. | Time only moves when the host calls `ta_system_advance_time(now)`, and a datamodel reads only that time (`ta_datamodel_environment_time`). Timer ties break by a monotonic sequence number. Same image + same inputs + same datamodel ⇒ same trace. |
 | C14 | `<invoke src>`/`<data src>`/`<script src>` vs. "no filesystem, no blocking". | Static `src` is resolved by the **compiler** (inlined into the image, child charts linked by index). Dynamic `srcexpr` becomes an explicit **request/response** effect. |
 
 ---
@@ -593,6 +593,9 @@ valid until the next call on that datamodel instance.
   event `_event` is unbound (the datamodel never received `bind_event`).
 - `In(state)` resolves through `ta_datamodel_environment_in(environment, state_id)`; names → ids are
   resolved at `chart_attach` from `STATE_NAMES`.
+- A datamodel reads the time through `ta_datamodel_environment_time(environment, &time)`: the
+  system's clocks as the last `ta_system_advance_time` set them, the same for a whole run (the
+  ECMAScript datamodel's `Date` and `performance.now()` on the host's clock).
 - The `null` datamodel (SCXML §B.1) is built into the core.
 
 ---
@@ -657,7 +660,7 @@ uint32_t  ta_system_send_many(ta_system *, const ta_event_in *events, uint32_t n
 ta_status ta_system_resume(ta_system *, const ta_resume *); /* request, status, result */
 /* execution */
 ta_run    ta_system_run(ta_system *, uint32_t budget);      /* tagged outcome */
-void      ta_system_advance_time(ta_system *, uint64_t now);
+void      ta_system_advance_time(ta_system *, ta_system_time now); /* monotonic, wall_ns */
 uint64_t  ta_system_next_deadline(const ta_system *);         /* UINT64_MAX = none */
 /* outbound (batched, borrowed) */
 uint32_t  ta_system_effects(ta_system *, const ta_effect **out);

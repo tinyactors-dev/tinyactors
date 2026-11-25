@@ -140,6 +140,10 @@ struct ta_core {
     uint32_t trace_step_fuel;
     uint64_t trace_clock;
     uint64_t trace_now;
+    /* the system's other clock and its rate, for ta_datamodel_environment_time
+     * (trace_now is the monotonic one) */
+    uint64_t wall_ns;
+    uint64_t ticks_per_second;
     uint64_t contexts_dropped; /* events left untraced because the pool was full */
     /* the macrostep records were last written about: its actor, session and
      * number, the mix its span IDs share, its span and its cause's. A cache,

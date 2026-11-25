@@ -32,7 +32,12 @@ the headers (`include/tinyactors/host.h`, `datamodel.h`, `cbor.h`,
   hibernation blobs wake in no other host.
 - **Datamodels:** the ECMAScript one (`datamodel_ecmascript.h`, quickjs),
   or your own behind the vtable (`datamodel.h`), at most eight, each
-  chosen by the chart's `datamodel` attribute.
+  chosen by the chart's `datamodel` attribute. A datamodel reads the
+  clocks your loop gives `ta_host_advance_time` through
+  `ta_datamodel_environment_time`: the ECMAScript one does for `Date` and
+  `performance.now()` with its config's `clock` set to
+  `TA_DATAMODEL_ECMASCRIPT_CLOCK_HOST`, and with a `random_seed` it draws
+  `Math.random` from a generator of its own, so a run repeats.
 - **Your loop:** inputs in, effects out. The host does no I/O, has no
   clock and starts no thread.
 
@@ -402,7 +407,7 @@ int main(void) {
     /* the loop, until idle (a real program arms a timer at next_deadline) */
     for (;;) {
         drain(host);
-        ta_host_advance_time(host, (ta_host_time){ta_runtime_now_ns(), 0});
+        ta_host_advance_time(host, (ta_system_time){ta_runtime_now_ns(), 0});
         ta_run run = ta_host_run(host, 10000);
         drain(host);
         if (run.status == TA_RUN_IDLE) break;

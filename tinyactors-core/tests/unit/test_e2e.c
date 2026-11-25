@@ -78,7 +78,7 @@ static void run_trace(const ta_image *image, uint32_t quantum, char *trace, size
         if (result.status == TA_RUN_IDLE) {
             if (result.next_deadline == UINT64_MAX) break;
             now = result.next_deadline; /* host event loop: sleep until the deadline */
-            ta_system_advance_time(system, now);
+            ta_system_advance_time(system, (ta_system_time){now, 0});
         }
     }
     *end_time = now;

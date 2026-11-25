@@ -682,7 +682,7 @@ ta_status ta_host_add_image(ta_host *host, ta_bytes bytes, uint32_t *segment) {
         return status;
     }
     ta_system_trace_clock(segment_record->system, host->fuel_clock);
-    ta_system_advance_time(segment_record->system, host->now);
+    ta_system_advance_time(segment_record->system, (ta_system_time){host->now, host->now_wall_ns});
     segment_record->live = 1;
     segment_record->busy = 1;
     segment_record->deadline = UINT64_MAX;
@@ -2011,12 +2011,13 @@ static void migrations_woken(ta_host *host, uint64_t session) {
 
 static void watches_expire(ta_host *host);
 
-void ta_host_advance_time(ta_host *host, ta_host_time now) {
+void ta_host_advance_time(ta_host *host, ta_system_time now) {
     if (host->running) return; /* not during a run (host.h) */
     host->now = now.monotonic;
+    if (now.wall_ns > host->now_wall_ns) host->now_wall_ns = now.wall_ns;
     host->encoder->mark(host, now.wall_ns);
     for (uint32_t i = 0; i < host->segment_count; i++)
-        if (host->segments[i].live) ta_system_advance_time(host->segments[i].system, now.monotonic);
+        if (host->segments[i].live) ta_system_advance_time(host->segments[i].system, now);
     if (host->watch_count) watches_expire(host);
 }
 

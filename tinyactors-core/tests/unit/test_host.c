@@ -57,11 +57,13 @@ static void refusable_free(void *context, void *pointer, size_t size) {
 /* The next world_open's environment nonce and system id (test_blob_identity). */
 static uint64_t world_nonce;
 static const char *world_system = "h";
+/* The next world_open's ECMAScript datamodel config (NULL: the defaults). */
+static const ta_datamodel_ecmascript_config *world_ecmascript;
 
 static void world_open(host_world *e, uint32_t max_actors, const ta_io_processor_entry *io,
                        uint32_t io_count) {
     memset(e, 0, sizeof *e);
-    e->ecmascript = ta_datamodel_ecmascript_new(NULL);
+    e->ecmascript = ta_datamodel_ecmascript_new(world_ecmascript);
     e->binding = ta_datamodel_ecmascript_binding(e->ecmascript);
     test_host_config config;
     memset(&config, 0, sizeof config);
@@ -290,7 +292,7 @@ static void test_class_across_segments(void) {
     ta_run result = ta_host_run(e.host, 1000);
     drain(&e);
     CHECK_EQUAL(result.next_deadline, 500u);
-    ta_host_advance_time(e.host, (ta_host_time){500, 0});
+    ta_host_advance_time(e.host, (ta_system_time){500, 0});
     CHECK(unwatch(e.host, id, "{\"id\":1,\"error\":{\"code\":-32001,\"message\":\"no such watch: it ended or never was\",\"data\":{\"reason\":\"stale\",\"path\":\"params.id\"}}}"));
     CHECK_EQUAL(send(&e, w, "ask", message), TA_OK);
     run(&e);
@@ -568,7 +570,7 @@ static void test_migration_wake_and_timeout(void) {
     ta_host_effects_ack(e.host); /* the output is copied: its batch ends */
     world_add(&e, W2);
     /* without wake, with a timeout: b moves, a is left behind and reported */
-    ta_host_advance_time(e.host, (ta_host_time){1000, 0});
+    ta_host_advance_time(e.host, (ta_system_time){1000, 0});
     uint32_t migration;
     CHECK_EQUAL(
         ta_host_migrate(e.host, &(ta_host_migration){(ta_string_view){"w", 1}, 0, 0, 0, 50}, &migration),
@@ -578,7 +580,7 @@ static void test_migration_wake_and_timeout(void) {
     drain(&e);
     run(&e);
     CHECK_EQUAL(e.last_migration, 0u); /* not over yet: a waits */
-    ta_host_advance_time(e.host, (ta_host_time){1060, 0});
+    ta_host_advance_time(e.host, (ta_system_time){1060, 0});
     run(&e);
     CHECK_EQUAL(e.last_migration, migration);
     CHECK(e.last_done.migrated == 1 && e.last_done.pending == 1);
@@ -825,7 +827,7 @@ static void test_migration_fails_invoking_actors_without_timeout(void) {
                 TA_OK);
     run(&e);
     CHECK_EQUAL(e.last_migration, migration - 1); /* waiting */
-    ta_host_advance_time(e.host, (ta_host_time){100, 0});
+    ta_host_advance_time(e.host, (ta_system_time){100, 0});
     run(&e);
     CHECK(e.last_migration == migration && e.last_done.migrated == 0 && e.last_done.failed == 0 &&
           e.last_done.pending == 1);
@@ -1031,7 +1033,7 @@ static void test_snapshot_restore(void) {
     char peer[64];
     snprintf(peer, sizeof peer, "{\"k\": 3, \"peer\": %llu}", (unsigned long long)echo);
     CHECK_EQUAL(send(&e, c, "add", peer), TA_OK); /* not run before the snapshot */
-    ta_host_advance_time(e.host, (ta_host_time){50, 0});
+    ta_host_advance_time(e.host, (ta_system_time){50, 0});
     size_t hl = 0, dl = 0;
     ta_buffer written = {NULL, 0, 0};
     CHECK_EQUAL(ta_host_snapshot(e.host, &written), TA_ERROR_NO_MEMORY);
@@ -1079,7 +1081,7 @@ static void test_snapshot_restore(void) {
     e.log[0] = 0;
     run(&e); /* the queued event, with its payload */
     CHECK(strcmp(e.log, "n=5;") == 0);
-    ta_host_advance_time(e.host, (ta_host_time){120, 0}); /* the delayed send, armed before the snapshot */
+    ta_host_advance_time(e.host, (ta_system_time){120, 0}); /* the delayed send, armed before the snapshot */
     run(&e);
     if (strcmp(e.log, "n=5;ticked:5;done;")) fprintf(stderr, "  log: %s\n", e.log);
     CHECK(strcmp(e.log, "n=5;ticked:5;done;") == 0); /* routed to the other segment and back */
@@ -1414,7 +1416,7 @@ static void test_hibernate_and_wake(void) {
     e.blob_length = output_copy(written, e.blob, sizeof e.blob);
     ta_host_effects_ack(e.host); /* the output is copied: its batch ends */
     CHECK_EQUAL(hibernated(&e, s), 1);
-    ta_host_advance_time(e.host, (ta_host_time){250, 0});
+    ta_host_advance_time(e.host, (ta_system_time){250, 0});
     run(&e);
     CHECK(e.wake_count == 2 && e.wake_session == s);
     CHECK_EQUAL(ta_host_wake(e.host, s, (ta_bytes){e.blob, e.blob_length}), TA_OK);
@@ -1886,6 +1888,115 @@ static void test_stats_pools_per_segment(void) {
     world_close(&e);
 }
 
+
+/* A seeded datamodel on the host's clock: two hosts given the same inputs and
+ * clocks log the same Math.random draws and times; Date reads the host's wall
+ * clock and performance.now() its monotonic one (ticks at 1000 a second);
+ * a host restored from snapshots goes on drawing the numbers the original
+ * draws. */
+#define DRAWS                                                                                      \
+    SC("draws", "initial='a'><state id='a'><transition event='draw'>"                              \
+                "<log expr=\"Math.random() + '@' + Date.now() + '@' + performance.now() + '@' + "  \
+                "new Date().getTime()\"/></transition></state>")
+
+static void draws_open(host_world *e, uint64_t *session) {
+    world_open(e, 16, NULL, 0);
+    world_add(e, DRAWS);
+    *session = spawn(e, "draws");
+    ta_host_advance_time(e->host, (ta_system_time){1500, 1700000000123456789ull});
+    run(e);
+}
+
+static void draw(host_world *e, uint64_t session, ta_system_time now) {
+    ta_host_advance_time(e->host, now);
+    CHECK_EQUAL(send(e, session, "draw", NULL), TA_OK);
+    run(e);
+}
+
+static void test_seeded_datamodel_on_the_host_clock(void) {
+    ta_datamodel_ecmascript_config seeded;
+    memset(&seeded, 0, sizeof seeded);
+    seeded.size = sizeof seeded;
+    seeded.random_seed = 42;
+    seeded.clock = TA_DATAMODEL_ECMASCRIPT_CLOCK_HOST;
+    world_ecmascript = &seeded;
+    host_world a, b;
+    uint64_t session_a, session_b;
+    draws_open(&a, &session_a);
+    draws_open(&b, &session_b);
+    draw(&a, session_a, (ta_system_time){1500, 1700000000123456789ull});
+    draw(&b, session_b, (ta_system_time){1500, 1700000000123456789ull});
+    draw(&a, session_a, (ta_system_time){2250, 1700000000873456789ull});
+    draw(&b, session_b, (ta_system_time){2250, 1700000000873456789ull});
+    CHECK(strcmp(a.log, b.log) == 0);
+    if (strcmp(a.log, b.log)) fprintf(stderr, "  a: %s\n  b: %s\n", a.log, b.log);
+    CHECK(strstr(a.log, "@1700000000123@1500@1700000000123;") != NULL);
+    CHECK(strstr(a.log, "@1700000000873@2250@1700000000873;") != NULL);
+    if (!strstr(a.log, "@1700000000873@2250@1700000000873;")) fprintf(stderr, "  log: %s\n", a.log);
+    char first[32];
+    snprintf(first, sizeof first, "%.*s", (int)(strchr(a.log, '@') - a.log), a.log);
+    CHECK(strtod(first, NULL) >= 0 && strtod(first, NULL) < 1);
+    CHECK(strncmp(a.log, "0.", 2) == 0);
+
+    /* snapshots of a's host and datamodel, then a goes on */
+    ta_buffer written = {NULL, 0, 0};
+    CHECK_EQUAL(ta_host_snapshot(a.host, &written), TA_ERROR_NO_MEMORY);
+    void *host_snapshot = malloc(written.length);
+    written = (ta_buffer){host_snapshot, written.length, 0};
+    CHECK_EQUAL(ta_host_snapshot(a.host, &written), TA_OK);
+    size_t host_length = written.length;
+    written = (ta_buffer){NULL, 0, 0};
+    CHECK_EQUAL(ta_datamodel_ecmascript_snapshot(a.ecmascript, &written), TA_ERROR_NO_MEMORY);
+    void *datamodel_snapshot = malloc(written.length);
+    written = (ta_buffer){datamodel_snapshot, written.length, 0};
+    CHECK_EQUAL(ta_datamodel_ecmascript_snapshot(a.ecmascript, &written), TA_OK);
+    size_t datamodel_length = written.length;
+    a.log[0] = 0;
+    draw(&a, session_a, (ta_system_time){3000, 1700000001000000000ull});
+    draw(&a, session_a, (ta_system_time){3001, 1700000001001000000ull});
+
+    /* restored with a datamodel of its own seed: the draws go on from a's state */
+    host_world c;
+    memset(&c, 0, sizeof c);
+    c.ecmascript = ta_datamodel_ecmascript_new(&(ta_datamodel_ecmascript_config){
+        sizeof(ta_datamodel_ecmascript_config), 0, 0, 0, 0, NULL, 7,
+        TA_DATAMODEL_ECMASCRIPT_CLOCK_HOST});
+    c.binding = ta_datamodel_ecmascript_binding(c.ecmascript);
+    test_host_config config;
+    memset(&config, 0, sizeof config);
+    config.size = sizeof config;
+    config.system_id = (ta_string_view){world_system, (uint32_t)strlen(world_system)};
+    config.system.size = sizeof config.system;
+    config.system.ticks_per_second = 1000;
+    config.datamodels = &c.binding;
+    config.datamodel_count = 1;
+    config.allocator = ta_runtime_malloc();
+    ta_bytes images[1] = {ta_image_bytes(&a.image[0])};
+    CHECK_EQUAL(test_host_restore(&config,
+                                  &(ta_host_snapshot_input){{0, 0},
+                                                            {host_snapshot, host_length},
+                                                            images,
+                                                            1,
+                                                            0},
+                                  &c.host),
+                TA_OK);
+    CHECK_EQUAL(ta_datamodel_ecmascript_restore(c.ecmascript,
+                                                (ta_bytes){datamodel_snapshot, datamodel_length}),
+                TA_OK);
+    draw(&c, session_a, (ta_system_time){3000, 1700000001000000000ull});
+    draw(&c, session_a, (ta_system_time){3001, 1700000001001000000ull});
+    CHECK(strcmp(a.log, c.log) == 0);
+    if (strcmp(a.log, c.log)) fprintf(stderr, "  a: %s\n  c: %s\n", a.log, c.log);
+    CHECK(strstr(c.log, "@1700000001001@3001@1700000001001;") != NULL);
+    ta_host_free(c.host);
+    ta_datamodel_ecmascript_free(c.ecmascript);
+    free(host_snapshot);
+    free(datamodel_snapshot);
+    world_close(&a);
+    world_close(&b);
+    world_ecmascript = NULL;
+}
+
 int main(void) {
     RUN(test_growth_grows_what_ran_out);
     RUN(test_a_small_pool_grows_by_a_share_of_the_region);
@@ -1905,6 +2016,7 @@ int main(void) {
     RUN(test_request_answered_with_an_error);
     RUN(test_state_value);
     RUN(test_snapshot_restore);
+    RUN(test_seeded_datamodel_on_the_host_clock);
     RUN(test_snapshot_of_one_image_in_two_segments);
     RUN(test_bad_targets);
     RUN(test_a_sender_waits_for_its_send);

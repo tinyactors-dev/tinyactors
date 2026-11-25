@@ -204,7 +204,7 @@ static uint64_t ta_napi_wall_ns(napi_env env) {
 /* The host's clocks now: a simulated clock's time is its wall clock too;
  * else the monotonic clock (ta_runtime_now_ns) and Date.now(). The wall
  * clock never goes back (host.h: "Neither goes back"). */
-static ta_host_time ta_napi_now(napi_env env, ta_napi_host *host) {
+static ta_system_time ta_napi_now(napi_env env, ta_napi_host *host) {
     uint64_t nanoseconds = 0, wall = 0;
     napi_value time;
     if (host->clock != NULL) {
@@ -217,7 +217,7 @@ static ta_host_time ta_napi_now(napi_env env, ta_napi_host *host) {
     }
     if (wall < host->wall) wall = host->wall;
     host->wall = wall;
-    return (ta_host_time){ta_napi_ticks(host, nanoseconds) + host->ticks_offset, wall};
+    return (ta_system_time){ta_napi_ticks(host, nanoseconds) + host->ticks_offset, wall};
 }
 
 /* The offset makes the ticks the clock reads now `time` (unsigned, so an

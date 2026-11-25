@@ -127,7 +127,7 @@ static void test_errors_and_readonly(void) {
 }
 
 static void test_runaway_script_interrupted(void) {
-    ta_datamodel_ecmascript_config config = {sizeof config, 10000, 0, 0, 0, NULL};
+    ta_datamodel_ecmascript_config config = {sizeof config, 10000, 0, 0, 0, NULL, 0, TA_DATAMODEL_ECMASCRIPT_CLOCK_ENGINE};
     ecmascript_system t;
     CHECK(ecmascript_open(
         &t,
@@ -159,10 +159,10 @@ static void test_error_execution_says_why(void) {
         {WHY("<log expr='nosuch.x'/>"), {0}, "why=exception:ReferenceError: nosuch is not defined:;"},
         {WHY("<send event='x' targetexpr='nosuch.y' id='s1'/>"), {0},
          "why=exception:ReferenceError: nosuch is not defined:s1;"},
-        {WHY("<script>while (true) {}</script>"), {sizeof(ta_datamodel_ecmascript_config), 10000, 0, 0, 0, NULL},
+        {WHY("<script>while (true) {}</script>"), {sizeof(ta_datamodel_ecmascript_config), 10000, 0, 0, 0, NULL, 0, TA_DATAMODEL_ECMASCRIPT_CLOCK_ENGINE},
          "why=fuel::;"},
         {WHY("<script>let a = []; while (true) a.push(new Array(100000).fill(1));</script>"),
-         {sizeof(ta_datamodel_ecmascript_config), 0, 8u << 20, 0, 0, NULL}, "why=memory::;"},
+         {sizeof(ta_datamodel_ecmascript_config), 0, 8u << 20, 0, 0, NULL, 0, TA_DATAMODEL_ECMASCRIPT_CLOCK_ENGINE}, "why=memory::;"},
         /* the default config: the default limit (1 GiB) stops it, the process goes on */
         {WHY("<script>let a = []; while (true) a.push(new ArrayBuffer(16777216));</script>"), {0},
          "why=memory::;"},
@@ -344,7 +344,7 @@ static size_t realm_run(uint32_t realm, char *log, size_t capacity) {
              "<assign location='seen' expr='seen + 1'/></transition>"
              "<transition event='error.execution'><log label='err' expr='typeof leak + \"/\" + "
              "typeof leak2'/></transition></state></scxml>");
-    ta_datamodel_ecmascript_config config = {sizeof config, 0, 0, 0, realm, NULL};
+    ta_datamodel_ecmascript_config config = {sizeof config, 0, 0, 0, realm, NULL, 0, TA_DATAMODEL_ECMASCRIPT_CLOCK_ENGINE};
     ecmascript_system t;
     CHECK(ecmascript_open(&t, chart, &config));
     ecmascript_run(&t);
@@ -420,7 +420,7 @@ static void test_eval_variables(void) {
 static void test_executable_scripts_run_again(void) {
     static const char *const lexical = "let k = n + 1; const c = k; class K {} n = c;";
     for (uint32_t realm = 0; realm < 2; realm++) {
-        ta_datamodel_ecmascript_config config = {sizeof config, 0, 0, 0, realm, NULL};
+        ta_datamodel_ecmascript_config config = {sizeof config, 0, 0, 0, realm, NULL, 0, TA_DATAMODEL_ECMASCRIPT_CLOCK_ENGINE};
         ecmascript_system t;
         char chart[1024];
         snprintf(chart, sizeof chart, RERUN("", "%s"), lexical);
@@ -566,7 +566,7 @@ static void test_executable_script_functions_and_strict(void) {
     static const char *const strict = "'use strict'; w = 1; n = n + 1;";
     static const char *const strict_function = "'use strict'; function g() { return 1; } n = n + g();";
     for (uint32_t realm = 0; realm < 2; realm++) {
-        ta_datamodel_ecmascript_config config = {sizeof config, 0, 0, 0, realm, NULL};
+        ta_datamodel_ecmascript_config config = {sizeof config, 0, 0, 0, realm, NULL, 0, TA_DATAMODEL_ECMASCRIPT_CLOCK_ENGINE};
         ecmascript_system t;
         char chart[1024];
         snprintf(chart, sizeof chart, RERUN("", "%s"), declares);
@@ -976,7 +976,7 @@ static void test_wire_values(void) {
 static void test_abort_flag_and_fuel(void) {
     volatile int stop = 0;
     ta_datamodel_ecmascript_config config = {
-        sizeof config, 0, 0, 0, 0, (const volatile int *)&stop};
+        sizeof config, 0, 0, 0, 0, (const volatile int *)&stop, 0, TA_DATAMODEL_ECMASCRIPT_CLOCK_ENGINE};
     ecmascript_system t;
     CHECK(ecmascript_open(&t,
                           SC("initial='a'><state id='a'><onentry><script>while (true) {}</script>"
@@ -1021,7 +1021,7 @@ static void test_abort_flag_and_fuel(void) {
 static void test_deep_value_not_stored(void) {
     /* a small engine stack (the wasm build's native stack is smaller than the
      * engine's default; the rule is the same at any size) */
-    ta_datamodel_ecmascript_config config = {sizeof config, 0, 0, 64 * 1024, 0, NULL};
+    ta_datamodel_ecmascript_config config = {sizeof config, 0, 0, 64 * 1024, 0, NULL, 0, TA_DATAMODEL_ECMASCRIPT_CLOCK_ENGINE};
     ecmascript_system t;
     CHECK(ecmascript_open(&t,
                           SC("initial='a'><datamodel><data id='deep' expr='null'/></datamodel>"
@@ -1061,6 +1061,156 @@ static void test_deep_value_not_stored(void) {
     ecmascript_close(&t);
 }
 
+
+/* Math.random, Date and performance.now() on request (random_seed, clock),
+ * in both realms: the same seed draws the same numbers, the host's clock is
+ * what Date and performance.now() read, and Date keeps the engine's
+ * prototype and its other forms. */
+static const char *CLOCKS_CHART =
+    SC("initial='a'><datamodel><data id='draws' expr='[]'/></datamodel>"
+       "<state id='a'><transition event='draw'>"
+       "<assign location='draws' expr='draws.concat([Math.random(), Math.random()])'/>"
+       "<log label='draws' expr='draws.join()'/></transition>"
+       "<transition event='time'>"
+       "<log label='now' expr='Date.now()'/>"
+       "<log label='new' expr='new Date().getTime()'/>"
+       "<log label='call' expr='Date() === new Date(Date.now()).toString()'/>"
+       "<log label='performance' expr='performance.now()'/>"
+       "<log label='given' expr='new Date(5).getTime() + \":\" + new Date(1970, 0, 1, 0, 0, 0, 7).getMilliseconds()'/>"
+       "<log label='kind' expr='(new Date() instanceof Date) + \":\" + Date.length + \":\" + Date.name + \":\" + "
+       "(new Date().constructor === Date) + \":\" + Date.UTC(2020, 0, 1) + \":\" + Date.parse(\"2020-01-01T00:00:00Z\")'/>"
+       "</transition></state>");
+
+static ta_datamodel_ecmascript_config clocks_config(uint32_t realm, uint64_t seed, uint32_t clock) {
+    ta_datamodel_ecmascript_config config;
+    memset(&config, 0, sizeof config);
+    config.size = sizeof config;
+    config.realm = realm;
+    config.random_seed = seed;
+    config.clock = clock;
+    return config;
+}
+
+/* the draws an actor of CLOCKS_CHART logs for two `draw` events */
+static void clocks_draws(const ta_datamodel_ecmascript_config *config, char *out, size_t capacity) {
+    ecmascript_system t;
+    CHECK(ecmascript_open(&t, CLOCKS_CHART, config));
+    ecmascript_run(&t);
+    ecmascript_send(&t, "draw", NULL);
+    ecmascript_send(&t, "draw", NULL);
+    snprintf(out, capacity, "%s", t.log);
+    ecmascript_close(&t);
+}
+
+static void test_seeded_random(void) {
+    static const uint32_t realms[] = {TA_DATAMODEL_ECMASCRIPT_REALM_AUTO,
+                                      TA_DATAMODEL_ECMASCRIPT_REALM_ISOLATED};
+    char first[512], second[512], other[512], engine[512];
+    for (uint32_t r = 0; r < 2; r++) {
+        ta_datamodel_ecmascript_config seeded =
+            clocks_config(realms[r], 42, TA_DATAMODEL_ECMASCRIPT_CLOCK_ENGINE);
+        clocks_draws(&seeded, first, sizeof first);
+        clocks_draws(&seeded, second, sizeof second);
+        CHECK(strncmp(first, "draws=0.", 8) == 0);
+        CHECK(strcmp(first, second) == 0); /* the same seed: the same numbers */
+        if (strcmp(first, second)) fprintf(stderr, "  %s\n  %s\n", first, second);
+        ta_datamodel_ecmascript_config reseeded =
+            clocks_config(realms[r], 43, TA_DATAMODEL_ECMASCRIPT_CLOCK_ENGINE);
+        clocks_draws(&reseeded, other, sizeof other);
+        CHECK(strcmp(first, other) != 0);
+        /* seed 0: the engine's own generator, numbers in [0, 1) */
+        ta_datamodel_ecmascript_config unseeded =
+            clocks_config(realms[r], 0, TA_DATAMODEL_ECMASCRIPT_CLOCK_ENGINE);
+        clocks_draws(&unseeded, engine, sizeof engine);
+        CHECK(strncmp(engine, "draws=0.", 8) == 0);
+        CHECK(strcmp(first, engine) != 0);
+    }
+}
+
+static void test_host_clock(void) {
+    static const uint32_t realms[] = {TA_DATAMODEL_ECMASCRIPT_REALM_AUTO,
+                                      TA_DATAMODEL_ECMASCRIPT_REALM_ISOLATED};
+    static const char want[] =
+        "now=1700000000123;new=1700000000123;call=true;performance=2500.5;given=5:7;"
+        "kind=true:7:Date:true:1577836800000:1577836800000;"
+        "now=1700000001123;new=1700000001123;call=true;performance=3500.5;given=5:7;"
+        "kind=true:7:Date:true:1577836800000:1577836800000;";
+    for (uint32_t r = 0; r < 2; r++) {
+        ta_datamodel_ecmascript_config config =
+            clocks_config(realms[r], 0, TA_DATAMODEL_ECMASCRIPT_CLOCK_HOST);
+        ecmascript_system t;
+        CHECK(ecmascript_open(&t, CLOCKS_CHART, &config));
+        ecmascript_run(&t);
+        /* ticks at the system's default rate, 10^9 a second */
+        ta_system_advance_time(t.system, (ta_system_time){2500500000ull, 1700000000123456789ull});
+        ecmascript_send(&t, "time", NULL);
+        ta_system_advance_time(t.system, (ta_system_time){3500500000ull, 1700000001123456789ull});
+        ecmascript_send(&t, "time", NULL);
+        CHECK(strcmp(t.log, want) == 0);
+        if (strcmp(t.log, want)) fprintf(stderr, "  log: %s\n", t.log);
+        /* outside an evaluation: the time the last one read */
+        CHECK(strcmp(ecmascript_eval(&t, "Date.now()"), "1700000001123") == 0);
+        ecmascript_close(&t);
+    }
+    /* the engine's clock (the default): the machine's time of day, whatever
+     * the system's clocks say */
+    ecmascript_system t;
+    CHECK(ecmascript_open(&t, CLOCKS_CHART, NULL));
+    ecmascript_run(&t);
+    ta_system_advance_time(t.system, (ta_system_time){2500500000ull, 123456789ull});
+    ecmascript_send(&t, "time", NULL);
+    CHECK(strncmp(t.log, "now=17", 6) == 0 || strncmp(t.log, "now=18", 6) == 0);
+    CHECK(strstr(t.log, "performance=2500.5;") == NULL);
+    ecmascript_close(&t);
+}
+
+/* The generator's state is the datamodel's: its snapshot carries it, so a
+ * restored datamodel draws what the original draws next. */
+static void test_seeded_random_snapshot(void) {
+    ta_datamodel_ecmascript_config seeded =
+        clocks_config(TA_DATAMODEL_ECMASCRIPT_REALM_AUTO, 9, TA_DATAMODEL_ECMASCRIPT_CLOCK_ENGINE);
+    ecmascript_system t;
+    CHECK(ecmascript_open(&t, CLOCKS_CHART, &seeded));
+    ecmascript_run(&t);
+    ecmascript_send(&t, "draw", NULL);
+    uint32_t a = ecmascript_actor(&t);
+    ta_actor_info actor_info;
+    actor_info.size = sizeof actor_info;
+    CHECK_EQUAL(ta_actor_info_get(t.system, a, &actor_info), TA_OK);
+    ta_buffer written = {NULL, 0, 0};
+    CHECK_EQUAL(ta_datamodel_ecmascript_snapshot(t.ecmascript, &written), TA_ERROR_NO_MEMORY);
+    void *snapshot = malloc(written.length);
+    written = (ta_buffer){snapshot, written.length, 0};
+    CHECK_EQUAL(ta_datamodel_ecmascript_snapshot(t.ecmascript, &written), TA_OK);
+    char next[3][64];
+    for (int i = 0; i < 3; i++)
+        snprintf(next[i], sizeof next[i], "%s", ecmascript_eval(&t, "Math.random()"));
+    /* any seed: the snapshot's state replaces it */
+    ta_datamodel_ecmascript_config other =
+        clocks_config(TA_DATAMODEL_ECMASCRIPT_REALM_AUTO, 1, TA_DATAMODEL_ECMASCRIPT_CLOCK_ENGINE);
+    ta_datamodel_ecmascript *restored = ta_datamodel_ecmascript_new(&other);
+    const ta_datamodel_vtable *vtable = ta_datamodel_ecmascript_vtable();
+    ta_datamodel_chart chart = {sizeof chart, actor_info.chart, &t.image, TA_BINDING_EARLY, 0};
+    void *chart_context = NULL;
+    CHECK_EQUAL(vtable->chart_attach(restored, &chart, &chart_context), TA_OK);
+    CHECK_EQUAL(ta_datamodel_ecmascript_restore(restored, (ta_bytes){snapshot, written.length}),
+                TA_OK);
+    static const char expression[] = "Math.random()";
+    char buffer[64];
+    for (int i = 0; i < 3; i++) {
+        CHECK(eval_text(restored, actor_info.datamodel_instance,
+                        (ta_string_view){expression, (uint32_t)strlen(expression)}, buffer,
+                        sizeof buffer) != (size_t)-1);
+        CHECK(strcmp(buffer, next[i]) == 0);
+        if (strcmp(buffer, next[i])) fprintf(stderr, "  got %s, want %s\n", buffer, next[i]);
+    }
+    vtable->destroy(&(ta_datamodel_call){restored, actor_info.datamodel_instance, 0});
+    vtable->chart_detach(restored, chart_context);
+    ta_datamodel_ecmascript_free(restored);
+    free(snapshot);
+    ecmascript_close(&t);
+}
+
 int main(void) {
 
     RUN(test_expressions_and_script);
@@ -1083,5 +1233,8 @@ int main(void) {
     RUN(test_wire_values);
     RUN(test_abort_flag_and_fuel);
     RUN(test_deep_value_not_stored);
+    RUN(test_seeded_random);
+    RUN(test_host_clock);
+    RUN(test_seeded_random_snapshot);
     TEST_MAIN_END();
 }

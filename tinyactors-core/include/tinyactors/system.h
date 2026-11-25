@@ -243,7 +243,18 @@ typedef struct ta_run {
 } ta_run;
 
 TA_API ta_run ta_system_run(ta_system *system, uint32_t budget);
-TA_API void ta_system_advance_time(ta_system *system, ta_time now);
+/* The clocks: `monotonic` drives timers, deadlines and TTLs (the unit of
+ * <send delay>, config.ticks_per_second); `wall_ns` is the time of day,
+ * nanoseconds since the Unix epoch (0: unknown), which a datamodel may read
+ * during an evaluation (ta_datamodel_environment_time: an ECMAScript Date on
+ * the host's clock). Neither goes back: a value below the last is ignored. */
+typedef struct ta_system_time {
+    ta_time monotonic;
+    uint64_t wall_ns;
+} ta_system_time;
+/* Move the system's clocks and fire the timers that are due; nothing during
+ * its own run. */
+TA_API void ta_system_advance_time(ta_system *system, ta_system_time now);
 TA_API ta_time ta_system_next_deadline(const ta_system *system);
 
 /* ---- outbound effects (batched, borrowed) ------------------------------- */

@@ -46,6 +46,14 @@
  * and ta_datamodel_ecmascript_last_error() names the variable (and a function's
  * line). Changes to builtins are not stored. Runaway scripts are interrupted
  * after `max_ops` engine checks and reported as error.execution.
+ *
+ * Determinism (random_seed, clock): with a seed, Math.random draws from the
+ * datamodel's own generator; with the host's clock, Date and
+ * performance.now() read the system's clocks. The datamodel replaces those
+ * builtins in every context that runs a chart's code (the shared realm
+ * before it is frozen, each isolated session's, and the one host helpers
+ * evaluate in); with both fields 0 it makes its contexts exactly as the
+ * engine does.
  */
 #ifndef TINYACTORS_DATAMODEL_ECMASCRIPT_H
 #define TINYACTORS_DATAMODEL_ECMASCRIPT_H
@@ -72,7 +80,38 @@ typedef struct ta_datamodel_ecmascript_config {
      * JavaScript work is also charged to the actor's fuel (one unit per
      * 100 operations), so the system's budget bounds it. */
     const volatile int *abort_flag;
+    /* Math.random's seed. 0: the engine's own (each context seeded from the
+     * time of day, a different sequence on every run). Any other value: one
+     * generator per datamodel (xorshift64*, its state mixed from the seed),
+     * shared by every context and session it makes, so draws come in the
+     * order the system runs evaluations and two datamodels with the same seed
+     * and the same inputs draw the same numbers. Its state is in the
+     * datamodel's snapshot, not in a session's blob (hibernation and export
+     * keep no part of it), so a restored datamodel goes on drawing where the
+     * snapshot was taken. */
+    uint64_t random_seed;
+    /* What Date and performance.now() read: a ta_datamodel_ecmascript_clock. */
+    uint32_t clock;
 } ta_datamodel_ecmascript_config;
+
+/* The clock of a datamodel's contexts (ta_datamodel_ecmascript_config.clock).
+ *   ENGINE (0): the engine's own, the machine's time of day and monotonic clock.
+ *   HOST: the system's clocks (ta_system_advance_time, ta_host_advance_time),
+ *     read during an evaluation through ta_datamodel_environment_time: `new
+ *     Date()`, `Date()` and `Date.now()` give its wall time in milliseconds
+ *     (0, the epoch, while the embedder gives none), `performance.now()` its
+ *     monotonic ticks in milliseconds (`performance.timeOrigin` is 0: the
+ *     engine's is the machine's time); every read within one run gives the
+ *     same time. Outside an evaluation (ta_datamodel_ecmascript_payload_eval)
+ *     they read the time the last evaluation saw. `new Date(...)` with
+ *     arguments, Date.UTC, Date.parse and every method of Date.prototype are
+ *     the engine's (`instanceof Date` holds). The local-time methods
+ *     (getHours, getTimezoneOffset, toString, ...) still follow the process's
+ *     time zone (TZ) under either clock: set TZ to repeat them. */
+typedef enum ta_datamodel_ecmascript_clock {
+    TA_DATAMODEL_ECMASCRIPT_CLOCK_ENGINE = 0,
+    TA_DATAMODEL_ECMASCRIPT_CLOCK_HOST = 1
+} ta_datamodel_ecmascript_clock;
 
 /* The engine's memory limit when the config gives none: 1 GiB. An
  * evaluation that allocates past it fails with error.execution (reason

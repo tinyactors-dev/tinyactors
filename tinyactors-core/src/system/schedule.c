@@ -252,6 +252,7 @@ static uint32_t run_actor(ta_system *system, uint32_t index, uint32_t quantum, u
 static void core_trace_clock_sync(ta_system *system) {
     system->core.trace_clock = system->fuel_clock;
     system->core.trace_now = system->now;
+    system->core.wall_ns = system->wall_ns;
 }
 
 ta_run ta_system_run(ta_system *system, uint32_t budget) {
@@ -315,9 +316,10 @@ ta_run ta_system_run(ta_system *system, uint32_t budget) {
     return result;
 }
 
-void ta_system_advance_time(ta_system *system, ta_time now) {
+void ta_system_advance_time(ta_system *system, ta_system_time now) {
     if (system->in_call) return;
-    if (now > system->now) system->now = now;
+    if (now.monotonic > system->now) system->now = now.monotonic;
+    if (now.wall_ns > system->wall_ns) system->wall_ns = now.wall_ns;
     core_trace_clock_sync(system);
     ta_system_fire_timers(system);
 }
