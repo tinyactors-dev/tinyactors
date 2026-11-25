@@ -336,6 +336,8 @@ ta-tabs { display: block; }
 .figure__scroll { overflow-x: auto; border: 1px solid var(--border-1); border-radius: var(--radius-2); background: var(--surface-1); padding: var(--space-4); }
 .figure__scroll > svg { display: block; width: 100%; min-width: 720px; height: auto; font-family: var(--font-mono); }
 .figure__caption { font: var(--type-body-sm); color: var(--fg-2); max-width: var(--prose-max); }
+/* A picture a command drew (the CLI pages' examples): its own size, never wider than the column. */
+.drawing img { display: block; max-width: 100%; height: auto; margin: 0 auto; }
 .figure__line { fill: none; stroke: var(--fg-3); }
 .figure__frame { fill: var(--surface-1); stroke: var(--rule); stroke-width: 1.5; }
 .figure__fill { fill: var(--surface-2); stroke: var(--border-2); }

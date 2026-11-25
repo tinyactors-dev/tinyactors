@@ -115,7 +115,10 @@ module Website
     FileUtils.rm_rf(SITE)
     FileUtils.mkdir_p(SITE)
     packages!
-    run('sxml', 'transform', "--result-directory=#{SITE}", "--param=version=#{version}", STYLESHEET, CONTENT.join('site.xml'))
+    # The CLI section's pages are made from the released command (mise/cli.rb).
+    cli = CLI::PAGE.file? ? ["--param=cli=#{CLI.capture!.to_path}"] : []
+    run('sxml', 'transform', "--result-directory=#{SITE}", "--param=version=#{version}", *cli, STYLESHEET, CONTENT.join('site.xml'))
+    CLI.serve!(SITE) unless cli.empty?
     FileUtils.cp(AUDIENCE_SCHEMA, SITE.join('audiences/audience.xsd'))
     needs!
     assets!
@@ -321,3 +324,5 @@ module Website
     out
   end
 end
+
+require_relative 'cli'

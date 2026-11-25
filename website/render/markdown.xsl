@@ -68,7 +68,7 @@
   <xsl:function name="f:llms" as="xs:string">
     <xsl:variable name="home" select="$md-pages[@path = '/']"/>
     <xsl:variable name="order" select="f:llms-order()"/>
-    <xsl:variable name="grouped" select="$site/s:nav/s:group/s:link/@to"/>
+    <xsl:variable name="grouped" select="$site/s:nav/s:group/f:group-ids(.)"/>
     <xsl:variable name="parts" as="xs:string*">
       <xsl:sequence select="'# ' || normalize-space($site/s:name)"/>
       <xsl:sequence select="'> ' || normalize-space($site/s:tagline)"/>
@@ -79,7 +79,7 @@
                               $site/s:audiences/s:audience ! ('- ' || f:audience-link(@id) || ': ' || normalize-space(s:description)), $nl)"/>
       <xsl:sequence select="f:llms-section('Pages', $order[not(f:optional(.)) and not(@id = $grouped)], false())"/>
       <xsl:for-each select="$site/s:nav/s:group">
-        <xsl:variable name="ids" select="s:link/@to"/>
+        <xsl:variable name="ids" select="f:group-ids(.)"/>
         <xsl:sequence select="f:llms-section(normalize-space(@label), $order[not(f:optional(.)) and @id = $ids], true())"/>
       </xsl:for-each>
       <xsl:sequence select="f:llms-section('Optional', $order[f:optional(.)], false())"/>
@@ -89,6 +89,15 @@
                                 '- [' || normalize-space($elsewhere[@href = $href][1]) || '](' || $href || ')'), $nl)"/>
     </xsl:variable>
     <xsl:sequence select="string-join($parts[. != ''], $blank) || $nl"/>
+  </xsl:function>
+
+  <!-- The pages of a navigation group: its links', and with the page
+       that lists the command's commands, each command's page. -->
+  <xsl:function name="f:group-ids" as="xs:string*">
+    <xsl:param name="group" as="element(s:group)"/>
+    <xsl:variable name="commands-page" select="$commands/ancestor::s:page/@id"/>
+    <xsl:sequence select="$group/s:link/@to ! string(.),
+                          if ($group/s:link/@to = $commands-page) then $cli-doc/command/@name ! ($commands-page || '-' || .) else ()"/>
   </xsl:function>
 
   <xsl:function name="f:llms-section" as="xs:string">
@@ -350,6 +359,19 @@
       </xsl:for-each>
     </xsl:variable>
     <xsl:sequence select="string-join($blocks, $blank)"/>
+  </xsl:template>
+
+  <!-- The command's commands: its usage, then each command, as the HTML. -->
+  <xsl:template match="s:commands" mode="md" as="xs:string">
+    <xsl:variable name="blocks" as="xs:string*">
+      <xsl:apply-templates select="f:commands-blocks()" mode="md"/>
+    </xsl:variable>
+    <xsl:sequence select="string-join($blocks, $blank)"/>
+  </xsl:template>
+
+  <!-- A picture a command drew: the image, named by the command. -->
+  <xsl:template match="s:drawing" mode="md" as="xs:string">
+    <xsl:sequence select="'![' || @alt || '](' || $origin || @href || ')'"/>
   </xsl:template>
 
   <xsl:template match="*" mode="md">

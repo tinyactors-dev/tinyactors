@@ -1,0 +1,15 @@
+<scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0" name="payment" datamodel="ecmascript" initial="pending">
+  <datamodel>
+    <data id="amount" expr="0"/>
+  </datamodel>
+  <state id="pending">
+    <transition event="authorize" target="authorized"/>
+    <transition event="decline" target="declined"/>
+  </state>
+  <state id="authorized">
+    <transition event="capture" target="settled"/>
+    <transition event="void" target="declined"/>
+  </state>
+  <final id="settled"/>
+  <final id="declined"/>
+</scxml>

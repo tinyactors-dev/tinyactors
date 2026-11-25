@@ -1,0 +1,73 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<page xmlns="https://www.tinyactors.dev/ns/site" id="cli" path="/cli/">
+  <title>The tinyactors command</title>
+  <description>The tinyactors command compiles, checks, draws, compares and runs charts, and reads the snapshots and blobs a host writes.</description>
+  <purpose kind="reference" for="workflow-tester agent-platform"/>
+
+  <hero>
+    <headline>Check, compare and run charts from a shell</headline>
+    <lede><code>tinyactors</code> finds the path to a state, the change that breaks running actors, and every actor in a snapshot. Each answer comes as Markdown, JSON or XML.</lede>
+    <install>
+      <command package="c">mise use github:tinyactors-dev/tinyactors-core@{version}</command>
+    </install>
+  </hero>
+
+  <section id="install">
+    <heading>One program per platform, checked by mise</heading>
+    <p>Each release of tinyactors-core carries the command for Linux and macOS, on x86_64 and arm64. mise picks your machine's archive, checks it against the release's checksums and puts <code>tinyactors</code> on your path.</p>
+    <claims>
+      <claim>
+        <statement>One Linux binary runs on every distribution</statement>
+        <p>The Linux program is linked statically against musl, so one file serves glibc and musl systems alike. The macOS one loads only libSystem.</p>
+        <source href="https://github.com/tinyactors-dev/tinyactors/blob/main/tinyactors-core/docs/distribution.md#the-tinyactors-command">tinyactors-core, <code>docs/distribution.md</code></source>
+      </claim>
+      <claim>
+        <statement>The command runs charts on quickjs</statement>
+        <p>It carries the host and the ECMAScript datamodel, so <code>tinyactors run</code> runs your charts with no language package installed.</p>
+        <source href="https://github.com/tinyactors-dev/tinyactors/blob/main/tinyactors-core/docs/cli.md#run">tinyactors-core, <code>docs/cli.md</code></source>
+      </claim>
+    </claims>
+  </section>
+
+  <section id="commands" answers="workflow-tester.ci-commands">
+    <heading>Each command answers one question</heading>
+    <p>Each page below is made from the command's own help, with its examples run on an order and a payment chart.</p>
+    <commands for="workflow-tester agent-platform">
+      <title>tinyactors {command}</title>
+      <usage>Run it</usage>
+      <options>Options</options>
+      <program-options>Options every command takes</program-options>
+      <examples>Examples, run on an order chart</examples>
+      <see>Read next</see>
+      <option>Option</option>
+      <values>Values</values>
+      <meaning>What it does</meaning>
+      <status>It exits with status {status}.</status>
+      <from>From the help of tinyactors {version}, which wrote everything on this page.</from>
+      <related command="run"><link to="cli-protocol"/></related>
+      <related command="inspect"><link to="cli-snapshots"/></related>
+      <related command="actors"><link to="cli-snapshots"/></related>
+      <artifact command="run" arguments="run --schema" file="run.schema.json">The protocol's JSON Schema, from this release</artifact>
+    </commands>
+  </section>
+
+  <section id="formats">
+    <heading>Programs read the same answer as JSON</heading>
+    <p>With <code>-f json</code> or <code>-f xml</code>, every command answers with the members its Markdown shows, in the same order. A CI job reads <code>charts[0].states</code> from JSON.</p>
+    <claims>
+      <claim>
+        <statement>Exit statuses are part of the answer</statement>
+        <p><code>diff --exit-code</code> exits with 1 on a difference, <code>lint --deny</code> on a finding, and <code>fmt --check</code> on a file to rewrite.</p>
+        <source href="https://github.com/tinyactors-dev/tinyactors/blob/main/tinyactors-core/docs/cli.md#exit-status">tinyactors-core, <code>docs/cli.md</code></source>
+      </claim>
+    </claims>
+  </section>
+
+  <section id="more">
+    <heading>Drive a host, read what it wrote</heading>
+    <list>
+      <item><term><link to="cli-protocol">Drive a host from a script</link></term><text>A script spawns actors, answers their sends and moves the clock over JSON-RPC.</text></item>
+      <item><term><link to="cli-snapshots">Read a snapshot</link></term><text>A snapshot file holds every actor of a host, and the command reads it without restoring it.</text></item>
+    </list>
+  </section>
+</page>

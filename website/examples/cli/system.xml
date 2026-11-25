@@ -1,0 +1,5 @@
+<system>
+  <chart name="order" src="order.scxml"/>
+  <chart name="payment" src="payment.scxml"/>
+  <actor name="first-order" chart="order"/>
+</system>

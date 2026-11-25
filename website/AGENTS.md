@@ -178,6 +178,15 @@ The wording of each point is the content's (`content/site.xml`,
   scenario runner in `tinyactors-napi/examples`), not an API of
   tinyactors.
 
+## The CLI section
+
+- **It documents the latest release of the command, from the command.**
+  The pages under `/cli/` are made from the pinned binary's own help and
+  its examples run on `examples/cli/` (README.md, "The CLI section"):
+  never write a command's usage, options or examples in `content/`. Move
+  the pin (`mise.toml`) when tinyactors-core releases, and rerun `mise run
+  test`. `TINYACTORS_CLI` is for development only.
+
 ## Tasks and tests
 
 - `mise run test` before every commit that changes this directory. It

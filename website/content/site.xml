@@ -31,6 +31,7 @@
       <want id="written-flow">The whole flow written down as states and transitions</want>
       <want id="no-mocks">Effects as events their code performs, so tests need no mocks of the world</want>
       <want id="no-server">No server to run</want>
+      <want id="ci-commands">Commands that check, compare and run charts in CI, with no program to write</want>
       <task id="one-workflow">Write one workflow as a chart</task>
       <task id="test-timeouts">Test its timeouts in CI</task>
       <task id="show-speedup">Show the team the speedup</task>
@@ -81,6 +82,12 @@
       <link to="guide-telemetry">Telemetry</link>
       <link to="guide-browser">In the browser</link>
     </group>
+    <group label="CLI">
+      <link to="cli">All commands</link>
+      <link to="cli-run">Run charts</link>
+      <link to="cli-protocol">Drive a host from a script</link>
+      <link to="cli-snapshots">Read a snapshot</link>
+    </group>
     <link to="changelog">Changelog</link>
     <link to="when-to-use">When to use</link>
     <link to="architecture">Architecture</link>
@@ -115,6 +122,9 @@
     <page src="guides/snapshots.xml"/>
     <page src="guides/telemetry.xml"/>
     <page src="guides/testing.xml"/>
+    <page src="pages/cli.xml"/>
+    <page src="pages/cli-protocol.xml"/>
+    <page src="pages/cli-snapshots.xml"/>
     <page src="pages/changelog.xml"/>
     <page src="pages/404.xml"/>
   </pages>

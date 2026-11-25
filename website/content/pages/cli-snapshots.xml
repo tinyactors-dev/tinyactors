@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<page xmlns="https://www.tinyactors.dev/ns/site" id="cli-snapshots" path="/cli/snapshots/">
+  <title>Read a snapshot without restoring it</title>
+  <description>tinyactors inspect and tinyactors actors read the snapshots and hibernation blobs a host writes: every actor's chart, state, queued events and delayed sends.</description>
+  <purpose kind="how-to" for="agent-platform workflow-tester"/>
+
+  <hero>
+    <headline>Read a snapshot without restoring it</headline>
+    <lede>A snapshot holds every actor of a host, and a hibernation blob holds one. <code>tinyactors actors</code> lists where each actor is, from the file alone.</lede>
+  </hero>
+
+  <section id="write">
+    <heading>Snapshot a host of orders</heading>
+    <p>This session spawns 20 orders and pays and ships some. Then it adds the chart's next version, hibernates order 17 and snapshots the host.</p>
+    <code language="shell">tinyactors run --config shop.json --system shop system.xml &lt; shop.jsonl</code>
+    <code src="../../examples/cli/shop.jsonl" language="text" file="shop.jsonl"/>
+    <p>The site's build runs it with the release, and the command pages below read the file it writes, <code>shop.snapshot</code>.</p>
+  </section>
+
+  <section id="read">
+    <heading>Ask the file where each order is</heading>
+    <list>
+      <item><term><link to="cli-actors"><code>tinyactors actors</code></link></term><text>Every actor: its chart, version, state, the events in its mailbox and its delayed sends, such as a payment timeout.</text></item>
+      <item><term><link to="cli-inspect"><code>tinyactors inspect</code></link></term><text>What the snapshot holds: its segments, images and time, and for a blob, the session it is and whether it wakes in that snapshot.</text></item>
+      <item><term><link to="cli-states"><code>tinyactors states</code></link></term><text>The states of the chart a segment runs, with <code>--segment</code> for a version other than the newest.</text></item>
+    </list>
+  </section>
+
+  <section id="formats">
+    <heading>The command reads its own release's formats</heading>
+    <claims>
+      <claim>
+        <statement>A snapshot is one build's memory</statement>
+        <p>Snapshots and blobs are raw memory of one build of the library, each format with a version. The command reads its own library's formats, and names any other.</p>
+        <source href="https://github.com/tinyactors-dev/tinyactors/blob/main/tinyactors-core/docs/cli.md#inputs">tinyactors-core, <code>docs/cli.md</code></source>
+      </claim>
+    </claims>
+  </section>
+</page>

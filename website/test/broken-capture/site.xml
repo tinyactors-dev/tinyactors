@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- A page that lists the command's commands, built with no capture of the
+     command (mise/cli.rb writes it): the pages it promises cannot be made.
+     expect: lists the command's commands, and the build gave no capture -->
+<site xmlns="https://www.tinyactors.dev/ns/site" origin="https://www.tinyactors.dev">
+  <name>t</name>
+  <tagline>A test site.</tagline>
+  <nav><link to="cli">Commands</link></nav>
+  <pages><page src="pages/cli.xml"/></pages>
+  <footer><links><link href="https://example.com">Example</link></links></footer>
+</site>

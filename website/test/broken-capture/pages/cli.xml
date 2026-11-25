@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<page xmlns="https://www.tinyactors.dev/ns/site" id="cli" path="/cli/"><title>T</title><description>A test page.</description><hero><headline>T</headline><lede>Lede.</lede></hero>
+  <section id="commands"><heading>Commands</heading>
+    <commands for="t"><title>t {command}</title><usage>Usage</usage><options>Options</options><program-options>All</program-options><examples>Examples</examples><see>See</see><option>Option</option><values>Values</values><meaning>Meaning</meaning><status>Status {status}</status><from>From {version}</from></commands>
+  </section>
+</page>

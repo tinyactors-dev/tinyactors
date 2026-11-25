@@ -1,0 +1,27 @@
+<scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0" name="order" datamodel="ecmascript" initial="open">
+  <datamodel>
+    <data id="total" expr="0"/>
+    <data id="charge" expr="null"/>
+  </datamodel>
+  <state id="open">
+    <transition event="item.added" cond="_event.data.price &gt; 0">
+      <assign location="total" expr="total + _event.data.price"/>
+    </transition>
+    <transition event="checkout" target="paying"/>
+  </state>
+  <state id="paying">
+    <onentry>
+      <send type="payments" target="charges" event="charge" id="pay">
+        <param name="amount" expr="total"/>
+      </send>
+    </onentry>
+    <transition event="charge.ok" target="paid">
+      <assign location="charge" expr="_event.data.charge"/>
+    </transition>
+    <transition event="charge.declined" target="open"/>
+  </state>
+  <state id="paid">
+    <transition event="shipped" target="shipped"/>
+  </state>
+  <final id="shipped"/>
+</scxml>

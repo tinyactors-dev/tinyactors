@@ -1,6 +1,6 @@
 #!/usr/bin/env ruby
 #MISE description="Test the website: the content against its schema, the refusals the schema and the build must make, the build's internal links and anchors, and every example a page shows, run"
-#MISE sources=["content/**/*", "presence/**/*.{mjs,scxml,json}", ".agents/skills/ant-animation/scripts/ant.mjs", "schema/**/*", "render/**/*", "style/**/*", "icons/**/*", "components/**/*", "../tinyactors-napi/docs/guide/*.md", "../tinyactors-napi/CHANGELOG.md", "../tinyactors-cpython/CHANGELOG.md", "../tinyactors-core/CHANGELOG.md", "examples/**/*.{scxml,mjs,py,c,txt,json,toml,lock}", "test/**/*", "tools/**/*", "package.json", "package-lock.json", "mise/website.rb", "mise/tasks/*", "../.agents/skills/tinyactors-design/styles.css", "../.agents/skills/tinyactors-design/tokens/**/*", "../.agents/skills/tinyactors-design/components/components.css", "../.agents/skills/tinyactors-design/assets/**/*"]
+#MISE sources=["content/**/*", "presence/**/*.{mjs,scxml,json}", ".agents/skills/ant-animation/scripts/ant.mjs", "schema/**/*", "render/**/*", "style/**/*", "icons/**/*", "components/**/*", "../tinyactors-napi/docs/guide/*.md", "../tinyactors-napi/CHANGELOG.md", "../tinyactors-cpython/CHANGELOG.md", "../tinyactors-core/CHANGELOG.md", "examples/**/*.{scxml,mjs,py,c,txt,json,jsonl,xml,toml,lock}", "mise.toml", "test/**/*", "tools/**/*", "package.json", "package-lock.json", "mise/website.rb", "mise/tasks/*", "../.agents/skills/tinyactors-design/styles.css", "../.agents/skills/tinyactors-design/tokens/**/*", "../.agents/skills/tinyactors-design/components/components.css", "../.agents/skills/tinyactors-design/assets/**/*"]
 #MISE outputs={auto=true}
 # vim:ft=ruby
 
@@ -13,7 +13,9 @@
 # 2. test/broken-*/: sites the build must stop at, naming why (`expect:
 #    <message>`): a link to a page the site does not list, a purpose for an
 #    audience site.xml does not define, a section that answers a need no
-#    audience has.
+#    audience has, a page of commands with no capture of the command, a
+#    link from a command page for a command the binary lacks (with a
+#    capture beside the site, cli.xml).
 # 3. The build (validation first), then every link and asset a page names
 #    on this site resolves to a file, and every #anchor to an id there;
 #    and the site for agents: each page's Markdown, llms.txt (3b).
@@ -23,6 +25,8 @@
 #    A page's code is these files themselves (<code src>), so what a page
 #    shows is what ran here.
 # 5. The guides' examples a page transcludes, run (see below).
+# 5c. The CLI section: its pages against the binary's commands and
+#     options, the help's examples' statuses, its transcripts (below).
 # 6. test/components.mjs: the trace view's tree, time format and axis. The
 #    components' rendering, and the live examples in a page, run in a
 #    browser, which this task does not start.
@@ -53,7 +57,10 @@ broken.each do |site|
   name = site.dirname.basename
   message = expected.call(site)
   Dir.mktmpdir('website-test') do |dir|
-    out, ok = Website.capture('sxml', 'transform', "--result-directory=#{dir}", Website::STYLESHEET, site)
+    # a site with a capture of the command beside it (cli.xml) is built with it
+    capture = site.dirname.join('cli.xml')
+    cli = capture.file? ? ["--param=cli=#{capture}"] : []
+    out, ok = Website.capture('sxml', 'transform', "--result-directory=#{dir}", *cli, Website::STYLESHEET, site)
     failures << "#{name}: built, but must stop at #{message.inspect}" if ok
     failures << "#{name}: stopped, but without #{message.inspect}:\n#{out}" if !ok && !out.include?(message)
   end
@@ -353,6 +360,81 @@ Website.documents.each do |document|
   end
 end
 puts "website: #{written} examples written in the content ran and printed their output"
+
+# 5c. The CLI section (mise/cli.rb), against the binary the build used:
+#     the pinned release's, or TINYACTORS_CLI's for development. Every
+#     command the binary lists has its page and Markdown, and every page
+#     under /cli/ is a command's or the content's; no page names a command
+#     or an option the binary lacks (a code span or a shell block that
+#     runs `tinyactors COMMAND ...`, or a span that starts with a command's
+#     name or an option); every example of its help ran with a status its
+#     exit table gives for an answer (0 or 1: 2 is a command line the
+#     program refused, 3 a file it could not read); each transcript a page
+#     shows is what the binary prints now; and the release the pages
+#     describe is the one the site's install command names: the pin, and
+#     tinyactors-core's newest release.
+cli = Website::CLI
+cli_xml = cli::DOCUMENT.read
+commands = cli.commands
+options = cli.options
+known = options.values.flatten.uniq
+commands.each do |command|
+  %w[index.html index.md].each do |file|
+    failures << "cli: the binary lists #{command}, and build/site/cli/#{command}/#{file} is missing" unless Website::SITE.join('cli', command, file).file?
+  end
+end
+cli_pages = Website::SITE.join('cli').children.select { |dir| dir.directory? && dir.join('index.html').file? }.map { |dir| dir.basename.to_s }
+concepts = Website.documents.filter_map { |document| document.read[%r{<page\b[^>]*\spath="/cli/([a-z-]+)/"}, 1] }
+(cli_pages - commands - concepts).each { |name| failures << "cli: build/site/cli/#{name}/ is the page of no command the binary lists" }
+named = 0
+unescape = ->(text) { text.gsub('&lt;', '<').gsub('&gt;', '>').gsub('&quot;', '"').gsub('&amp;', '&') }
+Website.documents.each do |document|
+  text = document.read
+  spans = text.scan(%r{<code>([^<]*)</code>}).flatten + text.scan(%r{<code\s[^>]*language="shell"[^>]*>([^<]*)</code>}).flatten
+  spans.map(&unescape).each do |span|
+    span.split(/\s*\|\s*|\n/).each do |segment|
+      words = segment.split
+      runs = segment.match?(/(?:\A|\s)tinyactors\s/)
+      command = runs ? segment[/(?:\A|\s)tinyactors\s+(?:-\S+\s+)*([^\s<>]+)/, 1] : (words.first if commands.include?(words.first))
+      if runs && !commands.include?(command)
+        failures << "#{document.relative_path_from(Website::ROOT)}: `#{segment}` names the command #{command.inspect}, which tinyactors does not have"
+        next
+      end
+      next unless command || segment.start_with?('-')
+
+      allowed = command ? options[command] : known
+      segment.scan(/(?<![\w\-.\/=])--?[A-Za-z][\w-]*/).each do |token|
+        named += 1
+        # flags clustered (-Wf) or a value attached (-cNAME)
+        next if allowed.include?(token) || allowed.include?(token[0, 2])
+
+        failures << "#{document.relative_path_from(Website::ROOT)}: `#{segment}` names #{token}, which tinyactors #{command} does not have".squeeze(' ')
+      end
+    end
+  end
+end
+examples = cli_xml.scan(/<example line="([^"]*)" status="(\d+)">/)
+examples.each do |line, status|
+  failures << "cli: the help's example `#{unescape.call(line)}` exited with #{status}" if status.to_i > 1
+end
+cli::TRANSCRIPTS.each do |file, line|
+  shown = Website.documents.any? { |document| document.read.include?(line.gsub('<', '&lt;')) }
+  failures << "cli: no page shows `#{line}`, whose output is examples/cli/#{file}" unless shown
+  out, = cli.shell(line)
+  want = cli::FIXTURE.join(file).read
+  failures << "cli: `#{line}` printed\n#{out}but examples/cli/#{file} says\n#{want}" unless out == want
+end
+version = cli_xml[/<cli version="([^"]+)"/, 1]
+core = Website::REPO.join('tinyactors-core/CHANGELOG.md').read[/^## \[([^\]]+)\] - /, 1]
+if cli.override
+  puts "website: cli: #{cli::OVERRIDE} names tinyactors #{version}, not the pinned release #{cli.pin} " \
+       "(tinyactors-core's newest is #{core}): run the tests again without it once #{cli.pin} is published"
+else
+  failures << "cli: the build ran tinyactors #{version}, but mise.toml pins #{cli.pin}" unless version == cli.pin
+  failures << "cli: mise.toml pins tinyactors-core #{cli.pin}, but the install command shows its newest release, #{core}" unless cli.pin == core
+end
+puts "website: cli: tinyactors #{version}: #{commands.size} commands have their pages; #{examples.size} examples of its help ran; " \
+     "#{named} options the content names checked against it; #{cli::TRANSCRIPTS.size} transcripts match"
 
 # 6. The components' pure parts (their rendering runs in a browser).
 out, ok = Website.capture('node', Website::ROOT.join('test/components.mjs'))

@@ -497,6 +497,7 @@
       <xs:element ref="demo"/>
       <xs:element ref="playground"/>
       <xs:element ref="changelog"/>
+      <xs:element ref="commands"/>
     </xs:choice>
   </xs:group>
 
@@ -847,6 +848,87 @@
     </xs:complexType>
   </xs:element>
 
+  <xs:element name="commands">
+    <xs:annotation><xs:documentation>
+      The tinyactors command's commands, as the released command describes
+      itself: the build runs the binary website/mise.toml pins (mise/cli.rb;
+      TINYACTORS_CLI names another, for development), reads its help as XML
+      (`help -f xml`, `help COMMAND -f xml`, the tables its argument parser
+      reads) and runs each example of its help on the charts of
+      examples/cli/. Here the block is the program's usage and a list of its
+      commands, each with its summary; and each command gets a page of its
+      own, at this page's path followed by its name ("/cli/compile/"), with
+      the id of this page followed by "-" and its name ("cli-compile"): its
+      usage and description, its options and the options every command
+      takes, each example with what it printed (and the pictures it drew),
+      then what `related` and `artifact` add. Nothing on those pages is
+      written by hand: a new command or option appears when the site builds
+      against a new release. One page of the site holds it.
+
+      The children are the words those pages use, since the help gives
+      only its own: `title`, each command page's title, with "{command}"
+      for the command's name; the headings `usage`, `options`,
+      `program-options` (the options every command takes), `examples`
+      and `see` (the links that follow); the columns of an options table
+      (`option`, `values`, `meaning`); `status`, an example's caption when
+      it exits with another status than 0, with "{status}"; and `from`,
+      which says which release the page describes, with "{version}" for
+      the binary's version. `for` is the command pages' audiences, as a
+      purpose's.
+
+      `related` adds a link (a page of this site that explains what the
+      help cannot carry) to the page of its `command`; `artifact` a file
+      the build writes from the binary (its `arguments`, run as
+      `tinyactors ARGUMENTS`, their standard output) and serves at the
+      commands page's path followed by `file`, linked with its words from
+      the page of its `command`. The build stops at a `command` the binary
+      does not have.
+    </xs:documentation></xs:annotation>
+    <xs:complexType>
+      <xs:sequence>
+        <xs:element name="title" type="with-command"/>
+        <xs:element name="usage" type="title"/>
+        <xs:element name="options" type="title"/>
+        <xs:element name="program-options" type="title"/>
+        <xs:element name="examples" type="title"/>
+        <xs:element name="see" type="title"/>
+        <xs:element name="option" type="plain"/>
+        <xs:element name="values" type="plain"/>
+        <xs:element name="meaning" type="plain"/>
+        <xs:element name="status" type="with-status"/>
+        <xs:element name="from" type="with-version"/>
+        <xs:element name="related" minOccurs="0" maxOccurs="unbounded">
+          <xs:complexType>
+            <xs:sequence>
+              <xs:element name="link" type="link"/>
+            </xs:sequence>
+            <xs:attribute name="command" type="command-name" use="required"/>
+          </xs:complexType>
+        </xs:element>
+        <xs:element name="artifact" minOccurs="0" maxOccurs="unbounded">
+          <xs:complexType>
+            <xs:simpleContent>
+              <xs:extension base="plain-attribute">
+                <xs:attribute name="command" type="command-name" use="required"/>
+                <xs:attribute name="arguments" type="plain-attribute" use="required"/>
+                <xs:attribute name="file" use="required">
+                  <xs:simpleType>
+                    <xs:restriction base="xs:token"><xs:pattern value="[a-z0-9][a-z0-9.-]*\.[a-z]+"/></xs:restriction>
+                  </xs:simpleType>
+                </xs:attribute>
+              </xs:extension>
+            </xs:simpleContent>
+          </xs:complexType>
+        </xs:element>
+      </xs:sequence>
+      <xs:attribute name="for" type="audience-ids" use="required"/>
+    </xs:complexType>
+  </xs:element>
+
+  <xs:simpleType name="command-name">
+    <xs:restriction base="xs:token"><xs:pattern value="[a-z]+"/></xs:restriction>
+  </xs:simpleType>
+
   <xs:element name="actions">
     <xs:annotation><xs:documentation>
       What to do next, most important first: the first action is the one
@@ -1010,6 +1092,27 @@
     <xs:annotation><xs:documentation>Plain text that holds {ants}, where the page puts a number of ants.</xs:documentation></xs:annotation>
     <xs:restriction base="xs:string">
       <xs:pattern value="[^\n]*\{ants\}[^\n]*"/>
+    </xs:restriction>
+  </xs:simpleType>
+
+  <xs:simpleType name="with-command">
+    <xs:annotation><xs:documentation>Plain text that holds {command}, where a command page puts the command's name.</xs:documentation></xs:annotation>
+    <xs:restriction base="xs:string">
+      <xs:pattern value="[^\n]*\{command\}[^\n]*"/>
+    </xs:restriction>
+  </xs:simpleType>
+
+  <xs:simpleType name="with-status">
+    <xs:annotation><xs:documentation>Plain text that holds {status}, where a command page puts an example's exit status.</xs:documentation></xs:annotation>
+    <xs:restriction base="xs:string">
+      <xs:pattern value="[^\n]*\{status\}[^\n]*"/>
+    </xs:restriction>
+  </xs:simpleType>
+
+  <xs:simpleType name="with-version">
+    <xs:annotation><xs:documentation>Plain text that holds {version}, where a command page puts the version of the command it describes.</xs:documentation></xs:annotation>
+    <xs:restriction base="xs:string">
+      <xs:pattern value="[^\n]*\{version\}[^\n]*"/>
     </xs:restriction>
   </xs:simpleType>
 

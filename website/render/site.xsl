@@ -36,10 +36,19 @@
   <!-- A hash of the stylesheet's and the scripts' sources (mise/website.rb). -->
   <xsl:param name="version" as="xs:string" select="'dev'"/>
 
+  <!-- The CLI section's capture (mise/cli.rb): the released tinyactors
+       command's help and its examples' runs, build/cli/cli.xml. Only a
+       site whose content lists the commands (<commands>) needs it. -->
+  <xsl:param name="cli" as="xs:string" select="''"/>
+
   <xsl:variable name="site" select="/s:site"/>
   <xsl:variable name="origin" select="string($site/@origin)"/>
-  <xsl:variable name="pages" as="element(s:page)*"
+  <xsl:variable name="content-pages" as="element(s:page)*"
                 select="$site/s:pages/s:page ! doc(resolve-uri(@src, base-uri($site)))/s:page"/>
+  <xsl:variable name="commands" as="element(s:commands)?" select="($content-pages//s:commands)[1]"/>
+  <xsl:variable name="cli-doc" as="element(cli)?" select="if (exists($commands) and $cli != '') then doc($cli)/cli else ()"/>
+  <!-- Every page: the content's, then a page per command of the capture. -->
+  <xsl:variable name="pages" as="element(s:page)*" select="$content-pages, f:command-pages()"/>
 
   <!-- ===================================================== the site -->
 
@@ -63,6 +72,15 @@
 
   <!-- What the schema cannot check: names across documents. -->
   <xsl:template name="check">
+    <xsl:if test="count($content-pages//s:commands) gt 1">
+      <xsl:message terminate="yes">site: two pages list the command's commands (&lt;commands&gt;); one does, and its command pages are under its path</xsl:message>
+    </xsl:if>
+    <xsl:if test="exists($commands) and empty($cli-doc)">
+      <xsl:message terminate="yes">site: {f:where($commands)}: lists the command's commands, and the build gave no capture of the command (the parameter cli: mise/cli.rb)</xsl:message>
+    </xsl:if>
+    <xsl:for-each select="$commands/(s:related, s:artifact)[not(@command = $cli-doc/command/@name)]">
+      <xsl:message terminate="yes">site: {f:where(.)}: the command "{@command}", which the tinyactors {$cli-doc/@version} the site documents does not have</xsl:message>
+    </xsl:for-each>
     <xsl:for-each-group select="$pages" group-by="@id">
       <xsl:if test="count(current-group()) gt 1">
         <xsl:message terminate="yes">site: two pages have the id "{current-grouping-key()}"</xsl:message>
@@ -136,7 +154,7 @@
           <link rel="stylesheet" href="/vendor/scxmljs/dist/themes/tinyactors.css"/>
           <script type="module" src="/assets/components/chart.mjs?v={$version}"></script>
         </xsl:if>
-        <xsl:if test=".//s:code[not(@role = 'output') and not(@language = 'text')]">
+        <xsl:if test=".//s:code[not(@role = 'output') and not(@language = 'text')] or .//s:commands">
           <script type="module" src="/assets/components/highlight.mjs?v={$version}"></script>
         </xsl:if>
         <xsl:if test=".//s:code[parent::s:section or parent::s:example or parent::s:program or parent::s:in] or .//s:live or .//s:install">
@@ -689,6 +707,22 @@
     </ta-tabs>
   </xsl:template>
 
+  <!-- The command's commands, from its help: its usage, then a list of
+       its commands, each linked to its page with its summary. -->
+  <xsl:template match="s:commands">
+    <xsl:apply-templates select="f:commands-blocks()"/>
+  </xsl:template>
+
+  <!-- A picture a command drew (an example's SVG, from the capture),
+       served beside its page; the command that drew it is its name. -->
+  <xsl:template match="s:drawing">
+    <figure class="figure drawing">
+      <div class="figure__scroll" tabindex="0">
+        <img src="{@href}" alt="{@alt}"/>
+      </div>
+    </figure>
+  </xsl:template>
+
   <!-- Claims: each a card with its statement, why, and where to check it. -->
   <xsl:template match="s:claims">
     <div class="claims">
@@ -1087,5 +1121,135 @@
   <xsl:function name="f:where" as="xs:string">
     <xsl:param name="node" as="element()"/>
     <xsl:sequence select="replace(base-uri($node), '^.*/content/', 'content/')"/>
+  </xsl:function>
+  <!-- ===================================================== the CLI
+       The pages of the command's commands (mise/cli.rb, build/cli/cli.xml),
+       made of the content's own blocks so the HTML, the Markdown and the
+       checks treat them as any page: no word of them is written here. The
+       help's text is the command's, the headings and labels the content's
+       (<commands>), each command's page at the commands page's path
+       followed by its name, its id the page's followed by "-" and its
+       name. -->
+
+  <xsl:function name="f:command-pages" as="element(s:page)*">
+    <xsl:variable name="page" select="$commands/ancestor::s:page"/>
+    <xsl:for-each select="$cli-doc/command">
+      <xsl:variable name="name" select="string(@name)"/>
+      <xsl:variable name="help" select="help"/>
+      <s:page id="{$page/@id}-{$name}" path="{$page/@path}{$name}/">
+        <s:title>{f:fill($commands/s:title, 'command', $name)}</s:title>
+        <s:description>{f:sentence($help/@summary)}</s:description>
+        <s:purpose kind="reference" for="{$commands/@for}"/>
+        <s:hero>
+          <s:headline><s:code>{$cli-doc/help/@name} {$name}</s:code></s:headline>
+          <s:lede>{f:sentence($help/@summary)}</s:lede>
+        </s:hero>
+        <s:section id="usage">
+          <s:heading>{normalize-space($commands/s:usage)}</s:heading>
+          <s:code language="shell">{$help/@usage}</s:code>
+          <xsl:if test="normalize-space($help/@description)"><s:p>{$help/@description}</s:p></xsl:if>
+          <s:p>{f:fill($commands/s:from, 'version', $cli-doc/@version)}</s:p>
+        </s:section>
+        <xsl:if test="$help/options/option">
+          <s:section id="options">
+            <s:heading>{normalize-space($commands/s:options)}</s:heading>
+            <xsl:sequence select="f:options-table($help/options/option)"/>
+          </s:section>
+        </xsl:if>
+        <s:section id="program-options">
+          <s:heading>{normalize-space($commands/s:program-options)}</s:heading>
+          <xsl:sequence select="f:options-table($help/programOptions/option)"/>
+        </s:section>
+        <xsl:if test="runs/example">
+          <s:section id="examples">
+            <s:heading>{normalize-space($commands/s:examples)}</s:heading>
+            <xsl:for-each select="runs/example">
+              <s:example>
+                <s:code language="shell">{@line}</s:code>
+                <xsl:if test="normalize-space(output)"><s:code language="text" role="output">{output}</s:code></xsl:if>
+                <xsl:if test="@status != '0'"><s:caption>{f:fill($commands/s:status, 'status', @status)}</s:caption></xsl:if>
+              </s:example>
+              <xsl:for-each select="svg">
+                <s:drawing href="{$page/@path}{@href}" alt="{../@line}" file="{@file}"/>
+              </xsl:for-each>
+            </xsl:for-each>
+          </s:section>
+        </xsl:if>
+        <xsl:variable name="see" select="$commands/(s:related, s:artifact)[@command = $name]"/>
+        <xsl:if test="$see">
+          <s:section id="see">
+            <s:heading>{normalize-space($commands/s:see)}</s:heading>
+            <s:list>
+              <xsl:for-each select="$see">
+                <s:item><s:text>
+                  <xsl:choose>
+                    <xsl:when test="self::s:related"><xsl:sequence select="s:link"/></xsl:when>
+                    <xsl:otherwise><s:link href="{$page/@path}{@file}">{normalize-space(.)}</s:link></xsl:otherwise>
+                  </xsl:choose>
+                </s:text></s:item>
+              </xsl:for-each>
+            </s:list>
+          </s:section>
+        </xsl:if>
+      </s:page>
+    </xsl:for-each>
+  </xsl:function>
+
+  <!-- A table of options: each one's names, the values it takes, what it does. -->
+  <xsl:function name="f:options-table" as="element(s:table)">
+    <xsl:param name="options" as="element(option)*"/>
+    <s:table>
+      <s:head>
+        <s:cell>{normalize-space($commands/s:option)}</s:cell>
+        <s:cell>{normalize-space($commands/s:values)}</s:cell>
+        <s:cell>{normalize-space($commands/s:meaning)}</s:cell>
+      </s:head>
+      <xsl:for-each select="$options">
+        <s:row>
+          <s:cell><s:code>{@option}</s:code></s:cell>
+          <s:cell>
+            <xsl:for-each select="tokenize(@values, ',\s*')[. != '']">
+              <xsl:if test="position() gt 1">, </xsl:if><s:code>{.}</s:code>
+            </xsl:for-each>
+          </s:cell>
+          <s:cell>{@description}</s:cell>
+        </s:row>
+      </xsl:for-each>
+    </s:table>
+  </xsl:function>
+
+  <!-- The commands page's blocks: the program's usage, then each command
+       (in a section of their own, as the templates of a section's blocks match them). -->
+  <xsl:function name="f:commands-blocks" as="element()*">
+    <xsl:variable name="page" select="$commands/ancestor::s:page"/>
+    <xsl:variable name="blocks" as="element(s:section)">
+      <s:section id="{$commands/ancestor::s:section/@id}">
+    <s:p><s:code>{$cli-doc/help/@usage}</s:code></s:p>
+    <s:list>
+      <xsl:for-each select="$cli-doc/help/commands/command">
+        <s:item>
+          <s:term><s:link to="{$page/@id}-{@command}"><s:code>{$cli-doc/help/@name} {@command}</s:code></s:link></s:term>
+          <s:text>{f:sentence(@summary)}</s:text>
+        </s:item>
+      </xsl:for-each>
+    </s:list>
+      </s:section>
+    </xsl:variable>
+    <xsl:sequence select="$blocks/*"/>
+  </xsl:function>
+
+  <!-- The content's words with "{name}" filled in. -->
+  <xsl:function name="f:fill" as="xs:string">
+    <xsl:param name="words" as="element()"/>
+    <xsl:param name="name" as="xs:string"/>
+    <xsl:param name="value" as="xs:string"/>
+    <xsl:sequence select="replace(normalize-space($words), '{' || $name || '}', $value, 'q')"/>
+  </xsl:function>
+
+  <!-- The help's lowercase summary as a sentence. -->
+  <xsl:function name="f:sentence" as="xs:string">
+    <xsl:param name="text" as="xs:string"/>
+    <xsl:variable name="text" select="normalize-space($text)"/>
+    <xsl:sequence select="upper-case(substring($text, 1, 1)) || substring($text, 2) || (if (matches($text, '[.!?]$')) then '' else '.')"/>
   </xsl:function>
 </xsl:stylesheet>

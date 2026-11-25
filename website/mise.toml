@@ -7,6 +7,11 @@
 # sxml validates the content against its XSD 1.1 schema and runs the XSLT
 # 4.0 stylesheet that writes the pages (https://sxml.tinyactors.dev).
 "github:tinyactors-dev/sxml" = "0.2.0"
+# The tinyactors command whose help and examples make the CLI section
+# (/cli/, mise/cli.rb): the latest release, from its archive, as the
+# examples use the published packages. TINYACTORS_CLI names another
+# binary for development (mise/cli.rb says how).
+"github:tinyactors-dev/tinyactors-core" = "0.4.0"
 # Node.js runs the examples the pages show (examples/, with the packages
 # they import from npm), the local server and wrangler, which deploys.
 node = "22"

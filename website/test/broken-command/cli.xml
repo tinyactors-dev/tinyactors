@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- A capture as mise/cli.rb writes it, of a binary with one command. -->
+<cli version="0.0.0" binary="override">
+  <help name="tinyactors" summary="a test" usage="tinyactors [options] &lt;command&gt;">
+    <commands><command command="run" summary="run charts"/></commands>
+    <programOptions/>
+  </help>
+  <command name="run"><help name="run" summary="run charts" usage="tinyactors run" description=""><options/><programOptions/></help><runs/></command>
+</cli>

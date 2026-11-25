@@ -1,0 +1,18 @@
+<scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0" name="shop" datamodel="ecmascript" initial="browsing">
+  <state id="browsing">
+    <transition event="cart.checkout" target="checkout"/>
+  </state>
+  <state id="checkout" initial="address">
+    <state id="address">
+      <transition event="address.entered" target="shipping"/>
+    </state>
+    <state id="shipping">
+      <transition event="shipping.chosen" target="review"/>
+    </state>
+    <state id="review">
+      <transition event="order.placed" target="placed"/>
+    </state>
+    <transition event="checkout.abandoned" target="browsing"/>
+  </state>
+  <final id="placed"/>
+</scxml>

@@ -37,7 +37,8 @@ content and runs the stylesheet. Node.js runs the examples and wrangler.
 | `tools/serve.mjs` | the local server |
 | `../copywriter/` | not the site's: the copywriter's build (`dist/site`) is copied to `/copywriter/` (the extension's ZIP, a switch that loads its widget on every page of a device; not indexed) |
 | `wrangler.jsonc` | the Cloudflare Worker: `build/site` as static assets on www.tinyactors.dev |
-| `mise/` | the tasks (Ruby) and what they share (`website.rb`) |
+| `mise/` | the tasks (Ruby) and what they share (`website.rb`; `cli.rb`, the CLI section's capture) |
+| `examples/cli/` | the charts and inputs the `tinyactors` command's help examples name (`order.scxml`, `system.xml`, `requests.jsonl`, ...), which the build runs them on, and `requests.txt`, a session's output a page shows |
 
 The design system is the repository's one copy,
 `.agents/skills/tinyactors-design`. The build puts its tokens and
@@ -111,6 +112,35 @@ A page is a hero and sections. Each section has a heading and blocks:
   `render/markdown.xsl` (the build stops at a block with no Markdown).
 
 A new page goes in `content/pages/` and in `site.xml`'s `<pages>`.
+
+## The CLI section
+
+The pages under `/cli/` document the latest release of the `tinyactors`
+command, as the examples use the published packages. `<commands>`
+(`content/pages/cli.xml`) is where they come from: the build
+(`mise/cli.rb`) runs the binary `mise.toml` pins
+(`"github:tinyactors-dev/tinyactors-core"`, installed by mise from the
+release's archive), reads its help as XML (`help -f xml`, `help COMMAND
+-f xml`), runs each example of its help on the charts of `examples/cli/`
+and writes `build/cli/cli.xml`, from which `render/site.xsl` makes one
+page per command: usage, description, options, examples with what they
+printed. Nothing per command is written by hand; a new command or
+option appears when the site builds against a new release, after the pin
+moves. `<artifact>` serves a file the binary writes (`run --schema` as
+`/cli/run.schema.json`). `mise run test` checks that every command the
+binary lists has its page, that no page names a command or an option it
+lacks, that its help's examples ran, and that the pin is
+tinyactors-core's newest release.
+
+For development, `TINYACTORS_CLI` names another binary, such as
+tinyactors-core's `build/dev/bin/tinyactors`; the build and the tests use
+it instead of the pin's, and the pages say its version. Before the pinned
+release is published, mise cannot install it and refuses to run the
+tasks; run them as
+
+```sh
+MISE_TASK_RUN_AUTO_INSTALL=false TINYACTORS_CLI=../tinyactors-core/build/dev/bin/tinyactors mise run test
+```
 
 ## Purposes and audiences in the content
 

@@ -1,0 +1,59 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<page xmlns="https://www.tinyactors.dev/ns/site" id="cli-protocol" path="/cli/protocol/">
+  <title>Drive a host from a script</title>
+  <description>tinyactors run serves one host over JSON-RPC 2.0 on standard input and output: a script spawns actors, answers their sends and moves the clock.</description>
+  <purpose kind="how-to" for="workflow-tester agent-platform"/>
+
+  <hero>
+    <headline>Drive a host from a script</headline>
+    <lede><code>tinyactors run</code> reads one JSON-RPC request a line and writes what the actors did before each answer. Your script plays the payment service and the clock.</lede>
+  </hero>
+
+  <section id="start">
+    <heading>Start a host on your charts</heading>
+    <p>The command compiles the charts into one host, and <code>--io-processor payments</code> names the service your script answers for. The end of standard input ends it.</p>
+    <code language="shell">tinyactors run --io-processor payments --system shop order.scxml &lt; requests.jsonl</code>
+    <p>The order chart asks <code>payments</code> for a charge, retries after 30 seconds of silence, and gives up after three attempts.</p>
+    <code src="../../examples/cli/order.scxml" language="scxml" file="order.scxml"/>
+  </section>
+
+  <section id="session">
+    <heading>Answer each send the actor makes</heading>
+    <p>A <code>run.*</code> method is one of the host's calls, and any other method, such as <code>actor.state</code>, asks the host. Your script answers each <code>effect.send</code> with <code>run.send</code>.</p>
+    <example>
+      <code src="../../examples/cli/requests.jsonl" language="text" file="requests.jsonl"/>
+      <code src="../../examples/cli/requests.txt" language="text" role="output"/>
+      <caption>The first order is paid and shipped; the second gets no answer, and its charge goes out again at 30 seconds.</caption>
+    </example>
+  </section>
+
+  <section id="hold">
+    <heading>Answer a send before its sender moves on</heading>
+    <p>With <code>"hold": true</code>, the turn stops at a send whose sender waits, and answers <code>held</code>. The order stays in <code>paying</code> until request 5 answers and request 6 turns again.</p>
+    <p>Without it, the sender goes on at once, and a later answer arrives as an ordinary event.</p>
+  </section>
+
+  <section id="clock" answers="workflow-tester.simulated-clock">
+    <heading>Move the clock yourself</heading>
+    <p>The host's clock moves only with <code>run.advanceTime</code>. Request 14 moves it 30 seconds, and the next turn fires the second order's timeout at once.</p>
+    <claims>
+      <claim>
+        <statement>A session repeats byte for byte</statement>
+        <p>The clock is simulated and <code>Math.random</code> has a fixed seed, so the same requests write the same lines, trace ids included.</p>
+        <source href="https://github.com/tinyactors-dev/tinyactors/blob/main/tinyactors-core/docs/cli.md#startup-and-the-end-of-input">tinyactors-core, <code>docs/cli.md</code></source>
+      </claim>
+    </claims>
+  </section>
+
+  <section id="schema">
+    <heading>Generate a client from the schema</heading>
+    <p><code>tinyactors run --schema</code> prints the protocol's JSON Schema, every message in both directions. The <link to="cli-run" section="see">run command's page</link> serves this release's.</p>
+    <claims>
+      <claim>
+        <statement>The protocol is experimental</statement>
+        <p>It may change in any release until a second client uses it. The schema describes the release you have.</p>
+        <source href="https://github.com/tinyactors-dev/tinyactors/blob/main/tinyactors-core/docs/cli.md#run">tinyactors-core, <code>docs/cli.md</code></source>
+      </claim>
+    </claims>
+  </section>
+</page>

@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- A link added to the page of a command the binary does not have (its
+     capture, cli.xml, lists only run): a command page the build cannot
+     make. expect: the command "deploy", which the tinyactors 0.0.0 -->
+<site xmlns="https://www.tinyactors.dev/ns/site" origin="https://www.tinyactors.dev">
+  <name>t</name>
+  <tagline>A test site.</tagline>
+  <nav><link to="cli">Commands</link></nav>
+  <pages><page src="pages/cli.xml"/></pages>
+  <footer><links><link href="https://example.com">Example</link></links></footer>
+</site>
