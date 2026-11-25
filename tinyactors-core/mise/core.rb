@@ -59,6 +59,10 @@ module Core
     # A statechart drawn: scxmljs's layout of nested boxes and orthogonal
     # routes, ported (src/diagram/diagram.h). Freestanding; not in a
     # released library.
+    # What can be known about a chart without running it: lint's findings
+    # and the shortest path to a state (src/analysis/analysis.h).
+    # Freestanding; not in a released library.
+    Layer.new(name: 'analysis', uses: %w[image], freestanding: true, sources: %w[src/analysis/search.c src/analysis/lint.c]),
     Layer.new(name: 'diagram', uses: %w[base], freestanding: true, sources: %w[src/diagram/layout.c src/diagram/check.c]),
     # The layout as SVG (src/diagram/svg.h), written through the compiler's
     # ta_xml_writer, so compiled without the C library's headers but not
@@ -66,8 +70,8 @@ module Core
     Layer.new(name: 'svg', uses: %w[diagram compile], freestanding: :headers, sources: %w[src/diagram/svg.c]),
     # The tinyactors command's commands (tools/tinyactors): the C library only
     # in its platform file, which the program adds (TOOLS below).
-    Layer.new(name: 'tool', uses: %w[cli svg compile image], freestanding: :headers,
-              sources: %w[program input compile_command inspect disassemble graph diff]
+    Layer.new(name: 'tool', uses: %w[cli svg analysis compile image], freestanding: :headers,
+              sources: %w[program input compile_command inspect disassemble graph diff lint path]
                 .map { |s| "tools/tinyactors/#{s}.c" }),
     # The BasicHTTP Event I/O Processor's codec; the transport stays with the host.
     Layer.new(name: 'basic_http', uses: %w[base], freestanding: true, sources: %w[src/basic_http/basic_http.c]),
@@ -200,6 +204,7 @@ module Core
     unit('test_cli_arguments', 'cli'),
     unit('test_cli_report', 'cli'),
     unit('test_diagram', 'svg'),
+    unit('test_analysis', 'analysis', 'compile'),
     unit('test_table', 'base'),
     unit('test_session_map', 'host'),
     unit('test_growable_arena', 'base'),

@@ -60,6 +60,22 @@ static const ta_cli_option diff_options[] = {
     [TOOL_DIFF_ALL] = {T("all"), 0, TA_CLI_OPTION_FLAG, 0, 0, 0, T(""),
                        T("list the charts that did not change too")},
 };
+static const ta_cli_option lint_options[] = {
+    WARNINGS_AS_ERRORS, CHART,
+    [TOOL_LINT_DENY] = {T("deny"), 'd', TA_CLI_OPTION_VALUE, TA_CLI_OPTION_REPEATABLE, 0, 0, T("RULE"),
+                        T("exit with 1 when this rule finds something (all: any rule); repeat it for more")},
+    [TOOL_LINT_ALLOW] = {T("allow"), 'a', TA_CLI_OPTION_VALUE, TA_CLI_OPTION_REPEATABLE, 0, 0, T("RULE"),
+                         T("do not report this rule's findings (all: none); repeat it for more")},
+};
+static const ta_cli_option path_options[] = {
+    WARNINGS_AS_ERRORS, CHART,
+    [TOOL_PATH_TO] = {T("to"), 't', TA_CLI_OPTION_VALUE, TA_CLI_OPTION_REQUIRED, 0, 0, T("STATE"),
+                      T("the state the last configuration holds")},
+    [TOOL_PATH_FROM] = {T("from"), 0, TA_CLI_OPTION_VALUE, 0, 0, 0, T("STATE"),
+                        T("start in this state, entered with its defaults, instead of the initial configuration")},
+    [TOOL_PATH_UNREACHABLE] = {T("unreachable"), 'u', TA_CLI_OPTION_FLAG, 0, 0, 0, T(""),
+                               T("succeed when no path exists, and exit with 1 when one does")},
+};
 
 #define OPTIONS(table) (uint32_t)(sizeof(table) / sizeof(table)[0]), (table)
 #define EXAMPLES(table) (uint32_t)(sizeof(table) / sizeof(table)[0]), (table)
@@ -88,6 +104,12 @@ static const ta_string_view graph_examples[] = {T("graph -f svg order.scxml > or
 static const ta_string_view diff_examples[] = {
     T("diff order-v1.tai order-v2.scxml"), T("diff --breaking --exit-code deployed.tai order.scxml"),
     T("diff -f json --chart order old.tai new.tai")};
+static const ta_string_view lint_examples[] = {
+    T("lint order.scxml"), T("lint --deny all --allow unsent-event system.xml"),
+    T("lint -f json --chart payment shop.tai")};
+static const ta_string_view path_examples[] = {
+    T("path order.scxml --to shipped"), T("path order.scxml --from cancelled --to paid --unreachable"),
+    T("path -f json --chart payment shop.tai --to settled")};
 static const ta_string_view help_examples[] = {T("help"), T("help compile"),
                                                T("help -f json inspect")};
 static const ta_string_view version_examples[] = {T("version"), T("version -f json")};
@@ -104,6 +126,8 @@ typedef enum tool_command_index {
     TOOL_COMMAND_DISASSEMBLE,
     TOOL_COMMAND_GRAPH,
     TOOL_COMMAND_DIFF,
+    TOOL_COMMAND_LINT,
+    TOOL_COMMAND_PATH,
     TOOL_COMMAND_HELP,
     TOOL_COMMAND_VERSION,
     TOOL_COMMAND_COUNT
@@ -164,6 +188,25 @@ static const ta_cli_command commands[TOOL_COMMAND_COUNT] = {
            "no longer handles) or a change of behaviour, and the answer says what a migration "
            "does to running actors. --breaking --exit-code fails a build that would break them."),
          T("OLD NEW"), 2, 2, OPTIONS(diff_options), EXAMPLES(diff_examples)},
+    [TOOL_COMMAND_LINT] =
+        {T("lint"), T("what cannot work as written: unreachable states, dead ends, shadowed transitions, ..."),
+         T("Reads the charts' states, transitions, raises and sends, without running them, and reports what "
+           "cannot do what it is written for. Rules: unreachable (a state no path enters), dead-end (a state "
+           "an actor never leaves), never-ends (no final state reachable from it), shadowed (a transition an "
+           "earlier one always takes first), eventless-loop (an eventless transition taken without end), "
+           "unhandled-event (raised or sent to a chart of the image that handles it nowhere), unsent-event "
+           "(with several charts: handled, but sent by nothing in the image), unknown-events (a computed "
+           "event may arrive, so the last is not checked), send-target (a static target no send can reach), "
+           "search-limit. Exits with 1 when a rule given to --deny finds something."),
+         T("INPUT..."), 1, TA_CLI_UNBOUNDED, OPTIONS(lint_options), EXAMPLES(lint_examples)},
+    [TOOL_COMMAND_PATH] =
+        {T("path"), T("the shortest way to a state: events, conditions, transitions"),
+         T("Searches the chart's configurations breadth first, from its initial configuration (or a state "
+           "given with --from) to one holding the state given with --to, taking any transition whose "
+           "source is active: events may come in any order and conditions may hold, so each step lists the "
+           "events that take it and the condition it needs. Exits with 1 when no path exists (with "
+           "--unreachable: when one does). The chart is the first one, or the one --chart names."),
+         T("INPUT..."), 1, TA_CLI_UNBOUNDED, OPTIONS(path_options), EXAMPLES(path_examples)},
     [TOOL_COMMAND_HELP] = {T("help"), T("describe a command, or the program"), T(""),
                            T("[COMMAND]"), 0, 1, 0, 0, EXAMPLES(help_examples)},
     [TOOL_COMMAND_VERSION] = {T("version"), T("the version of the program and its library"), T(""),
@@ -183,7 +226,8 @@ static const tool_run runs[TOOL_COMMAND_COUNT] = {
     [TOOL_COMMAND_TRANSITIONS] = tool_transitions, [TOOL_COMMAND_EVENTS] = tool_events,
     [TOOL_COMMAND_DATA] = tool_data,               [TOOL_COMMAND_EXPRESSIONS] = tool_expressions,
     [TOOL_COMMAND_DISASSEMBLE] = tool_disassemble, [TOOL_COMMAND_GRAPH] = tool_graph,
-    [TOOL_COMMAND_DIFF] = tool_diff,               [TOOL_COMMAND_HELP] = tool_help,
+    [TOOL_COMMAND_DIFF] = tool_diff,               [TOOL_COMMAND_LINT] = tool_lint,
+    [TOOL_COMMAND_PATH] = tool_path,               [TOOL_COMMAND_HELP] = tool_help,
     [TOOL_COMMAND_VERSION] = tool_version,
 };
 

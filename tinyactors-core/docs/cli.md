@@ -98,6 +98,8 @@ column.
 | `disassemble` | INPUT... | Each chart's executable content as instructions: their place, the entry points starting there (onentry and onexit of a state, a transition's actions, an invoke's finalize, the chart's script), the instruction and its operands. |
 | `graph` | INPUT... | Each chart drawn: nested boxes for its states, orthogonal routes for its transitions, labels on their routes. `-f svg` answers the picture (every selected chart, one above the other, under its name; light or dark by the reader's preference); the other formats answer the drawing as data: each box (its state, kind, how it is drawn and its rectangle), each edge (source, target, events, condition and its route as points) and the transitions a box lists inside it (those without a target, and those crossing three or more container borders). See [Graph](#graph). |
 | `diff` | OLD NEW | Two versions, each an image, a manifest or a chart, compared chart by chart (matched by name) as statecharts: states, transitions, data, executable content, invokes and the events each state handles, each change marked breaking for actors running the old version or not, and what a migration does to them. `--breaking` lists only the breaking changes, `--all` the unchanged charts too, and `--exit-code` exits with 1 when they differ (with `--breaking`, when a change breaks running actors). See [Diff](#diff). |
+| `lint` | INPUT... | What cannot work as written, found without running the charts: each finding's rule, severity (warning or note), chart, state, transition, event, line (0 when the image has none) and a sentence saying what it means. `--deny RULE` (repeatable, `all` for every rule) exits with 1 when that rule finds something; `--allow RULE` (repeatable, `all`) leaves its findings out. See [Lint](#lint). |
+| `path` | INPUT... | The shortest sequence of transitions from the chart's initial configuration (or `--from STATE`) to a configuration holding `--to STATE`: each step's events (or eventless), condition, source, targets and the atomic states active after it; or that no path exists, or that the search stopped at its limit. `--unreachable` asks the opposite: success when no path exists. `--chart` names the chart (default: the first). See [Path](#path). |
 | `help` | [COMMAND] | The program's commands, or a command's usage, options and examples. |
 | `version` | | The program's version (a development build's names its commit: `0.4.0-dev.<date>.<n>.g<sha>`), its library's version and ABI, and the image format version it reads. |
 
@@ -114,7 +116,7 @@ describe it), `--version`.
 | Status | When |
 |---|---|
 | 0 | the command did what was asked |
-| 1 | an input was refused: a chart did not compile, an image did not verify, a file is none of the three; or `diff --exit-code` found differences (breaking ones, with `--breaking`) |
+| 1 | an input was refused: a chart did not compile, an image did not verify, a file is none of the three; or `diff --exit-code` found differences (breaking ones, with `--breaking`); or `lint` found something a `--deny` rule names; or `path` found no path (with `--unreachable`: found one), or stopped at its limit |
 | 2 | the command line was not understood (and `tinyactors` alone, after printing the commands) |
 | 3 | a file could not be read or written, or memory ran out |
 
@@ -127,6 +129,8 @@ tinyactors inspect --format json order.tai | jq '.charts[].name'
 tinyactors transitions --chart order order.scxml
 tinyactors graph -f svg order.scxml > order.svg # the chart, drawn
 tinyactors diff --breaking --exit-code deployed.tai order.scxml   # in CI
+tinyactors lint --deny all --allow unsent-event system.xml        # in CI
+tinyactors path order.scxml --to shipped
 tinyactors compile order.scxml -o - | tinyactors disassemble -
 ```
 
@@ -229,6 +233,107 @@ answers, among the rest:
 | open | cancel | no longer handled |
 ```
 
+## Lint
+
+`tinyactors lint INPUT...` reads the charts' states, transitions, raises
+and sends, runs nothing, and reports what cannot do what it is written
+for. It answers the developer who asks "is anything in this chart dead or
+stuck?" before an actor finds out, and CI, which fails a build on the
+rules it denies:
+
+```sh
+tinyactors lint order.scxml
+tinyactors lint --deny all --allow unsent-event system.xml
+```
+
+`check` answers whether charts compile, and refuses what does not; `lint`
+answers what compiles but cannot work, and fails only on the rules a
+build denies, so the two stay apart.
+
+| Rule | Severity | What it finds |
+|---|---|---|
+| `unreachable` | warning | a state no path from the initial configuration enters (only the topmost of such a subtree; a history state no transition targets is one) |
+| `dead-end` | warning | a reachable atomic state, not final, where an actor does nothing more: no transition of it or of an ancestor handles any event, and none of a parallel region beside it exits it |
+| `never-ends` | warning | in a chart with a final state at its top level: a state from whose every configuration no such final state is reachable (the topmost; one only a dead end keeps from ending is that dead end's) |
+| `shadowed` | warning | a transition an earlier transition of its state, without a condition, always takes first: its descriptors cover this one's (`order` covers `order.paid`, `*` everything), or it is eventless and taken before any event |
+| `eventless-loop` | warning | an eventless transition without a condition, the first eventless one an actor resting in a state must take, that leads back to it: the actor never rests |
+| `unhandled-event` | warning | an event raised, or sent by name to the chart itself, to its parent or to an invoked chart the image holds, that no transition of the receiving chart handles |
+| `unsent-event` | note | with several charts (a manifest, or charts compiled together): a descriptor a chart handles that nothing in the image raises or sends by name to it, so only the application can; `done.*`, `error.*` and `*` are not reported |
+| `unknown-events` | note | with several charts: a send whose event is computed (`eventexpr`) may arrive at the chart, so which events arrive is unknown and `unsent-event` is not checked for it |
+| `send-target` | warning | a send to the SCXML processor whose static target no send can reach: `#_id` naming no invocation of the chart (`error.communication`), or text that is neither `#_...` nor an absolute URI (`error.execution`) |
+| `search-limit` | note | the search of the chart's configurations stopped at its limit (20,000), so `never-ends` was not checked |
+
+What is unknown is never reported as unused: a send whose target is
+computed (`targetexpr`), names an address or a session, or goes to the
+parent of a chart nothing in the image invokes may reach any chart, and
+counts as sent to each; a send with a `type` goes to the application's
+I/O processors and is not followed.
+
+States and transitions carry no line in an image: a transition's finding
+has its condition's line, a send's the line of its first expression, and
+the rest 0.
+
+### What the analysis models
+
+A configuration is a set of active states as SCXML defines one. From a
+configuration, any transition whose source is active and which has
+targets may be taken, one at a time, unless the `shadowed` rule finds it;
+its exit and entry are SCXML's (the transition domain, a compound state
+entered by its initial transition, a parallel state with every region, a
+history state by its default transition). Entering a final state at the
+chart's top level ends the actor. Events are free: any event may come at
+any time, `done.*` and `error.*` included; every condition may hold; an
+eventless transition with a condition does not run first; parallel
+regions take their transitions one after another; history holds nothing
+but its default; invoked children are not followed. So a state found
+unreachable is unreachable whatever happens at run time, while one found
+reachable may still not be. The analysis is a layer of its own
+(`src/analysis/analysis.h`), freestanding, which another tool or a
+binding can call.
+
+## Path
+
+`tinyactors path INPUT... --to STATE` answers "how does an actor get
+there?": the shortest sequence of transitions (by their number), found
+breadth first over the configurations the model above gives, from the
+chart's initial configuration or from `--from STATE` (that state entered
+from the root, its defaults completing the configuration). Each step names
+the events that take it (or that it is eventless), the condition it needs
+(conditions are not evaluated: they are requirements), its source and
+targets, and the atomic states active after it, so a parallel state's
+regions show side by side.
+
+```text
+$ tinyactors path refund.scxml --to emailed
+```
+
+```markdown
+- **Result**: found
+- **Transitions**: 3
+- **Start**: requested
+
+| Step | Events | Eventless | Condition | Source | Targets | Active |
+| --- | --- | --- | --- | --- | --- | --- |
+| 1 | review | no |  | requested | reviewing | reviewing |
+| 2 | approve | no | `amount < 500` | reviewing | approved | transferring emailing |
+| 3 | emailed | no |  | emailing | emailed | transferring emailed |
+```
+
+The result is `found`, `unreachable` (every configuration was searched,
+and none holds the state: no events and no conditions make it happen) or
+`unknown` (the search stopped at 20,000 configurations). The command exits
+with 0 when it found a path and 1 otherwise; with `--unreachable` it asks
+the opposite, for a CI check that something must never happen:
+
+```sh
+tinyactors path refund.scxml --from rejected --to refunded --unreachable
+```
+
+Since events are free, a path may take an event the chart only gets in a
+later situation (`done.state.approved` before both regions are final):
+read a path as the transitions to take, each of which needs its event and
+its condition.
+
 ## Graph
 
 `tinyactors graph` lays a chart out as scxmljs's `<scxml-view>` does (it is
@@ -266,13 +371,17 @@ problems (`tests/diagram`, its README).
 
 ## How it is built
 
-Four layers, from the bottom:
+The layers, from the bottom:
 
 - **`src/cli`**, freestanding like `src/base`: `arguments.h` reads a
   command line against a program's description (its commands, their
   options and arguments), and `report.h` builds an answer as one tree and
   writes it in the three formats. Neither uses the C library, recurses or
   allocates but from the arena it is given.
+- **`src/analysis`**: what can be known about a chart without running
+  it (`analysis.h`, freestanding like `src/cli`): `lint`'s findings and
+  `path`'s search, as arrays in the arena given, knowing nothing of the
+  report.
 - **`src/diagram`**: a chart laid out (`diagram.h`, freestanding like
   `src/cli`) and drawn as SVG through `ta_xml_writer` (`svg.h`).
 - **`tools/tinyactors`** but one file: the commands. They compile without

@@ -464,6 +464,68 @@ static void test_diff(void) {
     CHECK(has("errors", "no chart 'shipment' in either image"));
 }
 
+/* A refund: a descriptor shadowed by an earlier one, a rejected refund
+ * nothing happens to any more, an escalation nothing enters, and a
+ * parallel approval that pays and notifies. */
+static const char refund[] =
+    "<scxml " NS " datamodel='ecmascript' name='refund' initial='requested'>\n"
+    "<datamodel><data id='amount' expr='0'/></datamodel>\n"
+    "<state id='requested'>\n"
+    "<transition event='review' target='reviewing'/>\n"
+    "<transition event='review.urgent' target='approved'/></state>\n"
+    "<state id='reviewing'>\n"
+    "<transition event='approve' cond='amount &lt; 500' target='approved'/>\n"
+    "<transition event='reject' target='rejected'/></state>\n"
+    "<parallel id='approved'>\n"
+    "<state id='paying'><state id='transferring'><transition event='transferred' target='transferred'/></state>"
+    "<final id='transferred'/></state>\n"
+    "<state id='notifying'><state id='emailing'><transition event='emailed' target='emailed'/></state>"
+    "<final id='emailed'/></state>\n"
+    "<transition event='done.state.approved' target='refunded'/></parallel>\n"
+    "<state id='rejected'/>\n<state id='escalated'/>\n<final id='refunded'/></scxml>\n";
+
+static void test_lint_and_path(void) {
+    CHECK(fixture_write("refund.scxml", refund));
+    CHECK_EQUAL(run("lint refund.scxml"), 0);
+    CHECK(has("output", "# Lint"));
+    CHECK(has("output", "- **Warnings**: 3"));
+    CHECK(has("output", "| unreachable | warning | refund | escalated |  |  | 0 |"));
+    CHECK(has("output", "| dead-end | warning | refund | rejected |  |  | 0 |"));
+    CHECK(has("output", "| shadowed | warning | refund | requested | review.urgent \xe2\x86\x92 approved |  | 0 | "
+                        "never taken: review \xe2\x86\x92 reviewing has no condition"));
+    CHECK_EQUAL(run("lint -f json refund.scxml"), 0);
+    CHECK(has("output", "\"rule\": \"dead-end\",\n      \"severity\": \"warning\",\n      \"chart\": \"refund\",\n"
+                        "      \"state\": \"rejected\""));
+    /* --deny fails on a rule's findings; --allow silences them */
+    CHECK_EQUAL(run("lint --deny dead-end refund.scxml"), 1);
+    CHECK(has("output", "- **Denied**: 1"));
+    CHECK_EQUAL(run("lint --deny all --allow dead-end --allow shadowed --allow unreachable refund.scxml"), 0);
+    CHECK(has("output", "- **Warnings**: 0"));
+    CHECK_EQUAL(run("lint -d never-ends refund.scxml"), 0);
+    CHECK_EQUAL(run("lint --deny door refund.scxml"), 2);
+    CHECK(has("errors", "'door' is not a rule; the rules are all, unreachable, dead-end"));
+
+    /* the shortest path: through the parallel approval, one region moving */
+    CHECK_EQUAL(run("path refund.scxml --to emailed"), 0);
+    CHECK(has("output", "# Path"));
+    CHECK(has("output", "- **Result**: found"));
+    CHECK(has("output", "- **Start**: requested"));
+    CHECK(has("output", "| 2 | approve | no | `amount < 500` | reviewing | approved | transferring emailing |"));
+    CHECK(has("output", "| 3 | emailed | no |  | emailing | emailed | transferring emailed |"));
+    CHECK_EQUAL(run("path -f json refund.scxml --to emailed"), 0);
+    CHECK(has("output", "\"transitions\": 3"));
+    CHECK(has("output", "\"events\": \"review\",\n      \"eventless\": false"));
+    /* nothing leaves a rejected refund */
+    CHECK_EQUAL(run("path refund.scxml --from rejected --to refunded"), 1);
+    CHECK(has("output", "- **Result**: unreachable"));
+    CHECK(has("output", "_none_"));
+    CHECK_EQUAL(run("path refund.scxml --from rejected --to refunded --unreachable"), 0);
+    CHECK_EQUAL(run("path refund.scxml --to refunded --unreachable"), 1);
+    CHECK_EQUAL(run("path refund.scxml --to settled"), 2);
+    CHECK(has("errors", "chart 'refund' has no state 'settled'"));
+    CHECK_EQUAL(run("path refund.scxml"), 2);
+}
+
 int main(void) {
     RUN(test_compile_and_inspect);
     RUN(test_a_system);
@@ -475,6 +537,7 @@ int main(void) {
     RUN(test_graph_layout);
     RUN(test_layout_corpus);
     RUN(test_diff);
+    RUN(test_lint_and_path);
     RUN(test_help_and_version);
     TEST_MAIN_END();
 }

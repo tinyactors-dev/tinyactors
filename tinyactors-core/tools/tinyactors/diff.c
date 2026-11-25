@@ -31,6 +31,8 @@
  * comes from the invocation's arena, and nothing recurses. */
 #include "tool.h"
 
+#include "analysis/analysis.h"
+
 #include <tinyactors/datamodel.h>
 
 enum diff_limits {
@@ -983,14 +985,6 @@ static void compare_invokes(chart_diff *diff) {
 
 /* ---- events a state handles ------------------------------------------------------------- */
 
-/* Whether descriptor `handler` matches event `event`: "*", the same name,
- * or a prefix of it at a dot (SCXML 3.12.1). */
-static int covers(ta_string_view handler, ta_string_view event) {
-    if (tool_equal(handler, ta_string("*")) || tool_equal(handler, event)) return 1;
-    return event.length > handler.length && event.pointer[handler.length] == '.' &&
-           tool_equal((ta_string_view){event.pointer, handler.length}, handler);
-}
-
 /* The descriptors of the transitions an actor in `state` takes: those
  * whose source is the state or one of its ancestors (a source's
  * descendants are the interval (source, end), records.h). */
@@ -1019,7 +1013,7 @@ static int walk_next(descriptor_walk *walk, ta_string_view *name) {
 typedef struct handled_query {
     const chart_side *side;
     uint32_t state;
-    uint32_t before; /* TA_NIL: every descriptor, matched by covers */
+    uint32_t before; /* TA_NIL: every descriptor, matched by ta_analysis_descriptor_covers */
 } handled_query;
 
 static int handles(handled_query query, ta_string_view event) {
@@ -1029,7 +1023,7 @@ static int handles(handled_query query, ta_string_view event) {
         if (query.before != TA_NIL) {
             if (k >= query.before) return 0;
             if (tool_equal(name, event)) return 1;
-        } else if (covers(name, event)) {
+        } else if (ta_analysis_descriptor_covers(name, event)) {
             return 1;
         }
     }

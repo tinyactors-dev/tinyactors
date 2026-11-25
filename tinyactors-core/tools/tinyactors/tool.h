@@ -197,6 +197,16 @@ typedef enum tool_diff_option {
     TOOL_DIFF_ALL = 4        /* --all: unchanged charts too */
 } tool_diff_option;
 
+typedef enum tool_lint_option {
+    TOOL_LINT_DENY = 2, /* --deny RULE, repeatable ("all"): its findings exit 1 */
+    TOOL_LINT_ALLOW = 3 /* --allow RULE, repeatable ("all"): its findings are not reported */
+} tool_lint_option;
+typedef enum tool_path_option {
+    TOOL_PATH_TO = 2,         /* --to STATE (required) */
+    TOOL_PATH_FROM = 3,       /* --from STATE */
+    TOOL_PATH_UNREACHABLE = 4 /* --unreachable: succeed when no path exists */
+} tool_path_option;
+
 /* What a command that looks into an image starts with: its arguments as
  * inputs (-W read), the image made from them, and the charts --chart
  * selects. TA_OK: the image is open. Otherwise the reason is told: for a
@@ -233,5 +243,7 @@ void tool_expressions(tool *t);
 void tool_disassemble(tool *t);
 void tool_graph(tool *t);
 void tool_diff(tool *t);
+void tool_lint(tool *t);
+void tool_path(tool *t);
 
 #endif /* TINYACTORS_TOOL_H */
