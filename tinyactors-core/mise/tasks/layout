@@ -3,6 +3,7 @@
 #USAGE flag "--all" help="Every capacity: also requests, outbox entries, trace rules, charts, slab pages and the segment's fixed cost"
 #USAGE flag "--types" help="The region's types: each one's size and padding"
 #USAGE flag "--members" help="The region's types with their members (implies --types)"
+#USAGE flag "--json" help="Print what build/debuginfo/layout.json holds instead of the text, for other programs"
 # vim:ft=ruby
 
 # It builds the layers with the release flags and debug information
@@ -15,11 +16,17 @@
 # ta_system_layout what one more of each pool adds, and each must be what
 # the types give. A difference fails the task.
 #
-# It writes the numbers to build/debuginfo/layout.json. The sizes are this
+# It also checks ta-layout's other mode, the region of an image file at the
+# capacities given (what a binding's memory example asks), against the
+# same cost.
+#
+# It writes the numbers to build/debuginfo/layout.json, and with --json
+# prints them instead of the text. The sizes are this
 # machine's; x86_64 and aarch64 have the same, and no region type holds a
 # pointer, so wasm32 has them too.
 require 'json'
 require 'open3'
+require 'stringio'
 require_relative '../core'
 require_relative '../dwarf'
 
@@ -27,6 +34,8 @@ flag = ->(name) { ENV["usage_#{name}"] == 'true' || ARGV.include?("--#{name}") }
 all = flag.('all')
 members = flag.('members')
 types = members || flag.('types')
+json = flag.('json')
+out = json ? StringIO.new : $stdout
 
 layers = %w[base trace core system host]
 Core.build_layers('debuginfo', (layers + %w[image compile]).uniq)
@@ -58,9 +67,13 @@ generation = 1 # each pool keeps a byte per slot beside its records (ta_pool's g
 message = [['event', slot.('ta_event')], ['trace context', slot.('ta_trace_entry')], ['generations', 2 * generation]]
 untraced_message = [['event', slot.('ta_event')], ['generation', generation]]
 timer = [['timer', slot.('ta_timer')], ['heap entry', size.('ta_heap_node') + 4], ['generation', generation]]
+actor = [['record', slot.('ta_actor')], ['links', size.('ta_actor_links')], ['session index', 8],
+         ['name index', 8], ['generation', generation]]
 COSTS = {
-  'actor' => [['record', slot.('ta_actor')], ['links', size.('ta_actor_links')], ['session index', 8],
-              ['name index', 8], ['generation', generation]],
+  'actor' => actor,
+  # a hibernated actor keeps its records and its strings, and gives its
+  # instance back to the slab (unload in src/system/hibernate.c)
+  'hibernated actor' => actor,
   'message' => message,
   'delayed send' => timer + [['its message', message.sum { |_, bytes| bytes }]],
   'request' => [['request', slot.('ta_request')], ['generation', generation]],
@@ -78,43 +91,45 @@ untraced = untraced_message.sum { |_, bytes| bytes }
 actor_most = total.('actor') - 16 + index_most
 strings = dwarf.macro('TA_STRING_BYTES_PER_ACTOR')
 
-puts "What one more of each costs in a segment's region, with tracing on (the default):"
-puts
-puts format('  %-14<name>s %6<bytes>s  %<parts>s', name: 'actor', bytes: "#{total.('actor')} B", parts: parts.('actor'))
-puts format('  %-14<name>s %6<bytes>s  %<note>s', name: '', bytes: '', note: "up to #{actor_most} B: the two indexes round up to a power of two")
-puts format('  %-14<name>s %6<bytes>s  %<note>s', name: '', bytes: '',
+out.puts "What one more of each costs in a segment's region, with tracing on (the default):"
+out.puts
+out.puts format('  %-14<name>s %6<bytes>s  %<parts>s', name: 'actor', bytes: "#{total.('actor')} B", parts: parts.('actor'))
+out.puts format('  %-14<name>s %6<bytes>s  %<note>s', name: '', bytes: '', note: "up to #{actor_most} B: the two indexes round up to a power of two")
+out.puts format('  %-14<name>s %6<bytes>s  %<note>s', name: '', bytes: '',
                                                  note: "in memory it also holds its chart's instance and #{strings} B of strings")
-puts format('  %-14<name>s %6<bytes>s  %<parts>s', name: 'message', bytes: "#{total.('message')} B", parts: parts.('message'))
-puts format('  %-14<name>s %6<bytes>s  %<note>s', name: '', bytes: '', note: "#{untraced} B with tracing off")
-puts format('  %-14<name>s %6<bytes>s  %<parts>s', name: 'delayed send', bytes: "#{total.('delayed send')} B", parts: parts.('delayed send'))
-puts format('  %-14<name>s %6<bytes>s  %<note>s', name: '', bytes: '',
+out.puts format('  %-14<name>s %6<bytes>s  %<note>s', name: 'hibernated', bytes: "#{total.('hibernated actor')} B",
+                                                 note: "its records; its instance goes back to the slab, its #{strings} B of strings stay")
+out.puts format('  %-14<name>s %6<bytes>s  %<parts>s', name: 'message', bytes: "#{total.('message')} B", parts: parts.('message'))
+out.puts format('  %-14<name>s %6<bytes>s  %<note>s', name: '', bytes: '', note: "#{untraced} B with tracing off")
+out.puts format('  %-14<name>s %6<bytes>s  %<parts>s', name: 'delayed send', bytes: "#{total.('delayed send')} B", parts: parts.('delayed send'))
+out.puts format('  %-14<name>s %6<bytes>s  %<note>s', name: '', bytes: '',
                                                  note: "#{total.('delayed send') - total.('message') + untraced} B with tracing off")
-puts
-puts "  A million of each: actors #{total.('actor')} MB, messages #{total.('message')} MB, " \
+out.puts
+out.puts "  A million of each: actors #{total.('actor')} MB, messages #{total.('message')} MB, " \
      "delayed sends #{total.('delayed send')} MB."
-puts '  A message waits in a mailbox, and a delayed send in the timer heap, until it is handled.'
+out.puts '  A message waits in a mailbox, and a delayed send in the timer heap, until it is handled.'
 
 if all
-  puts
+  out.puts
   %w[request outbox\ entry trace\ rule chart\ of\ the\ image slab\ page segment,\ once].each do |name|
-    puts format('  %-20<name>s %8<bytes>s  %<parts>s', name: name, bytes: "#{total.(name)} B", parts: parts.(name))
+    out.puts format('  %-20<name>s %8<bytes>s  %<parts>s', name: name, bytes: "#{total.(name)} B", parts: parts.(name))
   end
 end
 
 TYPES = %w[ta_actor ta_actor_links ta_event ta_trace_entry ta_timer ta_heap_node ta_request
            ta_effect_record ta_effect ta_trace_rule_compiled ta_chart_stats ta_slab_page ta_system].freeze
 if types
-  puts
-  puts "The region's types (#{Core.archive_path('debuginfo', 'system').dirname.relative_path_from(Core::ROOT)}):"
+  out.puts
+  out.puts "The region's types (#{Core.archive_path('debuginfo', 'system').dirname.relative_path_from(Core::ROOT)}):"
   TYPES.each do |name|
     type = dwarf.struct(name)
-    puts format('  %-24<name>s %6<size>d B  %4<padding>d B padding  %<declared>s', name: name, size: type.size,
+    out.puts format('  %-24<name>s %6<size>d B  %4<padding>d B padding  %<declared>s', name: name, size: type.size,
                                                                                 padding: type.padding, declared: type.declared)
     next unless members
 
     type.members.each do |member|
       width = member.bits ? "#{member.bits} bits" : "#{member.size} B"
-      puts format('      %6<offset>d  %-10<width>s %-28<name>s %<type>s', offset: member.offset, width: width,
+      out.puts format('      %6<offset>d  %-10<width>s %-28<name>s %<type>s', offset: member.offset, width: width,
                                                                          name: member.name, type: member.type)
     end
     type.holes.each { |offset, length| puts format('      %6<offset>d  %-10<width>s (padding)', offset: offset, width: "#{length} B") }
@@ -131,19 +146,33 @@ expected = {
   'request' => total.('request'),
   'outbox' => total.('outbox entry')
 }
-output, status = Open3.capture2(Core.program_path('debuginfo', 'ta-layout').to_s)
+program = Core.program_path('debuginfo', 'ta-layout').to_s
+output, status = Open3.capture2(program)
 abort 'layout: ta-layout failed' unless status.success?
 measured = output.lines.to_h { |line| name, value = line.split; [name, Integer(value)] }
+
+# The other mode, as a binding runs it: an actor's cost from the regions of
+# a file's chart at 2^16 and 2^17 actors, the slabs fixed.
+chart = Core.directory('debuginfo').join('layout-idle.scxml')
+File.write(chart, "<scxml xmlns='http://www.w3.org/2005/07/scxml' version='1.0' name='idle' initial='s'>" \
+                  "<state id='s'/></scxml>\n")
+regions = [1 << 16, 1 << 17].map do |actors|
+  output, status = Open3.capture2(program, chart.to_s, "maxActors=#{actors}", 'instanceBytes=4096', 'stringBytes=16384')
+  abort "layout: ta-layout #{chart} failed" unless status.success?
+  Integer(output[/\Aregion (\d+)$/, 1] || abort("layout: ta-layout #{chart} printed #{output.inspect}"))
+end
+expected['actor, from a file'] = total.('actor')
+measured['actor, from a file'] = (regions[1] - regions[0]) / (1 << 16)
+
 wrong = expected.reject { |name, bytes| measured[name] == bytes }
-puts
+out.puts
 if wrong.empty?
-  puts "Checked against ta_system_layout (tools/layout/layout.c): #{expected.map { |name, bytes| "#{name} #{bytes} B" }.join(', ')}."
+  out.puts "Checked against ta_system_layout (tools/layout/layout.c): #{expected.map { |name, bytes| "#{name} #{bytes} B" }.join(', ')}."
 else
-  wrong.each { |name, bytes| puts "  #{name}: ta_system_layout gives #{measured[name].inspect} B, the types #{bytes} B" }
+  wrong.each { |name, bytes| warn "  #{name}: ta_system_layout gives #{measured[name].inspect} B, the types #{bytes} B" }
 end
 
-out = Core.directory('debuginfo').join('layout.json')
-File.write(out, JSON.pretty_generate(
+document = JSON.pretty_generate(
   'costs' => COSTS.to_h { |name, list| [name, { 'bytes' => total.(name), 'parts' => list.to_h }] }
                   .merge('message, tracing off' => { 'bytes' => untraced, 'parts' => untraced_message.to_h },
                          'actor, most' => { 'bytes' => actor_most }),
@@ -152,5 +181,7 @@ File.write(out, JSON.pretty_generate(
     [name, { 'size' => type.size, 'padding' => type.padding, 'declared' => type.declared,
              'members' => type.members.map { |m| m.to_h.compact.transform_keys(&:to_s) } }]
   end
-))
+)
+File.write(Core.directory('debuginfo').join('layout.json'), document)
+puts document if json
 abort "layout: #{wrong.keys.join(', ')} differ from ta_system_layout: carve() changed, and COSTS must follow it" if wrong.any?

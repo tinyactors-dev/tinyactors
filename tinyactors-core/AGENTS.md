@@ -17,9 +17,9 @@ programs and the builds (`dev`: ASan/UBSan at -O1; `release`; `wasi`).
   (`build/dev/lib`, `build/dev/bin`); `--release` builds `build/release`.
 - `mise run test` builds and runs every test program, then `lint`,
   `check:freestanding`, `api --check` (after `amalgamate`), `wasm:test`,
-  `conform`, `check:wasm` and `run:schema` (the run protocol's JSON
+  `conform`, `check:wasm`, `run:schema` (the run protocol's JSON
   Schema and the schema generator's fixtures against json_schemer, pinned
-  in `tools/tinyactors/schema/Gemfile.lock`); `--full` adds `torture:test` and `check:cross`. Each also runs on its own.
+  in `tools/tinyactors/schema/Gemfile.lock`) and `layout`; `--full` adds `torture:test` and `check:cross`. Each also runs on its own.
 - `mise run check:freestanding` must pass for any change under
   `src/{base,image,core,system}`; `mise run check:wasm` builds the tests for
   wasm32-wasi and runs them under wasmtime.
@@ -54,7 +54,12 @@ programs and the builds (`dev`: ASan/UBSan at -O1; `release`; `wasi`).
   compiler laid them out. It checks each pool's cost against
   `ta_system_layout` (`tools/layout/layout.c`) and fails when they differ:
   a change to `carve()` (`src/system/system.c`) changes the task's `COSTS`
-  in the same commit.
+  in the same commit. `--json` prints the numbers (`build/debuginfo/layout.json`)
+  for other programs. `ta-layout FILE NAME=VALUE...` prints the region of
+  a segment of an image (or an `.scxml` document) at the capacities given,
+  named as the host config's `system` map names them; it calls only public
+  functions of core's amalgamation, so a binding builds it from
+  `tools/layout/layout.c` beside its extension.
 - `third_party/` is vendored (`mise run vendor-quickjs`): never edit or
   format it.
 
