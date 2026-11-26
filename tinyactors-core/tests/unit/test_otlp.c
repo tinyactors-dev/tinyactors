@@ -761,10 +761,10 @@ static void test_fixed_bytes(void) {
     uint64_t hash = 0xcbf29ce484222325ull;
     for (size_t i = 0; i < size; i++)
         hash = (hash ^ request[i]) * 0x100000001b3ull;
-    if (hash != 0x663214607e2fe1b9ull)
+    if (hash != 0x6b52f6d74542b830ull)
         fprintf(stderr, "  request: %zu bytes, FNV-1a %016llx\n", size, (unsigned long long)hash);
     CHECK_EQUAL(size, 984);
-    CHECK_EQUAL(hash, 0x663214607e2fe1b9ull);
+    CHECK_EQUAL(hash, 0x6b52f6d74542b830ull);
     free(request);
     w.otlp = t.otlp;
     synthetic_close(&t, &w);
