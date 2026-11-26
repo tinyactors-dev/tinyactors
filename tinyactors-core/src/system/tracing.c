@@ -76,6 +76,36 @@ uint32_t ta_system_trace(ta_system *system, ta_trace_view *view) {
     return view->length;
 }
 
+/* How many records `view` holds, and how many of them begin in its first
+ * `acknowledged` bytes. */
+static void count_records(const ta_trace_view *view, uint32_t *acknowledged, ta_trace_kept *out) {
+    uint32_t cursor = 0;
+    for (const ta_trace_record *record; (record = ta_trace_next(view, &cursor)) != (const ta_trace_record *)0;) {
+        out->records++;
+        if (cursor - record->size < *acknowledged) out->acknowledged_records++;
+    }
+    *acknowledged = *acknowledged > view->length ? *acknowledged - view->length : 0;
+}
+
+ta_status ta_system_trace_kept(const ta_system *system, ta_trace_kept *out) {
+    uint32_t size = out->size;
+    ta_memset(out, 0, sizeof *out);
+    out->size = size;
+    if (system->config.tracing == TA_TRACING_DISABLED) return TA_ERROR_STATE;
+    ta_journal_kept kept;
+    ta_journal_kept_get(&system->journal, &kept);
+    const unsigned char *strings = (const unsigned char *)ta_slab_pointer(&system->slab, 0);
+    out->first = (ta_trace_view){kept.first, kept.first_length, 0, strings};
+    out->second = (ta_trace_view){kept.second, kept.second_length, 0, strings};
+    out->acknowledged = system->journal.retained;
+    out->lost = system->journal.lost_total;
+    out->ticks_per_second = system->config.ticks_per_second;
+    uint32_t acknowledged = out->acknowledged;
+    count_records(&out->first, &acknowledged, out);
+    count_records(&out->second, &acknowledged, out);
+    return TA_OK;
+}
+
 void ta_system_trace_ack(ta_system *system, uint32_t bytes) {
     if (system->config.tracing == TA_TRACING_DISABLED || system->in_call) return;
     ta_trace_view view;

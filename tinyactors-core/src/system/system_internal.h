@@ -241,41 +241,6 @@ typedef struct ta_system_variables_buffer {
 } ta_system_variables_buffer;
 void ta_system_actor_variables(ta_system *s, const ta_actor *a, ta_system_variables_buffer *b,
                                ta_datamodel_system_variables *sv);
-/* Inspection (docs/requests.md, actor.get and actor.state), called only by
- * those requests: nothing per event.
- *
- * An actor's pending delayed sends: the earliest `timers.capacity` in
- * firing order (due, then the order they were sent) into `timers`, by
- * insertion while its chain (ta_actor.timers, owner_next) is walked once;
- * returns how many it has. Views of region strings, valid until the system
- * runs again; a send without an id has a sendid of {NULL, 0}. */
-typedef struct ta_actor_timer {
-    uint64_t due; /* in the system's ticks */
-    uint32_t sequence, pad;
-    ta_string_view event, sendid;
-} ta_actor_timer;
-typedef struct ta_actor_timer_array {
-    ta_actor_timer *pointer;
-    uint32_t capacity;
-} ta_actor_timer_array;
-uint32_t ta_system_actor_timers(const ta_system *s, uint32_t actor, ta_actor_timer_array timers);
-/* An actor's queued external events (its mailbox), in the order it will
- * take them: the first `events.capacity` into `events`; returns how many it
- * holds. Views of region strings, valid until the system runs again; an
- * event without a sendid has a sendid of {NULL, 0}. For the tinyactors
- * command, which reads a restored snapshot: nothing per event. */
-typedef struct ta_actor_queued {
-    ta_string_view event, sendid;
-} ta_actor_queued;
-typedef struct ta_actor_queued_array {
-    ta_actor_queued *pointer;
-    uint32_t capacity;
-} ta_actor_queued_array;
-uint32_t ta_system_actor_mailbox(const ta_system *s, uint32_t actor, ta_actor_queued_array events);
-/* The name an actor was spawned with (the chart's name when it was given
- * none; a boot actor's manifest name), a view of a region string valid
- * until the system runs again; empty for an actor that is gone. */
-ta_string_view ta_system_actor_name(const ta_system *s, uint32_t actor);
 
 /* ---- reading a blob without a system (hibernate.c) ---------------------------------
  * What a hibernation or export blob holds, read in place, for the tinyactors

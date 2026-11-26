@@ -937,6 +937,18 @@
       "value": 0
     },
     {
+      "name": "TA_TRANSITION_EXTERNAL",
+      "value": 0
+    },
+    {
+      "name": "TA_TRANSITION_INITIAL",
+      "value": 2
+    },
+    {
+      "name": "TA_TRANSITION_INTERNAL",
+      "value": 1
+    },
+    {
       "name": "TA_VERSION_MAJOR",
       "value": 0
     },
@@ -3077,6 +3089,87 @@
         }
       }
     },
+    "ta_trace_kept": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "size",
+          "type": "uint32_t"
+        },
+        {
+          "name": "acknowledged",
+          "type": "uint32_t"
+        },
+        {
+          "name": "first",
+          "type": "ta_trace_view"
+        },
+        {
+          "name": "second",
+          "type": "ta_trace_view"
+        },
+        {
+          "name": "records",
+          "type": "uint32_t"
+        },
+        {
+          "name": "acknowledged_records",
+          "type": "uint32_t"
+        },
+        {
+          "name": "lost",
+          "type": "uint64_t"
+        },
+        {
+          "name": "ticks_per_second",
+          "type": "uint64_t"
+        }
+      ],
+      "layout": {
+        "x86_64": {
+          "size": 80,
+          "align": 8,
+          "offsets": {
+            "size": 0,
+            "acknowledged": 4,
+            "first": 8,
+            "second": 32,
+            "records": 56,
+            "acknowledged_records": 60,
+            "lost": 64,
+            "ticks_per_second": 72
+          }
+        },
+        "aarch64": {
+          "size": 80,
+          "align": 8,
+          "offsets": {
+            "size": 0,
+            "acknowledged": 4,
+            "first": 8,
+            "second": 32,
+            "records": 56,
+            "acknowledged_records": 60,
+            "lost": 64,
+            "ticks_per_second": 72
+          }
+        },
+        "wasm32": {
+          "size": 64,
+          "align": 8,
+          "offsets": {
+            "size": 0,
+            "acknowledged": 4,
+            "first": 8,
+            "second": 24,
+            "records": 40,
+            "acknowledged_records": 44,
+            "lost": 48,
+            "ticks_per_second": 56
+          }
+        }
+      }
+    },
     "ta_system_stats": {
       "kind": "struct",
       "fields": [
@@ -3263,11 +3356,19 @@
         {
           "name": "slab_pages_high_water",
           "type": "uint32_t"
+        },
+        {
+          "name": "pad2",
+          "type": "uint32_t"
+        },
+        {
+          "name": "ticks_per_second",
+          "type": "uint64_t"
         }
       ],
       "layout": {
         "x86_64": {
-          "size": 248,
+          "size": 264,
           "align": 8,
           "offsets": {
             "size": 0,
@@ -3315,11 +3416,13 @@
             "timers_high_water": 232,
             "workspaces_high_water": 236,
             "requests_high_water": 240,
-            "slab_pages_high_water": 244
+            "slab_pages_high_water": 244,
+            "pad2": 248,
+            "ticks_per_second": 256
           }
         },
         "aarch64": {
-          "size": 248,
+          "size": 264,
           "align": 8,
           "offsets": {
             "size": 0,
@@ -3367,11 +3470,13 @@
             "timers_high_water": 232,
             "workspaces_high_water": 236,
             "requests_high_water": 240,
-            "slab_pages_high_water": 244
+            "slab_pages_high_water": 244,
+            "pad2": 248,
+            "ticks_per_second": 256
           }
         },
         "wasm32": {
-          "size": 248,
+          "size": 264,
           "align": 8,
           "offsets": {
             "size": 0,
@@ -3419,7 +3524,9 @@
             "timers_high_water": 232,
             "workspaces_high_water": 236,
             "requests_high_water": 240,
-            "slab_pages_high_water": 244
+            "slab_pages_high_water": 244,
+            "pad2": 248,
+            "ticks_per_second": 256
           }
         }
       }
@@ -3970,6 +4077,73 @@
             "id": 0,
             "expression": 8,
             "state": 12
+          }
+        }
+      }
+    },
+    "ta_transition_info": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "size",
+          "type": "uint32_t"
+        },
+        {
+          "name": "source",
+          "type": "uint32_t"
+        },
+        {
+          "name": "type",
+          "type": "uint32_t"
+        },
+        {
+          "name": "condition",
+          "type": "uint32_t"
+        },
+        {
+          "name": "event_count",
+          "type": "uint32_t"
+        },
+        {
+          "name": "target_count",
+          "type": "uint32_t"
+        }
+      ],
+      "layout": {
+        "x86_64": {
+          "size": 24,
+          "align": 4,
+          "offsets": {
+            "size": 0,
+            "source": 4,
+            "type": 8,
+            "condition": 12,
+            "event_count": 16,
+            "target_count": 20
+          }
+        },
+        "aarch64": {
+          "size": 24,
+          "align": 4,
+          "offsets": {
+            "size": 0,
+            "source": 4,
+            "type": 8,
+            "condition": 12,
+            "event_count": 16,
+            "target_count": 20
+          }
+        },
+        "wasm32": {
+          "size": 24,
+          "align": 4,
+          "offsets": {
+            "size": 0,
+            "source": 4,
+            "type": 8,
+            "condition": 12,
+            "event_count": 16,
+            "target_count": 20
           }
         }
       }
@@ -5838,6 +6012,183 @@
         }
       }
     },
+    "ta_actor_timer": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "due",
+          "type": "uint64_t"
+        },
+        {
+          "name": "sequence",
+          "type": "uint32_t"
+        },
+        {
+          "name": "pad",
+          "type": "uint32_t"
+        },
+        {
+          "name": "event",
+          "type": "ta_string_view"
+        },
+        {
+          "name": "sendid",
+          "type": "ta_string_view"
+        }
+      ],
+      "layout": {
+        "x86_64": {
+          "size": 48,
+          "align": 8,
+          "offsets": {
+            "due": 0,
+            "sequence": 8,
+            "pad": 12,
+            "event": 16,
+            "sendid": 32
+          }
+        },
+        "aarch64": {
+          "size": 48,
+          "align": 8,
+          "offsets": {
+            "due": 0,
+            "sequence": 8,
+            "pad": 12,
+            "event": 16,
+            "sendid": 32
+          }
+        },
+        "wasm32": {
+          "size": 32,
+          "align": 8,
+          "offsets": {
+            "due": 0,
+            "sequence": 8,
+            "pad": 12,
+            "event": 16,
+            "sendid": 24
+          }
+        }
+      }
+    },
+    "ta_actor_timer_array": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "pointer",
+          "type": "ta_actor_timer *"
+        },
+        {
+          "name": "capacity",
+          "type": "uint32_t"
+        }
+      ],
+      "layout": {
+        "x86_64": {
+          "size": 16,
+          "align": 8,
+          "offsets": {
+            "pointer": 0,
+            "capacity": 8
+          }
+        },
+        "aarch64": {
+          "size": 16,
+          "align": 8,
+          "offsets": {
+            "pointer": 0,
+            "capacity": 8
+          }
+        },
+        "wasm32": {
+          "size": 8,
+          "align": 4,
+          "offsets": {
+            "pointer": 0,
+            "capacity": 4
+          }
+        }
+      }
+    },
+    "ta_actor_queued": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "event",
+          "type": "ta_string_view"
+        },
+        {
+          "name": "sendid",
+          "type": "ta_string_view"
+        }
+      ],
+      "layout": {
+        "x86_64": {
+          "size": 32,
+          "align": 8,
+          "offsets": {
+            "event": 0,
+            "sendid": 16
+          }
+        },
+        "aarch64": {
+          "size": 32,
+          "align": 8,
+          "offsets": {
+            "event": 0,
+            "sendid": 16
+          }
+        },
+        "wasm32": {
+          "size": 16,
+          "align": 4,
+          "offsets": {
+            "event": 0,
+            "sendid": 8
+          }
+        }
+      }
+    },
+    "ta_actor_queued_array": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "pointer",
+          "type": "ta_actor_queued *"
+        },
+        {
+          "name": "capacity",
+          "type": "uint32_t"
+        }
+      ],
+      "layout": {
+        "x86_64": {
+          "size": 16,
+          "align": 8,
+          "offsets": {
+            "pointer": 0,
+            "capacity": 8
+          }
+        },
+        "aarch64": {
+          "size": 16,
+          "align": 8,
+          "offsets": {
+            "pointer": 0,
+            "capacity": 8
+          }
+        },
+        "wasm32": {
+          "size": 8,
+          "align": 4,
+          "offsets": {
+            "pointer": 0,
+            "capacity": 4
+          }
+        }
+      }
+    },
     "ta_trace_rule": {
       "kind": "struct",
       "fields": [
@@ -6283,6 +6634,66 @@
             "datamodels": 28,
             "datamodel_count": 32,
             "pad": 36
+          }
+        }
+      }
+    },
+    "ta_otlp_history_input": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "size",
+          "type": "uint32_t"
+        },
+        {
+          "name": "source",
+          "type": "uint32_t"
+        },
+        {
+          "name": "kept",
+          "type": "const ta_trace_kept *"
+        },
+        {
+          "name": "image",
+          "type": "const ta_image *"
+        },
+        {
+          "name": "allocator",
+          "type": "const ta_allocator *"
+        }
+      ],
+      "layout": {
+        "x86_64": {
+          "size": 32,
+          "align": 8,
+          "offsets": {
+            "size": 0,
+            "source": 4,
+            "kept": 8,
+            "image": 16,
+            "allocator": 24
+          }
+        },
+        "aarch64": {
+          "size": 32,
+          "align": 8,
+          "offsets": {
+            "size": 0,
+            "source": 4,
+            "kept": 8,
+            "image": 16,
+            "allocator": 24
+          }
+        },
+        "wasm32": {
+          "size": 20,
+          "align": 4,
+          "offsets": {
+            "size": 0,
+            "source": 4,
+            "kept": 8,
+            "image": 12,
+            "allocator": 16
           }
         }
       }
@@ -9957,6 +10368,23 @@
       "implemented": true
     },
     {
+      "name": "ta_host_snapshot_region",
+      "returns": "ta_bytes",
+      "params": [
+        {
+          "name": "pack",
+          "type": "ta_bytes"
+        },
+        {
+          "name": "segment",
+          "type": "uint32_t"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
       "name": "ta_host_snapshot_segments",
       "returns": "uint32_t",
       "params": [
@@ -10490,6 +10918,86 @@
       "implemented": true
     },
     {
+      "name": "ta_image_transition",
+      "returns": "ta_status",
+      "params": [
+        {
+          "name": "image",
+          "type": "const ta_image *"
+        },
+        {
+          "name": "transition",
+          "type": "ta_chart_item"
+        },
+        {
+          "name": "out",
+          "type": "ta_transition_info *"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "ta_image_transition_count",
+      "returns": "uint32_t",
+      "params": [
+        {
+          "name": "image",
+          "type": "const ta_image *"
+        },
+        {
+          "name": "chart",
+          "type": "uint32_t"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "ta_image_transition_event",
+      "returns": "ta_string_view",
+      "params": [
+        {
+          "name": "image",
+          "type": "const ta_image *"
+        },
+        {
+          "name": "transition",
+          "type": "ta_chart_item"
+        },
+        {
+          "name": "i",
+          "type": "uint32_t"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "ta_image_transition_targets",
+      "returns": "uint32_t",
+      "params": [
+        {
+          "name": "image",
+          "type": "const ta_image *"
+        },
+        {
+          "name": "transition",
+          "type": "ta_chart_item"
+        },
+        {
+          "name": "targets",
+          "type": "ta_uint32_array"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
       "name": "ta_library_version",
       "returns": "ta_version",
       "params": [],
@@ -10580,6 +11088,23 @@
         {
           "name": "wall_ns",
           "type": "uint64_t"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "ta_otlp_history",
+      "returns": "ta_status",
+      "params": [
+        {
+          "name": "input",
+          "type": "const ta_otlp_history_input *"
+        },
+        {
+          "name": "out",
+          "type": "ta_buffer *"
         }
       ],
       "public": true,
@@ -11039,6 +11564,65 @@
       "implemented": true
     },
     {
+      "name": "ta_system_actor_mailbox",
+      "returns": "uint32_t",
+      "params": [
+        {
+          "name": "system",
+          "type": "const ta_system *"
+        },
+        {
+          "name": "actor",
+          "type": "uint32_t"
+        },
+        {
+          "name": "events",
+          "type": "ta_actor_queued_array"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "ta_system_actor_name",
+      "returns": "ta_string_view",
+      "params": [
+        {
+          "name": "system",
+          "type": "const ta_system *"
+        },
+        {
+          "name": "actor",
+          "type": "uint32_t"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "ta_system_actor_timers",
+      "returns": "uint32_t",
+      "params": [
+        {
+          "name": "system",
+          "type": "const ta_system *"
+        },
+        {
+          "name": "actor",
+          "type": "uint32_t"
+        },
+        {
+          "name": "timers",
+          "type": "ta_actor_timer_array"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
       "name": "ta_system_actors",
       "returns": "uint32_t",
       "params": [
@@ -11261,6 +11845,27 @@
         {
           "name": "system",
           "type": "const ta_system *"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "ta_system_read",
+      "returns": "ta_status",
+      "params": [
+        {
+          "name": "setup",
+          "type": "const ta_system_setup *"
+        },
+        {
+          "name": "region",
+          "type": "ta_bytes"
+        },
+        {
+          "name": "out",
+          "type": "ta_system **"
         }
       ],
       "public": true,
@@ -11515,6 +12120,23 @@
         {
           "name": "at_least",
           "type": "uint64_t"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "ta_system_trace_kept",
+      "returns": "ta_status",
+      "params": [
+        {
+          "name": "system",
+          "type": "const ta_system *"
+        },
+        {
+          "name": "out",
+          "type": "ta_trace_kept *"
         }
       ],
       "public": true,

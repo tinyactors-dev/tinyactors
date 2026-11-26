@@ -2915,6 +2915,26 @@ uint32_t ta_host_snapshot_segments(ta_bytes snapshot, ta_uint64_array hashes) {
     return hd->segment_count;
 }
 
+ta_bytes ta_host_snapshot_region(ta_bytes pack, uint32_t segment) {
+    ta_bytes region = {(const void *)0, 0};
+    ta_host_snapshot_contents contents;
+    contents.size = sizeof contents;
+    if (ta_host_snapshot_unpack(pack, &contents) != TA_OK) return region;
+    const snapshot_header *hd = snap_check(contents.host, contents.host_length);
+    if (!hd || segment >= hd->segment_count) return region;
+    const unsigned char *at = (const unsigned char *)contents.host + sizeof *hd;
+    for (uint32_t i = 0;; i++) {
+        snapshot_segment ss;
+        ta_memcpy(&ss, at, sizeof ss);
+        at += sizeof ss;
+        if (i == segment) {
+            if (ss.live) region = (ta_bytes){at, (size_t)ss.region_length};
+            return region;
+        }
+        at += ss.live ? pad8((size_t)ss.region_length) : 0;
+    }
+}
+
 static ta_status restore_failed(ta_host *host, ta_status status) {
     ta_host_free(host);
     return status;

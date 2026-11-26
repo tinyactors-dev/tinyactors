@@ -427,3 +427,44 @@ int main(void) {
     return 0;
 }
 ```
+
+## 12 · Reading a snapshot
+
+A pack (`ta_host_snapshot_pack`'s bytes) is read without a host, for a
+tool that shows what every actor was doing at the moment it was taken:
+
+1. `ta_host_snapshot_unpack(pack, &contents)` gives its header: the system
+   id, the time, the number of segments, the datamodels' state as packed.
+2. For each segment, `ta_host_snapshot_image(pack, i)` is its image
+   (`ta_image_open` it) and `ta_host_snapshot_region(pack, i)` its region;
+   both are empty for a retired segment.
+3. `ta_system_read(&setup, region, &system)` copies the region into
+   `setup.memory` (8-aligned, at least the region's length) and binds no
+   datamodel (`setup.datamodels` empty). Nothing runs it:
+   `ta_system_run` refuses it, and it takes no input. It holds pointers
+   into itself and to the `ta_image`, so neither may move while it is
+   read; free the memory when done (it needs no `ta_system_deinit`).
+4. Read it with the system's readers:
+   - `ta_system_actors` pages through the actors;
+   - `ta_actor_info_get` gives an actor's session, chart, state, parent
+     and counts;
+   - `ta_actor_config` gives its active states;
+   - `ta_system_actor_name`, `_mailbox` and `_timers` give its name, its
+     queued events and its delayed sends;
+   - `ta_system_stats_get` gives the time and the tick rate.
+
+   A chart's states, transitions and data come from the image
+   (`ta_image_state_info`, `ta_image_transition`, `ta_image_data`).
+5. `ta_system_trace_kept` gives the records the journal kept, the
+   acknowledged ones and the pending ones. `ta_otlp_history` writes their
+   spans as an ExportTraceServiceRequest, which `ta_otlp_next_span` reads.
+   Its times are the system's clock, not wall time. Of the acknowledged
+   records it leaves out the dynamic strings and the values, which may
+   have been freed.
+
+A region is raw memory of one build: `ta_system_read` refuses another
+layout, so read a snapshot with the release that wrote it. The
+datamodels' variables are in their state (`contents.state`), which only
+that datamodel reads: restore the snapshot (`ta_host_restore`) to ask for
+them (`actor.context`).
+

@@ -309,6 +309,22 @@ typedef struct ta_trace_view {
     const unsigned char *strings;
 } ta_trace_view;
 
+/* Every record a system's journal keeps (ta_system_trace_kept), oldest
+ * first: the acknowledged ones it retains for a reader of its memory (a
+ * snapshot), then the pending ones, in at most two views (`second` is empty
+ * unless the journal wrapped). The first `acknowledged` bytes, through both
+ * views, are the acknowledged records: a dynamic string of one may have
+ * been freed, and its payloads released. Their times are the system's
+ * clock (`now`, in ticks of `ticks_per_second`) and its fuel stamp. */
+typedef struct ta_trace_kept {
+    uint32_t size;
+    uint32_t acknowledged; /* bytes */
+    ta_trace_view first, second;
+    uint32_t records, acknowledged_records;
+    uint64_t lost; /* records the journal could not take, ever */
+    uint64_t ticks_per_second;
+} ta_trace_kept;
+
 /* The size of a kind's body, without the lists that follow it; 0 for an
  * unknown kind. */
 TA_API uint32_t ta_trace_body_size(uint32_t kind);

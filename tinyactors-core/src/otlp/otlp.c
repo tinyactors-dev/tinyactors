@@ -142,18 +142,39 @@ static void otlp_kv_ints(ta_otlp *otlp, otlp_out *out, uint32_t field, ta_string
 
 /* ---- names from the image ---------------------------------------------------------------- */
 
+/* Records a journal keeps, read for their history (ta_otlp_history): their
+ * times from the system's clock, and, of the acknowledged ones, nothing a
+ * release may have freed. */
+typedef struct otlp_kept {
+    uint32_t acknowledged; /* bytes, from the first record kept */
+    uint32_t at;           /* the record read now, from the first record kept */
+    uint32_t base;         /* where the view read now starts, from the first record kept */
+    uint64_t ticks_per_second;
+    uint64_t now;  /* the tick of the records read last */
+    uint64_t fuel; /* the lowest fuel stamp of that tick */
+    uint64_t time; /* the tick, in nanoseconds */
+    int started;
+} otlp_kept;
+
 /* What one record is read with. */
 typedef struct otlp_reading {
     ta_otlp *otlp;
     const ta_otlp_input *input;
     const ta_image_view *view;
+    otlp_kept *kept; /* NULL: a run's records, timed by the marks */
 } otlp_reading;
+
+/* 1 when the record read now is acknowledged: its dynamic strings may have
+ * been freed. */
+static int otlp_released(const otlp_reading *reading) {
+    return reading->kept && reading->kept->at < reading->kept->acknowledged;
+}
 
 static ta_string_view otlp_reading_string(const otlp_reading *reading, uint32_t reference) {
     ta_string_view none = {"", 0};
     if (reference == TA_NIL) return none;
     if (reference & TA_TRACE_STRING_DYNAMIC)
-        return ta_trace_dynamic_string(&reading->input->view, reference);
+        return otlp_released(reading) ? none : ta_trace_dynamic_string(&reading->input->view, reference);
     return ta_image_string(reading->input->image, reference);
 }
 
@@ -237,7 +258,9 @@ static uint32_t otlp_render_value(const otlp_reading *reading, uint32_t datamode
     ta_otlp *otlp = reading->otlp;
     const ta_otlp_input *input = reading->input;
     *cut = 0;
-    if (!payload || datamodel >= input->datamodel_count || !input->datamodels) return 0;
+    if (!payload || datamodel >= input->datamodel_count || !input->datamodels ||
+        otlp_released(reading))
+        return 0;
     const ta_datamodel_vtable *vtable = input->datamodels[datamodel].vtable;
     if (vtable->size < offsetof(ta_datamodel_vtable, to_wire) + sizeof vtable->to_wire ||
         !vtable->to_wire)
@@ -326,6 +349,15 @@ static uint64_t otlp_wall_of(const ta_otlp *otlp, uint64_t fuel) {
                                                otlp->mark_wall[next] - otlp->mark_wall[i], span);
     }
     return otlp->mark_wall[(otlp->mark_head + OTLP_MARKS - otlp->mark_count) % OTLP_MARKS];
+}
+
+/* The time of a fuel stamp of the record read now: the marks', or, for
+ * kept records, its tick in nanoseconds plus the stamp's distance from the
+ * tick's lowest. */
+static uint64_t otlp_time(const otlp_reading *reading, uint64_t fuel) {
+    const otlp_kept *kept = reading->kept;
+    if (!kept) return otlp_wall_of(reading->otlp, fuel);
+    return kept->time + (fuel > kept->fuel ? fuel - kept->fuel : 0);
 }
 
 /* ---- chunks: what open spans gather --------------------------------------------------------- */
@@ -1360,7 +1392,7 @@ static uint32_t otlp_read_microstep(const otlp_reading *reading, otlp_scratch *s
     uint32_t status = otlp_needs_check(otlp, &needs);
     if (status != TA_OTLP_READ) return status;
     otlp_span *span = otlp_target_take(reading, record, &target, time, source);
-    span->start = otlp_wall_of(otlp, micro->begin_fuel);
+    span->start = otlp_time(reading, micro->begin_fuel);
     otlp_open *open = target.open;
     otlp_span_stage(reading, span, &open->common, fields, TEXT("microstep"), open->source,
                     open->chart, time);
@@ -1425,7 +1457,7 @@ static uint32_t otlp_read_record(const otlp_reading *reading, const ta_trace_rec
     ta_otlp *otlp = reading->otlp;
     otlp_scratch scratch = {OTLP_POINTER(otlp, scratch_relative, unsigned char),
                             otlp->scratch_bytes, 0};
-    uint64_t time = otlp_wall_of(otlp, record->fuel);
+    uint64_t time = otlp_time(reading, record->fuel);
     uint32_t source = reading->input->source;
     if (record->kind != TA_TRACE_DROPPED && record->chart >= reading->view->chart_count)
         return TA_OTLP_READ; /* not of this image: nothing to name it with */
@@ -1456,19 +1488,49 @@ static uint32_t otlp_read_record(const otlp_reading *reading, const ta_trace_rec
     return otlp_read_event(reading, &scratch, record, time, source);
 }
 
-uint32_t ta_otlp_read(ta_otlp *otlp, const ta_otlp_input *input, uint32_t *cursor) {
-    otlp_reading reading = {otlp, input, ta_image_view_of(input->image)};
+/* A kept record's tick: a new one starts at its lowest fuel stamp. */
+static void otlp_kept_tick(otlp_kept *kept, const ta_trace_record *record) {
+    uint64_t fuel = record->fuel;
+    if (record->kind == TA_TRACE_MICROSTEP) {
+        const ta_trace_microstep *micro = (const ta_trace_microstep *)ta_trace_body(record);
+        if (micro->begin_fuel < fuel) fuel = micro->begin_fuel;
+    }
+    if (kept->started && record->now == kept->now) {
+        if (fuel < kept->fuel) kept->fuel = fuel;
+        return;
+    }
+    kept->started = 1;
+    kept->now = record->now;
+    kept->fuel = fuel;
+    kept->time = kept->ticks_per_second ? otlp_scale(record->now % kept->ticks_per_second,
+                                                     1000000000u, kept->ticks_per_second) +
+                                              record->now / kept->ticks_per_second * 1000000000u
+                                        : record->now;
+}
+
+static uint32_t otlp_read_view(const otlp_reading *reading, uint32_t *cursor) {
+    ta_otlp *otlp = reading->otlp;
+    const ta_otlp_input *input = reading->input;
     for (;;) {
         uint32_t at = *cursor;
         const ta_trace_record *record = ta_trace_next(&input->view, cursor);
         if (!record) return TA_OTLP_READ;
-        uint32_t status = otlp_read_record(&reading, record);
+        if (reading->kept) {
+            reading->kept->at = reading->kept->base + at;
+            otlp_kept_tick(reading->kept, record);
+        }
+        uint32_t status = otlp_read_record(reading, record);
         if (status != TA_OTLP_READ) {
             *cursor = at; /* not read: read it again after the flush or the growth */
             return status;
         }
         otlp->records++;
     }
+}
+
+uint32_t ta_otlp_read(ta_otlp *otlp, const ta_otlp_input *input, uint32_t *cursor) {
+    otlp_reading reading = {otlp, input, ta_image_view_of(input->image), (otlp_kept *)0};
+    return otlp_read_view(&reading, cursor);
 }
 
 void ta_otlp_end_all(ta_otlp *otlp, uint64_t wall_ns) {
@@ -1502,7 +1564,8 @@ void ta_otlp_end_all(ta_otlp *otlp, uint64_t wall_ns) {
             scope->bytes_length = (uint32_t)(out.at - (bytes + scope->bytes_at));
             otlp->scope_bytes_used += OTLP_SCOPE_BYTES;
         }
-        otlp_reading reading = {otlp, (const ta_otlp_input *)0, (const ta_image_view *)0};
+        otlp_reading reading = {otlp, (const ta_otlp_input *)0, (const ta_image_view *)0,
+                                (otlp_kept *)0};
         otlp_open_end(&reading, open, wall_ns, incomplete, 0);
     }
 }
@@ -2449,4 +2512,112 @@ ta_status ta_otlp_add_span_metrics(ta_otlp *otlp, uint64_t start_ns, uint64_t ti
     metric.start_ns = start_ns;
     metric.time_ns = time_ns;
     return ta_otlp_add_metric(otlp, &metric);
+}
+
+/* ---- the history a journal keeps ------------------------------------------------------------- */
+
+/* The finished spans written at `*length` in `out` when they fit there, and
+ * counted either way; the encoder forgets them. */
+static void otlp_history_put(ta_otlp *otlp, ta_buffer *out, size_t *length) {
+    size_t size = otlp_traces_size(otlp);
+    if (!size) return;
+    if (out->pointer && *length <= out->capacity && size <= out->capacity - *length) {
+        ta_buffer piece = {(unsigned char *)out->pointer + *length, out->capacity - *length, 0};
+        ta_otlp_put_traces(otlp, &piece);
+    } else {
+        otlp_spans_forget(otlp);
+    }
+    *length += size;
+}
+
+/* The encoder of a history call, in a block of the input's allocator. */
+typedef struct otlp_history_encoder {
+    const ta_allocator *allocator;
+    ta_otlp *otlp;
+    void *block;
+    size_t block_bytes;
+    ta_otlp_config config;
+} otlp_history_encoder;
+
+/* The encoder in a block twice as roomy for open spans, chunks and scopes. */
+static ta_status otlp_history_grow(otlp_history_encoder *encoder) {
+    ta_otlp_config config = encoder->config;
+    config.open_spans *= 2u;
+    config.chunks *= 2u;
+    config.scopes *= 2u;
+    size_t bytes;
+    if (ta_otlp_layout(&config, &bytes) != TA_OK) return TA_ERROR_LIMIT;
+    void *block = encoder->allocator->alloc(encoder->allocator->context, bytes, 8);
+    if (!block) return TA_ERROR_NO_MEMORY;
+    ta_otlp *otlp = encoder->otlp;
+    if (ta_otlp_relocate(&otlp, (ta_memory){block, bytes}, &config) != TA_OK) {
+        encoder->allocator->free(encoder->allocator->context, block, bytes);
+        return TA_ERROR_LIMIT;
+    }
+    encoder->allocator->free(encoder->allocator->context, encoder->block, encoder->block_bytes);
+    encoder->otlp = otlp;
+    encoder->block = block;
+    encoder->block_bytes = bytes;
+    ta_otlp_config_normalize(&config, &encoder->config);
+    return TA_OK;
+}
+
+/* Read one view of kept records to its end, putting the spans as the
+ * staging fills. */
+static ta_status otlp_history_view(otlp_history_encoder *encoder, const otlp_reading *base,
+                                   ta_buffer *out, size_t *length) {
+    uint32_t cursor = 0;
+    for (;;) {
+        otlp_reading reading = *base;
+        reading.otlp = encoder->otlp;
+        uint32_t status = otlp_read_view(&reading, &cursor);
+        if (status == TA_OTLP_READ) return TA_OK;
+        if (status == TA_OTLP_FLUSH) {
+            otlp_history_put(encoder->otlp, out, length);
+            if (encoder->otlp->spans_used) return TA_ERROR_LIMIT; /* a span past the staging */
+            continue;
+        }
+        ta_status grown = otlp_history_grow(encoder);
+        if (grown != TA_OK) return grown;
+    }
+}
+
+ta_status ta_otlp_history(const ta_otlp_history_input *input, ta_buffer *out) {
+    const ta_trace_kept *kept = input->kept;
+    otlp_history_encoder encoder = {input->allocator, (ta_otlp *)0, (void *)0, 0, {0}};
+    ta_otlp_config config;
+    ta_memset(&config, 0, sizeof config);
+    config.size = sizeof config;
+    config.flags = TA_OTLP_NO_LOGS;
+    config.staging_bytes = TA_OTLP_STAGING_BYTES_MIN;
+    ta_otlp_config_normalize(&config, &encoder.config);
+    if (ta_otlp_layout(&encoder.config, &encoder.block_bytes) != TA_OK) return TA_ERROR_INVALID;
+    encoder.block = input->allocator->alloc(input->allocator->context, encoder.block_bytes, 8);
+    if (!encoder.block) return TA_ERROR_NO_MEMORY;
+    ta_status status = ta_otlp_init((ta_memory){encoder.block, encoder.block_bytes}, &encoder.config,
+                                    &encoder.otlp);
+    otlp_kept reading_kept = {kept->acknowledged, 0, 0, kept->ticks_per_second, 0, 0, 0, 0};
+    size_t length = 0;
+    const ta_trace_view *views[2] = {&kept->first, &kept->second};
+    uint32_t base = 0;
+    for (uint32_t i = 0; i < 2 && status == TA_OK; i++) {
+        ta_otlp_input view = {sizeof view, input->source, *views[i], input->image,
+                              (const ta_datamodel_binding *)0, 0, 0};
+        reading_kept.base = base;
+        otlp_reading reading = {encoder.otlp, &view, ta_image_view_of(input->image), &reading_kept};
+        status = otlp_history_view(&encoder, &reading, out, &length);
+        base += views[i]->length;
+    }
+    if (status == TA_OK) {
+        /* what is still open ends at the last record, marked incomplete */
+        for (uint32_t round = 0; round < 64 && encoder.otlp->open_count; round++) {
+            ta_otlp_end_all(encoder.otlp, reading_kept.time);
+            otlp_history_put(encoder.otlp, out, &length);
+        }
+        otlp_history_put(encoder.otlp, out, &length);
+    }
+    input->allocator->free(input->allocator->context, encoder.block, encoder.block_bytes);
+    if (status != TA_OK) return status;
+    out->length = length;
+    return length <= out->capacity && (out->pointer || !length) ? TA_OK : TA_ERROR_NO_MEMORY;
 }

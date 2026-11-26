@@ -3,12 +3,12 @@
  * tinyactors actors.
  *
  * A snapshot (ta_host_snapshot_pack's bytes) is unpacked with
- * ta_host_snapshot_unpack and restored with ta_host_restore into a host made
- * in the invocation's arena, whose segments are then read through the
- * system's inspection readers. The datamodels' state is not restored: each
- * datamodel the images name is bound as one that does nothing, and nothing
- * runs, so no datamodel is ever called; the state is shown as it was packed
- * (decoded when it is one CBOR item). A blob is read in place with the
+ * ta_host_snapshot_unpack, and each live segment's region
+ * (ta_host_snapshot_region) is read with ta_system_read into the
+ * invocation's arena, with its image (ta_host_snapshot_image): a system no
+ * one runs, read through the system's inspection readers. No host is made
+ * and no datamodel is bound; the datamodels' state is shown as it was
+ * packed (decoded when it is one CBOR item). A blob is read in place with the
  * system's blob readers (ta_blob_read). Snapshots and blobs are raw memory
  * of one build of the library, so this build reads its own format only and
  * says so of another. Freestanding. */
@@ -20,9 +20,6 @@
 #include <tinyactors/host.h>
 
 #define T TA_CLI_TEXT
-
-/* The most datamodels a host binds (ta_host_environment.datamodel_count). */
-enum { SNAPSHOT_DATAMODELS_MAX = 8 };
 
 static const uint64_t nanoseconds_per_second = 1000000000u;
 
@@ -110,127 +107,79 @@ static ta_string_view delay_text(tool *t, uint64_t delta, uint64_t ticks_per_sec
     return tool_text_view(&text);
 }
 
-/* ---- a snapshot, restored ------------------------------------------------------------- */
+/* ---- a snapshot, read ------------------------------------------------------------------ */
 
-typedef struct restored {
-    ta_bytes pack;
-    ta_host_snapshot_contents contents;
-    ta_status unpacked; /* ta_host_snapshot_unpack's */
-    ta_status status;   /* ta_host_restore's, or why it was not tried */
-    ta_host *host;      /* NULL when not restored */
-    ta_allocator allocator;
-} restored;
-
-/* A datamodel bound by name that does nothing: the restore attaches no
- * chart to it and nothing runs, so it is never called. */
-static ta_status bind_name(tool *t, ta_string_view name, ta_datamodel_binding *bindings,
-                           uint32_t *count) {
-    if (tool_equal(name, ta_string("null"))) return TA_OK; /* every system has it */
-    for (uint32_t i = 0; i < *count; i++)
-        if (tool_equal(name, ta_string(bindings[i].vtable->name))) return TA_OK;
-    if (*count >= SNAPSHOT_DATAMODELS_MAX) return TA_ERROR_LIMIT;
-    ta_datamodel_vtable *vtable =
-        (ta_datamodel_vtable *)ta_growable_arena_alloc(t->arena, sizeof *vtable, 8);
-    char *text = (char *)ta_growable_arena_alloc(t->arena, name.length + 1u, 1);
-    if (!vtable || !text) return TA_ERROR_NO_MEMORY;
-    ta_memset(vtable, 0, sizeof *vtable);
-    if (name.length) ta_memcpy(text, name.pointer, name.length);
-    text[name.length] = 0;
-    vtable->size = sizeof *vtable;
-    vtable->name = text;
-    bindings[*count].vtable = vtable;
-    bindings[*count].datamodel = (void *)0;
-    (*count)++;
-    return TA_OK;
-}
-
-/* Unpack `pack`, and restore it when it unpacks. */
-static void restore(tool *t, ta_bytes pack, restored *out) {
-    ta_memset(out, 0, sizeof *out);
-    out->pack = pack;
-    out->contents.size = sizeof out->contents;
-    out->allocator = ta_growable_arena_allocator(t->arena);
-    out->unpacked = ta_host_snapshot_unpack(pack, &out->contents);
-    out->status = out->unpacked;
-    if (out->unpacked != TA_OK) return;
-    uint32_t count = out->contents.image_count;
-    ta_bytes *images = (ta_bytes *)ta_growable_arena_alloc(t->arena, sizeof *images * (count + 1u), 8);
-    ta_datamodel_binding bindings[SNAPSHOT_DATAMODELS_MAX];
-    uint32_t binding_count = 0;
-    if (!images) {
-        out->status = TA_ERROR_NO_MEMORY;
-        return;
-    }
-    for (uint32_t i = 0; i < count && out->status == TA_OK; i++) {
-        images[i] = ta_host_snapshot_image(pack, i);
-        ta_image image;
-        if (!images[i].length) continue;
-        out->status = ta_image_open(images[i], &image);
-        ta_image_info info;
-        ta_memset(&info, 0, sizeof info);
-        info.size = sizeof info;
-        if (out->status == TA_OK) ta_image_get_info(&image, &info);
-        for (uint32_t c = 0; out->status == TA_OK && c < info.chart_count; c++)
-            out->status = bind_name(t, ta_image_chart_datamodel(&image, c), bindings, &binding_count);
-    }
-    if (out->status != TA_OK) return;
-    ta_cbor_writer writer;
-    ta_cbor_writer_init(&writer, (ta_buffer){(void *)0, 0, 0}, &out->allocator);
-    ta_cbor_write_map(&writer, 1);
-    ta_cbor_write_text(&writer, ta_string("systemID"));
-    ta_cbor_write_text(&writer, out->contents.system_id);
-    ta_bytes config;
-    out->status = ta_cbor_writer_bytes(&writer, &config);
-    if (out->status != TA_OK) return;
-    ta_host_environment environment;
-    ta_memset(&environment, 0, sizeof environment);
-    environment.size = sizeof environment;
-    environment.datamodel_count = binding_count;
-    environment.datamodels = bindings;
-    environment.allocator = out->allocator;
-    ta_host_snapshot_input input = {config,
-                                    {out->contents.host, out->contents.host_length},
-                                    images,
-                                    count,
-                                    0};
-    out->status = ta_host_restore(&environment, &input, &out->host);
-}
-
-static void release(restored *r) {
-    if (r->host) ta_host_free(r->host);
-    r->host = (ta_host *)0;
-}
-
-/* Why a snapshot was not restored, in words. */
-static ta_string_view restore_refusal(tool *t, const restored *r) {
-    tool_text text;
-    tool_text_init(t, &text);
-    tool_text_append(&text, status_name(r->status));
-    tool_text_append(&text, r->status == TA_ERROR_INVALID
-                                ? ta_string(": this build of the library cannot restore it (a "
-                                            "snapshot of another build's layout, or a damaged one)")
-                            : r->status == TA_ERROR_LIMIT
-                                ? ta_string(": its images name more datamodels than a host binds")
-                                : ta_string(""));
-    return tool_text_view(&text);
-}
-
-/* The segment's system and image view; 0 when the segment is retired. */
+/* A segment's system and image view; system NULL when the segment is
+ * retired, or could not be read. */
 typedef struct segment_view {
     ta_system *system;
     const ta_image *image;
     const ta_image_view *view;
 } segment_view;
 
-static int segment_of(const restored *r, uint32_t segment, segment_view *out) {
-    ta_host_segment_info info;
+typedef struct restored {
+    ta_bytes pack;
+    ta_host_snapshot_contents contents;
+    ta_status unpacked; /* ta_host_snapshot_unpack's */
+    ta_status status;   /* the first ta_system_read's that failed, or why none was tried */
+    int read;           /* every live segment was read */
+    uint32_t segment_count;
+    segment_view *segments; /* in the arena */
+    ta_image *images;
+} restored;
+
+/* Unpack `pack`, and read each live segment's region (ta_system_read) into
+ * the arena, with its image. */
+static void restore(tool *t, ta_bytes pack, restored *out) {
     ta_memset(out, 0, sizeof *out);
-    info.size = sizeof info;
-    if (!r->host || ta_host_segment_info_get(r->host, segment, &info) != TA_OK || !info.live) return 0;
-    out->system = ta_host_system(r->host, segment);
-    out->image = info.image;
-    out->view = ta_image_view_of(info.image);
-    return out->system != (ta_system *)0;
+    out->pack = pack;
+    out->contents.size = sizeof out->contents;
+    out->unpacked = ta_host_snapshot_unpack(pack, &out->contents);
+    out->status = out->unpacked;
+    if (out->unpacked != TA_OK) return;
+    uint32_t count = out->contents.image_count;
+    out->segments = (segment_view *)ta_growable_arena_alloc(t->arena, sizeof *out->segments * (count + 1u), 8);
+    out->images = (ta_image *)ta_growable_arena_alloc(t->arena, sizeof *out->images * (count + 1u), 8);
+    if (!out->segments || !out->images) {
+        out->status = TA_ERROR_NO_MEMORY;
+        return;
+    }
+    ta_memset(out->segments, 0, sizeof *out->segments * count);
+    out->segment_count = count;
+    for (uint32_t i = 0; i < count && out->status == TA_OK; i++) {
+        ta_bytes image = ta_host_snapshot_image(pack, i);
+        ta_bytes region = ta_host_snapshot_region(pack, i);
+        if (!image.length || !region.length) continue; /* retired */
+        out->status = ta_image_open(image, &out->images[i]);
+        void *memory = out->status == TA_OK ? ta_growable_arena_alloc(t->arena, region.length, 8) : (void *)0;
+        if (out->status == TA_OK && !memory) out->status = TA_ERROR_NO_MEMORY;
+        if (out->status != TA_OK) break;
+        ta_system_setup setup = {{memory, region.length}, &out->images[i], (const ta_system_config *)0,
+                                 (const ta_datamodel_binding *)0, 0, 0};
+        out->status = ta_system_read(&setup, region, &out->segments[i].system);
+        out->segments[i].image = &out->images[i];
+        out->segments[i].view = ta_image_view_of(&out->images[i]);
+    }
+    out->read = out->status == TA_OK;
+}
+
+/* Why a snapshot was not read, in words. */
+static ta_string_view restore_refusal(tool *t, const restored *r) {
+    tool_text text;
+    tool_text_init(t, &text);
+    tool_text_append(&text, status_name(r->status));
+    tool_text_append(&text, r->status == TA_ERROR_INVALID
+                                ? ta_string(": this build of the library cannot read it (a "
+                                            "snapshot of another build's layout, or a damaged one)")
+                                : ta_string(""));
+    return tool_text_view(&text);
+}
+
+static int segment_of(const restored *r, uint32_t segment, segment_view *out) {
+    ta_memset(out, 0, sizeof *out);
+    if (!r->read || segment >= r->segment_count || !r->segments[segment].system) return 0;
+    *out = r->segments[segment];
+    return 1;
 }
 
 /* Every live actor of a segment, a page at a time. */
@@ -277,14 +226,14 @@ static ta_string_view chart_names(tool *t, const ta_image *image) {
 
 static uint64_t ticks_per_second_of(const restored *r) {
     segment_view segment;
-    for (uint32_t s = 0; r->host && s < ta_host_segment_count(r->host); s++)
+    for (uint32_t s = 0; s < r->segment_count; s++)
         if (segment_of(r, s, &segment)) return segment.system->config.ticks_per_second;
     return 0;
 }
 
 static int identity_of(const restored *r, uint32_t *identity) {
     segment_view segment;
-    for (uint32_t s = 0; r->host && s < ta_host_segment_count(r->host); s++)
+    for (uint32_t s = 0; s < r->segment_count; s++)
         if (segment_of(r, s, &segment)) {
             *identity = segment.system->config.identity;
             return 1;
@@ -353,8 +302,8 @@ static void inspect_snapshot(tool *t, ta_bytes pack) {
     if (ticks_per_second) ta_report_number(report, ta_string("ticksPerSecond"), ticks_per_second);
     uint32_t identity;
     if (identity_of(&r, &identity)) ta_report_text(report, ta_string("identity"), tool_hexadecimal(t, identity));
-    ta_report_boolean(report, ta_string("restored"), r.host != (ta_host *)0);
-    if (!r.host) ta_report_text(report, ta_string("why"), restore_refusal(t, &r));
+    ta_report_boolean(report, ta_string("restored"), r.read);
+    if (!r.read) ta_report_text(report, ta_string("why"), restore_refusal(t, &r));
     uint64_t actors = 0, hibernated = 0;
     ta_report_list(report, (ta_report_list_names){ta_string("segments"), ta_string("segment")});
     for (uint32_t s = 0; s < r.contents.image_count; s++) {
@@ -389,7 +338,7 @@ static void inspect_snapshot(tool *t, ta_bytes pack) {
         ta_report_end(report);
     }
     ta_report_end(report);
-    if (r.host) {
+    if (r.read) {
         ta_report_number(report, ta_string("actors"), actors);
         ta_report_number(report, ta_string("hibernated"), hibernated);
     }
@@ -398,7 +347,6 @@ static void inspect_snapshot(tool *t, ta_bytes pack) {
     ta_report_text(report, ta_string("label"), r.contents.datamodel);
     report_datamodel_bytes(t, (ta_bytes){r.contents.state, r.contents.state_length});
     ta_report_end(report);
-    release(&r);
 }
 
 /* A host snapshot alone (ta_host_snapshot's bytes): its segments' image
@@ -458,8 +406,7 @@ static ta_status find_blob_image(tool *t, uint64_t hash, blob_image *out) {
         restored r;
         restore(t, first, &r);
         out->identity_known = identity_of(&r, &out->identity);
-        release(&r);
-        for (uint32_t s = 0; r.unpacked == TA_OK && s < r.contents.image_count && !out->found; s++) {
+            for (uint32_t s = 0; r.unpacked == TA_OK && s < r.contents.image_count && !out->found; s++) {
             ta_bytes bytes = ta_host_snapshot_image(first, s);
             ta_image_info info;
             info.size = sizeof info;
@@ -659,7 +606,7 @@ static ta_status check_options(tool *t, const restored *r, uint32_t *segment) {
         if (value->option.option == TOOL_OPTION_CHART) {
             int found = 0;
             segment_view view;
-            for (uint32_t s = 0; s < ta_host_segment_count(r->host) && !found; s++)
+            for (uint32_t s = 0; s < r->segment_count && !found; s++)
                 found = segment_of(r, s, &view) && ta_image_chart_by_name(view.image, value->text) != TA_NIL;
             if (!found) {
                 tool_text_append(&text, ta_string("no chart '"));
@@ -777,7 +724,7 @@ void tool_actors(tool *t) {
     }
     restored r;
     restore(t, bytes, &r);
-    if (!r.host) {
+    if (!r.read) {
         tool_text text;
         tool_text_init(t, &text);
         tool_text_append(&text, path);
@@ -791,15 +738,14 @@ void tool_actors(tool *t) {
     }
     uint32_t only;
     if (check_options(t, &r, &only) != TA_OK) {
-        release(&r);
-        return;
+            return;
     }
     ta_report *report = &t->report;
     ta_report_text(report, ta_string("snapshot"), path);
     ta_report_text(report, ta_string("systemID"), r.contents.system_id);
     ta_report_number(report, ta_string("time"), r.contents.time);
     ta_report_list(report, (ta_report_list_names){ta_string("actors"), ta_string("actor")});
-    for (uint32_t s = 0; s < ta_host_segment_count(r.host); s++) {
+    for (uint32_t s = 0; s < r.segment_count; s++) {
         segment_view segment;
         if ((only != TA_NIL && s != only) || !segment_of(&r, s, &segment)) continue;
         actor_cursor cursor = {0, 0, 0, {0}};
@@ -815,5 +761,4 @@ void tool_actors(tool *t) {
         }
     }
     ta_report_end(report);
-    release(&r);
 }

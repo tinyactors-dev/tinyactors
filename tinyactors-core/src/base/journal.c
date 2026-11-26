@@ -100,6 +100,23 @@ uint32_t ta_journal_peek(const ta_journal *journal, const unsigned char **bytes)
            journal->read;
 }
 
+void ta_journal_kept_get(const ta_journal *journal, ta_journal_kept *out) {
+    const unsigned char *storage = journal_storage(journal);
+    out->first = storage + journal->head;
+    out->second = storage;
+    out->second_length = 0;
+    if (!journal->used && !journal->retained) {
+        out->first_length = 0;
+        return;
+    }
+    if (journal->wrapped) { /* [head, end), then [0, tail) */
+        out->first_length = journal->end - journal->head;
+        out->second_length = journal->tail;
+    } else {
+        out->first_length = journal->tail - journal->head;
+    }
+}
+
 void ta_journal_release(ta_journal *journal, uint32_t length) {
     TA_ASSERT(length <= journal->used);
     TA_ASSERT(length <=

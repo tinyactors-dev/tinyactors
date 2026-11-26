@@ -89,6 +89,35 @@ typedef struct ta_data_info {
         expression; /* TA_NIL if none (content, if any, is a TA_EXPRESSION_CONTENT expr) */
     uint32_t state; /* owning state */
 } ta_data_info;
+/* A chart's transitions, in document order (an initial or a history's
+ * default transition among them): its source state and its targets are
+ * indices of ta_image_state_info's states, `condition` the expression of
+ * its cond (TA_NIL for none). */
+typedef struct ta_transition_info {
+    uint32_t size;
+    uint32_t source;
+    uint32_t type; /* TA_TRANSITION_* */
+    uint32_t condition;
+    uint32_t event_count;  /* its event descriptors; 0: eventless */
+    uint32_t target_count; /* 0: targetless */
+} ta_transition_info;
+enum {
+    TA_TRANSITION_EXTERNAL = 0,
+    TA_TRANSITION_INTERNAL = 1,
+    TA_TRANSITION_INITIAL = 2 /* a compound state's initial, or a history's default */
+};
+TA_API uint32_t ta_image_transition_count(const ta_image *image, uint32_t chart);
+TA_API ta_status ta_image_transition(const ta_image *image, ta_chart_item transition,
+                                     ta_transition_info *out);
+/* Event descriptor `i` of a transition (i < event_count): the name or the
+ * prefix it matches ("order.paid" also matches "order.paid.late"), "*" for
+ * any event; empty when `i` is out of range. */
+TA_API ta_string_view ta_image_transition_event(const ta_image *image, ta_chart_item transition,
+                                                uint32_t i);
+/* A transition's targets into `targets` (the first `targets.capacity`);
+ * returns how many it has, 0 for a transition that is not one. */
+TA_API uint32_t ta_image_transition_targets(const ta_image *image, ta_chart_item transition,
+                                            ta_uint32_array targets);
 TA_API uint32_t ta_image_data_count(const ta_image *image, uint32_t chart);
 TA_API ta_status ta_image_data(const ta_image *image, ta_chart_item data, ta_data_info *out);
 

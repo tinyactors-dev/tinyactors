@@ -983,6 +983,7 @@ void ta_system_stats_get(const ta_system *system, ta_system_stats *o) {
     z.workspaces_high_water = system->workspaces.high_water_mark;
     z.requests_high_water = system->requests.high_water_mark;
     z.slab_pages_high_water = system->slab.high_water_mark;
+    z.ticks_per_second = system->config.ticks_per_second;
     uint32_t n = o->size && o->size < sizeof z ? o->size : (uint32_t)sizeof z;
     ta_memcpy(o, &z, n);
     o->size = n;
@@ -1022,6 +1023,7 @@ uint32_t ta_system_actor_by_name(const ta_system *system, ta_string_view name) {
 
 void ta_system_deinit(ta_system *system) {
     if (!system || system->magic != TA_SYSTEM_MAGIC) return;
+    if (!system->datamodel_count) return; /* a system to read (ta_system_read): nothing to let go */
     /* nothing more is traced; what the journal holds is let go */
     system->core.trace_kinds = 0;
     ta_memset(system->core.class_kinds, 0, sizeof system->core.class_kinds);
@@ -1393,15 +1395,15 @@ ta_status ta_system_snapshot(const ta_system *system, ta_buffer *out) {
     return TA_OK;
 }
 
-ta_status ta_system_restore(const ta_system_setup *setup, ta_bytes snapshot, ta_system **out) {
+/* The region copied into the setup's memory after the checks a restore
+ * makes: alignment, room, the magic, this build's layout and the image. */
+static ta_status region_copy(const ta_system_setup *setup, ta_bytes snapshot, ta_system **out) {
     void *memory = setup->memory.pointer;
     size_t length = setup->memory.length;
-    const ta_image *image = setup->image;
     const void *snap = snapshot.pointer;
     size_t snap_length = snapshot.length;
-    const ta_system_config *host = setup->config;
     *out = (ta_system *)0;
-    const ta_image_view *view = ta_image_view_of(image);
+    const ta_image_view *view = ta_image_view_of(setup->image);
     if (((uintptr_t)memory & (TA_ALIGN_MAX - 1)) || length < snap_length ||
         snap_length < sizeof(ta_system))
         return TA_ERROR_INVALID;
@@ -1418,15 +1420,49 @@ ta_status ta_system_restore(const ta_system_setup *setup, ta_bytes snapshot, ta_
     ta_memcpy(memory, snap, snap_length);
     ta_system *system = (ta_system *)memory;
     ta_memset(system->datamodels, 0, sizeof system->datamodels);
+    const ta_system_config *host = setup->config;
     system->config.io_processors =
         host ? host->io_processors : (const ta_io_processor_entry *)0;
     system->config.io_processor_count = host ? host->io_processor_count : 0;
     system->config.base = host ? host->base : (ta_string_view){0, 0};
-    ta_status status = bind_datamodels(system, image, setup->datamodels, setup->datamodel_count);
+    *out = system;
+    return TA_OK;
+}
+
+ta_status ta_system_restore(const ta_system_setup *setup, ta_bytes snapshot, ta_system **out) {
+    *out = (ta_system *)0;
+    ta_system *system;
+    ta_status status = region_copy(setup, snapshot, &system);
     if (status != TA_OK) return status;
-    rebind(system, image);
-    status = attach_charts(system, image);
+    status = bind_datamodels(system, setup->image, setup->datamodels, setup->datamodel_count);
     if (status != TA_OK) return status;
+    rebind(system, setup->image);
+    status = attach_charts(system, setup->image);
+    if (status != TA_OK) return status;
+    *out = system;
+    return TA_OK;
+}
+
+ta_status ta_system_read(const ta_system_setup *setup, ta_bytes region, ta_system **out) {
+    *out = (ta_system *)0;
+    if (setup->datamodel_count) return TA_ERROR_INVALID;
+    ta_system *system;
+    ta_status status = region_copy(setup, region, &system);
+    if (status != TA_OK) return status;
+    /* every chart's binding the null datamodel's, none attached, and the
+     * count 0, which marks a system to read: ta_system_run refuses it,
+     * ta_system_deinit leaves it, and a payload's datamodel is past the
+     * count, so nothing calls a datamodel */
+    system->datamodels[0].vtable = ta_datamodel_null();
+    system->datamodels[0].datamodel = (void *)0;
+    system->datamodel_count = 0;
+    uint8_t *datamodel_of = SYSTEM_POINTER(system, chart_datamodels_relative, uint8_t);
+    void **context = SYSTEM_POINTER(system, chart_contexts_relative, void *);
+    for (uint32_t c = 0; c < system->chart_count; c++) {
+        datamodel_of[c] = 0;
+        context[c] = (void *)0;
+    }
+    rebind(system, setup->image);
     *out = system;
     return TA_OK;
 }

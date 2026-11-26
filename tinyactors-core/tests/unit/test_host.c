@@ -5,6 +5,7 @@
 #include "../support/compile_util.h"
 #include <tinyactors/datamodel_ecmascript.h>
 #include <tinyactors/host.h>
+#include <tinyactors/otlp.h>
 #include <tinyactors/runtime.h>
 #include "../support/host_request.h"
 #include "../support/host_config.h"
@@ -59,6 +60,9 @@ static uint64_t world_nonce;
 static const char *world_system = "h";
 /* The next world_open's ECMAScript datamodel config (NULL: the defaults). */
 static const ta_datamodel_ecmascript_config *world_ecmascript;
+/* The next world_open's telemetry: 1, an encoder that takes the journal's
+ * records at each run (and so acknowledges them). */
+static int world_telemetry;
 
 static void world_open(host_world *e, uint32_t max_actors, const ta_io_processor_entry *io,
                        uint32_t io_count) {
@@ -79,6 +83,7 @@ static void world_open(host_world *e, uint32_t max_actors, const ta_io_processor
     config.io_processors = io;
     config.io_processor_count = io_count;
     config.allocator = (ta_allocator){NULL, refusable_alloc, refusable_free};
+    if (world_telemetry) config.telemetry.otlp.size = sizeof config.telemetry.otlp;
     CHECK_EQUAL(test_host_new(&config, &e->host), TA_OK);
 }
 
@@ -1154,6 +1159,165 @@ static void test_snapshot_of_one_image_in_two_segments(void) {
 #undef TWICE
 }
 
+/* A pack read without a host: each segment's region read with
+ * ta_system_read, its actors, names, configurations, mailboxes and delayed
+ * sends with the system's readers, its chart's transitions from the image,
+ * and the spans its journal kept; the system to read refuses a run. */
+#define ORDER                                                                                      \
+    SC("order", "initial='open'><datamodel><data id='n' expr='0'/></datamodel>"                     \
+                "<state id='open'><onentry><send event='reminder' id='nag' delay='10s'/></onentry>"  \
+                "<transition event='order.pay' cond='n &lt; 3' target='paid'/>"                     \
+                "<transition event='*'><assign location='n' expr='n + 1'/></transition></state>"     \
+                "<state id='paid'/>")
+static void snapshot_read(int telemetry) {
+    host_world e;
+    world_telemetry = telemetry;
+    world_open(&e, 16, NULL, 0);
+    world_telemetry = 0;
+    world_add(&e, ORDER);
+    ta_host_chart_ref ref;
+    CHECK_EQUAL(ta_host_chart(e.host, (ta_string_view){"order", 5}, &ref), TA_OK);
+    uint64_t session = 0;
+    CHECK_EQUAL(ta_host_spawn(e.host,
+                              &(ta_spawn){ref.segment, ref.chart, (ta_string_view){"order-1", 7}, 0,
+                                          (ta_string_view){0, 0}},
+                              &session),
+                TA_OK);
+    run(&e);
+    CHECK_EQUAL(send(&e, session, "poke", NULL), TA_OK);
+    run(&e);
+    CHECK_EQUAL(send(&e, session, "order.pay", NULL), TA_OK); /* queued, not run */
+    drain(&e);
+    ta_buffer packed = {NULL, 0, 0};
+    ta_datamodel_state none = {{"x", 1}, {NULL, 0}};
+    CHECK_EQUAL(ta_host_snapshot_pack(e.host, &none, &packed), TA_ERROR_NO_MEMORY);
+    uint64_t *pack = calloc(packed.length / 8 + 1, 8);
+    packed = (ta_buffer){pack, packed.length, 0};
+    CHECK_EQUAL(ta_host_snapshot_pack(e.host, &none, &packed), TA_OK);
+    ta_bytes bytes = {pack, packed.length};
+
+    ta_bytes region = ta_host_snapshot_region(bytes, 0);
+    CHECK(region.length > 0 && ((uintptr_t)region.pointer & 7u) == 0);
+    CHECK(ta_host_snapshot_region(bytes, 1).length == 0);
+    CHECK(ta_host_snapshot_region((ta_bytes){(const unsigned char *)pack + 1, packed.length - 1}, 0).length == 0);
+    ta_image image;
+    CHECK_EQUAL(ta_image_open(ta_host_snapshot_image(bytes, 0), &image), TA_OK);
+    void *memory = aligned_alloc(8, (region.length + 7u) / 8u * 8u);
+    ta_system *system = NULL;
+    ta_system_setup setup = {{memory, region.length}, &image, NULL, &e.binding, 1, 0};
+    CHECK_EQUAL(ta_system_read(&setup, region, &system), TA_ERROR_INVALID); /* datamodels given */
+    setup.datamodel_count = 0;
+    setup.datamodels = NULL;
+    setup.memory.length = region.length - 8;
+    CHECK_EQUAL(ta_system_read(&setup, region, &system), TA_ERROR_INVALID); /* too small */
+    setup.memory.length = region.length;
+    CHECK_EQUAL(ta_system_read(&setup, region, &system), TA_OK);
+
+    uint32_t cursor = 0, actors[4];
+    CHECK_EQUAL(ta_system_actors(system, &cursor, (ta_uint32_array){actors, 4}), 1u);
+    ta_actor_info info;
+    info.size = sizeof info;
+    CHECK_EQUAL(ta_actor_info_get(system, actors[0], &info), TA_OK);
+    CHECK_EQUAL(info.serial, session);
+    ta_string_view name = ta_system_actor_name(system, actors[0]);
+    CHECK(name.length == 7 && !memcmp(name.pointer, "order-1", 7));
+    uint32_t states[4];
+    CHECK_EQUAL(ta_actor_config(system, actors[0], (ta_uint32_array){states, 4}), 1u);
+    ta_string_view open = ta_image_state_name(&image, info.chart, states[0]);
+    CHECK(open.length == 4 && !memcmp(open.pointer, "open", 4));
+    ta_actor_queued queued[2];
+    CHECK_EQUAL(ta_system_actor_mailbox(system, actors[0], (ta_actor_queued_array){queued, 2}), 1u);
+    CHECK(queued[0].event.length == 9 && !memcmp(queued[0].event.pointer, "order.pay", 9));
+    ta_actor_timer timers[2];
+    CHECK_EQUAL(ta_system_actor_timers(system, actors[0], (ta_actor_timer_array){timers, 2}), 1u);
+    CHECK(timers[0].sendid.length == 3 && !memcmp(timers[0].sendid.pointer, "nag", 3));
+    ta_system_stats stats;
+    stats.size = sizeof stats;
+    ta_system_stats_get(system, &stats);
+    CHECK_EQUAL(stats.ticks_per_second, 1000u);
+    CHECK(timers[0].due >= stats.now + 10000u); /* 10s ahead, in the system's ticks */
+
+    /* the chart's transitions: a cond, a descriptor, a wildcard, targets */
+    uint32_t count = ta_image_transition_count(&image, info.chart);
+    int found_payment = 0, found_any = 0;
+    for (uint32_t t = 0; t < count; t++) {
+        ta_transition_info transition;
+        CHECK_EQUAL(ta_image_transition(&image, (ta_chart_item){info.chart, t}, &transition), TA_OK);
+        ta_string_view event = ta_image_transition_event(&image, (ta_chart_item){info.chart, t}, 0);
+        if (event.length == 9 && !memcmp(event.pointer, "order.pay", 9)) {
+            found_payment = 1;
+            CHECK(transition.condition != TA_NIL);
+            CHECK_EQUAL(transition.type, (uint32_t)TA_TRANSITION_EXTERNAL);
+            uint32_t target = TA_NIL;
+            CHECK_EQUAL(ta_image_transition_targets(&image, (ta_chart_item){info.chart, t},
+                                                    (ta_uint32_array){&target, 1}),
+                        1u);
+            ta_string_view paid = ta_image_state_name(&image, info.chart, target);
+            CHECK(paid.length == 4 && !memcmp(paid.pointer, "paid", 4));
+        }
+        if (event.length == 1 && event.pointer[0] == '*') {
+            found_any = 1;
+            CHECK_EQUAL(transition.target_count, 0u);
+        }
+    }
+    CHECK(found_payment && found_any);
+    ta_transition_info nothing;
+    CHECK_EQUAL(ta_image_transition(&image, (ta_chart_item){info.chart, count}, &nothing),
+                TA_ERROR_INVALID);
+    CHECK_EQUAL(ta_image_transition_event(&image, (ta_chart_item){info.chart, 0}, 99).length, 0u);
+
+    /* the journal's kept records, and their spans */
+    ta_trace_kept kept;
+    kept.size = sizeof kept;
+    CHECK_EQUAL(ta_system_trace_kept(system, &kept), TA_OK);
+    CHECK(kept.records > 0);
+    if (telemetry) CHECK(kept.acknowledged_records > 0 && kept.acknowledged > 0);
+    else CHECK_EQUAL(kept.acknowledged_records, 0u); /* none taken: no telemetry */
+    CHECK_EQUAL(kept.ticks_per_second, 1000u);
+    ta_allocator allocator = ta_runtime_malloc();
+    ta_otlp_history_input input = {sizeof input, 0, &kept, &image, &allocator};
+    ta_buffer request = {NULL, 0, 0};
+    CHECK_EQUAL(ta_otlp_history(&input, &request), TA_ERROR_NO_MEMORY);
+    CHECK(request.length > 0);
+    request.pointer = malloc(request.length);
+    request.capacity = request.length;
+    CHECK_EQUAL(ta_otlp_history(&input, &request), TA_OK);
+    ta_otlp_cursor walk;
+    memset(&walk, 0, sizeof walk);
+    ta_otlp_span span;
+    int spans = 0, macrosteps = 0, spawned = 0;
+    while (ta_otlp_next_span((ta_bytes){request.pointer, request.length}, &walk, &span) == 1) {
+        spans++;
+        if (span.name.length >= 15 && !memcmp(span.name.pointer, "scxml.macrostep", 15)) macrosteps++;
+        if (span.name.length == 13 && !memcmp(span.name.pointer, "scxml.spawned", 13)) spawned++;
+        CHECK(span.start <= span.end);
+    }
+    CHECK(spans > 0 && macrosteps >= 2 && spawned == 1);
+    free(request.pointer);
+
+    /* a system to read is never run, and its deinit leaves it */
+    ta_run refused = ta_system_run(system, 100);
+    CHECK_EQUAL(refused.status, (uint32_t)TA_RUN_FAULT);
+    CHECK_EQUAL(refused.detail, (uint32_t)TA_ERROR_STATE);
+    ta_system_deinit(system);
+    CHECK_EQUAL(ta_system_actors(system, &(uint32_t){0}, (ta_uint32_array){actors, 4}), 1u);
+
+    /* another image is refused */
+    world_add(&e, ECHO);
+    ta_image other;
+    CHECK_EQUAL(ta_image_open(ta_image_bytes(&e.image[1]), &other), TA_OK);
+    setup.image = &other;
+    CHECK_EQUAL(ta_system_read(&setup, region, &system), TA_ERROR_INVALID);
+    free(memory);
+    free(pack);
+    world_close(&e);
+}
+
+static void test_snapshot_read(void) {
+    snapshot_read(0);
+    snapshot_read(1);
+}
+
 /* configurations as nested state values: atomic, compound, parallel regions
  * (an atomic region is {}), a missing session */
 static void test_state_value(void) {
@@ -2040,5 +2204,6 @@ int main(void) {
     RUN(test_migration_waits_for_invocations);
     RUN(test_migration_fails_invoking_actors_without_timeout);
     RUN(test_blob_identity);
+    RUN(test_snapshot_read);
     TEST_MAIN_END();
 }

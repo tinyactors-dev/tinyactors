@@ -126,6 +126,18 @@ ABI_CHECK(offsetof(ta_system_stats, traces_started) > offsetof(ta_system_stats, 
           system_stats_traces_last);
 ABI_CHECK(offsetof(ta_system_stats, actors_high_water) > offsetof(ta_system_stats, next_deadline),
           system_stats_high_water_last);
+ABI_CHECK(offsetof(ta_system_stats, ticks_per_second) > offsetof(ta_system_stats, slab_pages_high_water),
+          system_stats_ticks_per_second_last);
+/* what a reader of a snapshot reads (ta_system_read) */
+ABI_CHECK(offsetof(ta_transition_info, size) == 0, transition_info_size_first);
+ABI_CHECK(sizeof(ta_transition_info) == 24, transition_info_size);
+ABI_CHECK(TA_TRANSITION_EXTERNAL == 0 && TA_TRANSITION_INTERNAL == 1 && TA_TRANSITION_INITIAL == 2,
+          transition_types);
+ABI_CHECK(offsetof(ta_trace_kept, size) == 0, trace_kept_size_first);
+ABI_CHECK(offsetof(ta_otlp_history_input, size) == 0, otlp_history_input_size_first);
+ABI_CHECK(offsetof(ta_actor_timer, due) == 0 && offsetof(ta_actor_timer, event) == 16,
+          actor_timer_layout);
+ABI_CHECK(sizeof(ta_actor_queued) == 2 * sizeof(ta_string_view), actor_queued_size);
 ABI_CHECK(offsetof(ta_chart_stats, size) == 0, chart_stats_size_first);
 ABI_CHECK(offsetof(ta_chart_stats, actors) == 8 + sizeof(ta_string_view),
           chart_stats_actors_offset);

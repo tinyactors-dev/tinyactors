@@ -474,6 +474,12 @@ TA_API ta_status ta_host_snapshot(ta_host *h, ta_buffer *out);
  * image content hash (ta_image_info.content_hash), 0 for a retired segment.
  * 0 if the blob is not a host snapshot. */
 TA_API uint32_t ta_host_snapshot_segments(ta_bytes snapshot, ta_uint64_array hashes);
+/* Segment `segment`'s region in a pack (ta_host_snapshot_pack's bytes), a
+ * view into the pack: empty for a retired segment, a segment the pack does
+ * not have, or a pack that does not unpack (one that is not 8-aligned
+ * among them). ta_system_read reads it, with the segment's image
+ * (ta_host_snapshot_image). */
+TA_API ta_bytes ta_host_snapshot_region(ta_bytes pack, uint32_t segment);
 /* A snapshot to restore and the image of each of its segments: images[i]
  * is the bytes of the image segment i ran (same content hash), or empty if
  * it was retired; the host copies them as ta_host_add_image does, and reads

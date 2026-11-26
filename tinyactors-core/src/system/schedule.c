@@ -279,7 +279,7 @@ ta_run ta_system_run(ta_system *system, uint32_t budget) {
     ta_run result;
     ta_memset(&result, 0, sizeof result);
     result.next_deadline = UINT64_MAX;
-    if (system->in_call) {
+    if (system->in_call || !system->datamodel_count) { /* a run inside a call, or a system to read */
         result.status = TA_RUN_FAULT;
         result.detail = (uint32_t)TA_ERROR_STATE;
         return result;

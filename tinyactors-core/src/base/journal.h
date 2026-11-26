@@ -94,6 +94,15 @@ TA_INLINE void ta_journal_commit(ta_journal *journal, uint32_t size) {
  * length (0 when there are none); `*bytes` points at them. Release them, and
  * peek again for the rest. */
 uint32_t ta_journal_peek(const ta_journal *journal, const unsigned char **bytes);
+/* Every record kept, the released ones retained (ta_journal_retain) and
+ * the committed ones, oldest first, in at most two pieces: `second` holds
+ * the records after the wrap, and is empty unless the journal wrapped. The
+ * first `retained` bytes, through both pieces, are the released ones. */
+typedef struct ta_journal_kept {
+    const unsigned char *first, *second;
+    uint32_t first_length, second_length;
+} ta_journal_kept;
+void ta_journal_kept_get(const ta_journal *journal, ta_journal_kept *out);
 /* Release `length` bytes from the start of what ta_journal_peek returned:
  * a whole number of records. */
 void ta_journal_release(ta_journal *journal, uint32_t length);

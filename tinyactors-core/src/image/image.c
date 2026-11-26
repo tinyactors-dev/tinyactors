@@ -473,6 +473,52 @@ ta_status ta_image_state_info(const ta_image *image, ta_chart_item item, ta_stat
     return TA_OK;
 }
 
+uint32_t ta_image_transition_count(const ta_image *image, uint32_t chart) {
+    const ta_image_view *view = ta_image_view_of(image);
+    return chart < view->chart_count ? view->charts[chart].transition_count : 0;
+}
+
+/* The transition an item names, NULL when there is none. */
+static const ta_transition_record *transition_of(const ta_image_view *view, ta_chart_item item) {
+    if (item.chart >= view->chart_count || item.index >= view->charts[item.chart].transition_count)
+        return (const ta_transition_record *)0;
+    return &ta_chart_transitions(view, &view->charts[item.chart])[item.index];
+}
+
+ta_status ta_image_transition(const ta_image *image, ta_chart_item item, ta_transition_info *out) {
+    const ta_transition_record *transition = transition_of(ta_image_view_of(image), item);
+    if (!transition) return TA_ERROR_INVALID;
+    out->size = sizeof *out;
+    out->source = transition->source;
+    out->type = (transition->flags & TA_TRANSITION_FLAG_INITIAL)    ? TA_TRANSITION_INITIAL
+                : (transition->flags & TA_TRANSITION_FLAG_INTERNAL) ? TA_TRANSITION_INTERNAL
+                                                                    : TA_TRANSITION_EXTERNAL;
+    out->condition = transition->condition;
+    out->event_count = transition->event_count;
+    out->target_count = transition->target_count;
+    return TA_OK;
+}
+
+ta_string_view ta_image_transition_event(const ta_image *image, ta_chart_item item, uint32_t i) {
+    const ta_image_view *view = ta_image_view_of(image);
+    const ta_transition_record *transition = transition_of(view, item);
+    if (!transition || i >= transition->event_count) return (ta_string_view){(const char *)0, 0};
+    /* a descriptor is the interval of the event trie under its node: the
+     * node's dotted name, the root's (empty) matching every event */
+    ta_string_view name = ta_image_event_name(image, view->u32[transition->events_offset + 2u * i]);
+    return name.length ? name : (ta_string_view){"*", 1};
+}
+
+uint32_t ta_image_transition_targets(const ta_image *image, ta_chart_item item,
+                                     ta_uint32_array targets) {
+    const ta_image_view *view = ta_image_view_of(image);
+    const ta_transition_record *transition = transition_of(view, item);
+    if (!transition) return 0;
+    for (uint32_t i = 0; i < transition->target_count && i < targets.capacity; i++)
+        targets.pointer[i] = view->u32[transition->targets_offset + i];
+    return transition->target_count;
+}
+
 ta_status ta_image_boot_actor(const ta_image *image, uint32_t i, ta_boot_actor *out) {
     const ta_image_view *view = ta_image_view_of(image);
     if (i >= view->actor_count) return TA_ERROR_INVALID;

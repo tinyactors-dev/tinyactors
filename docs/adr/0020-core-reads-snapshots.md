@@ -1,16 +1,14 @@
-# ADR 0020: Core reads snapshots: a restored host that never runs
+# ADR 0020: Core reads snapshots, without a host
 
-**Status:** Proposed (2026-11-26), from the maintainer's request to move the
-snapshot decoder into core ("move the CLI's snapshot decoder into core
-proper and then have the CLI use that"; "move the decoder into core
-next"). Revised the same day after a refutation. The refutation corrected:
-- `advance_time` cannot refuse;
-- a run must stop before the encoder drains;
-- `sweep`, `traces` and `logs` change a host;
-- a restore adds images;
-- bytes the host writes are C calls, not methods;
-- what the MCP server's tools need.
-
+**Status:** Accepted in outline (2026-11-26); refined the same day after a
+refutation (a wrapped journal, the tick rate, what marks a system to
+read, the lifetimes and the trust a reading system needs).
+Decided by the maintainer: readers
+over a snapshot's bytes, which need no host ("Why must the host be frozen
+for reading a bunch of bytes?"), made public in C and mirrored by the
+bindings. It replaces the first draft of the same day, which restored a
+host that never ran (a "frozen" host), added methods, and added keys to
+`actor.get`. All of that is withdrawn.
 **Date:** 2026-11-26
 
 ## Whom it serves first, and who pays
@@ -19,238 +17,179 @@ Following [docs/roles.md](../roles.md):
 
 - **First: the operator, through a tool that reads a snapshot.** The
   tools are the MCP server (`@tinyactors/mcp`), `tinyactors inspect` and
-  `tinyactors actors`. The operator asks what every actor was doing at
-  one moment:
-  - its state, its mailbox, its delayed sends and its variables;
-  - the spans before that moment;
-  - the versions running and their charts.
+  `tinyactors actors`. The operator asks what every actor was doing at one
+  moment:
+  - its state, its mailbox and its delayed sends;
+  - the versions and their charts;
+  - the spans before that moment.
 
   Today the CLI answers with code of its own
   (`tools/tinyactors/snapshot.c`). The MCP server answers with a copy of
-  the website Inspector's JavaScript decoder (`tinyactors-napi/mcp/lib/snapshot.mjs`),
-  because a binding can only restore a snapshot into a host that runs: its
-  queued events run at the first turn, so the moment is gone before the
-  first question.
-- **Then: the binding author,** who should not write a decoder.
-- **Out of scope:** reading a snapshot of another build. The website
-  Inspector does that in JavaScript, from the layout description the pack
-  carries. Core's region is raw memory of one build, and a restore refuses
-  another layout (`ta_host_restore`). The Inspector keeps its decoder.
+  the website Inspector's JavaScript decoder.
+- **Then: the binding author,** who mirrors C readers instead of writing a
+  decoder.
+- **Out of scope:**
+  - **A snapshot of another build.** The website Inspector reads one in
+    JavaScript, from the layout description the pack carries, and keeps
+    its decoder. Core's region is raw memory of one build, and core reads
+    its own layout only.
+  - **The variables.** They are the datamodel's state: a binding's own
+    encoding, or quickjs's. A tool reads them from a host restored from the
+    snapshot, as now.
 - **Who pays:**
 
   | Cost | What |
   |---|---|
-  | per event | one test of a host flag in each input call (spawn, send, terminate, ...), beside its `running` check; nothing in a run |
-  | per actor, memory | nothing |
-  | per call | `ta_host_trace_history` lays out an OTLP encoder for the call, its staging sized to the journal's kept bytes, through the host's allocator, freed before it returns |
-  | API | a flag on `ta_host_snapshot_input` (its `pad` becomes `flags`); one C call, `ta_host_trace_history`; one method, `chart.describe`; new keys in `actor.get`, `actor.list` and `host.stats` |
-  | code | the CLI's do-nothing datamodels move into the host; an OTLP encoding of the journal's kept records |
-  | bindings | a `frozen` option on `Host.restore`; `traceHistory()` (a host output, as `metrics()`); one typed method, `chartDescribe` |
+  | per event, per actor | nothing |
+  | memory | a reader holds a copy of one segment's region, in memory its caller gives (in a binding: a `Buffer` or a `bytearray`) |
+  | API | `ta_host_snapshot_region`; `ta_system_read`; three readers made public (`ta_system_actor_name`, `_mailbox`, `_timers`); `ta_system_stats.ticks_per_second`; a chart's transitions (`ta_image_transition_*`); the journal's kept records (`ta_system_trace_kept`) and their spans (`ta_otlp_history`); a row for each in `docs/boundary.md`, and embedding.md section 12 |
+  | memory per read | a copy of each segment's region read, beside the pack the tool keeps |
+  | bindings | each mirrors those calls, plus the existing readers (`ta_system_actors`, `ta_actor_info_get`, `ta_actor_config`, the image's) |
 
 ## Context
 
-A snapshot (`ta_host_snapshot_pack`) holds three things: every segment's
-region, its images, and the datamodels' state. What it says about actors
-is read in three ways today:
-
 1. **The CLI** (`tools/tinyactors/snapshot.c`, `restore`):
-   - unpacks the pack;
-   - binds each datamodel its images name to a vtable with only its size
-     and name set (`bind_name`);
-   - restores a host that it never runs;
-   - reads the host with the system's inspection readers:
-     `ta_system_actors`, `ta_actor_info_get`, `ta_actor_config`, and the
-     internal `ta_system_actor_mailbox`, `_timers` and `_name`.
-2. **The website Inspector** (`website/examples/inspector/decode.mjs`)
-   reads the bytes in JavaScript through the pack's layout description.
-   That includes the trace journal's kept records, which it turns into
-   spans the way core's OTLP encoder names them.
-3. **A binding** restores with `Host.restore`, which runs. The MCP server
-   gets variables from such a copy by posting every `actor.context`
-   before its first await. It reads everything else with the copied
-   Inspector decoder.
+   - unpacks a pack;
+   - binds each datamodel its images name to a vtable that does nothing;
+   - restores a whole host and never runs it;
+   - reads each segment's system with the public readers
+     (`ta_system_actors`, `ta_actor_info_get`, `ta_actor_config`) and the
+     internal ones (`ta_system_actor_mailbox`, `_timers`, `_name`).
 
-Nothing restores without running. Posts are answered without a run:
-`ta_host_effects` hands out REPLYs whether or not a run came
-(`host.h`, `src/host/request.c`). A restored host announces its
-invocations only at its first run (`announcing`, `src/host/host.c`), and
-a snapshot is taken only with no effect pending and no migration. So a
-host that never runs holds the snapshot's moment.
+   It needs a host only to get from the pack to each segment's system.
+2. **A segment's system can be read without a host.** `ta_system_restore`
+   copies a region into memory its caller gives, checks the layout id and
+   the image, and binds the datamodels (`src/system/system.c`). Its
+   readers take a `const ta_system *`.
+3. **The pack's other parts already have host-free calls**
+   (`docs/requests.md`, "Not methods": calls that need no host):
+   - `ta_host_snapshot_unpack` gives the header;
+   - `ta_host_snapshot_image` gives segment i's image.
 
-The control plane already answers much of what an operator asks, on any
-host (`docs/requests.md`):
-
-| Method | Answers |
-|---|---|
-| `actor.list` | the sessions |
-| `actor.get` | an actor's chart, parent, mailbox count, invocations and delayed sends |
-| `actor.state` | an actor's configuration |
-| `actor.context` | an actor's variables |
-| `host.stats` | per segment, its pools; per chart, its counters |
-
-What is missing:
-- a host that holds still;
-- the spans of the journal's kept records;
-- a chart's structure;
-- an actor's name, status, queued events and active states, read without
-  three posts per actor.
+   (`ta_host_snapshot_segments` reads a host snapshot, not a pack.) Only
+   the regions' bytes have no call.
+4. **The Inspector turns the journal's kept records into spans** in
+   JavaScript, named as core's OTLP encoder names them. That includes the
+   acknowledged records the snapshot keeps for that purpose (`4255811c`).
 
 ## Decisions
 
-1. **A frozen restore.** `ta_host_snapshot_input.flags` takes
-   `TA_HOST_RESTORE_FROZEN`. A host restored with it changes nothing in
-   its regions:
-   - **`ta_host_run`** answers `TA_RUN_IDLE` with no deadline, before
-     anything else it does. That comes before the encoder drains (which
-     would acknowledge the journal's pending records), before errors are
-     delivered and before invocations are announced. A binding's loop
-     drains and stops, as on an idle host.
-   - **`ta_host_advance_time`** does nothing (it stays `void`). A
-     binding's loop calls it before every run as it does now.
-   - **Refused with `TA_ERROR_STATE`**, every other call that would change
-     the host:
-     - spawn, send, send_many and terminate;
-     - boot and add_image;
-     - resume, hibernate, wake and migrate;
-     - sweep (it clears the actors' touched flags);
-     - `ta_host_traces` and `ta_host_logs` (a take acknowledges the
-       journal's records).
+1. **`ta_bytes ta_host_snapshot_region(ta_bytes pack, uint32_t segment)`:**
+   segment i's region in the pack, a view into the pack. It is empty for a
+   retired segment or a pack that does not unpack.
+2. **`ta_status ta_system_read(const ta_system_setup *setup, ta_bytes
+   region, ta_system **out)`** makes a system to read.
+   - **What it does.** It copies the region into `setup->memory`, at least
+     the region's length and 8-aligned. It refuses another layout or
+     another image, as `ta_system_restore` does.
+   - **Datamodels.** It binds no datamodel: `setup->datamodels` must be
+     empty. Every chart's binding is the null datamodel's, no chart is
+     attached, and the system's datamodel count is 0. That count marks a
+     system to read:
+     - `ta_system_run` refuses it (`TA_RUN_FAULT`, `TA_ERROR_STATE`);
+     - `ta_system_deinit` leaves it;
+     - every payload's datamodel is past the count, so nothing calls a
+       datamodel.
+   - **What reads it.** The system's readers only. Nothing is sent to it.
+   - **Lifetimes.** The system holds pointers into itself and to the
+     `ta_image`, so its memory, the `ta_image` and the image's bytes must
+     outlive every view and must not move.
+   - **Trust.** The region must be one this build wrote. Its records are
+     trusted, as a restore trusts them, so a binding keeps the copy
+     private.
+   - **Its end.** It needs no `ta_system_deinit`: its caller frees the
+     memory.
+   - **How it differs from `ta_system_restore`.** It takes a datamodel for
+     no chart.
+3. **Three readers become public** (`include/tinyactors/system.h`), as
+   they are:
+   - `ta_system_actor_name`;
+   - `ta_system_actor_mailbox` (`ta_actor_queued`);
+   - `ta_system_actor_timers` (`ta_actor_timer`).
 
-     `ta_host_metrics` reads, and answers.
-   - **Posts.** A post of a method that changes the host is answered with
-     the error `state`. Those methods are `actor.send`,
-     `trace.configure`, `trace.watch`, `trace.unwatch` and `trace.end`.
-     The methods that read answer as on any host.
-   - **Snapshots.** `ta_host_snapshot` of it gives the host snapshot it was
-     restored from. `ta_host_snapshot_pack` packs the datamodels' state its
-     caller gives.
-2. **A frozen restore binds what it is not given.**
-   - **What it binds.** For each datamodel its images name that the
-     environment does not bind, the host adds a vtable that holds no
-     state. These are the CLI's `bind_name`, moved into the host, and they
-     come after the environment's bindings, in the order the images name
+   Each is a view of region strings, valid while the system's memory is,
+   and none runs anything. `ta_system_stats` gains `ticks_per_second`, the
+   rate of its `now` and of a delayed send's due, which no public call gave
+   before.
+4. **A chart's transitions** (`include/tinyactors/image.h`), as its
+   states (`ta_image_state_info`) and its data (`ta_image_data`) already
+   are:
+   - `ta_image_transition_count(image, chart)`;
+   - `ta_image_transition(image, item, ta_transition_info *)`: its source,
+     its type (external, internal, initial), its condition (an expression,
+     `TA_NIL` for none), how many events and targets it has;
+   - `ta_image_transition_event(image, item, i)`: the name or prefix an
+     event descriptor matches, `*` for any. The compiler keeps only the
+     matched node of the event trie, so `order`, `order.` and `order.*` all
+     read `order`;
+   - `ta_image_transition_targets(image, item, ta_uint32_array)`.
+5. **The journal's kept records,** `ta_status ta_system_trace_kept(const
+   ta_system *system, ta_trace_kept *out)`: the records the journal keeps,
+   oldest first. Those are the acknowledged ones it retains, then the
+   pending ones.
+   - **Pieces.** A wrapped journal is not contiguous, so the records come
+     in two views, `first` and `second`.
+   - **The acknowledged.** `acknowledged` is the bytes of the acknowledged
+     records, counted from the first record through both views.
+   - **Counts.** The records, how many of them are acknowledged, and the
+     records lost ever.
+   - **Rate.** The system's `ticks_per_second`.
+
+   It refuses `TA_ERROR_STATE` when tracing is off. The view lives as the
+   system's memory does.
+6. **Their spans, `ta_status ta_otlp_history(const ta_otlp_history_input
+   *input, ta_buffer *out)`,** in the OTLP layer. It writes an
+   ExportTraceServiceRequest of the kept records into `out`.
+   - **Memory.** The encoder is allocated through the input's allocator for
+     the call and freed before it returns. It grows as it needs to (open
+     spans, chunks, scopes), and puts the staging's spans as it fills.
+   - **Probing.** `TA_ERROR_NO_MEMORY` with `out->length` the exact bytes of
+     the request, so a probe with capacity 0 sizes it, and the encoding
+     runs again with the room. The puts it writes one after another make
+     one request: protobuf concatenates repeated fields.
+   - **Names.** Spans are named and attributed as `ta_host_traces` names
      them.
-   - **Why that is safe.** A chart attaches to it. Nothing calls it,
-     because nothing runs, and core null-checks every entry.
-   - **What it answers.** `actor.context` of its actors is the error
-     `state`, as for a datamodel that shows no variables.
-   - **With the binding's own datamodel.** A binding passes its datamodels
-     in the order the live host had them, and restores their state as it
-     does now. Then `actor.context` answers the variables as they were.
-   - **The limit.** The added bindings count toward the host's limit of
-     eight.
-3. **`actor.get` says what an operator asks first.** Its result gains
-   these keys, on every host:
-   - **`name`:** the name the actor was spawned with, `null` when it was
-     given none.
-   - **`status`:** one of `"idle"`, `"runnable"`, `"waitingWorkspace"`,
-     `"waitingAck"`, `"done"` and `"hibernated"`, one for each `TA_ACTOR_*`
-     state.
-   - **`queued`:** the events in its mailbox, in the order it takes them,
-     at most 32, each `{"event", "sendid"}`. It pairs with the count
-     `mailbox`, as `timers` does with `timersPending`. The CLI's `actors`
-     report renames its list to match (`queued`, with the count
-     `mailbox`).
-   - **`target`** in each delayed send of `timers`: its target, `null` for
-     the actor's own queue.
-4. **`actor.list` can say what each actor is doing.** With the param
-   `"detail": true`, each entry of `sessions` is a map rather than a
-   number: `{"session", "segment", "chart", "name", "status", "states"}`.
-   `states` is the active atomic states' ids in document order, `[]` for
-   a hibernated actor. The page is the same 1 to 512 entries. A tool then
-   counts the actors per state with one post per page, not three per
-   actor.
-5. **`chart.describe`: a chart's structure, from its image.** It takes
-   `segment` (uint) and `chart` (text, its name). Its result is
-   `{"name", "datamodel", "states", "transitions", "data"}`:
-   - **`states`:** `{"id", "kind", "parent"}` in document order, `kind`
-     one of `"atomic"`, `"compound"`, `"parallel"`, `"final"` and
-     `"history"`, `parent` an index or `null`.
-   - **`transitions`:** `{"source", "events", "cond", "targets", "type"}`,
-     where `source` and `targets` are state indices and `cond` is the
-     expression's text or `null`.
-   - **`data`:** the `<data>` ids.
-
-   Errors: `missing`, `type`, `range` (no live segment), `unknown` (no
-   chart of that name). It reads only the image, so it answers on any
-   host. It is the chart of that version, which a tool cannot get from the
-   current charts' sources.
-6. **`host.stats` says what each segment runs and keeps.** Each entry of
-   its `segments` gains:
-   - **`live`** and **`charts`**: the names of the charts of its image.
-   - **`trace`**: `{"records", "acknowledged", "pending", "bytes",
-     "lost"}`, the journal's kept records, or `null` when tracing is off.
-7. **`ta_host_trace_history(ta_host *h, ta_bytes *out)`: the spans the
-   journal keeps.** It is a host output, a C call as `ta_host_traces` is
-   (`docs/requests.md`, "What does not" belong there: bytes the host
-   writes), on any host, live or frozen.
-   - **What it writes.** An ExportTraceServiceRequest of every live
-     segment's kept records, the acknowledged and the pending ones,
-     oldest first. It reads them without taking or releasing any.
-   - **The encoder.** It lays out an encoder of its own for the call,
-     with `ta_otlp_config_normalize`'s defaults, so neither the host's
-     telemetry nor its absence matters. Its staging is sized to the kept
-     bytes, so the request is one.
-   - **Names and attributes.** Spans are named and attributed as
-     `ta_host_traces` names them.
-   - **Times.** A kept record has no wall time, so a record's time is the
-     system's clock converted with `ticksPerSecond` to nanoseconds, plus
-     its fuel stamp's distance from the lowest of that tick.
-   - **What an acknowledged record leaves out.** Its dynamic strings may
-     have been freed, and its payloads released, so they are left out.
-     Image strings stay.
+   - **Times.** A kept record has no wall time. A record's time is its
+     system clock, converted with the system's `ticksPerSecond`, plus its
+     fuel stamp's distance from the lowest of that tick. That is the host's
+     clock, not wall time.
+   - **Acknowledged records.** Their dynamic strings may have been freed,
+     and their payloads released, so both are left out. Image strings
+     stay, and no value is written.
    - **Spans at the edges.** A span whose beginning the ring dropped is
-     left out. A span still open at the end ends there, marked
+     left out. One still open at the end ends there, marked
      `scxml.incomplete`.
-   - **Its view.** It lives until the ack. With no batch open it opens one
-     of its own, acknowledged at once by the binding, as `ta_host_metrics`
-     does.
-   - **Refusals.** `TA_ERROR_STATE` during a run or with tracing off.
-   - **Decoding.** A binding decodes the bytes as any traces
-     (`trace.spans.decode`, its `decodeTraces`).
-8. **The CLI uses the host's.** `tinyactors inspect` of a snapshot and
-   `tinyactors actors` restore frozen, and drop their own binding of
-   datamodels. Their readers stay. `actors` renames its mailbox list as
-   decision 3 says.
-9. **The bindings expose it, nothing more.**
-   - **`frozen`.** `Host.restore(snapshot, charts, {frozen: true})` in Node
-     (`frozen=True` in Python) restores frozen. Its typed methods,
-     `actor.state()` and `host.actors()` work, and its inputs throw the
-     refusal.
-   - **What the convenience layer skips on a frozen host.** It adds no
-     image: `charts` must all be in the snapshot, or the call refuses them
-     with `TA_ERROR_INVALID`. It trims nothing. It does not take traces or
-     logs, even at close.
-   - **`now()`** reads the snapshot's time, not the clock.
-   - **The new calls.** `traceHistory()` (`trace_history()`) returns the
-     bytes as `metrics()` does. `chartDescribe` (`chart_describe`) is the
-     typed method of decision 5.
-10. **The MCP server reads snapshots through it, and its copy of the
-    Inspector's decoder goes:**
-
-    | Tool | Reads |
-    |---|---|
-    | `snapshot_summary` | `host.stats` (segments, charts, trace counts) and `actor.list` with detail |
-    | `snapshot_actors` | `actor.list` with detail, and `actor.get` |
-    | `snapshot_variables` | `actor.context` of a frozen copy with the binding's datamodel |
-    | `snapshot_chart` | `chart.describe`, and the counts from `actor.list` with detail |
-    | `snapshot_traces` | `traceHistory()` decoded |
-    | `rehearse` | its counts from `actor.list` with detail |
-
-    The Inspector's own decoder stays, for snapshots of other builds.
+   - **Input.** `{size, source, kept, image, allocator}`. The function
+     takes no system, since the OTLP layer depends on trace and image
+     only. `source` is the segment's index, which names its scopes.
+7. **The CLI reads through them.** `tinyactors inspect` of a snapshot and
+   `tinyactors actors` go through `ta_host_snapshot_region` and
+   `ta_system_read`. They no longer restore a host and drop their own
+   datamodel binding. Their output stays as it is.
+8. **The bindings mirror them.** Node's direct layer and Python's
+   extension each get `readSnapshot(bytes)` (`read_snapshot`).
+   - **What it gives.** A `Snapshot` (the header) whose `segments` are each
+     a `SnapshotSegment`. A segment holds:
+     - its image;
+     - its system, read into a `Buffer` (`bytearray`) of the region's size;
+     - its readers: `actors()`, `actor(handle)`, `configuration(handle)`,
+       `mailbox(handle)`, `timers(handle)`, `name(handle)`;
+     - `traces()` (the OTLP bytes) and `traceCounts`;
+     - `charts`, each with its `states`, `transitions` and `data`, read
+       from the image.
+   - **What it holds.** Nothing of a host. The region's copy is the
+     language's memory: a byte buffer the object keeps private, 8-aligned
+     and never resized, gone with the object. The encoder of `traces()`
+     uses the binding's allocator for the call.
+9. **The MCP server reads through them,** and its copy of the Inspector's
+   decoder goes. `snapshot_variables` and `rehearse` keep a host restored
+   from the snapshot.
 
 ## Consequences
 
-- A tool reads a snapshot of its own build with the host's own readers.
-  What a frozen host answers is what the live host would have answered at
-  the moment of the snapshot.
-- The keys added to `actor.get`, `actor.list` and `host.stats`, and the
-  method `chart.describe`, are new protocol vectors
-  (`tinyactors-test/suites/protocol/requests.txt`).
-- What a frozen host cannot show:
-  - a hibernated actor's configuration and variables, which are in its
-    blob, as for a live host;
-  - the dynamic strings and values of acknowledged trace records.
-- A live host gains the same answers: an operator's `actor.get` shows the
-  queued events, and `ta_host_trace_history` shows the recent spans
-  without a frozen copy.
+- A tool reads a snapshot of its own build with core's own readers, and
+  no host is made to read one.
+- The readers of decision 3 and the image's transitions are public ABI.
+  `tests/unit/test_headers.c` checks their structs.
+- A reading system is never run. Its charts have no datamodel, and it
+  holds the moment of the snapshot as long as its memory lives.

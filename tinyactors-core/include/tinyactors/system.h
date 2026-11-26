@@ -367,6 +367,41 @@ TA_API ta_status ta_actor_watch(ta_system *system, uint32_t actor, uint32_t on);
 TA_API ta_status ta_actor_info_get(const ta_system *system, uint32_t actor, ta_actor_info *out);
 /* The actor's active states (up to states.capacity); returns how many it has. */
 TA_API uint32_t ta_actor_config(const ta_system *system, uint32_t actor, ta_uint32_array states);
+/* Inspection: what actor.get answers (docs/requests.md), and what a reader
+ * of a snapshot asks (ta_system_read). Nothing per event; none runs
+ * anything. Each gives views of region strings, valid until the system
+ * runs again (a system to read: while its memory lives).
+ *
+ * An actor's pending delayed sends: the earliest `timers.capacity` in
+ * firing order (due, then the order they were sent) into `timers`, by
+ * insertion while its chain is walked once; returns how many it has. A
+ * send without an id has a sendid of {NULL, 0}. */
+typedef struct ta_actor_timer {
+    uint64_t due; /* in the system's ticks (ta_system_stats.ticks_per_second) */
+    uint32_t sequence, pad;
+    ta_string_view event, sendid;
+} ta_actor_timer;
+typedef struct ta_actor_timer_array {
+    ta_actor_timer *pointer;
+    uint32_t capacity;
+} ta_actor_timer_array;
+TA_API uint32_t ta_system_actor_timers(const ta_system *system, uint32_t actor,
+                                       ta_actor_timer_array timers);
+/* An actor's queued external events (its mailbox), in the order it will
+ * take them: the first `events.capacity` into `events`; returns how many it
+ * holds. An event without a sendid has a sendid of {NULL, 0}. */
+typedef struct ta_actor_queued {
+    ta_string_view event, sendid;
+} ta_actor_queued;
+typedef struct ta_actor_queued_array {
+    ta_actor_queued *pointer;
+    uint32_t capacity;
+} ta_actor_queued_array;
+TA_API uint32_t ta_system_actor_mailbox(const ta_system *system, uint32_t actor,
+                                        ta_actor_queued_array events);
+/* The name an actor was spawned with (the chart's name when it was given
+ * none; a boot actor's manifest name); empty for an actor that is gone. */
+TA_API ta_string_view ta_system_actor_name(const ta_system *system, uint32_t actor);
 /* Pool occupancy and monotonic counters (tinyactors/stats.h), O(1). Set
  * `size` first. */
 TA_API void ta_system_stats_get(const ta_system *system, ta_system_stats *out);
@@ -392,6 +427,11 @@ TA_API ta_status ta_system_chart_stats_get(const ta_system *system, uint32_t cha
 TA_API uint32_t ta_system_trace(ta_system *system, ta_trace_view *view);
 TA_API void ta_system_trace_ack(ta_system *system, uint32_t bytes);
 TA_API void ta_system_trace_clock(ta_system *system, uint64_t at_least);
+/* Every record the journal keeps (tinyactors/trace.h, ta_trace_kept), read
+ * without releasing any: for a reader of a snapshot (ta_system_read), whose
+ * views live as its memory does, or of a live system, until it next runs or
+ * is acknowledged. Set out->size first. TA_ERROR_STATE when tracing is off. */
+TA_API ta_status ta_system_trace_kept(const ta_system *system, ta_trace_kept *out);
 /* The tracing policy (docs/adr/0007): the share of the traces the system
  * starts that are sampled, parts / whole (TraceIDRatioBased on the trace ID;
  * whole 0 is 1 / 1; a traceparent keeps its caller's decision), and the
@@ -568,6 +608,22 @@ TA_API ta_status ta_system_snapshot(const ta_system *system, ta_buffer *out);
  * host restores its datamodel state). */
 TA_API ta_status ta_system_restore(const ta_system_setup *setup, ta_bytes snapshot,
                                    ta_system **out);
+/* A system to read, never to run: a region (ta_system_snapshot's bytes, or
+ * a segment's region in a host snapshot, ta_host_snapshot_region) copied
+ * into setup->memory (8-aligned, at least the region's length) after the
+ * checks ta_system_restore makes (this build's layout, setup->image the
+ * image it ran). It binds no datamodel: setup->datamodels must be empty
+ * (TA_ERROR_INVALID otherwise), and no chart is attached, so nothing calls
+ * a datamodel. setup->config may be NULL. Read it with the system's readers
+ * (ta_system_actors, ta_actor_info_get, ta_actor_config,
+ * ta_system_actor_name, _mailbox, _timers, ta_system_trace_kept), whose
+ * views live as long as setup->memory, the ta_image and its bytes do; the
+ * memory must not move (the system holds pointers into itself and to the
+ * image). ta_system_run refuses it (TA_RUN_FAULT, TA_ERROR_STATE); give it
+ * no input. It needs no ta_system_deinit (which leaves it): free the
+ * memory. The region must be one this build wrote: its records are
+ * trusted as a restore trusts them. */
+TA_API ta_status ta_system_read(const ta_system_setup *setup, ta_bytes region, ta_system **out);
 
 #ifdef __cplusplus
 }
