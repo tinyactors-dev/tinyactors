@@ -1,7 +1,6 @@
 // @tinyactors/mcp over a host of this build: the tools an agent calls,
-// through an MCP client on an in-memory transport. Decoding a snapshot of
-// this build also checks lib/snapshot.mjs, the copy of the website
-// Inspector's decoder, against the layout core writes now.
+// through an MCP client on an in-memory transport. The snapshot tools read
+// with readSnapshot, core's own readers of a pack of this build.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
@@ -176,10 +175,3 @@ test('listen: Streamable HTTP with a bearer token', async () => {
   host.close();
 });
 
-test('lib/snapshot.mjs is the website Inspector\'s decoder, but for its header', async () => {
-  const { readFileSync, existsSync } = await import('node:fs');
-  const website = new URL('../../../website/examples/inspector/decode.mjs', import.meta.url);
-  if (!existsSync(website)) return; // an installed package: the monorepo is not there
-  const copy = readFileSync(new URL('../lib/snapshot.mjs', import.meta.url), 'utf8');
-  assert.equal(copy.slice(copy.indexOf('\n\n') + 2), readFileSync(website, 'utf8'));
-});

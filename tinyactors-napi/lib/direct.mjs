@@ -68,4 +68,5 @@ export const {
   Address,
   encodeHTTPPost,
   parseHTTPRequest,
+  readSnapshot,
 } = addon;

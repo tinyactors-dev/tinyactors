@@ -15,7 +15,7 @@
     ".": { "types": "./index.d.ts", "default": "./index.mjs" },
     "./package.json": "./package.json"
   },
-  "files": ["index.mjs", "index.d.ts", "lib", "README.md"],
+  "files": ["index.mjs", "index.d.ts", "README.md"],
   "dependencies": {
     "@modelcontextprotocol/sdk": "1.32.2",
     "zod": "3.25.76"

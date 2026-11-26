@@ -21,8 +21,7 @@ import { randomUUID } from 'node:crypto';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { z } from 'zod';
-import { compileCharts, decodeTraces, Host, SimulatedClock } from '@tinyactors/node';
-import { decodePack, stateName } from './lib/snapshot.mjs';
+import { compileCharts, decodeTraces, Host, readSnapshot, SimulatedClock } from '@tinyactors/node';
 
 // ---- tap: what the host's handlers see, kept for the agent -----------------------------------
 
@@ -112,6 +111,55 @@ export function migrationSummary(result) {
   return { migration: result.migration, migrated: result.migrated, failed, pending: result.pending.length };
 }
 
+// ---- a snapshot, read by core ------------------------------------------------------------------
+
+/**
+ * A snapshot's segments, charts, actors and trace history, read with
+ * `readSnapshot` (core's readers, no host): every live segment's actors
+ * with their status, configuration, mailbox and delayed sends, each
+ * chart's structure, and the spans the journals kept.
+ */
+export function snapshotOf(bytes) {
+  const reader = readSnapshot(bytes);
+  const segments = [];
+  const spans = [];
+  const retained = { records: 0, acknowledged: 0, bytes: 0, lost: 0 };
+  let traced = false;
+  for (let index = 0; index < reader.segments; index++) {
+    let stats;
+    try {
+      stats = reader.stats(index);
+    } catch {
+      segments.push({ index, live: false });
+      continue;
+    }
+    const charts = reader.charts(index).map((chart) => {
+      const states = chart.states.map((state, i) => ({ ...state, index: i, children: [] }));
+      for (const state of states) if (state.parent !== null) states[state.parent].children.push(state.index);
+      return { ...chart, states, data: chart.data.map((id) => ({ id })) };
+    });
+    const actors = reader.actors(index).map((handle) => {
+      const actor = reader.actor(index, handle);
+      return {
+        ...actor, slot: handle, state: actor.status, configuration: reader.configuration(index, handle),
+        mailboxLength: actor.mailbox, queued: reader.mailbox(index, handle),
+        delayed: reader.timers(index, handle).map((timer) => ({ ...timer, in: timer.due > stats.now ? Number(timer.due - stats.now) / stats.ticksPerSecond : 0 })),
+      };
+    });
+    const kept = reader.traceKept(index);
+    if (kept) {
+      traced = true;
+      retained.records += kept.records;
+      retained.acknowledged += kept.acknowledgedRecords;
+      retained.bytes += kept.bytes;
+      retained.lost += kept.lost;
+      spans.push(...decodeTraces(reader.traces(index)));
+    }
+    segments.push({ index, live: true, stats, charts, actors });
+  }
+  return { systemID: reader.systemID, time: reader.time, segments, traces: traced ? { spans, retained } : null };
+}
+
 // ---- the server ----------------------------------------------------------------------------------
 
 /**
@@ -175,7 +223,7 @@ export function createMCP(systems, options = {}) {
   const packOf = (id) => {
     const snap = shared.snapshots.get(id);
     if (!snap) throw new Error(`no snapshot ${id}; take one with the snapshot tool`);
-    snap.pack ??= decodePack(snap.bytes);
+    snap.pack ??= snapshotOf(snap.bytes);
     return snap;
   };
   const live = (pack) => pack.segments.filter((segment) => segment.live);
@@ -188,16 +236,16 @@ export function createMCP(systems, options = {}) {
   };
   const rowOf = (segment, actor) => ({
     session: actor.session, name: actor.name, chart: actor.chartName, segment: segment.index,
-    status: stateName(actor.state), states: leavesOf(segment, actor), mailbox: actor.mailboxLength,
-    queued: (actor.queued ?? []).map((e) => e?.eventName ?? null),
-    delayed: (actor.delayed ?? []).map((t) => ({ event: t.event?.eventName ?? null, sendid: t.event?.strings?.sendid ?? null })),
+    status: actor.state, states: leavesOf(segment, actor), mailbox: actor.mailboxLength,
+    queued: actor.queued.map((e) => e.event),
+    delayed: actor.delayed.map((t) => ({ event: t.event, sendid: t.sendid, inSeconds: t.in })),
   });
   const countStates = (pack, chart) => {
     const counts = {};
     for (const segment of live(pack)) {
       for (const actor of segment.actors) {
         if (chart && actor.chartName !== chart) continue;
-        const key = stateName(actor.state) === 'hibernated' ? '(hibernated)' : leavesOf(segment, actor).join('+');
+        const key = actor.state === 'hibernated' ? '(hibernated)' : leavesOf(segment, actor).join('+');
         counts[key] = (counts[key] ?? 0) + 1;
       }
     }
@@ -352,7 +400,7 @@ export function createMCP(systems, options = {}) {
       for (const segment of live(pack)) {
         for (const actor of segment.actors) {
           if (q.chart && actor.chartName !== q.chart) continue;
-          if (q.status && stateName(actor.state) !== q.status) continue;
+          if (q.status && actor.state !== q.status) continue;
           if (q.state && !statesOf(segment, actor).includes(q.state)) continue;
           if (q.name && !(actor.name ?? '').startsWith(q.name)) continue;
           rows.push(rowOf(segment, actor));
@@ -369,7 +417,7 @@ export function createMCP(systems, options = {}) {
           if (session != null && Number(actor.session) !== session) continue;
           if (chart && actor.chartName !== chart) continue;
           if (state && !statesOf(segment, actor).includes(state)) continue;
-          if (stateName(actor.state) !== 'hibernated' && sessions.length < limit) sessions.push(BigInt(actor.session));
+          if (actor.state !== 'hibernated' && sessions.length < limit) sessions.push(BigInt(actor.session));
         }
       }
       const { copy } = copyOf(snap);
@@ -392,7 +440,7 @@ export function createMCP(systems, options = {}) {
       for (const actor of segment.actors) if (actor.chartName === chart) for (const i of actor.configuration ?? []) counts.set(i, (counts.get(i) ?? 0) + 1);
       return ok({
         segment: segment.index, datamodel: c.datamodel, data: c.data.map((d) => d.id),
-        states: c.states.map((s, i) => ({ id: s.id, kind: s.kind, parent: s.parent ? c.states[s.parent].id : null, actors: counts.get(i) ?? 0 })).filter((s, i) => c.states[i].parent !== null),
+        states: c.states.map((s, i) => ({ id: s.id, kind: s.kind, parent: s.parent !== null ? c.states[s.parent].id : null, actors: counts.get(i) ?? 0 })).filter((s, i) => c.states[i].parent !== null),
         transitions: c.transitions.filter((t) => t.type !== 'initial').map((t) => ({ from: c.states[t.source]?.id, events: t.events, cond: t.cond || undefined, to: t.targets.map((i) => c.states[i].id) })),
       });
     });
@@ -402,7 +450,7 @@ export function createMCP(systems, options = {}) {
       let spans = pack.traces.spans;
       if (session != null) spans = spans.filter((s) => Number(s.attributes?.['scxml.session_id'] ?? -1) === session);
       if (name) spans = spans.filter((s) => s.name.startsWith(name));
-      return ok({ total: spans.length, retained: pack.traces.retained, spans: spans.slice(-limit).map(({ trace, span, parent, name: n, start, end, attributes, events }) => ({ trace, span, parent, name: n, start, end, attributes, events })) });
+      return ok({ total: spans.length, retained: pack.traces.retained, spans: spans.slice(-limit).map(({ trace, span, parent, name: n, start, end, attributes, events }) => ({ trace, span, parent, name: n, start, end, attributes, events })), note: 'times are the host clock, not wall time; spans a host had exported have no names or values given at run time' });
     });
     tool('rehearse', 'Rehearse a deploy on a copy of a snapshot: restore it with stand-ins for the I/O processors, services and transport, add a draft, migrate a chart to it, then run the copy for advanceMs on a simulated clock. Reports the migration, the states before and after, and what the copy sent and invoked. The live host is not touched.', {
       snapshot: z.string(), draft: z.string(), chart: z.string(), advanceMs: z.number().default(0),
@@ -429,7 +477,7 @@ export function createMCP(systems, options = {}) {
           clock.increment(Math.min(250, advanceMs - elapsed));
           await copy.idle();
         }
-        const after = countStates(decodePack(copy.snapshot()), chart);
+        const after = countStates(snapshotOf(copy.snapshot()), chart);
         const tally = (list) => list.reduce((counts, item) => ({ ...counts, [item]: (counts[item] ?? 0) + 1 }), {});
         return ok({ migration, result: migrationSummary(result), before, after, sends: tally(record.sends), invocations: tally(record.invocations), logs: record.logs.slice(0, 20), errors: record.errors.slice(0, 20) });
       } finally {

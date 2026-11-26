@@ -77,8 +77,9 @@ text here.
 | `terminate` | ends an actor (needs `allowTerminate`) |
 
 **Snapshot tools** read one snapshot of a host. A snapshot holds every
-actor at one moment, and they are read from its bytes, as the
-[Inspector](https://www.tinyactors.dev/inspector/) reads them:
+actor at one moment, and they read it with `readSnapshot`, core's own
+readers of a snapshot of this build, which make no host and run
+nothing:
 
 | Tool | What it does |
 |---|---|
@@ -87,7 +88,7 @@ actor at one moment, and they are read from its bytes, as the
 | `snapshot_actors` | lists the actors by chart, state, status or name, paged |
 | `snapshot_variables` | reads the actors' variables from a copy restored from the snapshot |
 | `snapshot_chart` | shows a chart's states with the count of actors in each, and its transitions and data |
-| `snapshot_traces` | reads the trace history that the snapshot kept |
+| `snapshot_traces` | reads the trace history that the snapshot kept: times on the host's clock, and no names or values given at run time in the spans a host had already exported |
 | `rehearse` | migrates a copy of the snapshot to a draft and runs the copy on a simulated clock |
 
 A **copy** is a host restored from a snapshot. It has the system, the
@@ -124,7 +125,3 @@ The tests run against the addon built in the directory above
 pnpm install
 node --test test/
 ```
-
-`lib/snapshot.mjs` is a copy of the website Inspector's decoder, and a
-test checks that the two are the same. When core reads snapshots itself,
-the copy goes.

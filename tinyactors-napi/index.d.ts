@@ -1529,6 +1529,102 @@ export function parseHTTPRequest(message: Uint8Array | ArrayBuffer): HTTPRequest
  */
 export function decodeTraces(bytes: Uint8Array | ArrayBuffer): DecodedSpan[];
 
+/**
+ * Reads a pack ({@link Host.snapshot}'s bytes) of this build without a
+ * host: each live segment's region is read by core's readers, which run
+ * nothing, so what it answers is the moment the snapshot was taken. The
+ * bytes are copied during the call. Throws `InvalidError` for bytes that
+ * are not a snapshot of this build.
+ *
+ * @example
+ * const snapshot = readSnapshot(host.snapshot());
+ * for (const handle of snapshot.actors(0)) {
+ *   const actor = snapshot.actor(0, handle);
+ *   const states = snapshot.configuration(0, handle).map((i) => snapshot.charts(0)[actor.chart].states[i].id);
+ *   console.log(actor.session, actor.name, actor.status, states, snapshot.timers(0, handle));
+ * }
+ */
+export function readSnapshot(bytes: Uint8Array | ArrayBuffer): Snapshot;
+
+/** A snapshot read by {@link readSnapshot}. A method takes a live segment's index (`RangeError` for
+ * another), and an actor's handle in it from `actors(segment)`. */
+export interface Snapshot {
+  readonly systemID: string;
+  /** The label of the datamodels' state ({@link state}), `"tinyactors-napi"` for this package's. */
+  readonly datamodel: string;
+  /** The host's time when it was packed, in its ticks. */
+  readonly time: bigint;
+  /** How many segments the host had, retired ones included. */
+  readonly segments: number;
+  /** The datamodels' state as packed; restore the snapshot ({@link Host.restore}) to read variables. */
+  readonly state: Uint8Array;
+  /** The handles of the segment's actors. */
+  actors(segment: number): number[];
+  actor(segment: number, handle: number): SnapshotActor;
+  /** Its active states, as indices of its chart's `states`, in document order; `[]` while hibernated. */
+  configuration(segment: number, handle: number): number[];
+  /** The events waiting in its mailbox, in the order it takes them. */
+  mailbox(segment: number, handle: number): { event: string; sendid: string | null }[];
+  /** Its pending delayed sends in firing order; `due` in the system's ticks (`stats(segment).ticksPerSecond`). */
+  timers(segment: number, handle: number): { due: bigint; event: string; sendid: string | null }[];
+  stats(segment: number): SnapshotStats;
+  /** The charts of the segment's image. */
+  charts(segment: number): SnapshotChart[];
+  /** The trace records the journal kept, or `null` when the segment does not trace. */
+  traceKept(segment: number): { records: number; acknowledgedRecords: number; bytes: number; acknowledgedBytes: number; lost: number } | null;
+  /**
+   * The spans of those records, an ExportTraceServiceRequest ({@link decodeTraces} reads it), or `null`
+   * when the segment does not trace. Times are the host's clock, not wall time; of the records a host
+   * had already exported it leaves out the dynamic strings (names and event names given at run time)
+   * and the values.
+   */
+  traces(segment: number): Uint8Array | null;
+}
+
+/** An actor as {@link Snapshot.actor} reads it. */
+export interface SnapshotActor {
+  session: bigint;
+  /** The name it was spawned with, `null` for none. */
+  name: string | null;
+  /** Its chart's index in the segment's image. */
+  chart: number;
+  chartName: string;
+  status: 'idle' | 'runnable' | 'waitingWorkspace' | 'waitingAck' | 'done' | 'hibernated';
+  /** The session that invoked it, `null` for a root actor. */
+  parent: bigint | null;
+  mailbox: number;
+  /** Its running invocations, and of those the services (external ones); 0 while hibernated. */
+  invocations: number;
+  services: number;
+}
+
+/** A segment's counters as {@link Snapshot.stats} reads them: its time and its pools. */
+export interface SnapshotStats {
+  now: bigint;
+  ticksPerSecond: number;
+  /** The earliest pending delayed send's due time, 2^64-1 for none. */
+  nextDeadline: bigint;
+  actors: number;
+  hibernated: number;
+  runnable: number;
+  events: number;
+  timers: number;
+  requests: number;
+  regionBytes: number;
+}
+
+/** A chart of a segment's image, as {@link Snapshot.charts} reads it. */
+export interface SnapshotChart {
+  name: string;
+  datamodel: string;
+  /** In document order; state 0 is the `<scxml>` root. */
+  states: { id: string; kind: 'atomic' | 'compound' | 'parallel' | 'final' | 'shallowHistory' | 'deepHistory'; parent: number | null }[];
+  /** `events` are the names or prefixes they match, `*` for any; `cond` the condition's text. */
+  transitions: { source: number; type: 'external' | 'internal' | 'initial'; events: string[]; cond: string | null; targets: number[] }[];
+  /** The `<data>` ids. */
+  data: string[];
+}
+
 /** A span as {@link decodeTraces} gives it: a {@link Span} and more of
  * what the request holds. */
 export interface DecodedSpan extends Span {

@@ -58,6 +58,15 @@ export interface MCP {
 
 export function createMCP(systems: Record<string, ServedSystem>, options?: MCPOptions): MCP;
 
+/** A snapshot read with `readSnapshot`: each segment's charts and actors (status, configuration, mailbox,
+ * delayed sends), and the spans its journals kept (null when no segment traces). */
+export function snapshotOf(bytes: Uint8Array): {
+  systemID: string;
+  time: bigint;
+  segments: ({ index: number; live: false } | { index: number; live: true; stats: unknown; charts: unknown[]; actors: unknown[] })[];
+  traces: { spans: unknown[]; retained: { records: number; acknowledged: number; bytes: number; lost: number } } | null;
+};
+
 /** A migration's result for a model: failures grouped by reason, five sessions of each. */
 export function migrationSummary(result: MigrationResult): {
   migration: number;

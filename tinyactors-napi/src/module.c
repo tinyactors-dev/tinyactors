@@ -88,7 +88,7 @@ napi_status ta_napi_arities(napi_env env, napi_value object, const ta_napi_arity
  * views' (effects.c). */
 static const ta_napi_arity ta_napi_exported_arities[] = {
     {"encode", 1},         {"decode", 1}, {"decodeTraces", 1}, {"compileCharts", 2}, {"compileSystem", 2}, {"encodeHTTPPost", 1},
-    {"parseHTTPRequest", 1}, {"Host", 2},   {"Address", 1},       {NULL, 0},
+    {"parseHTTPRequest", 1}, {"Host", 2},   {"Address", 1},       {"readSnapshot", 1}, {NULL, 0},
 };
 static const ta_napi_arity ta_napi_host_static_arities[] = {{"restore", 3}, {NULL, 0}};
 static const ta_napi_arity ta_napi_host_arities[] = {
@@ -98,6 +98,10 @@ static const ta_napi_arity ta_napi_host_arities[] = {
 };
 static const ta_napi_arity ta_napi_address_static_arities[] = {{"fromSession", 2}, {"fromName", 2}, {NULL, 0}};
 static const ta_napi_arity ta_napi_clock_arities[] = {{"increment", 1}, {NULL, 0}};
+static const ta_napi_arity ta_napi_snapshot_arities[] = {
+    {"actors", 1}, {"actor", 2}, {"configuration", 2}, {"mailbox", 2}, {"timers", 2},
+    {"stats", 1},  {"charts", 1}, {"traceKept", 1},    {"traces", 1},  {NULL, 0},
+};
 
 static napi_status ta_napi_module_arities(napi_env env, napi_value exports) {
     napi_value host, address, clock, prototype;
@@ -108,6 +112,10 @@ static napi_status ta_napi_module_arities(napi_env env, napi_value exports) {
     if (status == napi_ok) status = ta_napi_arities(env, prototype, ta_napi_host_arities);
     if (status == napi_ok) status = napi_get_named_property(env, exports, "Address", &address);
     if (status == napi_ok) status = ta_napi_arities(env, address, ta_napi_address_static_arities);
+    napi_value snapshot;
+    if (status == napi_ok) status = napi_get_reference_value(env, ta_napi_instance_of(env)->snapshot, &snapshot);
+    if (status == napi_ok) status = napi_get_named_property(env, snapshot, "prototype", &prototype);
+    if (status == napi_ok) status = ta_napi_arities(env, prototype, ta_napi_snapshot_arities);
     if (status == napi_ok) status = napi_get_named_property(env, exports, "SimulatedClock", &clock);
     if (status == napi_ok) status = napi_get_named_property(env, clock, "prototype", &prototype);
     if (status == napi_ok) status = ta_napi_arities(env, prototype, ta_napi_clock_arities);
@@ -328,6 +336,7 @@ static napi_value ta_napi_module_init(napi_env env, napi_value exports) {
     if (napi_define_properties(env, exports, sizeof properties / sizeof properties[0], properties) != napi_ok ||
         ta_napi_host_define(env, exports) != napi_ok || ta_napi_loop_define(env, exports) != napi_ok ||
         ta_napi_compile_define(env, exports) != napi_ok || ta_napi_address_define(env, exports) != napi_ok ||
+        ta_napi_snapshot_define(env, exports) != napi_ok ||
         ta_napi_effects_define(env, exports) != napi_ok || ta_napi_http_define(env, exports) != napi_ok ||
         ta_napi_module_arities(env, exports) != napi_ok)
         return NULL;

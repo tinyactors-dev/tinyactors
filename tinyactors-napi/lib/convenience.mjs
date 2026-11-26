@@ -65,6 +65,10 @@ import {
   UnsupportedError,
 } from '#direct';
 export { version } from './version.mjs';
+import * as direct from '#direct';
+// A snapshot read without a host (src/snapshot.c): the addon's; the wasm
+// package does not have it yet, and exports undefined.
+export const readSnapshot = direct.readSnapshot;
 export {
   Address,
   CompileError,

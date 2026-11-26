@@ -264,6 +264,12 @@ it into the root ROADMAP.md's "Requests to core" and answers there.
   actors and segments as values (for the addon to expose), so that the
   CLI, the bindings and the MCP server read a snapshot one way. The
   package keeps its copy until then.
+  **Answered 2026-11-26 (docs/adr/0020):** core reads a pack without a
+  host (`ta_host_snapshot_region`, `ta_system_read`, the system's and the
+  image's readers, `ta_system_trace_kept`, `ta_otlp_history`); the CLI
+  reads through them, the addon exposes them as `readSnapshot`, and the
+  MCP server's copy is gone. The wasm package's `readSnapshot` is still
+  to come.
 
 The first addon's two requests were answered on 2026-10-12
 (the runner skips envelope-level vectors for a binding, `34c09cfa`; the

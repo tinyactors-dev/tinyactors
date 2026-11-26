@@ -1037,6 +1037,20 @@ file.
   no idle() waiting, is thrown from the turn's callback; the host goes
   on'`.
 
+## Reading a snapshot
+
+**`readSnapshot(bytes) → Snapshot`** (`src/snapshot.c`) reads a pack of
+this build without a host (`tinyactors-core/docs/embedding.md`, section
+12): the pack copied into a `Buffer`, 8-aligned, and each live segment's
+region read with `ta_system_read` into a second one beside its
+`ta_image`; both kept under the instance's `snapshot` symbol, never handed
+out, and gone with the object (no finalizer, no allocator call). Its
+methods mirror core's readers a segment at a time: `actors`, `actor`,
+`configuration`, `mailbox`, `timers`, `stats`, `charts`, `traceKept`,
+`traces` (`ta_otlp_history`, its encoder through the environment's
+allocator for the call). The wasm package has none of it yet. Test:
+`test/read-snapshot.test.mjs`.
+
 ## The MCP server (`mcp/`)
 
 `@tinyactors/mcp` is a package of its own, beside this one and opt-in: an
@@ -1046,11 +1060,10 @@ versions (`mcp/README.md`). It is JavaScript over this package's public
 exports and `@modelcontextprotocol/sdk` only, never the addon or
 `lib/direct.mjs`, so it adds nothing to the binding: a tap wraps the
 host's handlers at construction, and live tools are typed methods and
-inputs. Its snapshot tools read a pack's bytes with `mcp/lib/snapshot.mjs`,
-a copy of the website Inspector's decoder that a test holds equal to it,
-until core reads snapshots (ROADMAP.md, "Requests to core"); variables and
-rehearsals come from a copy restored from the snapshot, with stand-ins for
-its I/O processors, services and transport. `mise run test` installs its
+inputs. Its snapshot tools read a pack with `readSnapshot`, core's readers
+of a snapshot of this build; variables and rehearsals come from a copy
+restored from the snapshot, with stand-ins for its I/O processors,
+services and transport. `mise run test` installs its
 dependencies from its lockfile with the pinned pnpm, checks its types
 with tsc and runs its test under node and bun on both datamodels. It is not
 packed or published yet.
@@ -1295,7 +1308,7 @@ index.mjs, index.d.ts   the package: both layers' exports; the types
 lib/direct.mjs       the direct layer: loads the platform's .node and re-exports it
 lib/convenience.mjs  the convenience layer: JavaScript over lib/direct.mjs only
 mcp/                 @tinyactors/mcp, opt-in: an MCP server over the public API and the MCP SDK (its own package.json,
-                     lockfile, README, types and test; lib/snapshot.mjs a copy of the website Inspector's decoder)
+                     lockfile, README, types and test)
 docs/api-map.md      each API item → ta_* function, method or effect (checked)
 docs/values.md       the JavaScript side of the value table
 src/                 addon.h, module.c, host.c, loop.c, effects.c, methods.c, values.c,

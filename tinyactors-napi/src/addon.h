@@ -88,6 +88,7 @@ typedef struct ta_napi_instance {
     napi_ref keys;
     napi_ref turn;
     napi_ref compiled;
+    napi_ref snapshot; /* the class Snapshot (snapshot.c), made only by readSnapshot */
     napi_ref compile_error;
     napi_ref checker; /* compile.c's syntax check of a chart's ECMAScript: vm.Script, made on first use */
     napi_ref resolve_error;
@@ -596,6 +597,9 @@ napi_status ta_napi_http_define(napi_env env, napi_value exports);
 /* compileCharts, compileSystem, CompileError and ResolveError on
  * `exports`; the class of a compile result in the instance. */
 napi_status ta_napi_compile_define(napi_env env, napi_value exports);
+
+/* ---- snapshot.c: readSnapshot and the Snapshot class --------------------------- */
+napi_status ta_napi_snapshot_define(napi_env env, napi_value exports);
 
 /* ---- loop.c: the loop (AGENTS.md, "The loop") ----------------------------- */
 
