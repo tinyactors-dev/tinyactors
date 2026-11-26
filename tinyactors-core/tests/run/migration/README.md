@@ -25,7 +25,9 @@ donedata) while one of them is hibernated by the client.
   spawned in segment 1 (session 2^32 + 1).
 - A subscription's renewal (`renewal.scxml`) invokes a payment service
   the client runs. Version 2 (`renewal-v2.scxml`) is added and the
-  migration of `renewal`, with no timeout, cannot move it while the
-  invocation runs: `effect.migrationDone` lists it in `failed` with
-  `TA_ERROR_STATE`. The client ends the payment (`run.send` with `done`),
-  the renewal ends on version 1 (no donedata), and its segment retires.
+  migration of `renewal`, with no timeout, moves it while the payment
+  runs (`effect.migrated`): version 2 keeps the `<invoke>` (the same id
+  and type), so the invocation goes on under its id, with no
+  `effect.uninvoke`, and segment 2 retires. The client ends the payment
+  (`run.send` with `done` and that id), and the renewal ends on version 2
+  (its donedata names the plan).

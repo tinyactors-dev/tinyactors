@@ -398,11 +398,13 @@ running the old version, when it changes what they hold:
 
 Everything else is **behaviour**: added states, transitions and data, new
 conditions, targets and actions, changed invokes. These change what an
-actor does on its next event, not what it holds. An invoke removed from a
-kept state does not break running actors: a migration never cancels a
-running invocation (an actor whose invocations run moves once they
-finished). An invoke added to a kept state does not start for the actors
-already in it; only states entered later invoke.
+actor does on its next event, not what it holds. A changed or removed
+invoke of a kept state does not break running actors: a migration keeps
+a running service whose `<invoke>` the new version keeps (the same id
+and type), and stops one whose `<invoke>` it drops, as leaving the state
+would; an invoked chart holds its actor until it ends. An invoke added
+to a kept state does not start for the actors already in it; only states
+entered later invoke.
 
 `migration` sums up the breaking changes in sentences; it is present only
 when there are some.
