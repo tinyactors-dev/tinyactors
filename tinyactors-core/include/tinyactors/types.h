@@ -46,7 +46,7 @@ extern "C" {
 /* The release, MAJOR.MINOR.PATCH (of libtinyactors and libtinyactors_runtime,
  * released together); a release sets them. */
 #define TA_VERSION_MAJOR 0
-#define TA_VERSION_MINOR 4
+#define TA_VERSION_MINOR 5
 #define TA_VERSION_PATCH 0
 
 #define TA_ABI_VERSION 1u
