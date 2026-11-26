@@ -1,6 +1,7 @@
 // What a page says about itself (website/README.md, "Audiences and page
-// kinds: the convention"): its kind and the audiences it links (one
-// published file each, in the namespace below). This module reads an
+// kinds: the convention"): its kind, the audiences it links and the voice
+// it is written in (one published file each, in the namespaces below).
+// This module reads a voice file into the instructions it gives, an
 // audience file into the store's shape and keeps a site audience's items,
 // edits and divergence from its file, and reads a site's map: its other
 // pages with their kind and audiences, from its llms.txt.
@@ -11,6 +12,8 @@
 
 /** The namespace of an audience file. */
 export const AUDIENCE_NS = 'https://www.tinyactors.dev/ns/audience';
+/** The namespace of a voice file. */
+export const VOICE_NS = 'https://www.tinyactors.dev/ns/voice';
 
 /** The kinds of page, in the convention's order: the maintainer's pitch, then Diátaxis's four. */
 export const PAGE_KINDS = Object.freeze(['pitch', 'tutorial', 'how-to', 'reference', 'explanation']);
@@ -177,6 +180,36 @@ export function parseAudience(text, { DOMParser = globalThis.DOMParser } = {}) {
   if (!record.name) throw new Error(`The audience ${id} has no name.`);
   return record;
 }
+
+/**
+ * A voice file's text → `{id, name, description, kinds: [kind], rules:
+ * [{id, text}]}`, its rules in the file's order. Throws when the root is
+ * not a voice of VOICE_NS, or it has no name or no rule.
+ */
+export function parseVoice(text, { DOMParser = globalThis.DOMParser } = {}) {
+  const root = parse(String(text), DOMParser);
+  if (root.ns !== VOICE_NS || root.local !== 'voice') throw new Error(`Not a voice file (its root is {${root.ns}}${root.local}).`);
+  const id = clean(root.attributes.id);
+  if (!/^[A-Za-z_][\w.-]*$/.test(id)) throw new Error('A voice file needs an id.');
+  const record = { id, name: '', description: '', kinds: clean(root.attributes.kinds).split(' ').filter((k) => PAGE_KINDS.includes(k)), rules: [] };
+  for (const el of root.children) {
+    if (typeof el === 'string' || el.ns !== VOICE_NS) continue;
+    if (el.local === 'name' || el.local === 'description') record[el.local] = clean(textOf(el));
+    else if (el.local === 'rule') {
+      const words = clean(textOf(el));
+      if (words) record.rules.push({ id: clean(el.attributes.id), text: words });
+    }
+  }
+  if (!record.name) throw new Error(`The voice ${id} has no name.`);
+  if (!record.rules.length) throw new Error(`The voice ${id} has no rule.`);
+  return record;
+}
+
+/** A parsed voice as the model is told it: its name and purpose, then a rule a line. */
+export const voiceInstructions = (voice) => [
+  `This page is written in the site's "${voice.name}" voice${voice.description ? `: ${voice.description}` : '.'}`,
+  ...voice.rules.map((r) => `- ${r.text}`),
+].join('\n');
 
 /** A parsed file's fields as a stored audience has them: each need one line. */
 export function fieldsOf(site) {

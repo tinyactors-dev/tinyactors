@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<voice xmlns="https://www.tinyactors.dev/ns/voice" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" id="literal" kinds="pitch how-to reference" xsi:schemaLocation="https://www.tinyactors.dev/ns/voice voice.xsd">
+  <name>Short and literal</name>
+  <description>The site's voice: short, literal sentences, each followed by its proof, for readers who decide, look up or reach a goal.</description>
+  <rule id="headings">Headlines, headings and claims' statements are 1 to 8 words, sentence case, with no period at the end ("Build a team chat").</rule>
+  <rule id="findings">A headline states a benefit, a heading its finding, and a sentence before a block what the block shows.</rule>
+  <rule id="lede">A lede states the page's strongest facts, never a list of what is coming.</rule>
+  <rule id="paragraphs">A paragraph is one or two sentences of at most 21 words each, with the product or the reader's code as the subject.</rule>
+  <rule id="proof">Each section is one line of prose and then the proof: code, output, a claim with its source.</rule>
+  <rule id="plain">No metaphors, no adjectives that do not measure something, no hype words, no emoji. Never write "formal verification".</rule>
+  <rule id="actions">Actions are a verb and an object, 2 to 4 words.</rule>
+  <rule id="terms">Name SCXML and actor terms exactly (state, event, transition, actor, host). The product name is lowercase: tinyactors.</rule>
+  <rule id="commas">No serial comma: "states, events and transitions".</rule>
+  <rule id="facts">Never add a claim, number, name or capability that the page or its sources do not state.</rule>
+  <rule id="audience">Never name the reader's role ("as a tech lead", "for operators"); write for them by choosing what to explain.</rule>
+  <rule id="site">Never explain how the site is made (that a page is generated, captured or checked); say what the thing does for the reader.</rule>
+</voice>

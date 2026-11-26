@@ -1622,8 +1622,15 @@ export function mountPanel(root, reviewer, { layout = 'sidebar', onTall = null }
       const text = voiceArea.value;
       send({ type: 'settings.save', voice: text }).then((r) => r !== FAILED && toast('Voice saved'));
     });
+    // a page that links its voice is written in it; this one is for pages that link none
+    const pageVoice = voice.page
+      ? h('p', { class: 'cw-hint', 'data-testid': 'page-voice' },
+        'This page links its voice, ', h('a', { href: voice.page.url, target: '_blank', rel: 'noopener' }, voice.page.name),
+        ': Gemini writes in it here. The voice below is for pages that link none.')
+      : null;
     body.append(h('div', { class: 'cw-group' },
       h('label', { class: 'cw-label', for: 'cw-voice', title: 'How to write' }, 'Voice'),
+      pageVoice,
       voiceArea,
       h('div', { class: 'cw-buttons' },
         voice.custom && button('Default', {

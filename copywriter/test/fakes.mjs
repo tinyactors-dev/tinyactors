@@ -78,8 +78,9 @@ export function fakePage({ url = 'https://www.tinyactors.dev/', title = 'tinyact
 }
 
 /**
- * The site's audience files, from test/fixtures/audiences/ (fetched once from
- * https://www.tinyactors.dev/audiences/): `fetchFile(url)` gives a file's
+ * The site's audience and voice files, from test/fixtures/audiences/ and
+ * test/fixtures/voices/ (fetched once from https://www.tinyactors.dev/audiences/
+ * and /voices/): `fetchFile(url)` gives a file's
  * text by its name; `files` overrides or adds texts by URL; `asked` lists
  * the URLs asked for.
  */
@@ -91,8 +92,10 @@ export function fakeFiles(files = {}) {
       if (files[url] instanceof Error) throw files[url];
       return files[url];
     }
-    const name = new URL(url).pathname.split('/').pop();
-    return readFileSync(new URL(`./fixtures/audiences/${name}`, import.meta.url), 'utf8');
+    const path = new URL(url).pathname;
+    const name = path.split('/').pop();
+    const dir = path.includes('/voices/') ? 'voices' : 'audiences';
+    return readFileSync(new URL(`./fixtures/${dir}/${name}`, import.meta.url), 'utf8');
   };
   fetchFile.asked = asked;
   fetchFile.files = files;

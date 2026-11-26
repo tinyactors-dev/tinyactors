@@ -50,7 +50,7 @@ test('settings: the key saved and forgotten, the model, the voice edited and res
   await reviewer.dispatch({ type: 'settings.save', model: 'gemini-4-carbon', voice: 'Use five words.' });
   s = reviewer.getState().settings;
   assert.equal(s.model, 'gemini-4-carbon');
-  assert.deepEqual(s.voice, { instructions: 'Use five words.', custom: true });
+  assert.deepEqual(s.voice, { instructions: 'Use five words.', custom: true, page: null });
   assert.deepEqual(await store.settings(), {
     model: 'gemini-4-carbon', thinking: 'high', length: 'short', tools: { search: false, url: true, code: false }, audienceIDs: [], voice: 'Use five words.',
   });

@@ -1,0 +1,115 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  A voice: how a site writes a kind of page. Published at
+  /voices/voice.xsd, beside the files it describes: one file per voice
+  (/voices/<id>.xml, the element `voice`) and an index of them
+  (/voices/index.xml, the element `voices`).
+
+  A page names the voice it is written in in its head, once:
+
+    <link rel="voice" href="/voices/tutorial.xml">
+
+  A voice file holds every rule of its voice: a tool that edits the page's
+  copy reads that one file and needs nothing else. README.md, "Audiences,
+  voices and page kinds", is the convention in full. Any site may publish
+  files of this format; a tool reads them from the links of the page it is
+  given, and knows no voice of its own.
+
+  This file is the site's (website/schema/voice.xsd); the build copies it
+  and writes the voice files from content/site.xml.
+-->
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"
+           xmlns="https://www.tinyactors.dev/ns/voice"
+           targetNamespace="https://www.tinyactors.dev/ns/voice"
+           elementFormDefault="qualified"
+           xpathDefaultNamespace="##targetNamespace"
+           version="1.1">
+
+  <xs:element name="voice">
+    <xs:annotation><xs:documentation>
+      One way of writing. `id` names it on its site; `kinds` are the kinds
+      of page written in it (pitch, tutorial, how-to, reference,
+      explanation). `name` is what it is called, `description` what it is
+      for. Then its rules, in order, one line each, with an `id` unique
+      within the voice.
+    </xs:documentation></xs:annotation>
+    <xs:complexType>
+      <xs:sequence>
+        <xs:element name="name" type="text"/>
+        <xs:element name="description" type="text"/>
+        <xs:element name="rule" maxOccurs="unbounded">
+          <xs:complexType>
+            <xs:simpleContent>
+              <xs:extension base="text">
+                <xs:attribute name="id" type="id" use="required"/>
+              </xs:extension>
+            </xs:simpleContent>
+          </xs:complexType>
+        </xs:element>
+      </xs:sequence>
+      <xs:attribute name="id" type="id" use="required"/>
+      <xs:attribute name="kinds" use="required">
+        <xs:simpleType>
+          <xs:list itemType="kind"/>
+        </xs:simpleType>
+      </xs:attribute>
+    </xs:complexType>
+    <xs:unique name="rule-ids">
+      <xs:selector xpath="rule"/>
+      <xs:field xpath="@id"/>
+    </xs:unique>
+  </xs:element>
+
+  <xs:element name="voices">
+    <xs:annotation><xs:documentation>
+      The index of a site's voices: each `item` names one by its `id`, its
+      file (`href`, relative to the index) and the kinds of page it is for;
+      its text is the voice's name.
+    </xs:documentation></xs:annotation>
+    <xs:complexType>
+      <xs:sequence>
+        <xs:element name="item" maxOccurs="unbounded">
+          <xs:complexType>
+            <xs:simpleContent>
+              <xs:extension base="text">
+                <xs:attribute name="id" type="id" use="required"/>
+                <xs:attribute name="href" type="xs:anyURI" use="required"/>
+                <xs:attribute name="kinds" use="required">
+                  <xs:simpleType><xs:list itemType="kind"/></xs:simpleType>
+                </xs:attribute>
+              </xs:extension>
+            </xs:simpleContent>
+          </xs:complexType>
+        </xs:element>
+      </xs:sequence>
+    </xs:complexType>
+    <xs:unique name="voice-ids">
+      <xs:selector xpath="item"/>
+      <xs:field xpath="@id"/>
+    </xs:unique>
+  </xs:element>
+
+  <xs:simpleType name="kind">
+    <xs:restriction base="xs:token">
+      <xs:enumeration value="pitch"/>
+      <xs:enumeration value="tutorial"/>
+      <xs:enumeration value="how-to"/>
+      <xs:enumeration value="reference"/>
+      <xs:enumeration value="explanation"/>
+    </xs:restriction>
+  </xs:simpleType>
+
+  <xs:simpleType name="id">
+    <xs:annotation><xs:documentation>Lowercase words joined by hyphens: "tutorial", "deep-dive".</xs:documentation></xs:annotation>
+    <xs:restriction base="xs:token">
+      <xs:pattern value="[a-z][a-z0-9]*(-[a-z0-9]+)*"/>
+    </xs:restriction>
+  </xs:simpleType>
+
+  <xs:simpleType name="text">
+    <xs:annotation><xs:documentation>One line of plain text.</xs:documentation></xs:annotation>
+    <xs:restriction base="xs:token">
+      <xs:minLength value="1"/>
+    </xs:restriction>
+  </xs:simpleType>
+</xs:schema>

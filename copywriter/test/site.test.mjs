@@ -11,7 +11,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { setup, fakePage, fakeFetch, fakeFiles, audienceFile, geminiReply } from './fakes.mjs';
 import { createMemoryStore } from '../src/core/store.mjs';
-import { parseAudience, parseXML, itemsOf, differences, AUDIENCE_NS } from '../src/core/site.mjs';
+import { parseAudience, parseVoice, voiceInstructions, parseXML, itemsOf, differences, AUDIENCE_NS } from '../src/core/site.mjs';
 import { buildPacket } from '../src/core/packet.mjs';
 
 const SITE = 'https://www.tinyactors.dev';
@@ -255,4 +255,40 @@ test('a packet with only an audience to update is valid to build', async () => {
   });
   assert.match(xml, /<design-task id="audience-item-1" observationRef="audience-observation-1" status="open"><summary>Update the audience "tech-lead"/);
   assert.match(changes, /knows:\n\nThe site:/);
+});
+
+const voiceFile = (id) => `${SITE}/voices/${id}.xml`;
+
+test('a voice file parses into its name, kinds and rules, and a page that links one is written in it', async () => {
+  const tutorial = parseVoice(readFileSync(new URL('./fixtures/voices/tutorial.xml', import.meta.url), 'utf8'));
+  assert.equal(tutorial.name, 'Tutorial');
+  assert.deepEqual(tutorial.kinds, ['tutorial']);
+  assert.ok(tutorial.rules.some((r) => r.id === 'paragraphs' && /passages of two or three sentences/.test(r.text)), 'the tutorial\'s own paragraphs rule');
+  assert.match(voiceInstructions(tutorial), /^This page is written in the site's "Tutorial" voice: /);
+  assert.throws(() => parseVoice(audienceFile('tech-lead')), /Not a voice file/);
+
+  const fetch = fakeFetch(geminiReply('Sure.', []));
+  const fetchFile = fakeFiles();
+  const { reviewer, page } = await setup({ page: homePage({ ...HOME, kind: 'tutorial', voice: voiceFile('tutorial') }), fetch, fetchFile });
+  assert.deepEqual(reviewer.getState().settings.voice.page, { name: 'Tutorial', url: voiceFile('tutorial') });
+  page.select('Install it with npm.');
+  await reviewer.dispatch({ type: 'annotate' });
+  await reviewer.dispatch({ type: 'chat', text: 'Is the page clear?' });
+  const asked = system(fetch.requests.at(-1));
+  assert.match(asked, /The voice \(how to write\):\nThis page is written in the site's "Tutorial" voice/);
+  assert.match(asked, /passages of two or three sentences/);
+  assert.doesNotMatch(asked, /A paragraph is one or two sentences of at most 21 words/, 'the default voice\'s rule is replaced');
+  reviewer.close();
+});
+
+test('a page whose voice file cannot be read, or that links none, is written in the reviewer\'s voice', async () => {
+  const fetch = fakeFetch(geminiReply('Sure.', []));
+  const fetchFile = fakeFiles({ [voiceFile('gone')]: new Error('404') });
+  const { reviewer, page } = await setup({ page: homePage({ ...HOME, voice: voiceFile('gone') }), fetch, fetchFile });
+  assert.equal(reviewer.getState().settings.voice.page, null);
+  page.select('Install it with npm.');
+  await reviewer.dispatch({ type: 'annotate' });
+  await reviewer.dispatch({ type: 'chat', text: 'Is the page clear?' });
+  assert.match(system(fetch.requests.at(-1)), /The voice \(how to write\):\nYou edit the copy of www\.tinyactors\.dev/);
+  reviewer.close();
 });

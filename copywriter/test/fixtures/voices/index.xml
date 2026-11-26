@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<voices xmlns="https://www.tinyactors.dev/ns/voice" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="https://www.tinyactors.dev/ns/voice voice.xsd">
+  <item id="literal" href="literal.xml" kinds="pitch how-to reference">Short and literal</item>
+  <item id="deep-dive" href="deep-dive.xml" kinds="explanation">Deep dive</item>
+  <item id="tutorial" href="tutorial.xml" kinds="tutorial">Tutorial</item>
+</voices>

@@ -308,7 +308,7 @@ export function contextOf(doc, exclude = () => false) {
   return { headings, text: index.text.slice(0, MAX_CONTEXT_TEXT), links };
 }
 
-/** What a page's head says it is for: its kind and the audience files it links, in order. */
+/** What a page's head says it is for: its kind, the audience files it links, in order, and the voice file it links (its first). */
 export function purposeOf(doc) {
   const head = doc.head || doc.documentElement;
   const kind = head.querySelector('meta[name="page-kind"]')?.getAttribute('content')?.trim() || null;
@@ -319,7 +319,10 @@ export function purposeOf(doc) {
       if (!audiences.includes(url)) audiences.push(url);
     } catch { /* not a URL */ }
   }
-  return { kind, audiences };
+  let voice = null;
+  const link = head.querySelector('link[rel~="voice"][href]');
+  try { if (link) voice = new URL(link.getAttribute('href'), doc.baseURI).href; } catch { /* not a URL */ }
+  return { kind, audiences, voice };
 }
 
 /**
@@ -327,7 +330,7 @@ export function purposeOf(doc) {
  * parsed with DOMParser, read as `context()` reads the live page (hidden
  * elements and the copywriter's own left out; nothing is rendered, so
  * nothing else is), with its head's purpose. →
- * `{url, title, lang, headings, text, links, kind, audiences}`.
+ * `{url, title, lang, headings, text, links, kind, audiences, voice}`.
  */
 export function readHTML(html, url, { DOMParser = globalThis.DOMParser } = {}) {
   const doc = new DOMParser().parseFromString(String(html), 'text/html');

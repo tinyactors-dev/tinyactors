@@ -423,7 +423,7 @@ test('a database of version 1: the page\'s chat is its first conversation, an ed
   const state = await page.evaluate(() => tinyactorsCopywriter.reviewer.getState());
   assert.equal(state.chat.id, 'c0');
   assert.deepEqual(state.chat.messages.map((m) => m.text), ['Old question', 'Old answer']);
-  assert.deepEqual(state.settings.voice, { instructions: 'Edited voice.', custom: true });
+  assert.deepEqual([state.settings.voice.instructions, state.settings.voice.custom], ['Edited voice.', true]);
   assert.equal(state.settings.thinking, 'low', 'the other settings stay');
   // no audience came from version 1; the page's linked files are added, and are its set
   assert.deepEqual(state.settings.audiences.map((a) => a.source), ['site', 'site', 'site']);
@@ -431,7 +431,7 @@ test('a database of version 1: the page\'s chat is its first conversation, an ed
   await context.close();
 });
 
-test('the widget reads the page\'s audiences from its links: the files are fetched, their chips appear with no audience of the copywriter\'s own', async () => {
+test('the widget reads the page\'s audiences and voice from its links: the files are fetched, their chips appear with no audience of the copywriter\'s own', async () => {
   const { context, page, errors, sheet, launcher } = await phone({ linked: true });
   const state = await page.evaluate(() => tinyactorsCopywriter.reviewer.getState());
   assert.equal(state.page.kind, 'pitch');
@@ -443,6 +443,7 @@ test('the widget reads the page\'s audiences from its links: the files are fetch
   ], 'parsed with the browser\'s DOMParser');
   assert.equal(state.settings.audiences[1].items[1].id, 'failure-semantics');
   assert.deepEqual(state.settings.audienceIDs, ['site-agent-platform', 'site-tech-lead', 'site-workflow-tester']);
+  assert.equal(state.settings.voice.page?.name, 'Short and literal', 'the voice its head links, read with DOMParser');
   const purpose = await page.evaluate(() => tinyactorsCopywriter.reviewer.getState().page);
   assert.equal(purpose.audienceSuggestion, null, 'not asked');
   await launcher.tap();

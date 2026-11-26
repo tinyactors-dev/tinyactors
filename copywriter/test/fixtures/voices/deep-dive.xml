@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<voice xmlns="https://www.tinyactors.dev/ns/voice" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" id="deep-dive" kinds="explanation" xsi:schemaLocation="https://www.tinyactors.dev/ns/voice voice.xsd">
+  <name>Deep dive</name>
+  <description>A technical deep dive a reader follows from start to end, like a chapter of a book, to understand a design before depending on it.</description>
+  <rule id="headings">Headlines, headings and claims' statements are 1 to 8 words, sentence case, with no period at the end ("Build a team chat").</rule>
+  <rule id="findings">A headline states a benefit, a heading its finding, and a sentence before a block what the block shows.</rule>
+  <rule id="lede">The lede sets the context a newcomer lacks: what the thing is, what problem the page explains, and what the reader can judge after it.</rule>
+  <rule id="paragraphs">The prose is passages of up to five sentences, each at most 32 words, with no questions.</rule>
+  <rule id="proof">Each section opens with a problem, the concrete situation it solves with its stakes, never a rhetorical question; passages build the idea, then a figure, a table or a claim with its source proves it.</rule>
+  <rule id="plain">No metaphors, no adjectives that do not measure something, no hype words, no emoji. Never write "formal verification".</rule>
+  <rule id="actions">Actions are a verb and an object, 2 to 4 words.</rule>
+  <rule id="terms">Name SCXML and actor terms exactly (state, event, transition, actor, host). The product name is lowercase: tinyactors.</rule>
+  <rule id="commas">No serial comma: "states, events and transitions".</rule>
+  <rule id="facts">Never add a claim, number, name or capability that the page or its sources do not state.</rule>
+  <rule id="audience">Never name the reader's role ("as a tech lead", "for operators"); write for them by choosing what to explain.</rule>
+  <rule id="site">Never explain how the site is made (that a page is generated, captured or checked); say what the thing does for the reader.</rule>
+  <rule id="order">Terms are introduced before they are used, and each section ends where the next one's question starts.</rule>
+</voice>
