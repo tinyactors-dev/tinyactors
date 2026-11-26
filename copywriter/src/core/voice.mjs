@@ -1,7 +1,8 @@
-// The voice: how the copy is written. The default is the website's voice
-// (website/AGENTS.md, "The voice: short and literal" and "Every sentence
-// says something"), editable in Settings, never deleted. Who reads is
-// another matter: the audiences (settings).
+// The voice: how the copy is written, for a page that links no voice of
+// its own (a page that links one is written in it: src/core/site.mjs,
+// parseVoice). The default is the website's short and literal voice
+// (website/content/site.xml, the voice "literal"), editable in Settings,
+// never deleted. Who reads is another matter: the audiences (settings).
 
 export const DEFAULT_VOICE = `You edit the copy of www.tinyactors.dev, the website of tinyactors, an SCXML statechart and actor runtime.
 

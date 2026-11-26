@@ -128,7 +128,7 @@ one-off Python.
   works outside pick mode.
 - **Voice and audiences** (the maintainer, 2026-11-23: a persona is who
   reads, not how we write). The **voice** is how to write: the website's
-  voice (`website/AGENTS.md`, "The voice: short and literal") by default,
+  voice (`website/content/site.xml`, the voice `literal`) by default,
   editable in Settings, never deleted; saved empty it is the default
   again. The **audiences** are who reads: each a name, who they are, what
   they know, what they want from the page, the tasks they came to do and
@@ -142,6 +142,18 @@ one-off Python.
   were written for (`audiences`), which the export prints ("Written
   for"). The database's version 2 moved an edited default persona's
   instructions to the voice and dropped the other personas.
+- **A page's voice is the site's** (the maintainer, 2026-11-26: voices
+  "fetched from metadata, just like audiences"; website/README.md,
+  "Audiences and page kinds: the convention"). A page's head links the
+  voice it is written in (`<link rel="voice">`, one file of the
+  `https://www.tinyactors.dev/ns/voice` namespace holding every rule).
+  Opening a page reads it once a session (`parseVoice` and
+  `voiceInstructions` in `src/core/site.mjs`), and every request about
+  that page (a rewrite, the page chat, a reading, the plan) is told that
+  voice. The Settings voice (the default, or the reviewer's edit) is for
+  pages that link none or whose file cannot be read; Settings names the
+  page's voice above it. A voice is not stored: the site owns it, and a
+  change to a rule is a change to `website/content/site.xml`.
 - **Pages remember their audiences** (the maintainer, 2026-11-23). The
   active audiences are the open page's set: choosing them (Settings'
   switches, a strip chip's menu, the model's `use_audiences` or
@@ -611,7 +623,7 @@ annotation's id.
     thinking,                              // 'low' | 'medium' | 'high' | 'xhigh'
     length,                                // 'short' | 'medium' | 'long': the model's own answers
     tools: { search, url, code },          // Google's built-in tools, each on or off
-    voice: { instructions, custom },       // how to write; custom false: the default voice
+    voice: { instructions, custom, page }, // how to write; custom false: the default voice; page {name, url} | null: the voice the open page links, which its requests use
     audiences: [{ id, name, description, knows?, wants?, tasks?, objections?,
       source?, url?, siteID?, items?, diverged? }],  // who reads; source 'model': defined by the model (define_audience);
                                            //   'site': from the file at url (siteID its id there, items its needs
