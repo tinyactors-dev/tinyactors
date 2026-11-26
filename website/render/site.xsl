@@ -197,7 +197,21 @@
           <xsl:with-param name="current" select="."/>
         </xsl:call-template>
         <main id="main">
-          <xsl:apply-templates select="s:hero, s:section, s:reference, s:app"/>
+          <xsl:choose>
+            <xsl:when test="s:command-nav">
+              <xsl:apply-templates select="s:hero"/>
+              <div class="wrap command-layout">
+                <xsl:apply-templates select="s:command-nav" mode="sidebar"/>
+                <div class="command-layout__body">
+                  <xsl:apply-templates select="s:section"/>
+                  <xsl:apply-templates select="s:command-nav" mode="steps"/>
+                </div>
+              </div>
+            </xsl:when>
+            <xsl:otherwise>
+              <xsl:apply-templates select="s:hero, s:section, s:reference, s:app"/>
+            </xsl:otherwise>
+          </xsl:choose>
         </main>
         <xsl:call-template name="footer"/>
         <xsl:apply-templates select="$site/s:presence">
@@ -1248,7 +1262,9 @@
           </s:section>
         </xsl:if>
         <xsl:variable name="see" select="$commands/(s:related, s:artifact)[@command = $name]"/>
-        <xsl:if test="$see">
+        <!-- the commands that do a job with this one, in the jobs' order -->
+        <xsl:variable name="siblings" select="distinct-values($commands/s:job[tokenize(normalize-space(@commands), ' ') = $name]/tokenize(normalize-space(@commands), ' '))[. != $name]"/>
+        <xsl:if test="$see or exists($siblings)">
           <s:section id="see">
             <s:heading>{normalize-space($commands/s:see)}</s:heading>
             <s:list>
@@ -1260,13 +1276,18 @@
                   </xsl:choose>
                 </s:text></s:item>
               </xsl:for-each>
+              <xsl:for-each select="$siblings">
+                <xsl:variable name="command" select="$cli-doc/help/commands/command[@command = current()]"/>
+                <s:item>
+                  <s:term><s:link to="{$page/@id}-{.}"><s:code>{$cli-doc/help/@name} {.}</s:code></s:link></s:term>
+                  <s:text><xsl:sequence select="f:help-text(f:sentence($command/@summary))"/></s:text>
+                </s:item>
+              </xsl:for-each>
             </s:list>
           </s:section>
         </xsl:if>
-        <s:section id="commands">
-          <s:heading>{normalize-space($commands/s:all)}</s:heading>
-          <s:command-nav current="{$name}"/>
-        </s:section>
+        <!-- every command beside the page (render: the command layout) -->
+        <s:command-nav current="{$name}"/>
       </s:page>
     </xsl:for-each>
   </xsl:function>
@@ -1274,39 +1295,47 @@
   <!-- A command's page ends with the way to the others: the one before and
        the one after it in the help's order, then every command, this one
        marked. -->
-  <xsl:template match="s:command-nav">
+  <!-- Every command, beside a command's page: under each job's name its
+       commands, this one marked. On a narrow screen it follows the page. -->
+  <xsl:template match="s:command-nav" mode="sidebar">
+    <xsl:variable name="page" select="$commands/ancestor::s:page"/>
+    <xsl:variable name="names" select="$cli-doc/help/commands/command/@command ! string()"/>
+    <xsl:variable name="current" select="string(@current)"/>
+    <xsl:variable name="groups" as="map(*)*" select="if ($commands/s:job)
+        then $commands/s:job ! map { 'name': s:name, 'names': tokenize(normalize-space(@commands), ' ') }
+        else map { 'name': (), 'names': $names }"/>
+    <nav class="command-sidebar" aria-labelledby="command-sidebar-title">
+      <p class="command-sidebar__title" id="command-sidebar-title"><a href="{$page/@path}">{normalize-space($commands/s:all)}</a></p>
+      <xsl:for-each select="$groups">
+        <p class="command-sidebar__label"><xsl:apply-templates select="?name/node()"/></p>
+        <ul class="command-sidebar__list">
+          <xsl:for-each select="?names">
+            <li>
+              <xsl:choose>
+                <xsl:when test=". = $current"><a href="{$page/@path}{.}/" aria-current="page"><code>{.}</code></a></xsl:when>
+                <xsl:otherwise><a href="{$page/@path}{.}/"><code>{.}</code></a></xsl:otherwise>
+              </xsl:choose>
+            </li>
+          </xsl:for-each>
+        </ul>
+      </xsl:for-each>
+    </nav>
+  </xsl:template>
+
+  <!-- The command before and the one after, in the help's order, at the
+       page's end. -->
+  <xsl:template match="s:command-nav" mode="steps">
     <xsl:variable name="page" select="$commands/ancestor::s:page"/>
     <xsl:variable name="names" select="$cli-doc/help/commands/command/@command ! string()"/>
     <xsl:variable name="at" select="index-of($names, string(@current))[1]"/>
     <xsl:variable name="program" select="string($cli-doc/help/@name)"/>
-    <nav class="command-nav" aria-label="{normalize-space($commands/s:all)}">
-      <p class="command-nav__steps">
-        <xsl:if test="$at gt 1">
-          <a class="command-nav__step" rel="prev" href="{$page/@path}{$names[$at - 1]}/"><span aria-hidden="true">← </span><code>{$program} {$names[$at - 1]}</code></a>
-        </xsl:if>
-        <xsl:if test="$at lt count($names)">
-          <a class="command-nav__step command-nav__step--next" rel="next" href="{$page/@path}{$names[$at + 1]}/"><code>{$program} {$names[$at + 1]}</code><span aria-hidden="true"> →</span></a>
-        </xsl:if>
-      </p>
-      <xsl:variable name="current" select="string(@current)"/>
-      <xsl:variable name="groups" as="map(*)*" select="if ($commands/s:job)
-          then $commands/s:job ! map { 'name': s:name, 'names': tokenize(normalize-space(@commands), ' ') }
-          else map { 'name': (), 'names': $names }"/>
-      <xsl:for-each select="$groups">
-        <div class="command-nav__group">
-          <xsl:if test="exists(?name)"><p class="command-nav__label"><xsl:apply-templates select="?name/node()"/></p></xsl:if>
-          <ul class="command-nav__all">
-            <xsl:for-each select="?names">
-              <li>
-                <xsl:choose>
-                  <xsl:when test=". = $current"><span class="command-nav__current" aria-current="page"><code>{.}</code></span></xsl:when>
-                  <xsl:otherwise><a href="{$page/@path}{.}/"><code>{.}</code></a></xsl:otherwise>
-                </xsl:choose>
-              </li>
-            </xsl:for-each>
-          </ul>
-        </div>
-      </xsl:for-each>
+    <nav class="command-steps wrap" aria-label="{normalize-space($commands/s:all)}">
+      <xsl:if test="$at gt 1">
+        <a class="command-steps__step" rel="prev" href="{$page/@path}{$names[$at - 1]}/"><span aria-hidden="true">← </span><code>{$program} {$names[$at - 1]}</code></a>
+      </xsl:if>
+      <xsl:if test="$at lt count($names)">
+        <a class="command-steps__step command-steps__step--next" rel="next" href="{$page/@path}{$names[$at + 1]}/"><code>{$program} {$names[$at + 1]}</code><span aria-hidden="true"> →</span></a>
+      </xsl:if>
     </nav>
   </xsl:template>
 

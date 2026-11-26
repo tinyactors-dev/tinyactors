@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <page xmlns="https://www.tinyactors.dev/ns/site" id="cli-why" path="/cli/why/">
-  <title>Choose between the command and the libraries</title>
+  <title>CLI and libraries · tinyactors CLI</title>
   <description>Understand when to use the tinyactors command for CI checks, diffs, offline snapshots and scripting instead of the libraries.</description>
   <purpose kind="explanation" for="workflow-tester agent-platform"/>
 

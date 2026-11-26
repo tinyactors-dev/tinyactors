@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <page xmlns="https://www.tinyactors.dev/ns/site" id="cli-ci" path="/cli/guides/ci/">
-  <title>Check charts in CI</title>
+  <title>CI checks · tinyactors CLI</title>
   <description>Fail pull requests on compile, tinyactors lint, tinyactors fmt --check or tinyactors diff --breaking --exit-code errors with a GitHub Actions workflow.</description>
   <purpose kind="how-to" for="workflow-tester agent-platform"/>
 

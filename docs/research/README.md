@@ -19,3 +19,4 @@ plans in roadmaps, and possible future work in `docs/proposals/`.
 | [tinyjs: a freestanding, strict-mode ECMAScript engine with resumable execution](tinyjs.md) | 2026-09-30 | nothing yet; design research for a possible sibling library and a default ECMAScript data model |
 | [tinyjs, the small way: a CEK machine over the syntax tree](tinyjs-small.md) | 2026-09-30 | nothing yet; a competing design to [tinyjs](tinyjs.md), with the same goals and constraints |
 | [Running other people's expressions: QuickJS, sandboxed JavaScript and rule languages, read for staticjs](staticjs-market.md) | 2026-10-14 | the [staticjs site](../../staticjs/site/)'s front page |
+| [How command-line tools document themselves: nine docs sites](cli-docs-survey.md) | 2026-11-26 | the website's CLI section (`website/content/pages/cli*.xml`) |

@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <page xmlns="https://www.tinyactors.dev/ns/site" id="cli-tutorial" path="/cli/tutorial/">
-  <title>Compile, lint, draw and run an order chart</title>
+  <title>Tutorial · tinyactors CLI</title>
   <description>Compile an order chart, fix a misspelt event with tinyactors lint, find the path to shipped and run one order with tinyactors run.</description>
   <purpose kind="tutorial" for="workflow-tester agent-platform"/>
 

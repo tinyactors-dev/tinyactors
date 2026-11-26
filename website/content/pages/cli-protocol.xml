@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <page xmlns="https://www.tinyactors.dev/ns/site" id="cli-protocol" path="/cli/guides/scripting/">
-  <title>Drive a host from a script</title>
+  <title>JSON-RPC scripting · tinyactors CLI</title>
   <description>Drive tinyactors run over JSON-RPC 2.0 to spawn orders, answer payment requests, hold batches, move the clock and generate a client.</description>
   <purpose kind="how-to" for="workflow-tester agent-platform"/>
 

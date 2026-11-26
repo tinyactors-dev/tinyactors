@@ -1,0 +1,113 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<page xmlns="https://www.tinyactors.dev/ns/site" id="cli-cheatsheet" path="/cli/cheatsheet/">
+  <title>Cheat sheet · tinyactors CLI</title>
+  <description>Reference sheet of tinyactors CLI commands by task, covering compilation, validation, formatting, inspection, diffing, graphing, execution, and snapshot reading.</description>
+  <purpose kind="reference" for="workflow-tester agent-platform"/>
+
+  <hero>
+    <headline>Common tinyactors command lines by task</headline>
+    <lede>Copy and adapt tinyactors commands for compiling, checking, inspecting, graphing, comparing, and running statecharts and reading offline snapshots.</lede>
+    <actions>
+      <action to="cli-commands">See every command</action>
+    </actions>
+  </hero>
+
+  <section id="compile-and-check-charts">
+    <heading>Compile and check charts</heading>
+    <code language="shell"># Compile two charts into one image
+tinyactors compile order.scxml payment.scxml -o order.tai
+
+# Emit a compiled chart as a C source array
+tinyactors compile order.scxml --emit c --symbol order_image -o order_image.c
+
+# Validate multiple SCXML files
+tinyactors check charts/*.scxml
+
+# Treat all lint warnings except unsent-event as errors
+tinyactors lint --deny all --allow unsent-event system.xml
+
+# Check whether SCXML files match canonical formatting
+tinyactors fmt --check charts/*.scxml</code>
+  </section>
+
+  <section id="inspect-chart-structure">
+    <heading>Inspect chart structure</heading>
+    <code language="shell"># Summarize the contents of a compiled image
+tinyactors inspect order.tai
+
+# List all states in a chart
+tinyactors states order.scxml
+
+# Output transitions from an image as JSON
+tinyactors transitions -f json order.tai
+
+# List every event of a system's charts
+tinyactors events system.xml
+
+# List only guard condition expressions
+tinyactors expressions --kind condition order.scxml</code>
+  </section>
+
+  <section id="trace-paths-and-draw-graphs">
+    <heading>Trace paths and draw graphs</heading>
+    <code language="shell"># Find the shortest way to shipped
+tinyactors path order.scxml --to shipped
+
+# Confirm paid cannot be reached from cancelled
+tinyactors path order.scxml --from cancelled --to paid --unreachable
+
+# Render a statechart diagram as SVG
+tinyactors graph -f svg order.scxml &gt; order.svg
+
+# Render a left-to-right diagram with the dark theme
+tinyactors graph -f svg --direction right --theme dark order.scxml &gt; order.svg
+
+# Render a top-level diagram with checkout folded
+tinyactors graph -f svg --depth 1 --fold checkout shop.scxml &gt; overview.svg</code>
+  </section>
+
+  <section id="compare-chart-versions">
+    <heading>Compare chart versions</heading>
+    <code language="shell"># Compare a compiled image against an SCXML file
+tinyactors diff order-v1.tai order-v2.scxml
+
+# Fail with a non-zero exit code on breaking changes
+tinyactors diff --breaking --exit-code deployed.tai order.scxml
+
+# Output structural differences for one chart as JSON
+tinyactors diff -f json --chart order old.tai new.tai</code>
+  </section>
+
+  <section id="run-charts-and-scripts">
+    <heading>Run charts and scripts</heading>
+    <code language="shell"># Serve a host for one chart on standard input
+tinyactors run order.scxml
+
+# Run multiple charts with a configuration file
+tinyactors run --config shop.json order.scxml payment.scxml
+
+# Drive a chart over JSON-RPC from standard input
+tinyactors run --io-processor payments --system shop order.scxml &lt; requests.jsonl
+
+# Write the JSON-RPC schema to a file
+tinyactors run --schema &gt; run.schema.json</code>
+  </section>
+
+  <section id="read-snapshots-and-blobs">
+    <heading>Read snapshots and blobs</heading>
+    <code language="shell"># Summarize the contents of a snapshot file
+tinyactors inspect shop.snapshot
+
+# Check whether a blob wakes in the snapshot's host
+tinyactors inspect order-17.blob shop.snapshot
+
+# List all actors recorded in a snapshot
+tinyactors actors shop.snapshot
+
+# Filter snapshot actors by chart name and session
+tinyactors actors --chart order --session 17 shop.snapshot
+
+# List the states of segment 1's charts
+tinyactors states --segment 1 shop.snapshot</code>
+  </section>
+</page>

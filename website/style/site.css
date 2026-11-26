@@ -1061,17 +1061,6 @@ html:has(> #tinyactors-copywriter) .app { --app-inset-start: 68px; --app-inset-b
   .chatlive__chart { margin: 0 12px; height: 300px; }
 }
 
-/* A command's way to the others: the one before and after, then every command. */
-.command-nav { display: grid; gap: var(--space-4); }
-.command-nav__steps { display: flex; justify-content: space-between; gap: var(--space-4); flex-wrap: wrap; margin: 0; }
-.command-nav__step { text-decoration: none; }
-.command-nav code { background: none; border: 0; padding: 0; }
-.command-nav__step--next { margin-left: auto; }
-.command-nav__all { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: var(--space-2); }
-.command-nav__all a, .command-nav__current { display: inline-block; padding: var(--space-1) var(--space-2); border: 1px solid var(--border-1); border-radius: var(--radius-1); text-decoration: none; }
-.command-nav__all a:hover { border-color: var(--border-2); background: var(--surface-2); }
-.command-nav__current { background: var(--accent-subtle); border-color: var(--accent); color: var(--fg-1); }
-
 /* ---------------------------------------------------- outputs: preview and source
    An output in Markdown, JSON or XML (components/output.mjs): a switch in
    its head between the preview, which shows first, and the source. The
@@ -1138,6 +1127,27 @@ h4.output-md__heading { font: var(--fw-regular) var(--fs-18)/1.25 var(--font-ser
 .command-group { display: grid; gap: var(--space-3); margin-top: var(--space-8); scroll-margin-top: 72px; }
 .command-group__name { font: var(--type-h2); letter-spacing: var(--tracking-tight); margin: 0; }
 .command-group__summary { color: var(--fg-2); margin: 0; }
-/* A command's page ends with every job's commands, under the job's name. */
-.command-nav__group { display: grid; gap: var(--space-2); }
-.command-nav__label { margin: 0; font: var(--type-ui); color: var(--fg-2); }
+
+/* A command's page: every command beside it, grouped by job, and the page;
+   on a narrow screen the list follows the page. */
+.command-layout { display: grid; grid-template-columns: 200px minmax(0, 1fr); gap: var(--space-8); align-items: start; }
+.command-layout__body > .section > .wrap { padding: 0; max-width: none; }
+.command-layout__body > .command-steps { padding: 0; }
+.command-sidebar { position: sticky; top: calc(var(--header-row) + var(--space-6)); max-height: calc(100dvh - var(--header-row) - var(--space-8)); overflow-y: auto; padding: var(--space-12) 0 var(--space-6); font: var(--type-body-sm); scrollbar-width: thin; }
+.command-sidebar__title { margin: 0 0 var(--space-3); font: var(--type-h3); }
+.command-sidebar__title a { color: var(--fg-1); text-decoration: none; }
+.command-sidebar__label { margin: var(--space-4) 0 var(--space-1); font: var(--type-label); letter-spacing: var(--tracking-label); text-transform: uppercase; color: var(--fg-3); line-height: 1.4; }
+.command-sidebar__list { list-style: none; margin: 0; padding: 0; display: grid; }
+.command-sidebar__list a { display: block; padding: 2px var(--space-2); margin-left: calc(-1 * var(--space-2)); border-radius: var(--radius-1); color: var(--fg-2); text-decoration: none; }
+.command-sidebar__list a:hover { background: var(--surface-2); color: var(--fg-1); }
+.command-sidebar__list a[aria-current="page"] { background: var(--accent-subtle); color: var(--fg-1); box-shadow: inset 2px 0 0 var(--accent); }
+.command-sidebar__list code { background: none; border: 0; padding: 0; font-size: var(--fs-13); }
+.command-steps { display: flex; justify-content: space-between; gap: var(--space-4); flex-wrap: wrap; margin: var(--space-12) 0 var(--space-16); }
+.command-steps__step { text-decoration: none; }
+.command-steps__step--next { margin-left: auto; }
+.command-steps code { background: none; border: 0; padding: 0; }
+@media (max-width: 900px) {
+  .command-layout { grid-template-columns: minmax(0, 1fr); }
+  .command-sidebar { position: static; max-height: none; order: 2; padding-top: 0; }
+  .command-layout__body { order: 1; }
+}

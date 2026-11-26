@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <page xmlns="https://www.tinyactors.dev/ns/site" id="cli-commands" path="/cli/commands/">
-  <title>Look up commands and shared options</title>
+  <title>Reference · tinyactors CLI</title>
   <description>Browse every tinyactors command grouped by task and check the shared options accepted by all commands.</description>
   <purpose kind="reference" for="workflow-tester agent-platform" answers="workflow-tester.ci-commands"/>
 
@@ -14,23 +14,23 @@
       <program-options>Pass options shared across all commands</program-options>
       <examples>Examples</examples>
       <exit-status>Exit status</exit-status>
-      <see>Read next</see>
-      <all>Every command</all>
+      <see>Related pages</see>
+      <all>Commands</all>
       <values>Values</values>
       <status>It exits with status {status}.</status>
       <shared>Configure output formats like <code>-f json</code> using the <link to="cli-commands" section="program-options">shared options on the command reference</link>.</shared>
-      <job id="check" commands="compile check lint fmt"><name>Compile, check, lint and format charts</name><summary>Build chart images, verify compilation, catch unreachable logic and format files into canonical layout.</summary></job>
-      <job id="read" commands="states transitions events data expressions path graph disassemble inspect"><name>Inspect chart structure, paths and compiled images</name><summary>List states, transitions, events, data, expressions and bytecode, trace shortest paths, draw diagrams and inspect images.</summary></job>
-      <job id="compare" commands="diff"><name>Compare chart versions for breaking changes</name><summary>Show what changed between two chart versions and how those changes affect running actors.</summary></job>
-      <job id="run" commands="run"><name>Run a local host over JSON-RPC</name><summary>Start one host over JSON-RPC 2.0 on standard input and output for scripts and local testing.</summary></job>
-      <job id="snapshots" commands="actors inspect"><name>Inspect snapshots and hibernation blobs offline</name><summary>List each snapshot actor's state, queued events and delayed sends, and inspect snapshot or blob contents.</summary></job>
-      <job id="program" commands="help version"><name>Print command help and version information</name><summary>Display usage details for any command alongside the versions of <code>tinyactors</code> and its embedded library.</summary></job>
-      <related command="run"><link to="cli-protocol"/></related>
-      <related command="inspect"><link to="cli-snapshots"/></related>
-      <related command="actors"><link to="cli-snapshots"/></related>
-      <related command="lint"><link to="cli-ci"/></related>
-      <related command="diff"><link to="cli-ci"/></related>
-      <related command="fmt"><link to="cli-ci"/></related>
+      <job id="check" commands="compile check lint fmt"><name>Compilation, checks, and formatting</name><summary>Build chart images, verify compilation, catch unreachable logic and format files into canonical layout.</summary></job>
+      <job id="read" commands="states transitions events data expressions path graph disassemble inspect"><name>Chart and image inspection</name><summary>List states, transitions, events, data, expressions and bytecode, trace shortest paths, draw diagrams and inspect images.</summary></job>
+      <job id="compare" commands="diff"><name>Chart comparison</name><summary>Show what changed between two chart versions and how those changes affect running actors.</summary></job>
+      <job id="run" commands="run"><name>Chart execution</name><summary>Start one host over JSON-RPC 2.0 on standard input and output for scripts and local testing.</summary></job>
+      <job id="snapshots" commands="actors inspect"><name>Snapshot and blob inspection</name><summary>List each snapshot actor's state, queued events and delayed sends, and inspect snapshot or blob contents.</summary></job>
+      <job id="program" commands="help version"><name>Help and version</name><summary>Display usage details for any command alongside the versions of <code>tinyactors</code> and its embedded library.</summary></job>
+      <related command="run"><link to="cli-protocol">JSON-RPC scripting</link></related>
+      <related command="inspect"><link to="cli-snapshots">Offline snapshots</link></related>
+      <related command="actors"><link to="cli-snapshots">Offline snapshots</link></related>
+      <related command="lint"><link to="cli-ci">CI checks</link></related>
+      <related command="diff"><link to="cli-ci">CI checks</link></related>
+      <related command="fmt"><link to="cli-ci">CI checks</link></related>
       <artifact command="run" arguments="run --schema" file="run.schema.json">The protocol's JSON Schema</artifact>
     </commands>
   </reference>

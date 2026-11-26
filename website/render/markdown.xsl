@@ -151,7 +151,7 @@
       <xsl:sequence select="'&lt;!-- ' || $origin || $page/@path || ' --&gt;' || $nl || '# ' || normalize-space($page/s:title)"/>
       <xsl:sequence select="$page/s:purpose ! f:purpose-md(.)"/>
       <xsl:sequence select="'> ' || normalize-space($page/s:description)"/>
-      <xsl:apply-templates select="$page/(s:hero, s:reference, s:app, s:section)" mode="md"/>
+      <xsl:apply-templates select="$page/(s:hero, s:reference, s:app, s:section, s:command-nav)" mode="md"/>
     </xsl:variable>
     <xsl:sequence select="string-join($blocks[. != ''], $blank) || $nl"/>
   </xsl:function>
@@ -262,10 +262,10 @@
     <xsl:sequence select="string-join(('&lt;a id=&quot;' || @id || '&quot;&gt;&lt;/a&gt;' || $nl || $nl || '### ' || f:md-inline(s:name), s:summary ! f:md-inline(.), $list)[. != ''], $blank)"/>
   </xsl:template>
 
-  <!-- The way to the other commands: each one, linked. -->
+  <!-- The way to the other commands: each one, linked, after the page. -->
   <xsl:template match="s:command-nav" mode="md" as="xs:string">
     <xsl:variable name="page" select="$commands/ancestor::s:page"/>
-    <xsl:sequence select="string-join($cli-doc/help/commands/command/@command ! ('- [' || $cli-doc/help/@name || ' ' || . || '](' || $site/@origin || $page/@path || . || '/)'), $nl)"/>
+    <xsl:sequence select="'## ' || normalize-space($commands/s:all) || $blank || string-join($cli-doc/help/commands/command/@command ! ('- [' || $cli-doc/help/@name || ' ' || . || '](' || $site/@origin || $page/@path || . || '/)'), $nl)"/>
   </xsl:template>
 
   <!-- A demo: what it shows, the video's address, and its steps. -->

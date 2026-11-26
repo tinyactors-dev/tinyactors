@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <page xmlns="https://www.tinyactors.dev/ns/site" id="cli-snapshots" path="/cli/guides/snapshots/">
-  <title>Read snapshots and hibernation blobs offline</title>
+  <title>Offline snapshots · tinyactors CLI</title>
   <description>Read snapshot state, queued events, pending timeouts and hibernation blobs offline with tinyactors actors and tinyactors inspect.</description>
   <purpose kind="how-to" for="agent-platform workflow-tester"/>
 

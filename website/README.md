@@ -121,8 +121,14 @@ install it, where to go), `/cli/tutorial/` is a first session,
 `/cli/guides/<name>/` are how-to guides (`ci`, `scripting`, `snapshots`),
 `/cli/commands/` is the reference, the commands by job and the options
 every command takes, each command's page `/cli/commands/<name>/`, and
-`/cli/why/` explains when to use the command beside the libraries. Each
-page has one name, its menu label, its title and its headline. The
+`/cli/cheatsheet/` is common command lines by task, and `/cli/why/`
+explains when to use the command beside the libraries. As the docs of
+gh, Cargo, mise and Deno do (`docs/research/cli-docs-survey.md`), the
+menu and each page's title use a short label ("Reference", "Cheat
+sheet"), and the headline says what the page does. A command's page has
+every command beside it, grouped by job (on a phone, after it), its
+related pages and the commands that share its jobs, and the command
+before and after it. The
 command pages are written by nobody: `<commands>`
 (`content/pages/cli-commands.xml`) holds only the words they use (headings,
 the jobs that group the commands, the sentence pointing to the shared options, the word before an option's

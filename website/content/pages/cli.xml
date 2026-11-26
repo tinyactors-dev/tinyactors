@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <page xmlns="https://www.tinyactors.dev/ns/site" id="cli" path="/cli/">
-  <title>Work with charts from the command line</title>
+  <title>Overview · tinyactors CLI</title>
   <description>Install the tinyactors command to compile, check, compare, draw and run charts and read application snapshots offline.</description>
   <purpose kind="how-to" for="workflow-tester agent-platform"/>
 
@@ -26,12 +26,12 @@
   <section id="next">
     <heading>Follow a guide or look up commands</heading>
     <list>
-      <item><term><link to="cli-tutorial">Compile, lint, draw and run an order chart</link></term><text>Compile an order chart, fix a misspelt event with <code>tinyactors lint</code> and find the path to <code>shipped</code>. Run one order locally with <code>tinyactors run</code>.</text></item>
-      <item><term><link to="cli-ci">Check charts in CI</link></term><text>Fail pull requests on compile, <code>tinyactors lint</code>, <code>tinyactors fmt --check</code> and <code>tinyactors diff --breaking --exit-code</code> errors. Use the included GitHub Actions workflow to protect running actors.</text></item>
-      <item><term><link to="cli-protocol">Drive a host from a script</link></term><text>Drive a host over JSON-RPC 2.0 on standard input and output with <code>tinyactors run</code>. Spawn orders, answer payment requests, hold batches, advance the clock and generate a JSON Schema client.</text></item>
-      <item><term><link to="cli-snapshots">Read snapshots and hibernation blobs offline</link></term><text>Read snapshots and hibernation blobs offline using <code>tinyactors actors</code> and <code>tinyactors inspect</code> without starting a host. Inspect each actor's state, queued events and timeouts, and check whether a blob wakes in a restored host.</text></item>
-      <item><term><link to="cli-commands">Look up commands and shared options</link></term><text>Browse every <code>tinyactors</code> command grouped by job, plus the shared options accepted across all commands.</text></item>
-      <item><term><link to="cli-why">Choose between the command and the libraries</link></term><text>See when a job belongs to the <code>tinyactors</code> command instead of the embeddable libraries. It covers runtime-free checks, pre-deploy diffs, offline snapshots and script workbenches.</text></item>
+      <item><term><link to="cli-tutorial">Tutorial</link></term><text>Compile an order chart, fix a misspelt event with <code>tinyactors lint</code> and find the path to <code>shipped</code>. Run one order locally with <code>tinyactors run</code>.</text></item>
+      <item><term><link to="cli-ci">CI checks</link></term><text>Fail pull requests on compile, <code>tinyactors lint</code>, <code>tinyactors fmt --check</code> and <code>tinyactors diff --breaking --exit-code</code> errors. Use the included GitHub Actions workflow to protect running actors.</text></item>
+      <item><term><link to="cli-protocol">JSON-RPC scripting</link></term><text>Drive a host over JSON-RPC 2.0 on standard input and output with <code>tinyactors run</code>. Spawn orders, answer payment requests, hold batches, advance the clock and generate a JSON Schema client.</text></item>
+      <item><term><link to="cli-snapshots">Offline snapshots</link></term><text>Read snapshots and hibernation blobs offline using <code>tinyactors actors</code> and <code>tinyactors inspect</code> without starting a host. Inspect each actor's state, queued events and timeouts, and check whether a blob wakes in a restored host.</text></item>
+      <item><term><link to="cli-commands">Reference</link></term><text>Browse every <code>tinyactors</code> command grouped by job, plus the shared options accepted across all commands.</text></item>
+      <item><term><link to="cli-why">CLI and libraries</link></term><text>See when a job belongs to the <code>tinyactors</code> command instead of the embeddable libraries. It covers runtime-free checks, pre-deploy diffs, offline snapshots and script workbenches.</text></item>
     </list>
   </section>
 </page>
