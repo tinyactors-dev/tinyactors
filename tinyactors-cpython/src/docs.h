@@ -157,6 +157,69 @@ static const char ta_python_doc_decode[] =
     "\n\n"
     "Part of the wire format (the README's \"Wire format\").";
 
+static const char ta_python_doc_read_snapshot[] =
+    "read_snapshot(data)\n"
+    "--\n"
+    "\n"
+    "A Snapshot of a pack (host.snapshot()'s bytes) of this build, read\n"
+    "without a host: each live segment's region is read by core's readers,\n"
+    "which run nothing, so what it answers is the moment the snapshot was\n"
+    "taken while the live host goes on. Use it to inspect a host: its\n"
+    "actors, their states, mailboxes and delayed sends, its charts, and the\n"
+    "spans its journal kept. The bytes are copied during the call; bytes\n"
+    "that are not a snapshot of this build raise InvalidError. The\n"
+    "variables are in the datamodels' state: Host.restore reads them.";
+
+static const char ta_python_doc_snapshot[] =
+    "A snapshot read by read_snapshot(), without a host. Each method takes\n"
+    "a live segment's index (IndexError for another), and those about an\n"
+    "actor its handle in the segment, from actors(segment). It holds a\n"
+    "private copy of the pack and of each segment's region.";
+
+static const char ta_python_doc_snapshot_system_id[] = "The host's system id, as the pack holds it.";
+static const char ta_python_doc_snapshot_datamodel[] = "The label of the datamodels' state (state).";
+static const char ta_python_doc_snapshot_time[] = "The host's time when it was packed, in its ticks.";
+static const char ta_python_doc_snapshot_segments[] = "How many segments the host had, retired ones included.";
+static const char ta_python_doc_snapshot_state[] = "The datamodels' state as packed, bytes; Host.restore reads it.";
+
+static const char ta_python_doc_snapshot_actors[] =
+    "actors(segment)\n--\n\nThe handles of the segment's actors, in slot order: give one to\n"
+    "actor(), configuration(), mailbox() or timers().";
+static const char ta_python_doc_snapshot_actor[] =
+    "actor(segment, handle)\n--\n\nAn actor: a dict of session, name (None for none), chart (its index\n"
+    "in the image), chart_name, status (idle, runnable, waiting_workspace,\n"
+    "waiting_ack, done, hibernated), parent (the invoking session, or None),\n"
+    "mailbox, invocations and services (0 while hibernated).";
+static const char ta_python_doc_snapshot_configuration[] =
+    "configuration(segment, handle)\n--\n\nThe actor's active states, as indices of its chart's states\n"
+    "(charts(segment)), in document order; [] while it is hibernated.";
+static const char ta_python_doc_snapshot_mailbox[] =
+    "mailbox(segment, handle)\n--\n\nThe events waiting in the actor's mailbox, in the order it takes\n"
+    "them: a list of {event, sendid}, sendid None for none.";
+static const char ta_python_doc_snapshot_timers[] =
+    "timers(segment, handle)\n--\n\nThe actor's pending delayed sends in firing order: a list of {due,\n"
+    "event, sendid}, due in the system's ticks (stats(segment)'s\n"
+    "ticks_per_second).";
+static const char ta_python_doc_snapshot_stats[] =
+    "stats(segment)\n--\n\nThe segment's counters: now, ticks_per_second, next_deadline (2**64-1\n"
+    "for none), actors, hibernated, runnable, events, timers, requests and\n"
+    "region_bytes.";
+static const char ta_python_doc_snapshot_charts[] =
+    "charts(segment)\n--\n\nThe charts of the segment's image, each {name, datamodel, states,\n"
+    "transitions, data}: states {id, kind, parent} in document order (0 is\n"
+    "the <scxml> root), transitions {source, type, events, cond, targets}\n"
+    "(events the names or prefixes they match, * for any), data the <data>\n"
+    "ids.";
+static const char ta_python_doc_snapshot_trace_kept[] =
+    "trace_kept(segment)\n--\n\nThe trace records the segment's journal kept: {records,\n"
+    "acknowledged_records, bytes, acknowledged_bytes, lost}, or None when it\n"
+    "does not trace.";
+static const char ta_python_doc_snapshot_traces[] =
+    "traces(segment)\n--\n\nThe spans of those records as an OTLP ExportTraceServiceRequest\n"
+    "(decode_traces() reads it), or None when the segment does not trace.\n"
+    "Times are the host's clock, not wall time; of the records a host had\n"
+    "already exported, the names and values given at run time are left out.";
+
 static const char ta_python_doc_compiled[] =
     "The result of compile_charts or compile_system: an image and the\n"
     "compilation's notes.\n"

@@ -9,6 +9,7 @@ static PyMethodDef ta_python_methods[] = {
     {"encode", ta_python_encode, METH_O, ta_python_doc_encode},
     {"decode", ta_python_decode, METH_O, ta_python_doc_decode},
     {"decode_traces", ta_python_decode_traces, METH_O, ta_python_doc_decode_traces},
+    {"read_snapshot", ta_python_read_snapshot, METH_O, ta_python_doc_read_snapshot},
     {"_binding_memory", ta_python_binding_memory, METH_O, ta_python_doc_binding_memory},
     {"compile_charts", (PyCFunction)(void (*)(void))ta_python_compile_charts, METH_FASTCALL | METH_KEYWORDS,
      ta_python_doc_compile_charts},
@@ -36,7 +37,7 @@ ta_python_module_state *ta_python_state_of_type(PyTypeObject *type) {
 
 #define TA_PYTHON_STATE_FIELDS(apply)                                                                           \
     apply(address_type) apply(undefined_type) apply(undefined) apply(host_type) apply(clock_type)                \
-    apply(compiled_type) apply(chart_type) apply(send_type) apply(entry_type)               \
+    apply(compiled_type) apply(snapshot_type) apply(chart_type) apply(send_type) apply(entry_type)               \
     apply(migrated_type) apply(invocation_type)                                                                \
     apply(event_type) apply(support) apply(error) apply(compile_error) apply(resolve_error) apply(diagnostic)    \
     apply(builtins) apply(attach) apply(check_file) apply(settlers) apply(event_kinds) apply(event_key) apply(time_ns) apply(coroutine_function) \
@@ -74,7 +75,7 @@ static int ta_python_module_exec(PyObject *module) {
     if (PyModule_AddStringConstant(module, "__version__", TA_PYTHON_VERSION) < 0 ||
         ta_python_value_types_init(module) < 0 || ta_python_support_init(module, state) < 0 ||
         ta_python_host_init_type(module, state) < 0 || ta_python_clock_init_type(module, state) < 0 ||
-        ta_python_compile_init_type(module, state) < 0 || ta_python_effects_init_types(module, state) < 0 ||
+        ta_python_compile_init_type(module, state) < 0 || ta_python_snapshot_init_type(module, state) < 0 || ta_python_effects_init_types(module, state) < 0 ||
         ta_python_event_init_type(module, state) < 0)
         return -1;
     return 0;

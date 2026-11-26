@@ -16,9 +16,10 @@
 # refused. Python objects (a bytes, a bytearray) are not this rule's: they
 # are the objects the binding holds.
 #
-# The host's allocator (ta_python_allocator) reaches core in three places
+# The host's allocator (ta_python_allocator) reaches core in four places
 # only: the host's environment (ta_python_host_build), the compiler's
-# options (ta_python_compile), and a call's CBOR writer
+# options (ta_python_compile), the encoder of a snapshot's spans
+# (ta_python_trace_history, for the call), and a call's CBOR writer
 # (ta_python_cbor_init), which grows through it, or through the allocator
 # it is given (the arena's view, the host's struct), when a value
 # outgrows its room (docs/adr/0010 in the repository root, decision 4).
@@ -69,7 +70,7 @@ utils:
             has:
               field: declarator
               kind: function_declarator
-              has: {field: declarator, regex: '^ta_python_(host_build|compile|cbor_init)$'}
+              has: {field: declarator, regex: '^ta_python_(host_build|compile|cbor_init|trace_history)$'}
         - inside:
             kind: function_definition
             stopBy: end
@@ -79,7 +80,7 @@ utils:
               has:
                 field: declarator
                 kind: function_declarator
-                has: {field: declarator, regex: '^ta_python_(host_build|compile|cbor_init)$'}
+                has: {field: declarator, regex: '^ta_python_(host_build|compile|cbor_init|trace_history)$'}
   writer-elsewhere:
     kind: call_expression
     has:

@@ -75,6 +75,26 @@ static PyObject *ta_python_error_new(ta_python_module_state *state, PyObject *ar
     return PyObject_Call(state->error, arguments, keywords);
 }
 
+PyObject *ta_python_trace_history(ta_otlp_history_input *input) {
+    input->allocator = &ta_python_allocator;
+    ta_buffer probe = {NULL, 0, 0};
+    ta_status status = ta_otlp_history(input, &probe);
+    if (status != TA_OK && status != TA_ERROR_NO_MEMORY) {
+        PyErr_Format(PyExc_RuntimeError, "the journal's records could not be written as spans: %s", ta_status_name(status));
+        return NULL;
+    }
+    PyObject *bytes = PyBytes_FromStringAndSize(NULL, (Py_ssize_t)probe.length);
+    if (!bytes || !probe.length) return bytes;
+    ta_buffer room = {PyBytes_AsString(bytes), probe.length, 0};
+    status = ta_otlp_history(input, &room);
+    if (status != TA_OK) {
+        Py_DECREF(bytes);
+        PyErr_Format(PyExc_RuntimeError, "the journal's records could not be written as spans: %s", ta_status_name(status));
+        return NULL;
+    }
+    return bytes;
+}
+
 void ta_python_raise_status(ta_python_module_state *state, ta_status status) {
     if (status == TA_ERROR_NO_MEMORY) {
         PyErr_NoMemory();

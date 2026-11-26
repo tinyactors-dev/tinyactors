@@ -32,6 +32,7 @@ typedef struct ta_python_module_state {
     PyObject *host_type;
     PyObject *clock_type;
     PyObject *compiled_type;
+    PyObject *snapshot_type;  /* Snapshot: a snapshot read without a host (snapshot.c) */
     PyObject *chart_type;     /* ChartRef */
     PyObject *send_type;      /* a send to an I/O processor: a thin view or a record */
     PyObject *entry_type;     /* a <log> line: a thin view */
@@ -87,6 +88,12 @@ int ta_python_value_write(ta_python_module_state *state, ta_cbor_writer *writer,
 /* One whole CBOR item as a Python value: a new reference or NULL. */
 PyObject *ta_python_value_read(ta_python_module_state *state, ta_bytes cbor);
 PyObject *ta_python_decode_traces(PyObject *module, PyObject *data);
+/* read_snapshot(data): a Snapshot (snapshot.c), and its type. */
+PyObject *ta_python_read_snapshot(PyObject *module, PyObject *data);
+/* The spans of a journal's kept records (ta_otlp_history) as bytes, the
+ * encoder through the binding's allocator for the call (host.c, the only
+ * file that reaches it): input->allocator is set there. */
+PyObject *ta_python_trace_history(ta_otlp_history_input *input);
 /* A copy of a value for another actor: mutable containers (list, dict)
  * copied, immutable values shared, anything outside the table refused
  * (TypeError) and nesting past 64 refused (ValueError). */
@@ -403,6 +410,7 @@ ta_status ta_python_compile(ta_compile_options *options, const ta_python_compila
 PyObject *ta_python_compile_charts(PyObject *module, PyObject *const *args, Py_ssize_t count, PyObject *names);
 PyObject *ta_python_compile_system(PyObject *module, PyObject *const *args, Py_ssize_t count, PyObject *names);
 int ta_python_compile_init_type(PyObject *module, ta_python_module_state *state);
+int ta_python_snapshot_init_type(PyObject *module, ta_python_module_state *state);
 
 /* ---- the support namespace (src/datamodel/expressions.c) ------------------- */
 

@@ -482,6 +482,17 @@ Decided by the maintainer (2026-10-13); every item is in
   parser reads (`ta_address_parse`; decision 5), so neither the binding
   nor the application parses the grammar. No peers, envelopes or routes:
   the transport, the wire encoding and trust are the application's.
+- **`tinyactors.read_snapshot(data) -> Snapshot`** (`src/snapshot.c`) reads
+  a pack of this build without a host (`tinyactors-core/docs/embedding.md`,
+  section 12): the pack copied into a `bytearray`, 8-aligned, and each
+  live segment's region read with `ta_system_read` into a second one
+  beside its `ta_image`, both private to the `Snapshot` and never resized.
+  Its methods mirror core's readers a segment at a time: `actors`,
+  `actor`, `configuration`, `mailbox`, `timers`, `stats`, `charts`,
+  `trace_kept`, `traces` (`ta_otlp_history`, its encoder through the
+  binding's allocator for the call: `ta_python_trace_history` in
+  `src/host.c`, the one other place it reaches core). Test:
+  `tests/test_read_snapshot.py`.
 - **`log=handler(entry)`** gets this host's `<log>` lines
   (`TA_EFFECT_LOG`) as thin views of `(session, label, text)`, no chart
   (decided 2026-10-13). Without a handler, the lines are discarded.
