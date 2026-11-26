@@ -35,6 +35,7 @@
         <xs:element name="name" type="plain"/>
         <xs:element name="tagline" type="plain"/>
         <xs:element ref="audiences"/>
+        <xs:element ref="voices"/>
         <xs:element name="nav" type="navigation"/>
         <xs:element name="pages">
           <xs:complexType>
@@ -103,6 +104,14 @@
         </xs:simpleType>
       </xs:attribute>
     </xs:complexType>
+    <xs:key name="voice-ids">
+      <xs:selector xpath="voices/voice"/>
+      <xs:field xpath="@id"/>
+    </xs:key>
+    <xs:keyref name="voice-extends" refer="voice-ids">
+      <xs:selector xpath="voices/voice"/>
+      <xs:field xpath="@extends"/>
+    </xs:keyref>
     <xs:key name="audience-ids">
       <xs:selector xpath="audiences/audience"/>
       <xs:field xpath="@id"/>
@@ -159,8 +168,61 @@
     </xs:unique>
   </xs:element>
 
+  <!-- ===================================================== voices -->
+
+  <xs:element name="voices">
+    <xs:annotation><xs:documentation>
+      How the site writes, defined once: one voice for each kind of page.
+      The build publishes each as /voices/&lt;id&gt;.xml
+      (schema/voice.xsd), its rules whole, which every page of its kinds
+      links in its head.
+    </xs:documentation></xs:annotation>
+    <xs:complexType>
+      <xs:sequence>
+        <xs:element ref="voice" maxOccurs="unbounded"/>
+      </xs:sequence>
+      <xs:assert test="(: every kind of page has exactly one voice :) every $k in ('pitch', 'tutorial', 'how-to', 'reference', 'explanation') satisfies count(voice[@kinds = $k]) eq 1"/>
+    </xs:complexType>
+  </xs:element>
+
+  <xs:element name="voice">
+    <xs:annotation><xs:documentation>
+      One way of writing: its `name`, what it is for (`description`) and
+      its rules, one line each with a short, stable id. `kinds` are the
+      kinds of page written in it. A voice that `extends` another keeps
+      that voice's rules, in order, and replaces those of the same id;
+      its other rules come after them.
+    </xs:documentation></xs:annotation>
+    <xs:complexType>
+      <xs:sequence>
+        <xs:element name="name" type="plain"/>
+        <xs:element name="description" type="words"/>
+        <xs:element name="rule" type="need" maxOccurs="unbounded"/>
+      </xs:sequence>
+      <xs:attribute name="id" type="audience-id" use="required"/>
+      <xs:attribute name="kinds" use="required">
+        <xs:simpleType>
+          <xs:list>
+            <xs:simpleType>
+              <xs:restriction base="xs:token">
+                <xs:enumeration value="pitch"/><xs:enumeration value="tutorial"/><xs:enumeration value="how-to"/>
+                <xs:enumeration value="reference"/><xs:enumeration value="explanation"/>
+              </xs:restriction>
+            </xs:simpleType>
+          </xs:list>
+        </xs:simpleType>
+      </xs:attribute>
+      <xs:attribute name="extends" type="audience-id"/>
+      <xs:assert test="(: a voice does not extend itself :) not(@extends = @id)"/>
+    </xs:complexType>
+    <xs:unique name="rule-ids">
+      <xs:selector xpath="rule"/>
+      <xs:field xpath="@id"/>
+    </xs:unique>
+  </xs:element>
+
   <xs:complexType name="need">
-    <xs:annotation><xs:documentation>One need of an audience, one line: its text, and its id within the audience.</xs:documentation></xs:annotation>
+    <xs:annotation><xs:documentation>One line with an id: a need of an audience, or a rule of a voice, unique within it.</xs:documentation></xs:annotation>
     <xs:simpleContent>
       <xs:extension base="words">
         <xs:attribute name="id" type="audience-id" use="required"/>

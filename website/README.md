@@ -26,6 +26,7 @@ content and runs the stylesheet. Node.js runs the examples and wrangler.
 | `content/guides/*.xml` | the guides, one page each, served at `/guides/<name>/`; their examples run in `examples/guides` against the published packages |
 | `schema/site.xsd` | what content may say, as XSD 1.1: every element is documented there |
 | `schema/audience.xsd` | the published format of an audience file, `/audiences/audience.xsd` ("Audiences and page kinds") |
+| `schema/voice.xsd` | the published format of a voice file, `/voices/voice.xsd` ("Audiences and page kinds") |
 | `render/needs.xq` | the needs report: `build/needs.json`, which pages and sections answer each audience's needs, and which needs none does |
 | `render/site.xsl` | content to HTML and `sitemap.xml`; it stops at a link to a page or section that does not exist |
 | `render/markdown.xsl` | the site for agents ([llmstxt.org](https://llmstxt.org)): each page as Markdown beside its HTML (`/x/index.md`), `llms.txt`, which lists them in the navigation's groups, and `llms-full.txt`, every page but the changelog in one file |
@@ -279,3 +280,35 @@ from `content/`; `mise run test` checks that every page with a purpose has
 its meta and links in order, that no page publishes the content's
 answers, and that every audience file validates against
 `audience.xsd`.
+
+**A voice** is how the page is written, published the same way. The
+head links one, the voice of the page's kind:
+
+```html
+<link rel="voice" href="/voices/tutorial.xml">
+```
+
+A voice file (`/voices/<id>.xml`), valid against
+[`/voices/voice.xsd`](schema/voice.xsd), namespace
+`https://www.tinyactors.dev/ns/voice`, holds every rule of the voice, so a
+tool that edits the page reads that one file:
+
+```xml
+<voice xmlns="https://www.tinyactors.dev/ns/voice" id="tutorial" kinds="tutorial">
+  <name>Tutorial</name>
+  <description>A learner reads each step while doing it: ...</description>
+  <rule id="headings">Headlines, headings and claims' statements are 1 to 8 words, ...</rule>
+  <rule id="paragraphs">A step's prose is passages of two or three sentences, ...</rule>
+</voice>
+```
+
+`name` and `description` once each, then one or more `rule`, each one line
+with an `id` unique within the voice; `kinds` are the kinds of page
+written in it. `/voices/index.xml` lists them (`<voices>`, an `item` per
+voice with its `id`, `href` and `kinds`). The page's Markdown says it on
+its second line, `Voice: [name](voice file URL).`, and `llms.txt` lists
+the voices under "Voices". In `content/site.xml` a voice may extend
+another (`extends`): the build writes its rules whole, the extended
+voice's first, each replaced by the voice's own of the same id. `mise run
+test` checks that every page with a purpose links one voice made for its
+kind, and that every voice file validates against `voice.xsd`.

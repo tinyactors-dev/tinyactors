@@ -59,6 +59,50 @@
     </audience>
   </audiences>
 
+  <!-- How the site writes: one voice for each kind of page (`kinds`).
+       A voice that extends another keeps its rules and replaces those of
+       the same id. Published as /voices/<id>.xml, which each page's head
+       links (README.md, "Audiences, voices and page kinds"). -->
+  <voices>
+    <!-- The maintainer, 2026-11-21: headings with no period. -->
+    <voice id="literal" kinds="pitch how-to reference">
+      <name>Short and literal</name>
+      <description>The site's voice: short, literal sentences, each followed by its proof, for readers who decide, look up or reach a goal.</description>
+      <rule id="headings">Headlines, headings and claims' statements are 1 to 8 words, sentence case, with no period at the end ("Build a team chat").</rule>
+      <rule id="findings">A headline states a benefit, a heading its finding, and a sentence before a block what the block shows.</rule>
+      <rule id="lede">A lede states the page's strongest facts, never a list of what is coming.</rule>
+      <rule id="paragraphs">A paragraph is one or two sentences of at most 21 words each, with the product or the reader's code as the subject.</rule>
+      <rule id="proof">Each section is one line of prose and then the proof: code, output, a claim with its source.</rule>
+      <rule id="plain">No metaphors, no adjectives that do not measure something, no hype words, no emoji. Never write "formal verification".</rule>
+      <rule id="actions">Actions are a verb and an object, 2 to 4 words.</rule>
+      <rule id="terms">Name SCXML and actor terms exactly (state, event, transition, actor, host). The product name is lowercase: tinyactors.</rule>
+      <rule id="commas">No serial comma: "states, events and transitions".</rule>
+      <rule id="facts">Never add a claim, number, name or capability that the page or its sources do not state.</rule>
+      <rule id="audience">Never name the reader's role ("as a tech lead", "for operators"); write for them by choosing what to explain.</rule>
+      <rule id="site">Never explain how the site is made (that a page is generated, captured or checked); say what the thing does for the reader.</rule>
+    </voice>
+    <!-- The maintainer, 2026-11-25: the Architecture page "should read like
+         a book or a technical deep dive"; problems, never rhetorical
+         questions. -->
+    <voice id="deep-dive" kinds="explanation" extends="literal">
+      <name>Deep dive</name>
+      <description>A technical deep dive a reader follows from start to end, like a chapter of a book, to understand a design before depending on it.</description>
+      <rule id="lede">The lede sets the context a newcomer lacks: what the thing is, what problem the page explains, and what the reader can judge after it.</rule>
+      <rule id="paragraphs">The prose is passages of up to five sentences, each at most 32 words, with no questions.</rule>
+      <rule id="proof">Each section opens with a problem, the concrete situation it solves with its stakes, never a rhetorical question; passages build the idea, then a figure, a table or a claim with its source proves it.</rule>
+      <rule id="order">Terms are introduced before they are used, and each section ends where the next one's question starts.</rule>
+    </voice>
+    <!-- The maintainer, 2026-11-26: the CLI tutorial's sentences were "a
+         bit too short". -->
+    <voice id="tutorial" kinds="tutorial" extends="literal">
+      <name>Tutorial</name>
+      <description>A learner reads each step while doing it: what to do, what they will see and why it matters for what they are building.</description>
+      <rule id="paragraphs">A step's prose is passages of two or three sentences, up to 32 words each, varying in length; a one-line instruction stays a short paragraph.</rule>
+      <rule id="proof">A step says what you do, what you will see and why it matters, joining cause and result in one sentence ("because", "so", "which"), then shows the command and its output.</rule>
+      <rule id="reader">The reader is "you". No questions, and no fact that the step's own output does not show.</rule>
+    </voice>
+  </voices>
+
   <nav>
     <link to="chat">Tutorial</link>
     <link to="property-testing">Testing</link>

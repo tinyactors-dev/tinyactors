@@ -68,6 +68,7 @@
     </xsl:result-document>
     <xsl:call-template name="markdown"/>
     <xsl:call-template name="audiences"/>
+    <xsl:call-template name="voices"/>
   </xsl:template>
 
   <!-- What the schema cannot check: names across documents. -->
@@ -150,6 +151,7 @@
           <xsl:for-each select="tokenize(@for)">
             <link rel="audience" href="/audiences/{.}.xml"/>
           </xsl:for-each>
+          <link rel="voice" href="/voices/{f:voice(@kind)/@id}.xml"/>
         </xsl:for-each>
         <link rel="icon" href="/assets/brand/favicon.svg" type="image/svg+xml"/>
         <link rel="icon" href="/assets/brand/favicon.ico" sizes="any"/>
@@ -460,6 +462,49 @@
       </audiences>
     </xsl:result-document>
   </xsl:template>
+
+  <!-- ===================================================== voices -->
+
+  <!-- Each voice of site.xml as /voices/<id>.xml, its rules whole (an
+       extended voice's first, those of the same id replaced), and their
+       index, in the format of schema/voice.xsd (copied beside them by the
+       build): what a page's <link rel="voice"> names. -->
+  <xsl:template name="voices">
+    <xsl:for-each select="$site/s:voices/s:voice">
+      <xsl:result-document href="voices/{@id}.xml" method="xml" indent="yes">
+        <voice xmlns="https://www.tinyactors.dev/ns/voice" id="{@id}" kinds="{normalize-space(@kinds)}" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="https://www.tinyactors.dev/ns/voice voice.xsd">
+          <name>{normalize-space(s:name)}</name>
+          <description>{normalize-space(s:description)}</description>
+          <xsl:for-each select="f:voice-rules(.)">
+            <rule id="{@id}">{normalize-space(.)}</rule>
+          </xsl:for-each>
+        </voice>
+      </xsl:result-document>
+    </xsl:for-each>
+    <xsl:result-document href="voices/index.xml" method="xml" indent="yes">
+      <voices xmlns="https://www.tinyactors.dev/ns/voice" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="https://www.tinyactors.dev/ns/voice voice.xsd">
+        <xsl:for-each select="$site/s:voices/s:voice">
+          <item id="{@id}" href="{@id}.xml" kinds="{normalize-space(@kinds)}">{normalize-space(s:name)}</item>
+        </xsl:for-each>
+      </voices>
+    </xsl:result-document>
+  </xsl:template>
+
+  <!-- A voice's rules in order: those of the voice it extends, each
+       replaced by its own of the same id, then its others. -->
+  <xsl:function name="f:voice-rules" as="element(s:rule)*">
+    <xsl:param name="voice" as="element(s:voice)"/>
+    <xsl:variable name="base" select="$site/s:voices/s:voice[@id = $voice/@extends]"/>
+    <xsl:variable name="inherited" select="if ($base) then f:voice-rules($base) else ()"/>
+    <xsl:sequence select="$inherited ! (let $r := . return ($voice/s:rule[@id = $r/@id], $r)[1]),
+                          $voice/s:rule[not(@id = $inherited/@id)]"/>
+  </xsl:function>
+
+  <!-- The voice a kind of page is written in. -->
+  <xsl:function name="f:voice" as="element(s:voice)">
+    <xsl:param name="kind" as="xs:string"/>
+    <xsl:sequence select="$site/s:voices/s:voice[tokenize(@kinds) = $kind]"/>
+  </xsl:function>
 
   <!-- ===================================================== sections -->
 

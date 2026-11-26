@@ -154,6 +154,8 @@ puts "website: #{markdown.size} pages have their Markdown, each listed once in l
 #     the content's answers (they stay in content/); every audience file the
 #     build wrote, and the index, validates against the published
 #     audiences/audience.xsd; and every file a page links to is one of them.
+#     Each such page links one voice, a file of voices/ for its kind, and
+#     every voice file and the index validate against voices/voice.xsd.
 PURPOSES_QUERY = <<~XQUERY
   declare namespace s = "https://www.tinyactors.dev/ns/site";
   array { for $page in /s:site/s:pages/s:page ! doc(resolve-uri(@src, base-uri(/s:site)))/s:page[s:purpose]
@@ -168,6 +170,10 @@ audience_dir = Website::SITE.join('audiences')
 audience_files = audience_dir.glob('*.xml').sort
 out, ok = Website.capture('sxml', 'validate', "--schema=#{audience_dir.join('audience.xsd')}", *audience_files)
 failures << "audiences/: not valid against audiences/audience.xsd:\n#{out}" unless ok && audience_files.size > 1
+voice_dir = Website::SITE.join('voices')
+voice_files = voice_dir.glob('*.xml').sort
+out, ok = Website.capture('sxml', 'validate', "--schema=#{voice_dir.join('voice.xsd')}", *voice_files)
+failures << "voices/: not valid against voices/voice.xsd:\n#{out}" unless ok && voice_files.size > 1
 linked = 0
 purposes.each do |purpose|
   file = Website::SITE.join("#{purpose['path'].delete_prefix('/')}#{'index' if purpose['path'].end_with?('/')}.html")
@@ -178,10 +184,18 @@ purposes.each do |purpose|
   want = purpose['for'].map { |id| "/audiences/#{id}.xml" }
   failures << "#{name}: links the audiences #{hrefs.inspect}, not #{want.inspect}" unless hrefs == want
   hrefs.each { |href| failures << "#{name}: #{href}: no such audience file" unless audience_dir.join(File.basename(href)).file? }
+  voices = html.scan(/<link rel="voice" href="([^"]+)">/).flatten
+  failures << "#{name}: links #{voices.size} voices, not one" unless voices.size == 1
+  voices.each do |href|
+    file = voice_dir.join(File.basename(href))
+    if !file.file? then failures << "#{name}: #{href}: no such voice file"
+    elsif !file.read.match?(/kinds="[^"]*\b#{Regexp.escape(purpose['kind'])}\b/) then failures << "#{name}: #{href} is not a voice for #{purpose['kind']} pages"
+    end
+  end
   linked += hrefs.size
   failures << "#{name}: publishes the content's answers (data-answers, data-kind or page-answers)" if html.match?(/data-answers=|data-kind=|name="page-answers"/)
 end
-puts "website: #{purposes.size} pages name their kind and #{linked} audience links; #{audience_files.size} audience files valid against audience.xsd"
+puts "website: #{purposes.size} pages name their kind, their voice and #{linked} audience links; #{audience_files.size} audience files valid against audience.xsd, #{voice_files.size} voice files against voice.xsd"
 
 # 4. The examples, run: every directory under examples/ that holds an
 #    output.txt is a program, its package.json's "main" or main.mjs; with

@@ -17,6 +17,8 @@ module Website
   SCHEMA = ROOT.join('schema/site.xsd')
   # The published format of an audience file (/audiences/audience.xsd).
   AUDIENCE_SCHEMA = ROOT.join('schema/audience.xsd')
+  # The published format of a voice file (/voices/voice.xsd).
+  VOICE_SCHEMA = ROOT.join('schema/voice.xsd')
   # The needs report: which pages and sections answer each audience's needs.
   NEEDS = ROOT.join('render/needs.xq')
   STYLESHEET = ROOT.join('render/site.xsl')
@@ -137,6 +139,7 @@ module Website
     CLI.serve!(SITE) unless cli.empty?
     redirects!(cli.empty? ? [] : CLI.commands)
     FileUtils.cp(AUDIENCE_SCHEMA, SITE.join('audiences/audience.xsd'))
+    FileUtils.cp(VOICE_SCHEMA, SITE.join('voices/voice.xsd'))
     needs!
     assets!
     vendor!

@@ -29,45 +29,26 @@ rules.
   `output.txt`. `live.mjs` only adapts it for the page. After changing a
   component or a live example, open the page in a browser (`mise run
   serve`) and run each button: nothing in the test task does.
-- **The voice: short and literal.** Headlines, headings and claims'
-  statements are 1 to 8 words, sentence case, with no period at the end
-  ("Build a team chat"; the maintainer, 2026-11-21, replacing "ending
-  with a period"). A paragraph is one or two sentences of at most 21
-  words each, with the product or the reader's code as the subject. The
-  schema refuses a heading or a paragraph outside these limits (the
-  types `title` and `paragraph`), and any text that says "formal
-  verification". Each section is one line of prose and then the proof:
-  code, output, a claim with its source. No metaphors, no adjectives that
-  do not measure something, no hype words, no emoji. Actions are a verb
-  and an object, 2 to 4 words.
-- **The deep-dive voice** (the maintainer, 2026-11-25: the Architecture
-  page "should read like a book or a technical deep dive"). An
-  explanation page a reader follows from start to end, written for the
-  tech lead who must understand the design before depending on it, is
-  prose in `<passage>` blocks: up to five sentences each, at most 32 words
-  a sentence (the schema's `passage` type; only explanation pages have
-  them). Its hero lede sets the context a newcomer lacks: what the thing
-  is, what problem the page explains, and what the reader will be able to
-  judge after it. Each section opens with a `<problem>`, the concrete situation it
-  solves with its stakes, as the reader meets it, never a rhetorical
-  question (the maintainer, 2026-11-25); then it builds the idea in
-  passages, which hold no questions either, then shows the proof (a figure, a table, a claim
-  with its source). Terms are introduced before they are used, and each
-  section ends where the next one's question starts. The rest of the
-  voice holds: literal, measured, no metaphors or hype; headings stay
-  findings of at most 8 words.
-- **The tutorial voice** (the maintainer, 2026-11-26: the CLI tutorial's
-  sentences were "a bit too short"). A tutorial step is prose a learner
-  reads while doing it, in `<passage>` blocks: two or three sentences
-  each, up to 32 words a sentence (the schema's `passage` type, which
-  tutorial pages may use). A step says what you do, what you will see,
-  and why it matters for the thing you are building, joining cause and
-  result in one sentence ("because", "so", "which") rather than stating
-  each fact alone. The reader is "you"; the sentences vary in length.
-  Headings stay steps of at most 8 words, and the rest of the voice
-  holds: literal, measured, no metaphors, hype or rhetorical questions,
-  and no fact the step's own output does not show. A short `<p>` stays
-  right for a one-line instruction.
+- **The voices are content.** `content/site.xml`'s `<voices>` holds how
+  the site writes, one voice for each kind of page, each rule one line
+  with a stable id; the build publishes each whole as `/voices/<id>.xml`
+  and every page's head links its own (README.md, "Audiences and page
+  kinds: the convention"), so the copywriter and agents read the rules
+  from the page. Change a rule there, not here. Three voices:
+  - **Short and literal** (`literal`: pitch, how-to and reference
+    pages). The schema refuses a heading or a paragraph outside its
+    limits (the types `title` and `paragraph`), and any text that says
+    "formal verification".
+  - **Deep dive** (`deep-dive`: explanation pages; the maintainer,
+    2026-11-25: the Architecture page "should read like a book or a
+    technical deep dive"), written for the tech lead who must understand
+    the design before depending on it: `<passage>` blocks (the schema's
+    `passage` type), each section opened by a `<problem>`, never a
+    rhetorical question (the maintainer, 2026-11-25).
+  - **Tutorial** (`tutorial`: tutorial pages; the maintainer,
+    2026-11-26: the CLI tutorial's sentences were "a bit too short"):
+    `<passage>` blocks of two or three longer sentences, each step saying
+    what you do, what you will see and why.
 - **Copy never names its audience** (the maintainer, 2026-11-25). The
   roles a page is written for (the tech lead, the operator, the workflow
   developer, the agent-platform engineer) are the writer's target and the

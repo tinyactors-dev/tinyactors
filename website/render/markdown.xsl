@@ -62,7 +62,7 @@
   </xsl:function>
 
   <!-- llms.txt: the name, the tagline, the home page's lede, the packages,
-       the audiences each page names in its first line, then the pages: those outside a navigation group under "Pages", each
+       the audiences each page names in its first line, the voices it names in its second, then the pages: those outside a navigation group under "Pages", each
        group under its label, the optional ones under "Optional", and the
        links to other sites. Each entry has its page's description. -->
   <xsl:function name="f:llms" as="xs:string">
@@ -77,6 +77,8 @@
                               $site/s:packages/s:package ! f:llms-package(.), $nl)"/>
       <xsl:sequence select="'## ' || 'Audiences' || $blank || string-join(
                               $site/s:audiences/s:audience ! ('- ' || f:audience-link(@id) || ': ' || normalize-space(s:description)), $nl)"/>
+      <xsl:sequence select="'## ' || 'Voices' || $blank || string-join(
+                              $site/s:voices/s:voice ! ('- [' || normalize-space(s:name) || '](' || $origin || '/voices/' || @id || '.xml): ' || normalize-space(s:description)), $nl)"/>
       <xsl:sequence select="f:llms-section('Pages', $order[not(f:optional(.)) and not(@id = $grouped)], false())"/>
       <xsl:for-each select="$site/s:nav/s:group">
         <xsl:variable name="ids" select="f:group-ids(.)"/>
@@ -156,12 +158,14 @@
     <xsl:sequence select="string-join($blocks[. != ''], $blank) || $nl"/>
   </xsl:function>
 
-  <!-- A page's purpose, in one line: its kind, and its audiences in
-       order, each linked to its file (/audiences/<id>.xml), as the HTML's
-       head names them. -->
+  <!-- A page's purpose, in two lines: its kind and its audiences in
+       order, each linked to its file (/audiences/<id>.xml), then its voice
+       (/voices/<id>.xml), as the HTML's head names them. -->
   <xsl:function name="f:purpose-md" as="xs:string">
     <xsl:param name="purpose" as="element(s:purpose)"/>
-    <xsl:sequence select="'Kind: ' || $purpose/@kind || '. For: ' || string-join(tokenize($purpose/@for) ! f:audience-link(.), ', ') || '.'"/>
+    <xsl:variable name="voice" select="f:voice($purpose/@kind)"/>
+    <xsl:sequence select="'Kind: ' || $purpose/@kind || '. For: ' || string-join(tokenize($purpose/@for) ! f:audience-link(.), ', ') || '.' || $nl
+                          || 'Voice: [' || normalize-space($voice/s:name) || '](' || $origin || '/voices/' || $voice/@id || '.xml).'"/>
   </xsl:function>
 
   <xsl:function name="f:audience-link" as="xs:string">
