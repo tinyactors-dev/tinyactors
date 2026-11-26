@@ -36,7 +36,7 @@ module Website
     FIXTURE = EXAMPLES.join('cli')
     # The page that lists the commands (its <commands>), whose path the
     # command pages are under.
-    PAGE = CONTENT.join('pages/cli.xml')
+    PAGE = CONTENT.join('pages/cli-commands.xml')
     # What the help's examples read besides the fixture's own files, made
     # by the released command itself before they run: images, copies a
     # `fmt -w` may rewrite, an include directory, and a snapshot and a
@@ -286,7 +286,13 @@ module Website
       end
     end
 
-    # The served files, into the built site's /cli/.
-    def serve!(site) = FileUtils.cp_r("#{SERVED}/.", site.join('cli'))
+    # The served files (run.schema.json, the examples' drawings), into the
+    # built site under the commands page's path, where its pages link them.
+    def serve!(site)
+      path = PAGE.read[/<page\b[^>]*\spath="([^"]+)"/, 1] or Website.fail!("#{PAGE}: no path")
+      target = site.join(path.delete_prefix('/'))
+      FileUtils.mkdir_p(target)
+      FileUtils.cp_r("#{SERVED}/.", target)
+    end
   end
 end

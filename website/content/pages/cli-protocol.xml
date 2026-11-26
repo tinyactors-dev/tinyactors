@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<page xmlns="https://www.tinyactors.dev/ns/site" id="cli-protocol" path="/cli/protocol/">
+<page xmlns="https://www.tinyactors.dev/ns/site" id="cli-protocol" path="/cli/guides/scripting/">
   <title>Drive a host from a script</title>
-  <description>tinyactors run serves one host over JSON-RPC 2.0 on standard input and output: a script spawns actors, answers their sends and moves the clock.</description>
+  <description>Drive tinyactors run over JSON-RPC 2.0 to spawn orders, answer payment requests, hold batches, move the clock and generate a client.</description>
   <purpose kind="how-to" for="workflow-tester agent-platform"/>
 
   <hero>
@@ -47,7 +47,7 @@
 
   <section id="schema">
     <heading>Generate a client from the schema</heading>
-    <p>Run <code>tinyactors run --schema</code> to print the JSON Schema for every request, response and notification. You can also download it from the <link to="cli-run" section="see">run command's page</link>.</p>
+    <p>Run <code>tinyactors run --schema</code> to print the JSON Schema for every request, response and notification. You can also download it from the <link to="cli-commands-run" section="see">run command's page</link>.</p>
     <claims>
       <claim>
         <statement>The protocol is experimental</statement>

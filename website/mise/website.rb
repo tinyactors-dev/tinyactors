@@ -109,6 +109,22 @@ module Website
 
   # Validates the content, then writes the site into build/site: the pages,
   # sitemap.xml, each page's Markdown, llms.txt and llms-full.txt from the
+  # Addresses that moved (2026-11-26: the CLI section by kind of page), each
+  # to where its page is now, permanently: a link someone kept still lands.
+  MOVED = {
+    '/cli/ci/' => '/cli/guides/ci/',
+    '/cli/protocol/' => '/cli/guides/scripting/',
+    '/cli/snapshots/' => '/cli/guides/snapshots/',
+    '/cli/run.schema.json' => '/cli/commands/run.schema.json'
+  }.freeze
+
+  # _redirects (Cloudflare's static assets read it): MOVED, and each
+  # command's page from /cli/<command>/ to /cli/commands/<command>/.
+  def redirects!(commands)
+    moved = MOVED.merge(commands.to_h { |command| ["/cli/#{command}/", "/cli/commands/#{command}/"] })
+    SITE.join('_redirects').write(moved.map { |from, to| "#{from} #{to} 301\n" }.join)
+  end
+
   # XSLT, robots.txt, and assets/.
   def build!
     validate!
@@ -119,6 +135,7 @@ module Website
     cli = CLI::PAGE.file? ? ["--param=cli=#{CLI.capture!.to_path}"] : []
     run('sxml', 'transform', "--result-directory=#{SITE}", "--param=version=#{version}", *cli, STYLESHEET, CONTENT.join('site.xml'))
     CLI.serve!(SITE) unless cli.empty?
+    redirects!(cli.empty? ? [] : CLI.commands)
     FileUtils.cp(AUDIENCE_SCHEMA, SITE.join('audiences/audience.xsd'))
     needs!
     assets!

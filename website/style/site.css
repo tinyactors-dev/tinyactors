@@ -1133,3 +1133,11 @@ h4.output-md__heading { font: var(--fw-regular) var(--fs-18)/1.25 var(--font-ser
 .output-tree__comment { color: var(--fg-3); font-style: italic; }
 .output-svg__frame { background: var(--surface-1); }
 .output-svg { display: block; max-width: 100%; height: auto; }
+
+/* The commands page: each job a heading, what it is for, and its commands. */
+.command-group { display: grid; gap: var(--space-3); margin-top: var(--space-8); scroll-margin-top: 72px; }
+.command-group__name { font: var(--type-h2); letter-spacing: var(--tracking-tight); margin: 0; }
+.command-group__summary { color: var(--fg-2); margin: 0; }
+/* A command's page ends with every job's commands, under the job's name. */
+.command-nav__group { display: grid; gap: var(--space-2); }
+.command-nav__label { margin: 0; font: var(--type-ui); color: var(--fg-2); }

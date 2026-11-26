@@ -1,11 +1,11 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<page xmlns="https://www.tinyactors.dev/ns/site" id="cli-ci" path="/cli/ci/">
+<page xmlns="https://www.tinyactors.dev/ns/site" id="cli-ci" path="/cli/guides/ci/">
   <title>Check charts in CI</title>
-  <description>Fail a pull request whose chart does not compile, cannot work as written, is not in the canonical layout, or breaks the actors running the deployed version.</description>
+  <description>Fail pull requests on compile, tinyactors lint, tinyactors fmt --check or tinyactors diff --breaking --exit-code errors with a GitHub Actions workflow.</description>
   <purpose kind="how-to" for="workflow-tester agent-platform"/>
 
   <hero>
-    <headline>Stop broken charts before they deploy</headline>
+    <headline>Check charts in CI</headline>
     <lede>Four commands fail a pull request with exit status 1. The last, <code>diff</code>, compares the change with the version your actors run now.</lede>
     <actions>
       <action to="cli-ci" section="workflow">Copy the workflow</action>

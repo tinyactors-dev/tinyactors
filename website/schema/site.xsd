@@ -916,6 +916,35 @@
         <xs:element name="all" type="title"/>
         <xs:element name="values" type="plain"/>
         <xs:element name="status" type="with-status"/>
+        <xs:element name="shared" type="inline" minOccurs="0">
+          <xs:annotation><xs:documentation>
+            The sentence each command's page shows in place of the options every
+            command takes, linking to where this page lists them (its
+            section "program-options").
+          </xs:documentation></xs:annotation>
+        </xs:element>
+        <xs:element name="job" minOccurs="0" maxOccurs="unbounded">
+          <xs:annotation><xs:documentation>
+            A job the command does, and the commands that do it (`commands`,
+            names separated by spaces; a command may do two jobs): this page
+            lists the commands by job, under its `name` and `summary`, and
+            each command's page ends with every job's commands. With jobs,
+            every command of the help must be in one: the build stops
+            otherwise, so a new command cannot drop out of the reference.
+          </xs:documentation></xs:annotation>
+          <xs:complexType>
+            <xs:sequence>
+              <xs:element name="name" type="title"/>
+              <xs:element name="summary" type="paragraph"/>
+            </xs:sequence>
+            <xs:attribute name="id" type="xs:NCName" use="required"/>
+            <xs:attribute name="commands" use="required">
+              <xs:simpleType>
+                <xs:list itemType="command-name"/>
+              </xs:simpleType>
+            </xs:attribute>
+          </xs:complexType>
+        </xs:element>
         <xs:element name="related" minOccurs="0" maxOccurs="unbounded">
           <xs:complexType>
             <xs:sequence>

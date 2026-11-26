@@ -1,11 +1,11 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <page xmlns="https://www.tinyactors.dev/ns/site" id="cli-tutorial" path="/cli/tutorial/">
-  <title>Your first session with the tinyactors command</title>
-  <description>Compile an order chart, find its misspelt event with lint, fix it, find the path to shipped, draw it and run one order with tinyactors run.</description>
+  <title>Compile, lint, draw and run an order chart</title>
+  <description>Compile an order chart, fix a misspelt event with tinyactors lint, find the path to shipped and run one order with tinyactors run.</description>
   <purpose kind="tutorial" for="workflow-tester agent-platform"/>
 
   <hero>
-    <headline>Check, draw and run an order chart</headline>
+    <headline>Compile, lint, draw and run an order chart</headline>
     <lede>In seven commands you take an order chart from a draft with a hidden mistake to an order paid on its second attempt.</lede>
     <install>
       <command package="c">mise use github:tinyactors-dev/tinyactors-core@{version}</command>

@@ -256,6 +256,12 @@
     <xsl:sequence select="'> ' || f:md-inline(.)"/>
   </xsl:template>
 
+  <!-- A group of the commands page: its name, what it is for, its list. -->
+  <xsl:template match="s:command-group" mode="md" as="xs:string">
+    <xsl:variable name="list" as="xs:string*"><xsl:apply-templates select="s:list" mode="md"/></xsl:variable>
+    <xsl:sequence select="string-join(('&lt;a id=&quot;' || @id || '&quot;&gt;&lt;/a&gt;' || $nl || $nl || '### ' || f:md-inline(s:name), s:summary ! f:md-inline(.), $list)[. != ''], $blank)"/>
+  </xsl:template>
+
   <!-- The way to the other commands: each one, linked. -->
   <xsl:template match="s:command-nav" mode="md" as="xs:string">
     <xsl:variable name="page" select="$commands/ancestor::s:page"/>

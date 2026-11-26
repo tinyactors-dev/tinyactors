@@ -115,12 +115,17 @@ A new page goes in `content/pages/` and in `site.xml`'s `<pages>`.
 
 ## The CLI section
 
-`/cli/` is the `tinyactors` command's section, by Diátaxis: `/cli/`
-explains when to use the command beside the libraries (an explanation
-page), `/cli/tutorial/` is a first session, `/cli/ci/`, `/cli/protocol/`
-and `/cli/snapshots/` are how-to guides, and each command has a reference
-page. Those are written by nobody: `<commands>` (`content/pages/cli.xml`)
-holds only the words they use (headings, the word before an option's
+`/cli/` is the `tinyactors` command's section, each kind of page under a
+path of its own: `/cli/` is where to start (what the command is, how to
+install it, where to go), `/cli/tutorial/` is a first session,
+`/cli/guides/<name>/` are how-to guides (`ci`, `scripting`, `snapshots`),
+`/cli/commands/` is the reference, the commands by job and the options
+every command takes, each command's page `/cli/commands/<name>/`, and
+`/cli/why/` explains when to use the command beside the libraries. Each
+page has one name, its menu label, its title and its headline. The
+command pages are written by nobody: `<commands>`
+(`content/pages/cli-commands.xml`) holds only the words they use (headings,
+the jobs that group the commands, the sentence pointing to the shared options, the word before an option's
 values). The build (`mise/cli.rb`) runs the binary `mise.toml` pins
 (`"github:tinyactors-dev/tinyactors-core"`, installed by mise from the
 release's archive), reads its help as XML (`help -f xml`, `help COMMAND
@@ -132,7 +137,8 @@ they printed and the pictures they drew, and the exit statuses and
 example captions once the help carries them. A new command or option
 appears when the site builds against a new release, after the pin moves.
 `<artifact>` serves a file the binary writes (`run --schema` as
-`/cli/run.schema.json`).
+`/cli/commands/run.schema.json`). An address that moved redirects
+(`_redirects`, `MOVED` in `mise/website.rb`).
 
 The hand-written pages show sessions that ran. A how-to page's output
 is a file of `examples/cli/` with its command line in `TRANSCRIPTS`; a

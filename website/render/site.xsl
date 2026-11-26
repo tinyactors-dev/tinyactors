@@ -78,6 +78,14 @@
     <xsl:if test="exists($commands) and empty($cli-doc)">
       <xsl:message terminate="yes">site: {f:where($commands)}: lists the command's commands, and the build gave no capture of the command (the parameter cli: mise/cli.rb)</xsl:message>
     </xsl:if>
+    <xsl:if test="$commands/s:job">
+      <xsl:for-each select="$cli-doc/command/@name[not(. = $commands/s:job/tokenize(normalize-space(@commands), ' '))]">
+        <xsl:message terminate="yes">site: {f:where($commands)}: the command "{.}" is in no &lt;job&gt;: name the job it does</xsl:message>
+      </xsl:for-each>
+      <xsl:for-each select="$commands/s:job/tokenize(normalize-space(@commands), ' ')[not(. = $cli-doc/command/@name)]">
+        <xsl:message terminate="yes">site: {f:where($commands)}: a &lt;job&gt; names the command "{.}", which the tinyactors {$cli-doc/@version} the site documents does not have</xsl:message>
+      </xsl:for-each>
+    </xsl:if>
     <xsl:for-each select="$commands/(s:related, s:artifact)[not(@command = $cli-doc/command/@name)]">
       <xsl:message terminate="yes">site: {f:where(.)}: the command "{@command}", which the tinyactors {$cli-doc/@version} the site documents does not have</xsl:message>
     </xsl:for-each>
@@ -96,7 +104,9 @@
       <xsl:if test="empty($target)">
         <xsl:message terminate="yes">site: {f:where(.)}: a link to the page "{@to}", which the site does not list</xsl:message>
       </xsl:if>
-      <xsl:if test="@section and empty($target/s:section[@id = current()/@section])">
+      <!-- a section, or a group the commands page makes (a job, the shared options) -->
+      <xsl:if test="@section and empty($target/s:section[@id = current()/@section])
+                    and not($target//s:commands and current()/@section = ($commands/s:job/@id, 'program-options', 'commands'))">
         <xsl:message terminate="yes">site: {f:where(.)}: a link to the section "{@section}", which the page "{@to}" does not have</xsl:message>
       </xsl:if>
     </xsl:for-each>
@@ -1195,15 +1205,13 @@
           <s:code language="shell">{$help/@usage}</s:code>
           <xsl:if test="normalize-space($help/@description)"><s:p><xsl:sequence select="f:help-text($help/@description)"/></s:p></xsl:if>
         </s:section>
-        <xsl:if test="$help/options/option">
-          <s:section id="options">
-            <s:heading>{normalize-space($commands/s:options)}</s:heading>
-            <xsl:sequence select="f:options-list($help/options/option)"/>
-          </s:section>
-        </xsl:if>
-        <s:section id="program-options">
-          <s:heading>{normalize-space($commands/s:program-options)}</s:heading>
-          <xsl:sequence select="f:options-list($help/programOptions/option)"/>
+        <s:section id="options">
+          <s:heading>{normalize-space($commands/s:options)}</s:heading>
+          <xsl:if test="$help/options/option"><xsl:sequence select="f:options-list($help/options/option)"/></xsl:if>
+          <xsl:choose>
+            <xsl:when test="$commands/s:shared"><s:p><xsl:sequence select="$commands/s:shared/node()"/></s:p></xsl:when>
+            <xsl:otherwise><xsl:sequence select="f:options-list($help/programOptions/option)"/></xsl:otherwise>
+          </xsl:choose>
         </s:section>
         <xsl:if test="runs/example">
           <s:section id="examples">
@@ -1280,16 +1288,25 @@
           <a class="command-nav__step command-nav__step--next" rel="next" href="{$page/@path}{$names[$at + 1]}/"><code>{$program} {$names[$at + 1]}</code><span aria-hidden="true"> →</span></a>
         </xsl:if>
       </p>
-      <ul class="command-nav__all">
-        <xsl:for-each select="$names">
-          <li>
-            <xsl:choose>
-              <xsl:when test=". = $names[$at]"><span class="command-nav__current" aria-current="page"><code>{.}</code></span></xsl:when>
-              <xsl:otherwise><a href="{$page/@path}{.}/"><code>{.}</code></a></xsl:otherwise>
-            </xsl:choose>
-          </li>
-        </xsl:for-each>
-      </ul>
+      <xsl:variable name="current" select="string(@current)"/>
+      <xsl:variable name="groups" as="map(*)*" select="if ($commands/s:job)
+          then $commands/s:job ! map { 'name': s:name, 'names': tokenize(normalize-space(@commands), ' ') }
+          else map { 'name': (), 'names': $names }"/>
+      <xsl:for-each select="$groups">
+        <div class="command-nav__group">
+          <xsl:if test="exists(?name)"><p class="command-nav__label"><xsl:apply-templates select="?name/node()"/></p></xsl:if>
+          <ul class="command-nav__all">
+            <xsl:for-each select="?names">
+              <li>
+                <xsl:choose>
+                  <xsl:when test=". = $current"><span class="command-nav__current" aria-current="page"><code>{.}</code></span></xsl:when>
+                  <xsl:otherwise><a href="{$page/@path}{.}/"><code>{.}</code></a></xsl:otherwise>
+                </xsl:choose>
+              </li>
+            </xsl:for-each>
+          </ul>
+        </div>
+      </xsl:for-each>
     </nav>
   </xsl:template>
 
@@ -1316,20 +1333,55 @@
   <xsl:function name="f:commands-blocks" as="element()*">
     <xsl:variable name="page" select="$commands/ancestor::s:page"/>
     <xsl:variable name="blocks" as="element(s:section)">
-      <s:section id="{$commands/ancestor::s:section/@id}">
-    <s:p><s:code>{$cli-doc/help/@usage}</s:code></s:p>
-    <s:list>
-      <xsl:for-each select="$cli-doc/help/commands/command">
-        <s:item>
-          <s:term><s:link to="{$page/@id}-{@command}"><s:code>{$cli-doc/help/@name} {@command}</s:code></s:link></s:term>
-          <s:text><xsl:sequence select="f:help-text(f:sentence(@summary))"/></s:text>
-        </s:item>
-      </xsl:for-each>
-    </s:list>
+      <s:section id="commands">
+        <s:p><s:code>{$cli-doc/help/@usage}</s:code></s:p>
+        <xsl:choose>
+          <!-- by job, as the content groups them -->
+          <xsl:when test="$commands/s:job">
+            <xsl:for-each select="$commands/s:job">
+              <s:command-group id="{@id}">
+                <s:name><xsl:sequence select="s:name/node()"/></s:name>
+                <s:summary><xsl:sequence select="s:summary/node()"/></s:summary>
+                <xsl:sequence select="f:command-items(tokenize(normalize-space(@commands), ' '))"/>
+              </s:command-group>
+            </xsl:for-each>
+          </xsl:when>
+          <xsl:otherwise><xsl:sequence select="f:command-items($cli-doc/help/commands/command/@command ! string())"/></xsl:otherwise>
+        </xsl:choose>
+        <!-- the options every command takes, once, where each command's page links -->
+        <s:command-group id="program-options">
+          <s:name>{normalize-space($commands/s:program-options)}</s:name>
+          <xsl:sequence select="f:options-list(($cli-doc/command/help/programOptions)[1]/option)"/>
+        </s:command-group>
       </s:section>
     </xsl:variable>
     <xsl:sequence select="$blocks/*"/>
   </xsl:function>
+
+  <!-- The commands named, each linked to its page with its summary. -->
+  <xsl:function name="f:command-items" as="element(s:list)">
+    <xsl:param name="names" as="xs:string*"/>
+    <xsl:variable name="page" select="$commands/ancestor::s:page"/>
+    <s:list>
+      <xsl:for-each select="$names">
+        <xsl:variable name="command" select="$cli-doc/help/commands/command[@command = current()]"/>
+        <s:item>
+          <s:term><s:link to="{$page/@id}-{.}"><s:code>{$cli-doc/help/@name} {.}</s:code></s:link></s:term>
+          <s:text><xsl:sequence select="f:help-text(f:sentence($command/@summary))"/></s:text>
+        </s:item>
+      </xsl:for-each>
+    </s:list>
+  </xsl:function>
+
+  <!-- A group of the commands page: its name as a heading that links to
+       itself, what the group is for, and its commands or options. -->
+  <xsl:template match="s:command-group">
+    <div class="command-group" id="{@id}">
+      <h3 class="command-group__name"><a class="section__anchor" href="#{@id}"><xsl:apply-templates select="s:name/node()"/></a></h3>
+      <xsl:if test="s:summary"><p class="prose command-group__summary"><xsl:apply-templates select="s:summary/node()"/></p></xsl:if>
+      <xsl:apply-templates select="s:list"/>
+    </div>
+  </xsl:template>
 
   <!-- The placeholders the command's usage lines and options name (INPUT,
        DIR, FORMAT, ...), which its prose refers to; "ID" is a word too. -->

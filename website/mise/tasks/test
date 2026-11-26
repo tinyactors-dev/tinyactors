@@ -364,7 +364,7 @@ puts "website: #{written} examples written in the content ran and printed their 
 # 5c. The CLI section (mise/cli.rb), against the binary the build used:
 #     the pinned release's, or TINYACTORS_CLI's for development. Every
 #     command the binary lists has its page and Markdown, and every page
-#     under /cli/ is a command's or the content's; no page names a command
+#     under /cli/ is the content's, or a command's under /cli/commands/; no page names a command
 #     or an option the binary lacks (a code span or a shell block that
 #     runs `tinyactors COMMAND ...`, or a span that starts with a command's
 #     name or an option); every example of its help ran with a status its
@@ -380,12 +380,16 @@ options = cli.options
 known = options.values.flatten.uniq
 commands.each do |command|
   %w[index.html index.md].each do |file|
-    failures << "cli: the binary lists #{command}, and build/site/cli/#{command}/#{file} is missing" unless Website::SITE.join('cli', command, file).file?
+    failures << "cli: the binary lists #{command}, and build/site/cli/commands/#{command}/#{file} is missing" unless Website::SITE.join('cli', 'commands', command, file).file?
   end
 end
-cli_pages = Website::SITE.join('cli').children.select { |dir| dir.directory? && dir.join('index.html').file? }.map { |dir| dir.basename.to_s }
-concepts = Website.documents.filter_map { |document| document.read[%r{<page\b[^>]*\spath="/cli/([a-z-]+)/"}, 1] }
-(cli_pages - commands - concepts).each { |name| failures << "cli: build/site/cli/#{name}/ is the page of no command the binary lists" }
+command_pages = Website::SITE.join('cli', 'commands').children.select { |dir| dir.directory? && dir.join('index.html').file? }.map { |dir| dir.basename.to_s }
+(command_pages - commands).each { |name| failures << "cli: build/site/cli/commands/#{name}/ is the page of no command the binary lists" }
+content_paths = Website.documents.filter_map { |document| document.read[%r{<page\b[^>]*\spath="(/cli/[a-z/-]*)"}, 1] }
+Website::SITE.join('cli').glob('**/index.html').map { |file| "/#{file.dirname.relative_path_from(Website::SITE)}/" }.each do |path|
+  next if content_paths.include?(path) || path.start_with?('/cli/commands/')
+  failures << "cli: build/site#{path} is neither a page of the content nor a command's"
+end
 named = 0
 unescape = ->(text) { text.gsub('&lt;', '<').gsub('&gt;', '>').gsub('&quot;', '"').gsub('&amp;', '&') }
 Website.documents.each do |document|

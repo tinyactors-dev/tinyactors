@@ -1,11 +1,11 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<page xmlns="https://www.tinyactors.dev/ns/site" id="cli-snapshots" path="/cli/snapshots/">
-  <title>Read a snapshot without restoring it</title>
-  <description>tinyactors actors and tinyactors inspect read the snapshots and hibernation blobs a host writes: each actor's chart, state, queued events and delayed sends, with no host running.</description>
+<page xmlns="https://www.tinyactors.dev/ns/site" id="cli-snapshots" path="/cli/guides/snapshots/">
+  <title>Read snapshots and hibernation blobs offline</title>
+  <description>Read snapshot state, queued events, pending timeouts and hibernation blobs offline with tinyactors actors and tinyactors inspect.</description>
   <purpose kind="how-to" for="agent-platform workflow-tester"/>
 
   <hero>
-    <headline>Find where each order is</headline>
+    <headline>Read snapshots and hibernation blobs offline</headline>
     <lede>A snapshot file holds the actors of a host and their pending timeouts. <code>tinyactors actors</code> reads from it which state each order is in, without starting a host.</lede>
   </hero>
 
@@ -38,8 +38,8 @@
   <section id="more">
     <heading>4. Inspect the snapshot's segments and states</heading>
     <list>
-      <item><term><link to="cli-inspect"><code>tinyactors inspect shop.snapshot</code></link></term><text>The snapshot's time and its segments, one per image the host added, with how many actors each holds.</text></item>
-      <item><term><link to="cli-states"><code>tinyactors states</code></link></term><text>The states of the chart a segment runs, with <code>--segment</code> for an older version.</text></item>
+      <item><term><link to="cli-commands-inspect"><code>tinyactors inspect shop.snapshot</code></link></term><text>The snapshot's time and its segments, one per image the host added, with how many actors each holds.</text></item>
+      <item><term><link to="cli-commands-states"><code>tinyactors states</code></link></term><text>The states of the chart a segment runs, with <code>--segment</code> for an older version.</text></item>
     </list>
     <claims>
       <claim>
