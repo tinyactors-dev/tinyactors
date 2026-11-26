@@ -260,6 +260,14 @@ summary.changelog__title { cursor: pointer; }
    inside a word only when nothing else fits; its chip continues on each line. */
 .items__term code { white-space: normal; overflow-wrap: anywhere; -webkit-box-decoration-break: clone; box-decoration-break: clone; }
 .items__term a { color: inherit; }
+/* Terms that are code (options, commands): one column as wide as the widest
+   term, every row aligned to it (subgrid), the code on one line; the list
+   takes the content's width rather than the prose's. */
+.section__body > .items--code { max-width: none; }
+.items--code { grid-template-columns: fit-content(50%) minmax(0, 1fr); column-gap: var(--space-6); }
+.items--code li { grid-column: 1 / -1; grid-template-columns: subgrid; }
+.items--code .items__term code { white-space: nowrap; overflow-wrap: normal; }
+.items--code .items__text { max-width: var(--prose-max); }
 ol.items { counter-reset: item; }
 ol.items .items__term::before { counter-increment: item; content: counter(item) ". "; color: var(--fg-3); font-variant-numeric: tabular-nums; }
 
@@ -600,6 +608,8 @@ html:has(> #tinyactors-copywriter) .app { --app-inset-start: 68px; --app-inset-b
   .section { padding-top: var(--space-12); }
   .section__head h2 { font: var(--type-h2); font-size: 28px; }
   .items--terms li { grid-template-columns: 1fr; gap: var(--space-1); }
+  .items--code { grid-template-columns: minmax(0, 1fr); }
+  .items--code .items__term code { white-space: normal; overflow-wrap: anywhere; }
   .claims, .claims:has(> :nth-child(4)) { grid-template-columns: 1fr; }
   p code, li code { white-space: normal; }
   .table td { white-space: normal; }

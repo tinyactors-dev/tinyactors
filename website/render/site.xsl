@@ -492,7 +492,9 @@
 
   <xsl:template match="s:list">
     <xsl:element name="{if (@ordered = 'true') then 'ol' else 'ul'}">
-      <xsl:attribute name="class" select="'items', if (s:item/s:term) then 'items--terms' else ()"/>
+      <!-- terms that are all code (options, commands) take the width they need -->
+      <xsl:attribute name="class" select="'items', if (s:item/s:term) then 'items--terms' else (),
+          if (s:item/s:term and (every $t in s:item/s:term satisfies normalize-space(string-join($t//s:code)) = normalize-space($t))) then 'items--code' else ()"/>
       <xsl:for-each select="s:item">
         <li>
           <xsl:if test="s:term">
