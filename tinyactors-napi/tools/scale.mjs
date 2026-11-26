@@ -53,7 +53,8 @@ import { BATCH, engine, random, Store } from './store.mjs';
 
 /** The most the cost at 2N may be of the cost at N. */
 export const FACTOR = 1.5;
-/** Actors in memory at most in the hibernated scenario, besides the invokers. */
+/** Actors in memory at most in the hibernated scenario (the invokers hibernate
+ * too: their services run on while they sleep). */
 const RESIDENT = 1000;
 
 /** Operations whose cost grows with the population because of core, each

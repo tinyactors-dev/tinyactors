@@ -125,6 +125,35 @@ class Hibernation(unittest.TestCase):
             self.assertEqual(store.wakes, [session.id])
         self.assertEqual(logs.labelled("later"), ["1"])
 
+    def test_an_actor_running_a_service_hibernates_and_its_events_wake_it(self):
+        """A service does not hold its actor in memory: it runs on while the
+        actor sleeps, and what it sends wakes the actor from the store."""
+        waiter = ('<scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0" datamodel="python" '
+                  'name="waiter" initial="s"><state id="s"><invoke type="svc" id="call" src="svc:x"/>'
+                  '<transition event="answer"><log label="w" expr="f\'answer {_event.data}\'"/></transition>'
+                  '<transition event="done.invoke.call" target="done"/></state><final id="done"/></scxml>')
+        logs, store, invocations = Logs(), Store(), []
+
+        def start(invocation):
+            invocations.append(invocation)
+            return object()
+
+        with host_with([("waiter.scxml", waiter)], log=logs, store=store, services={"svc": start}) as host:
+            session = host.spawn(host.chart("waiter"))
+            host.run_until_idle()
+            self.assertEqual(len(invocations), 1)
+            store.save(session.id, host.hibernate(session))
+            invocations[0].send_back("answer", 7)
+            host.run_until_idle()
+            self.assertEqual(store.wakes, [session.id])
+            self.assertEqual(logs.labelled("w"), ["answer 7"])
+            store.save(session.id, host.hibernate(session))
+            invocations[0].done()
+            host.run_until_idle()
+            self.assertEqual(store.wakes, [session.id, session.id])
+            with self.assertRaises(tinyactors.StaleError):
+                host.actor(session.id)
+
     def test_hibernate_refuses_an_actor_with_events_waiting(self):
         with host_with([("counter.scxml", COUNTER["python"])]) as host:
             session = host.spawn(host.chart("counter"))

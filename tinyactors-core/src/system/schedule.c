@@ -108,6 +108,25 @@ static void step_log(ta_system *system, uint32_t index, ta_instance *instance) {
     ta_shared_string_release(core, text);
 }
 
+/* The services of a resident actor that ends without leaving its states (a
+ * fault): each stopped (TA_EFFECT_UNINVOKE) and its request freed, as
+ * leaving its state would. */
+static void stop_services(ta_system *system, uint32_t index) {
+    ta_instance *instance = ta_actor_instance(system, ta_actor_at(system, index));
+    const ta_chart_record *chart = &system->core.image_view.charts[instance->chart];
+    uint32_t *children = ta_instance_word(instance, ta_instance_layout_of(chart).invoke_children);
+    for (uint32_t i = 0; i < chart->invoke_count; i++) {
+        uint32_t ri = children[i] & TA_EXTERNAL_INVOKE_BIT
+                          ? ta_pool_resolve(&system->requests, children[i] & ~TA_EXTERNAL_INVOKE_BIT)
+                          : TA_NIL;
+        if (ri == TA_NIL) continue;
+        ta_effect_record *effect = ta_system_effect_push(system, TA_EFFECT_UNINVOKE, index);
+        if (effect) effect->invocation = ((const ta_request *)ta_pool_at(&system->requests, ri))->invocation;
+        ta_system_external_free(system, ri);
+        children[i] = 0;
+    }
+}
+
 /* Run one actor for up to `quantum` fuel. Returns a TA_RUN_* status. The fuel
  * clock at the start of its turn is `clock`; what the kernel and the system
  * write is stamped with it plus the fuel used so far. */
@@ -225,6 +244,7 @@ static uint32_t run_actor(ta_system *system, uint32_t index, uint32_t quantum, u
         default: { /* FAULT or unknown: report and reclaim */
             ta_effect_record *effect = ta_system_effect_push(system, TA_EFFECT_ERROR, index);
             if (effect) effect->flags = core->out.fault;
+            stop_services(system, index); /* they would run on for nobody */
             stats->faults++;
             actor->state = TA_ACTOR_DONE;
             ta_system_reclaim(system, index, RECLAIM_ENDED);
@@ -351,23 +371,16 @@ static uint32_t opt_str(ta_core *core, ta_string_view v, int *oom) {
  * token's request, which must be an external invocation of the target
  * actor. NULL otherwise. */
 /* The request of the external invocation `invocation` of the actor at
- * `index`, found among its invoke slots (at most its chart's <invoke>
- * count): TA_NIL when it runs none with that id. A hibernated actor runs
- * none (hibernation refuses an actor with invocations). */
+ * `index`, resident or hibernated, from the index of running invocations
+ * (docs/adr/0019): TA_NIL when that actor runs none with that id. */
 static uint32_t external_request(ta_system *system, uint32_t index, uint64_t invocation) {
-    ta_actor *actor = ta_actor_at(system, index);
-    if (actor->state == TA_ACTOR_HIBERNATED || !invocation) return TA_NIL;
-    ta_instance *instance = ta_actor_instance(system, actor);
-    const ta_chart_record *chart = &system->core.image_view.charts[instance->chart];
-    const uint32_t *children = ta_instance_word(instance, ta_instance_layout_of(chart).invoke_children);
-    for (uint32_t i = 0; i < chart->invoke_count; i++) {
-        if (!(children[i] & TA_EXTERNAL_INVOKE_BIT)) continue;
-        uint32_t ri = ta_pool_resolve(&system->requests, children[i] & ~TA_EXTERNAL_INVOKE_BIT);
-        if (ri == TA_NIL) continue;
-        const ta_request *request = (const ta_request *)ta_pool_at(&system->requests, ri);
-        if (request->kind == REQUEST_EXTERNAL_INVOKE && request->invocation == invocation) return ri;
-    }
-    return TA_NIL;
+    uint32_t ri = invocation ? ta_system_invocation_lookup(system, invocation) : TA_NIL;
+    if (ri == TA_NIL) return TA_NIL;
+    const ta_request *request = (const ta_request *)ta_pool_at(&system->requests, ri);
+    return request->kind == REQUEST_EXTERNAL_INVOKE &&
+                   request->actor == ta_pool_handle(&system->actors, index)
+               ? ri
+               : TA_NIL;
 }
 
 /* Also during a run, from a datamodel (system.h): the event takes the path

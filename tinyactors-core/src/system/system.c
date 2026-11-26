@@ -85,8 +85,8 @@ typedef struct carved {
         request_slots, request_generations;
     size_t slab_pages, slab_metadata, effects, effect_views, sessions, chart_datamodels,
         chart_contexts, chart_stats, trace_storage, context_slots, context_generations, rules,
-        chart_points, actor_links, names;
-    uint32_t workspace_size, page_count, session_capacity, name_capacity;
+        chart_points, actor_links, names, invocations;
+    uint32_t workspace_size, page_count, session_capacity, name_capacity, invocation_capacity;
 } carved;
 
 static void carve(ta_arena *arena, const ta_image_view *view, const ta_system_config *config,
@@ -102,6 +102,10 @@ static void carve(ta_arena *arena, const ta_image_view *view, const ta_system_co
     o->session_capacity = 16;
     while (o->session_capacity < config->max_actors * 2)
         o->session_capacity <<= 1;
+    /* at most one running external invocation per request: a load of at most 1/2 */
+    o->invocation_capacity = 16;
+    while (o->invocation_capacity < config->max_requests * 2)
+        o->invocation_capacity <<= 1;
     /* at most one name per actor: a load of at most 4/5 */
     o->name_capacity = 16;
     while (o->name_capacity < config->max_actors + config->max_actors / 4)
@@ -132,6 +136,7 @@ static void carve(ta_arena *arena, const ta_image_view *view, const ta_system_co
     o->effects = ta_arena_alloc(arena, sizeof(ta_effect_record) * config->outbox, TA_ALIGN_MAX);
     o->effect_views = ta_arena_alloc(arena, sizeof(ta_effect) * config->outbox, TA_ALIGN_MAX);
     o->sessions = ta_arena_alloc(arena, sizeof(uint32_t) * o->session_capacity, 4);
+    o->invocations = ta_arena_alloc(arena, sizeof(uint32_t) * o->invocation_capacity, 4);
     o->chart_datamodels = ta_arena_alloc(arena, view->chart_count, 1);
     o->chart_contexts = ta_arena_alloc(arena, sizeof(void *) * view->chart_count, TA_ALIGN_MAX);
     o->chart_stats =
@@ -307,8 +312,11 @@ static void set_rels(ta_system *system, ta_arena *arena, const carved *o) {
         (int64_t)((intptr_t)ta_arena_pointer(arena, o->actor_links) - (intptr_t)system);
     system->names_relative =
         (int64_t)((intptr_t)ta_arena_pointer(arena, o->names) - (intptr_t)system);
+    system->invocations_relative =
+        (int64_t)((intptr_t)ta_arena_pointer(arena, o->invocations) - (intptr_t)system);
     system->session_capacity = o->session_capacity;
     system->name_capacity = o->name_capacity;
+    system->invocation_capacity = o->invocation_capacity;
 }
 
 ta_status ta_system_init(const ta_system_setup *setup, ta_system **out) {
@@ -392,6 +400,9 @@ ta_status ta_system_init(const ta_system_setup *setup, ta_system **out) {
     uint32_t *names = SYSTEM_POINTER(system, names_relative, uint32_t);
     for (uint32_t i = 0; i < system->name_capacity; i++)
         names[i] = TA_NIL;
+    uint32_t *invocations = SYSTEM_POINTER(system, invocations_relative, uint32_t);
+    for (uint32_t i = 0; i < system->invocation_capacity; i++)
+        invocations[i] = TA_NIL;
     ta_status status = bind_datamodels(system, image, datamodels, datamodel_count);
     if (status != TA_OK) return status;
     rebind(system, image);
@@ -447,6 +458,64 @@ static void session_remove(ta_system *system, uint32_t index) {
             system->session_count--;
             return;
         }
+}
+
+/* ---- the index of external invocations ------------------------------------------------------ */
+
+/* Each running external invocation has one slot, which holds its request's
+ * index; its id is in the request. Linear probing, and a removal moves the
+ * entries after it back into the gap, so no slot is left marked deleted
+ * (invocations come and go far more often than sessions): an insertion, a
+ * lookup and a removal cost O(1) expected, at a load of at most 1/2. */
+
+static uint32_t *invocation_slots(const ta_system *system) {
+    return SYSTEM_POINTER(system, invocations_relative, uint32_t);
+}
+
+static uint32_t invocation_id_hash(uint64_t invocation, uint32_t capacity) {
+    uint64_t h = invocation * 0x9E3779B97F4A7C15ull;
+    return (uint32_t)(h >> 32) & (capacity - 1);
+}
+
+static uint64_t invocation_at(const ta_system *system, uint32_t ri) {
+    return ((const ta_request *)ta_pool_at(&system->requests, ri))->invocation;
+}
+
+void ta_system_invocation_insert(ta_system *system, uint32_t ri) {
+    uint32_t *slots = invocation_slots(system), mask = system->invocation_capacity - 1;
+    uint32_t i = invocation_id_hash(invocation_at(system, ri), system->invocation_capacity);
+    while (slots[i] != TA_NIL)
+        i = (i + 1) & mask;
+    slots[i] = ri;
+    system->invocation_count++;
+}
+
+uint32_t ta_system_invocation_lookup(const ta_system *system, uint64_t invocation) {
+    const uint32_t *slots = invocation_slots(system);
+    uint32_t mask = system->invocation_capacity - 1;
+    uint32_t i = invocation_id_hash(invocation, system->invocation_capacity);
+    for (uint32_t n = 0; n < system->invocation_capacity && slots[i] != TA_NIL; n++, i = (i + 1) & mask)
+        if (invocation_at(system, slots[i]) == invocation) return slots[i];
+    return TA_NIL;
+}
+
+void ta_system_invocation_remove(ta_system *system, uint32_t ri) {
+    uint32_t *slots = invocation_slots(system), mask = system->invocation_capacity - 1;
+    uint32_t i = invocation_id_hash(invocation_at(system, ri), system->invocation_capacity);
+    for (uint32_t n = 0; n < system->invocation_capacity && slots[i] != ri && slots[i] != TA_NIL; n++)
+        i = (i + 1) & mask;
+    if (slots[i] != ri) return;
+    /* close the gap: an entry after it moves back when its home is not
+     * strictly between the gap and its slot */
+    for (uint32_t j = (i + 1) & mask; slots[j] != TA_NIL; j = (j + 1) & mask) {
+        uint32_t home = invocation_id_hash(invocation_at(system, slots[j]), system->invocation_capacity);
+        int between = i <= j ? (i < home && home <= j) : (i < home || home <= j);
+        if (between) continue;
+        slots[i] = slots[j];
+        i = j;
+    }
+    slots[i] = TA_NIL;
+    system->invocation_count--;
 }
 
 /* ---- the index of names ------------------------------------------------------------------- */
@@ -1276,6 +1345,14 @@ ta_status ta_system_relocate(ta_system **relocated, ta_memory memory,
             names[names_slot(new_system, names_actor_name(new_system, old_names[i]))] = old_names[i];
     for (uint32_t i = 0; i < new_system->actors.high_water_mark; i++)
         if (ta_pool_live(&new_system->actors, i)) ta_system_session_insert(new_system, i);
+    uint32_t *invocations = invocation_slots(new_system);
+    for (uint32_t i = 0; i < new_system->invocation_capacity; i++)
+        invocations[i] = TA_NIL;
+    new_system->invocation_count = 0;
+    for (uint32_t i = 0; i < new_system->requests.high_water_mark; i++)
+        if (ta_pool_live(&new_system->requests, i) &&
+            ((const ta_request *)ta_pool_at(&new_system->requests, i))->kind == REQUEST_EXTERNAL_INVOKE)
+            ta_system_invocation_insert(new_system, i);
     system->magic = 0; /* the old region is dead */
     *relocated = new_system;
     return TA_OK;

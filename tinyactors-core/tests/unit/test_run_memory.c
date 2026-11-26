@@ -97,7 +97,7 @@ static const char session_hibernation[] =
     "{\"jsonrpc\":\"2.0\",\"id\":46,\"method\":\"run.send\",\"params\":{\"target\":3,\"event\":\"checkout\","
     "\"data\":{\"card\":\"tok_visa\"}}}\n"
     "{\"jsonrpc\":\"2.0\",\"id\":47,\"method\":\"run.turn\"}\n"
-    "{\"jsonrpc\":\"2.0\",\"id\":48,\"method\":\"run.wake\",\"params\":{\"session\":3,\"blob\":\"VEFIQgQAAAAAAAAA"
+    "{\"jsonrpc\":\"2.0\",\"id\":48,\"method\":\"run.wake\",\"params\":{\"session\":3,\"blob\":\"VEFIQgUAAAAAAAAA"
     "SAAAAAQAAAA5KacD1X0pOI5i5ccDAAAAAAAAACcAAAAAAAAAAAAAAAYAAAABAAAAAAAAAP____________________8BAAAFAAAAAAA"
     "AAAAAAAAAAQAAAAAAAAABAAAA_____wIAAAAAAAAAAAAAABy8Cc9jAgEKdG90YWwBDGNoYXJnZQkDBQQIAgIF6AcEAQgBAgXoBw\"}}\n"
     "{\"jsonrpc\":\"2.0\",\"id\":49,\"method\":\"run.turn\",\"params\":{\"hold\":true}}\n"
@@ -113,7 +113,7 @@ static const char session_hibernation[] =
     "{\"jsonrpc\":\"2.0\",\"id\":53,\"method\":\"run.migrate\",\"params\":{\"chart\":\"order\",\"wake\":true,"
     "\"timeout\":\"1s\"}}\n"
     "{\"jsonrpc\":\"2.0\",\"id\":54,\"method\":\"run.turn\"}\n"
-    "{\"jsonrpc\":\"2.0\",\"id\":55,\"method\":\"run.wake\",\"params\":{\"session\":4,\"blob\":\"VEFIQgQAAAAAAAAA"
+    "{\"jsonrpc\":\"2.0\",\"id\":55,\"method\":\"run.wake\",\"params\":{\"session\":4,\"blob\":\"VEFIQgUAAAAAAAAA"
     "SAAAAAQAAAA5KacD1X0pOI5i5ccEAAAAAAAAACcAAAAAAAAAAAAAAAYAAAABAAAAAAAAAP____________________8CAAABAAAAAAA"
     "AAAAAAAAAAQAAAAAAAAABAAAA_____wIAAAAAAAAAAAAAABxMDa-rAgEKdG90YWwBDGNoYXJnZQkDBQQIAgIFsAkEAQgBAgWwCQ\"}}\n"
     "{\"jsonrpc\":\"2.0\",\"id\":56,\"method\":\"run.turn\"}\n"
@@ -351,7 +351,7 @@ static void test_every_refusal_is_a_status(void) {
     CHECK(whole.output && strstr(whole.output, "\"method\":\"effect.uninvoke\""));
     CHECK(whole.output && strstr(whole.output, "\"id\":24,\"result\":{\"schema\":{"));
     CHECK(whole.output && strstr(whole.output, "\"id\":27,\"result\":{\"status\":\"held\""));
-    CHECK(whole.output && strstr(whole.output, "\"id\":44,\"result\":{\"sessions\":[3,4]}"));
+    CHECK(whole.output && strstr(whole.output, "\"id\":44,\"result\":{\"sessions\":[3,4,4294967298]}"));
     CHECK(whole.output && strstr(whole.output, "\"id\":45,\"result\":{\"blob\":\""));
     CHECK(whole.output && strstr(whole.output, "\"id\":48,\"result\":{}"));
     CHECK(whole.output && strstr(whole.output, "\"id\":50,\"result\":{\"blob\":\""));

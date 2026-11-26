@@ -19,22 +19,22 @@
 < {"jsonrpc":"2.0","method":"effect.send","params":{"batch":3,"index":0,"session":2,"type":"payments","target":"charges","event":"charge","sendid":"pay","data":{"amount":990,"card":"tok_mastercard","reference":"ord_843291"},"traceparent":"00-1d42993fa43f2a5411361bf526a14bb5-dd8d121244a64d16-03","waiting":true}}
 < [{"jsonrpc":"2.0","id":11,"result":{}},{"jsonrpc":"2.0","id":12,"result":{"status":"idle","runs":2,"fuel":13,"time":0,"nextDeadline":30000}}]
 > {"jsonrpc":"2.0","id":13,"method":"run.hibernate","params":{"session":3}}
-< {"jsonrpc":"2.0","id":13,"result":{"blob":"VEFIQgQAAAAAAAAASAAAAAQAAAA5KacDi_pK2fQchyEDAAAAAAAAAEkAAAAAAAAAAAAAAAYAAAABAAAAAAAAAP____________________8DAAABAAAAAAAAAAAAAAAAAQAAAAAAAAABAAAA_____wIAAAAAAAAAAAAAABwZ2WWFBAEKdG90YWwBEnJlZmVyZW5jZQEMcGxhY2VkAQxjaGFyZ2UJAwUECAQCBawCBAcUb3JkXzM3MTQxMwYBCAEIAQIFrAI"}}
+< {"jsonrpc":"2.0","id":13,"result":{"blob":"VEFIQgUAAAAAAAAASAAAAAQAAAA5KacDi_pK2fQchyEDAAAAAAAAAEkAAAAAAAAAAAAAAAYAAAABAAAAAAAAAP____________________8DAAABAAAAAAAAAAAAAAAAAQAAAAAAAAABAAAA_____wIAAAAAAAAAAAAAABwZ2WWFBAEKdG90YWwBEnJlZmVyZW5jZQEMcGxhY2VkAQxjaGFyZ2UJAwUECAQCBawCBAcUb3JkXzM3MTQxMwYBCAEIAQIFrAI"}}
 > {"jsonrpc":"2.0","id":14,"method":"run.advanceTime","params":{"by":"10s"}}
 < {"jsonrpc":"2.0","id":14,"result":{"time":10000,"wallNs":1764054010000000000}}
 > {"jsonrpc":"2.0","id":15,"method":"run.snapshot","params":{"path":"orders.snapshot"}}
-< {"jsonrpc":"2.0","id":15,"result":{"bytes":329216}}
+< {"jsonrpc":"2.0","id":15,"result":{"bytes":329632}}
 > {"jsonrpc":"2.0","id":16,"method":"actor.context","params":{"session":2}}
 < {"jsonrpc":"2.0","id":16,"result":{"variables":{"total":990,"reference":"ord_843291","placed":"2025-11-25T07:00:00.000Z","charge":null}}}
 > [{"jsonrpc":"2.0","id":17,"method":"run.spawn","params":{"chart":"order","name":"order-4","params":{"total":2500}}},{"jsonrpc":"2.0","id":18,"method":"run.turn"},{"jsonrpc":"2.0","id":19,"method":"actor.context","params":{"session":4}}]
 < [{"jsonrpc":"2.0","id":17,"result":{"session":4,"address":"tinyactors://tinyactors-run/#_scxml_4"}},{"jsonrpc":"2.0","id":18,"result":{"status":"idle","runs":1,"fuel":6,"time":10000,"nextDeadline":30000}},{"jsonrpc":"2.0","id":19,"result":{"variables":{"total":2500,"reference":"ord_231147","placed":null,"charge":null}}}]
-> {"jsonrpc":"2.0","id":20,"method":"run.wake","params":{"session":3,"blob":"VEFIQgQAAAAAAAAASAAAAAQAAAA5KacDi_pK2fQchyEDAAAAAAAAAEkAAAAAAAAAAAAAAAYAAAABAAAAAAAAAP____________________8DAAABAAAAAAAAAAAAAAAAAQAAAAAAAAABAAAA_____wIAAAAAAAAAAAAAABwZ2WWFBAEKdG90YWwBEnJlZmVyZW5jZQEMcGxhY2VkAQxjaGFyZ2UJAwUECAQCBawCBAcUb3JkXzM3MTQxMwYBCAEIAQIFrAI"}}
+> {"jsonrpc":"2.0","id":20,"method":"run.wake","params":{"session":3,"blob":"VEFIQgUAAAAAAAAASAAAAAQAAAA5KacDi_pK2fQchyEDAAAAAAAAAEkAAAAAAAAAAAAAAAYAAAABAAAAAAAAAP____________________8DAAABAAAAAAAAAAAAAAAAAQAAAAAAAAABAAAA_____wIAAAAAAAAAAAAAABwZ2WWFBAEKdG90YWwBEnJlZmVyZW5jZQEMcGxhY2VkAQxjaGFyZ2UJAwUECAQCBawCBAcUb3JkXzM3MTQxMwYBCAEIAQIFrAI"}}
 < {"jsonrpc":"2.0","id":20,"result":{}}
 > [{"jsonrpc":"2.0","id":21,"method":"run.send","params":{"target":3,"event":"checkout","data":{"card":"tok_visa"}}},{"jsonrpc":"2.0","id":22,"method":"run.turn"}]
 < {"jsonrpc":"2.0","method":"effect.send","params":{"batch":6,"index":0,"session":3,"type":"payments","target":"charges","event":"charge","sendid":"pay","data":{"amount":150,"card":"tok_visa","reference":"ord_371413"},"traceparent":"00-8cbe7776598a798c0ecbdf7ffcd727e5-2364e01f7525351a-03","waiting":true}}
 < [{"jsonrpc":"2.0","id":21,"result":{}},{"jsonrpc":"2.0","id":22,"result":{"status":"idle","runs":2,"fuel":13,"time":10000,"nextDeadline":30000}}]
 > {"jsonrpc":"2.0","id":23,"method":"run.hibernate","params":{"session":3}}
-< {"jsonrpc":"2.0","id":23,"result":{"blob":"VEFIQgQAAAAAAAAASAAAAAQAAAA5KacDi_pK2fQchyEDAAAAAAAAANIAAAAAAAAAAAAAAAYAAAABAAAAAAAAAP____________________8DAAABAAAAAAAAAAAAAAAAAgAAAAAAAAABAAAA_____wQAAAAAAAAAAAAAABw_AOOcDQEKdG90YWwBEnJlZmVyZW5jZQEMcGxhY2VkAQxjaGFyZ2UBDF9ldmVudLoBCHR5cGUBDHNlbmRpZAEMb3JpZ2luARRvcmlnaW50eXBlARBpbnZva2VpZAEIZGF0YQEIY2FyZAkDBQQIBQIFrAIEBxRvcmRfMzcxNDEzBgcwMjAyNS0xMS0yNVQwNzowMDoxMC4wMDBaCAEKCAcMBxBjaGVja291dA4HEGV4dGVybmFsEAISAhQCFgIYCAEaBxB0b2tfdmlzYQgBAgWsAg"}}
+< {"jsonrpc":"2.0","id":23,"result":{"blob":"VEFIQgUAAAAAAAAASAAAAAQAAAA5KacDi_pK2fQchyEDAAAAAAAAANIAAAAAAAAAAAAAAAYAAAABAAAAAAAAAP____________________8DAAABAAAAAAAAAAAAAAAAAgAAAAAAAAABAAAA_____wQAAAAAAAAAAAAAABw_AOOcDQEKdG90YWwBEnJlZmVyZW5jZQEMcGxhY2VkAQxjaGFyZ2UBDF9ldmVudLoBCHR5cGUBDHNlbmRpZAEMb3JpZ2luARRvcmlnaW50eXBlARBpbnZva2VpZAEIZGF0YQEIY2FyZAkDBQQIBQIFrAIEBxRvcmRfMzcxNDEzBgcwMjAyNS0xMS0yNVQwNzowMDoxMC4wMDBaCAEKCAcMBxBjaGVja291dA4HEGV4dGVybmFsEAISAhQCFgIYCAEaBxB0b2tfdmlzYQgBAgWsAg"}}
 > [{"jsonrpc":"2.0","id":24,"method":"run.advanceTime","params":{"by":"20s"}},{"jsonrpc":"2.0","id":25,"method":"run.turn"}]
 < {"jsonrpc":"2.0","method":"effect.log","params":{"batch":7,"index":0,"session":2,"label":"order","text":"ord_843291: payment failed: payment.timeout"}}
 < [{"jsonrpc":"2.0","id":24,"result":{"time":30000,"wallNs":1764054030000000000}},{"jsonrpc":"2.0","id":25,"result":{"status":"idle","runs":1,"fuel":12,"time":30000,"nextDeadline":40000}}]
@@ -47,7 +47,7 @@
 > [{"jsonrpc":"2.0","id":32,"method":"run.send","params":{"target":3,"event":"charge.ok","sendid":"pay","origintype":"payments","data":{"charge":"ch_82"}}},{"jsonrpc":"2.0","id":33,"method":"run.turn"}]
 < {"jsonrpc":"2.0","method":"effect.wake","params":{"batch":11,"index":0,"session":3}}
 < [{"jsonrpc":"2.0","id":32,"result":{}},{"jsonrpc":"2.0","id":33,"result":{"status":"idle","runs":1,"fuel":0,"time":10000,"nextDeadline":30000}}]
-> {"jsonrpc":"2.0","id":34,"method":"run.wake","params":{"session":3,"blob":"VEFIQgQAAAAAAAAASAAAAAQAAAA5KacDi_pK2fQchyEDAAAAAAAAANIAAAAAAAAAAAAAAAYAAAABAAAAAAAAAP____________________8DAAABAAAAAAAAAAAAAAAAAgAAAAAAAAABAAAA_____wQAAAAAAAAAAAAAABw_AOOcDQEKdG90YWwBEnJlZmVyZW5jZQEMcGxhY2VkAQxjaGFyZ2UBDF9ldmVudLoBCHR5cGUBDHNlbmRpZAEMb3JpZ2luARRvcmlnaW50eXBlARBpbnZva2VpZAEIZGF0YQEIY2FyZAkDBQQIBQIFrAIEBxRvcmRfMzcxNDEzBgcwMjAyNS0xMS0yNVQwNzowMDoxMC4wMDBaCAEKCAcMBxBjaGVja291dA4HEGV4dGVybmFsEAISAhQCFgIYCAEaBxB0b2tfdmlzYQgBAgWsAg"}}
+> {"jsonrpc":"2.0","id":34,"method":"run.wake","params":{"session":3,"blob":"VEFIQgUAAAAAAAAASAAAAAQAAAA5KacDi_pK2fQchyEDAAAAAAAAANIAAAAAAAAAAAAAAAYAAAABAAAAAAAAAP____________________8DAAABAAAAAAAAAAAAAAAAAgAAAAAAAAABAAAA_____wQAAAAAAAAAAAAAABw_AOOcDQEKdG90YWwBEnJlZmVyZW5jZQEMcGxhY2VkAQxjaGFyZ2UBDF9ldmVudLoBCHR5cGUBDHNlbmRpZAEMb3JpZ2luARRvcmlnaW50eXBlARBpbnZva2VpZAEIZGF0YQEIY2FyZAkDBQQIBQIFrAIEBxRvcmRfMzcxNDEzBgcwMjAyNS0xMS0yNVQwNzowMDoxMC4wMDBaCAEKCAcMBxBjaGVja291dA4HEGV4dGVybmFsEAISAhQCFgIYCAEaBxB0b2tfdmlzYQgBAgWsAg"}}
 < {"jsonrpc":"2.0","id":34,"result":{}}
 > [{"jsonrpc":"2.0","id":35,"method":"actor.context","params":{"session":3}},{"jsonrpc":"2.0","id":36,"method":"run.turn"}]
 < {"jsonrpc":"2.0","method":"effect.log","params":{"batch":13,"index":0,"session":3,"label":"order","text":"ord_371413 paid ch_82"}}
@@ -77,4 +77,4 @@
 < {"jsonrpc":"2.0","method":"effect.done","params":{"batch":16,"index":1,"session":5,"name":"invoice-1","final":"issued"}}
 < [{"jsonrpc":"2.0","id":48,"result":{}},{"jsonrpc":"2.0","id":49,"result":{"status":"idle","runs":1,"fuel":9,"time":30000,"nextDeadline":null}}]
 > {"jsonrpc":"2.0","id":50,"method":"run.snapshot","params":{"path":"orders.snapshot"}}
-< {"jsonrpc":"2.0","id":50,"result":{"bytes":329384}}
+< {"jsonrpc":"2.0","id":50,"result":{"bytes":329800}}

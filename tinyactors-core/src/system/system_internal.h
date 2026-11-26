@@ -58,8 +58,10 @@ typedef struct ta_actor_links {
     uint32_t name_prev, name_next; /* actor indices; an actor alone with its name links itself */
     union {
         uint32_t requests;  /* live ta_requests whose `actor` is this one (ta_system_request_*) */
-        uint32_t wake_prev; /* in the wake queue (hibernated: no request is live, so `requests`
-                               is 0, and it is 0 again once the actor leaves the queue) */
+        uint32_t wake_prev; /* in the wake queue. A hibernated actor's only requests are its
+                               services' (docs/adr/0019), which nothing frees while it sleeps:
+                               `requests` is unused then, and ta_actor_wake counts them again
+                               from the invoke slots of the woken instance */
     };
     /* hibernated: the low 32 bits of its instance's macrostep when it was
      * hibernated last, which its latest blob holds; ta_actor_wake refuses a
@@ -139,6 +141,10 @@ struct ta_system {
      * backward shift) of name_capacity slots, each TA_NIL or the oldest live
      * actor of a name, the others in its ring (actor_links) */
     int64_t actor_links_relative, names_relative;
+    /* the running external invocations by id (docs/adr/0019): request
+     * indices, open addressing, at least twice the request pool */
+    int64_t invocations_relative;
+    uint32_t invocation_capacity, invocation_count;
     uint32_t name_capacity, name_count; /* name_count: distinct names indexed */
     uint32_t effects_head, effects_length, effects_capacity;
     uint32_t session_capacity, session_count;
@@ -433,6 +439,11 @@ uint32_t ta_system_request_alloc(ta_system *s, uint32_t index);
 void ta_system_request_free(ta_system *s, uint32_t ri);
 /* the live requests actor `index` made */
 uint32_t ta_system_actor_requests(const ta_system *s, uint32_t index);
+/* The index of running external invocations (system.c): add request `ri` once its id is
+ * set, find the request of an id (TA_NIL: none), and remove one before it is freed. */
+void ta_system_invocation_insert(ta_system *system, uint32_t ri);
+uint32_t ta_system_invocation_lookup(const ta_system *system, uint64_t invocation);
+void ta_system_invocation_remove(ta_system *system, uint32_t ri);
 /* The id of external invocation `k` of an export blob's root session (hibernate.c): what a
  * migration compares to find the invocations its translation cancelled. 0 past the last. */
 int ta_blob_invocation(ta_bytes blob, uint32_t k, uint64_t *id);

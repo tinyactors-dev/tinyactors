@@ -1357,7 +1357,7 @@ static void test_snapshots_and_blobs(void) {
      * an image or the charts */
     CHECK_EQUAL(run("inspect bob.blob"), 0);
     CHECK(has("output", "- **From**: hibernation blob\n"));
-    CHECK(has("output", "- **Format**: 4\n- **Readable**: yes\n- **Session**: 2\n"
+    CHECK(has("output", "- **Format**: 5\n- **Readable**: yes\n- **Session**: 2\n"
                         "- **Image hash**: "));
     CHECK(has("output", with_hash("- **Image hash**: %s\n")));
     CHECK(has("output", "- **Wakes**: only in the host that hibernated it"));

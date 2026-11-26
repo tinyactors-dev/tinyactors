@@ -66,12 +66,12 @@ Not session state, by design:
 | 4–7 | ✓ instance words | ✓ instance words | translated (below) | ✓ |
 | 8 | ✓ | ✓ | ✓ | ✓ |
 | 9–11 | ✓ datamodel `serialize` | ✓ datamodel `serialize` | ✓ + `migrate` hook | ✓ datamodel snapshot |
-| 12 | ✗ a session with running invocations | ✓ the whole tree | ✗ a tree (moved unchanged; translated once its invocations finished) | ✓ |
+| 12 | ✗ a session running SCXML invocations | ✓ the whole tree | ✗ a tree (moved unchanged; translated once its invocations finished) | ✓ |
 | 13 | ✓ stays in the region (fires while hibernated → mailbox → `TA_EFFECT_WAKE`) | ✓ in the blob, payloads as values | ✓ | ✓ |
 | 14 | ✓ stays (and keeps accepting events) | ✗ unless empty | ✗ | ✓ |
 | 15 | ✗ unless empty; a parked `error.communication` moves in on wake | ✗ unless empty | ✗ | ✓ |
 | 16 | ✗ not at a stable point | ✗ | ✗ | ✓ (mid-macrostep snapshots are valid) |
-| 17 | ✗ | ✗ pending requests; ✓ external invocations, in the blob (id, slot, type, src, invoke id, params as a value) | ✓ kept when their state and `<invoke>` are, else stopped (`TA_EFFECT_UNINVOKE`) | ✓ |
+| 17 | ✗ pending requests; ✓ external invocations: their requests stay in the region, their slots in the blob, and the service's events wake the actor | ✗ pending requests; ✓ external invocations, in the blob (id, slot, type, src, invoke id, params as a value) | ✓ kept when their state and `<invoke>` are, else stopped (`TA_EFFECT_UNINVOKE`) | ✓ |
 | 18 | ✓ applied on wake | ✗ | ✗ | ✓ |
 | 19 | ✓ instance header | ✓ instance header | ✓ copied with the header | ✓ |
 | 20 | ✓ stays in the region | ✓ in the blob, as values (re-created on adoption; untraced if the adopting system's pool is full or its tracing is off) | ✓ | ✓ region |
@@ -82,7 +82,16 @@ Why the refusals:
   children read their parent's instance (invoke slots, `done.invoke`,
   finalize), and a continuation refers to region objects (workspace, pinned
   event records) that a blob cannot hold. Hibernate the children (leaves
-  first) or export the tree.
+  first) or export the tree. A service (an external invocation) runs on
+  while its actor sleeps: its request stays in the region, found by its id
+  in the segment's index of running invocations, and its events wait in the
+  mailbox and wake the actor. A host restored from a snapshot may be given
+  a blob of a hibernation made after it: a service the blob no longer names
+  is stopped (`TA_EFFECT_UNINVOKE`), and one it names that the copy does
+  not have is lost (`error.communication` for the actor). The application's
+  store is what ends a sleeping actor's services: an actor terminated while
+  it sleeps ends when it is woken, so a store that loses or never loads its
+  blob leaves its services running until the host is freed.
 - **Export needs every session idle with empty queues** (14–18): queued events
   and requests are in flight *to* the session; the host runs the system first
   (the next `ta_system_run` drains them) and exports then. An external

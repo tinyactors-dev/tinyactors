@@ -34,7 +34,7 @@
 #include "trace/record.h"
 
 #define HIBERNATION_MAGIC   0x42484154u /* "TAHB" */
-#define HIBERNATION_VERSION 4u          /* 4: the writer's identity, in what was padding */
+#define HIBERNATION_VERSION 5u          /* 5: external invocations keep their slots (docs/adr/0019) */
 
 /* `identity` is the writing system's (ta_system_config.identity): a blob of
  * another system is refused, even for a session of the same number. */
@@ -120,10 +120,11 @@ static uint32_t tree_rank(const ta_system *system, uint32_t root, uint32_t ti) {
 }
 
 /* Idle at a stable point, nothing queued, no request that will write into
- * it. Invoked children: none for hibernation (they read the parent's
- * instance); for export, SCXML sessions of this system linked back to it
- * and the invocations the host carries out (external invokes): both leave
- * with it (docs/adr/0018). */
+ * it. Invoked SCXML sessions: none for hibernation (they read the parent's
+ * instance); for export, those of this system linked back to it, which
+ * leave with it (docs/adr/0018). The invocations the host carries out
+ * (external invokes) run on: their requests stay in the system while it
+ * sleeps (docs/adr/0019) and leave with it in an export. */
 static ta_status stable_member(const ta_system *system, uint32_t index, int children) {
     const ta_actor *actor = ta_actor_at(system, index);
     if (actor->state != TA_ACTOR_IDLE || actor->mailbox_length ||
@@ -140,11 +141,11 @@ static ta_status stable_member(const ta_system *system, uint32_t index, int chil
     for (uint32_t i = 0; i < chart->invoke_count; i++) {
         uint32_t k = ta_instance_word(instance, l.invoke_children)[i];
         if (!k) continue;
-        if (!children) return TA_ERROR_STATE;
-        if (k & TA_EXTERNAL_INVOKE_BIT) {
+        if (k & TA_EXTERNAL_INVOKE_BIT) { /* a service: it runs on while the actor sleeps or moves */
             services++;
             continue;
         }
+        if (!children) return TA_ERROR_STATE;
         /* gone without done.invoke (it faulted or was terminated): not part
          * of the tree. A child that finished normally left done.invoke in
          * our mailbox, which is empty here. */
@@ -374,6 +375,15 @@ static ta_status write_hib(ta_system *system, uint32_t index, ta_output *out) {
     size_t start = out->length;
     ta_output_write(out, &header, sizeof header);
     blob_body(core, instance, out);
+    /* its services run on while it sleeps: their slots keep the requests,
+     * which stay in this system (a wake checks them) */
+    const ta_chart_record *chart = &core->image_view.charts[instance->chart];
+    ta_instance_layout layout = ta_instance_layout_of(chart);
+    const uint32_t *children = ta_instance_word(instance, layout.invoke_children);
+    for (uint32_t i = 0; i < chart->invoke_count; i++)
+        if (children[i] & TA_EXTERNAL_INVOKE_BIT)
+            ta_output_patch(out, start + sizeof header + (size_t)(layout.invoke_children + i) * 4,
+                            (ta_bytes){&children[i], 4});
     ta_status status = blob_datamodel(core, instance, out, &header.datamodel_bytes);
     if (status != TA_OK) return status;
     ta_output_patch(out, start, (ta_bytes){&header, sizeof header});
@@ -857,6 +867,50 @@ static ta_status restore(ta_system *system, uint32_t index, uint32_t chart, cons
     return TA_OK;
 }
 
+/* Invoke slot `slot` of a blob's instance, as the blob holds it. */
+static uint32_t blob_child(const blob_view *view, const ta_chart_record *chart, uint32_t slot) {
+    uint32_t word;
+    ta_memcpy(&word, view->instance + (size_t)(ta_instance_layout_of(chart).invoke_children + slot) * 4, 4);
+    return word;
+}
+
+/* The request a blob's invoke slot names, when it is a service the actor
+ * at `index` runs in that slot in this system; else TA_NIL. */
+typedef struct blob_slot {
+    uint32_t index, slot, word;
+} blob_slot;
+
+static uint32_t slot_service(const ta_system *system, const blob_slot *at) {
+    if (!(at->word & TA_EXTERNAL_INVOKE_BIT)) return TA_NIL;
+    uint32_t ri = ta_pool_resolve(&system->requests, at->word & ~TA_EXTERNAL_INVOKE_BIT);
+    if (ri == TA_NIL) return TA_NIL;
+    const ta_request *request = (const ta_request *)ta_pool_at(&system->requests, ri);
+    return request->kind == REQUEST_EXTERNAL_INVOKE &&
+                   request->actor == ta_pool_handle(&system->actors, at->index) && request->slot == at->slot
+               ? ri
+               : TA_NIL;
+}
+
+/* A service this system runs for the actor at `index` that its blob does
+ * not name: after a restore, a blob of a hibernation made after the
+ * snapshot may have ended it. The first from request `from` on, TA_NIL for
+ * none. */
+static uint32_t unnamed_service(const ta_system *system, const blob_view *view, uint32_t index,
+                                uint32_t from) {
+    const ta_chart_record *chart = &system->core.image_view.charts[view->chart];
+    uint32_t handle = ta_pool_handle(&system->actors, index);
+    for (uint32_t ri = from; ri < system->requests.high_water_mark; ri++) {
+        if (!ta_pool_live(&system->requests, ri)) continue;
+        const ta_request *request = (const ta_request *)ta_pool_at(&system->requests, ri);
+        if (request->kind != REQUEST_EXTERNAL_INVOKE || request->actor != handle) continue;
+        if (request->slot >= chart->invoke_count ||
+            blob_child(view, chart, request->slot) !=
+                (ta_pool_handle(&system->requests, ri) | TA_EXTERNAL_INVOKE_BIT))
+            return ri;
+    }
+    return TA_NIL;
+}
+
 ta_status ta_actor_wake(ta_system *system, uint32_t actor, ta_bytes bytes) {
     if (system->in_call) return TA_ERROR_STATE;
     const void *blob = bytes.pointer;
@@ -877,11 +931,47 @@ ta_status ta_actor_wake(ta_system *system, uint32_t actor, ta_bytes bytes) {
     ta_memcpy(&macrostep, view.instance + offsetof(ta_instance, macrostep), sizeof macrostep);
     /* earlier, modulo 2^32; a later one is a hibernation after a snapshot this
      * system was restored from */
-    if ((int32_t)((uint32_t)macrostep - ta_system_actor_links(system)[index].hibernation) < 0)
-        return TA_ERROR_STALE;
+    int32_t age = (int32_t)((uint32_t)macrostep - ta_system_actor_links(system)[index].hibernation);
+    if (age < 0) return TA_ERROR_STALE;
+    /* its invoke slots name the services that ran on while it slept, which
+     * stay in this system. A blob of a hibernation made after the snapshot
+     * this system was restored from (age > 0) may name a service started
+     * since, which this system does not have, and not name one it ended:
+     * the first is lost (error.communication for the actor), the second
+     * stopped (TA_EFFECT_UNINVOKE). Of any other blob, each slot must name
+     * a service of this actor: anything else is no blob of this system. */
+    const ta_chart_record *chart_record = &core->image_view.charts[chart];
+    for (uint32_t i = 0; i < chart_record->invoke_count; i++) {
+        blob_slot at = {index, i, blob_child(&view, chart_record, i)};
+        if (at.word && (!(at.word & TA_EXTERNAL_INVOKE_BIT) || (!age && slot_service(system, &at) == TA_NIL)))
+            return TA_ERROR_INVALID;
+    }
+    uint32_t unnamed = 0;
+    for (uint32_t ri = age ? unnamed_service(system, &view, index, 0) : TA_NIL; ri != TA_NIL;
+         ri = unnamed_service(system, &view, index, ri + 1))
+        unnamed++;
+    if (system->effects_capacity - system->effects_length < unnamed) return TA_ERROR_NO_MEMORY;
     ta_status status = restore(system, index, chart, &view, &off);
     if (status != TA_OK) return status;
     ta_instance *instance = (ta_instance *)ta_slab_pointer(&system->slab, off);
+    if (age) {
+        uint32_t *children = ta_instance_word(instance, ta_instance_layout_of(chart_record).invoke_children);
+        uint32_t *ids = ta_instance_word(instance, ta_instance_layout_of(chart_record).invoke_ids);
+        for (uint32_t i = 0; i < chart_record->invoke_count; i++) {
+            blob_slot at = {index, i, children[i]};
+            if (!at.word || slot_service(system, &at) != TA_NIL) continue;
+            children[i] = 0;
+            ta_shared_string_release(core, ids[i]);
+            ids[i] = TA_NIL;
+            ta_core_raise_platform(core, instance, "error.communication", TA_NIL);
+        }
+        for (uint32_t ri = unnamed_service(system, &view, index, 0); ri != TA_NIL;
+             ri = unnamed_service(system, &view, index, ri)) {
+            ta_effect_record *effect = ta_system_effect_push(system, TA_EFFECT_UNINVOKE, index);
+            if (effect) effect->invocation = ((const ta_request *)ta_pool_at(&system->requests, ri))->invocation;
+            ta_system_external_free(system, ri);
+        }
+    }
     actor_record->instance = off;
     if (actor_record->flags & ACTOR_FLAG_IN_WAKE_QUEUE) /* woken before the request was emitted */
         ta_system_wake_unlink(system, index);
@@ -890,6 +980,16 @@ ta_status ta_actor_wake(ta_system *system, uint32_t actor, ta_bytes bytes) {
         (uint8_t)((actor_record->flags & ~(ACTOR_FLAG_IN_WAKE_QUEUE | ACTOR_FLAG_WAKE_SENT)) |
                   ACTOR_FLAG_TOUCHED);
     actor_record->state = TA_ACTOR_IDLE;
+    /* its requests: the services that ran on while it slept, one per slot
+     * (the word held its place in the wake queue meanwhile) */
+    {
+        const uint32_t *children =
+            ta_instance_word(instance, ta_instance_layout_of(chart_record).invoke_children);
+        uint32_t services = 0;
+        for (uint32_t i = 0; i < chart_record->invoke_count; i++)
+            services += (children[i] & TA_EXTERNAL_INVOKE_BIT) != 0;
+        ta_system_actor_links(system)[index].requests = services;
+    }
     system->hibernated_count--;
     system->stats_wakes++;
     core->chart_stats[instance->chart].hibernated--;
@@ -1004,6 +1104,7 @@ static ta_status restore_invocations(ta_system *system, uint32_t index, const bl
         request->ended = r.ended;
         request->invocation = r.invocation;
         request->pad = core->chart_datamodel[chart];
+        ta_system_invocation_insert(system, ri);
         children[r.slot] = ta_pool_handle(&system->requests, ri) | TA_EXTERNAL_INVOKE_BIT;
         int failed = 0;
         request->type = blob_string(core, (ta_string_view){texts[0], r.type_length}, &failed);
@@ -1197,6 +1298,9 @@ ta_status ta_system_adopt(ta_system *system, ta_bytes bytes, uint32_t *actor) {
             return TA_ERROR_INVALID;
         if (k == 0 ? (view.parent || view.serial != th.serial) : (!view.parent || view.init_count))
             return TA_ERROR_INVALID;
+        for (uint32_t i = 0; i < core->image_view.charts[view.chart].invoke_count; i++)
+            if (blob_child(&view, &core->image_view.charts[view.chart], i))
+                return TA_ERROR_INVALID; /* an export's slots are filled by its adoption */
         for (uint32_t d = 0; d < view.init_count; d++) {
             uint32_t declaration;
             ta_memcpy(&declaration, view.init + 4 * d, 4);
@@ -1802,7 +1906,6 @@ ta_status ta_blob_migrate(const ta_blob_migration *request, ta_buffer *destinati
  * through the links' `wake_prev`, so an actor woken (or reclaimed) before
  * its TA_EFFECT_WAKE was emitted leaves it in O(1), whatever its length. */
 static void wake_push(ta_system *system, uint32_t index) {
-    TA_ASSERT(ta_system_actor_links(system)[index].requests == 0); /* hibernated */
     ta_system_actor_links(system)[index].wake_prev = system->wake_queue.tail;
     ta_index_queue_push(&system->wake_queue, &system->actors, 0, index);
 }
@@ -1819,7 +1922,7 @@ void ta_system_wake_unlink(ta_system *system, uint32_t index) {
     else
         links[next].wake_prev = prev;
     ta_actor_at(system, index)->next = TA_NIL;
-    links[index].requests = 0; /* the word is its count of requests again */
+    links[index].requests = 0; /* the word is a count again: a wake counts its services */
 }
 
 void ta_system_wake_request(ta_system *system, uint32_t index) {

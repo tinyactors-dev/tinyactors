@@ -651,8 +651,23 @@ static void test_stable_point_counts_own_requests(void) {
     /* the fetcher is idle and stable, but its fetch will write into it */
     hibernate(t, fetcher, &status);
     CHECK_EQUAL(status, TA_ERROR_STATE);
-    hibernate(t, served[0], &status);
-    CHECK_EQUAL(status, TA_ERROR_STATE); /* a running service, in its invoke slot */
+    /* a running service does not hold it (docs/adr/0019): its request stays */
+    length = hibernate(t, served[0], &status);
+    CHECK_EQUAL(status, TA_OK);
+    CHECK_EQUAL(t->system->requests.used, SERVICES + 1);
+    /* a wake checks that each slot of the blob names a service of the actor */
+    ta_request *service = NULL;
+    for (uint32_t i = 0; i < t->system->requests.high_water_mark && !service; i++) {
+        ta_request *r = (ta_request *)ta_pool_at(&t->system->requests, i);
+        if (ta_pool_live(&t->system->requests, i) && r->kind == REQUEST_EXTERNAL_INVOKE && r->actor == served[0])
+            service = r;
+    }
+    CHECK(service != NULL);
+    service->slot++;
+    CHECK_EQUAL(ta_actor_wake(t->system, served[0], (ta_bytes){blob, length}), TA_ERROR_INVALID);
+    service->slot--;
+    CHECK_EQUAL(ta_system_invocation_lookup(t->system, service->invocation) != TA_NIL, 1);
+    CHECK_EQUAL(ta_actor_wake(t->system, served[0], (ta_bytes){blob, length}), TA_OK);
     /* the counts move with the region */
     ta_system_config big = config;
     big.max_actors = 2 * config.max_actors;

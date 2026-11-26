@@ -18,6 +18,8 @@
     "<transition event='news'><log label='origin' expr=\"_event.origin + ' ' + _event.origintype\"/>"   \
     "</transition>"                                                                                \
     "<transition event='later'><send target='#_svc' event='tick' delay='1s'/></transition>"        \
+    "<transition event='again' target='s'/>"                                                       \
+    "<transition event='error.communication'><log label='lost' expr=\"'lost'\"/></transition>"      \
     "<transition event='end' target='f'/></state><final id='f'/></scxml>"
 
 typedef struct world {
@@ -351,8 +353,13 @@ static void test_traceparents_last_until_the_ack(void) {
 
 /* The world's host snapshotted and packed, freed, and restored with a new
  * datamodel: the restore before its first run. */
-static void restore_world(world *w) {
-    /* the datamodel's state and the host, packed */
+/* The world's host and datamodel state as one snapshot pack (malloc'd). */
+typedef struct world_pack {
+    void *bytes;
+    size_t length;
+} world_pack;
+
+static world_pack pack_world(world *w) {
     ta_buffer probe = {NULL, 0, 0};
     CHECK_EQUAL(ta_datamodel_ecmascript_snapshot(w->ecmascript, &probe), TA_ERROR_NO_MEMORY);
     void *state = malloc(probe.length);
@@ -364,6 +371,12 @@ static void restore_world(world *w) {
     void *pack = aligned_alloc(8, (probe.length + 7) & ~(size_t)7);
     ta_buffer pack_out = {pack, probe.length, 0};
     CHECK_EQUAL(ta_host_snapshot_pack(w->host, &contents, &pack_out), TA_OK);
+    free(state);
+    return (world_pack){pack, pack_out.length};
+}
+
+/* The world's host replaced by one restored from `pack`. */
+static void restore_pack(world *w, world_pack pack) {
     ta_host_free(w->host);
     ta_datamodel_ecmascript_free(w->ecmascript);
     w->ecmascript = ta_datamodel_ecmascript_new(NULL);
@@ -371,8 +384,8 @@ static void restore_world(world *w) {
     ta_host_snapshot_contents unpacked;
     memset(&unpacked, 0, sizeof unpacked);
     unpacked.size = sizeof unpacked;
-    CHECK_EQUAL(ta_host_snapshot_unpack((ta_bytes){pack, pack_out.length}, &unpacked), TA_OK);
-    ta_bytes image = ta_host_snapshot_image((ta_bytes){pack, pack_out.length}, 0);
+    CHECK_EQUAL(ta_host_snapshot_unpack((ta_bytes){pack.bytes, pack.length}, &unpacked), TA_OK);
+    ta_bytes image = ta_host_snapshot_image((ta_bytes){pack.bytes, pack.length}, 0);
     test_host_config config;
     memset(&config, 0, sizeof config);
     config.size = sizeof config;
@@ -386,8 +399,12 @@ static void restore_world(world *w) {
     CHECK_EQUAL(test_host_restore(&config, &input, &w->host), TA_OK);
     CHECK_EQUAL(ta_datamodel_ecmascript_restore(w->ecmascript, (ta_bytes){unpacked.state, unpacked.state_length}),
                 TA_OK);
-    free(state);
-    free(pack);
+}
+
+static void restore_world(world *w) {
+    world_pack pack = pack_world(w);
+    restore_pack(w, pack);
+    free(pack.bytes);
 }
 
 /* A host restored from a snapshot announces each external invocation that
@@ -625,6 +642,122 @@ static void test_migration_stops_a_dropped_service(void) {
     }
 }
 
+/* ---- an actor hibernates with its services running (docs/adr/0019) ---- */
+
+/* The caller hibernates while its service runs: the service's events are
+ * taken while it sleeps and wake it (a WAKE), and once woken it handles
+ * them, the done.invoke included; a delayed send to the service fires while
+ * it sleeps, under the service's id. */
+static void test_an_actor_hibernates_with_its_service(void) {
+    world w;
+    world_open(&w);
+    const ta_host_effect *effects;
+    uint32_t count = run_batch(&w, &effects);
+    uint64_t invocation = ta_host_effect_number(w.host, find(w.host, count, TA_EFFECT_INVOKE),
+                                                TA_EFFECT_FIELD_INVOCATION);
+    send_event(&w, "later");
+    run_batch(&w, &effects);
+    ta_host_effects_ack(w.host);
+    ta_bytes written;
+    CHECK_EQUAL(ta_host_hibernate(w.host, w.session, &written), TA_OK);
+    size_t length = written.length;
+    void *blob = malloc(length);
+    memcpy(blob, written.pointer, length);
+    ta_host_effects_ack(w.host);
+    /* the delayed send to the service fires while it sleeps */
+    ta_host_advance_time(w.host, (ta_system_time){2000000000u, 0});
+    count = run_batch(&w, &effects);
+    uint32_t send = find(w.host, count, TA_EFFECT_SEND);
+    CHECK(send != TA_NIL);
+    CHECK_EQUAL(ta_host_effect_number(w.host, send, TA_EFFECT_FIELD_INVOCATION), invocation);
+    ta_host_effects_ack(w.host);
+    /* the service talks to it while it sleeps: taken, and a WAKE asks for it */
+    CHECK_EQUAL(from_service(&w, invocation, TA_EVENT_IN_FROM_INVOKE), TA_OK);
+    CHECK_EQUAL(from_service(&w, invocation, TA_EVENT_IN_INVOKE_DONE), TA_OK);
+    CHECK_EQUAL(from_service(&w, invocation, TA_EVENT_IN_FROM_INVOKE), TA_ERROR_STALE); /* done */
+    CHECK_EQUAL(from_service(&w, invocation + 1, TA_EVENT_IN_FROM_INVOKE), TA_ERROR_STALE);
+    count = run_batch(&w, &effects);
+    uint32_t wake = find(w.host, count, TA_EFFECT_WAKE);
+    CHECK(wake != TA_NIL);
+    CHECK_EQUAL(ta_host_effect_number(w.host, wake, TA_EFFECT_FIELD_SESSION), w.session);
+    ta_host_effects_ack(w.host);
+    CHECK_EQUAL(ta_host_wake(w.host, w.session, (ta_bytes){blob, length}), TA_OK);
+    free(blob);
+    count = run_batch(&w, &effects);
+    uint32_t log = find(w.host, count, TA_EFFECT_LOG);
+    CHECK(log != TA_NIL);
+    CHECK(text_is(ta_host_effect_text(w.host, log, TA_EFFECT_FIELD_AUXILIARY), "origin"));
+    ta_host_effects_ack(w.host);
+    /* the done.invoke was taken: the invocation is over, its request freed */
+    CHECK_EQUAL(from_service(&w, invocation, TA_EVENT_IN_FROM_INVOKE), TA_ERROR_STALE);
+    world_close(&w);
+}
+
+/* The world's caller hibernated: its blob, copied (malloc'd). */
+static world_pack hibernate_caller(world *w) {
+    ta_bytes written;
+    CHECK_EQUAL(ta_host_hibernate(w->host, w->session, &written), TA_OK);
+    void *blob = malloc(written.length);
+    memcpy(blob, written.pointer, written.length);
+    ta_host_effects_ack(w->host);
+    return (world_pack){blob, written.length};
+}
+
+/* A host restored from a snapshot takes a blob of a hibernation made after
+ * the snapshot (its store went on): a service the copy runs for the actor
+ * that the blob no longer names is stopped (UNINVOKE), and one the blob
+ * names that the copy does not have is lost (error.communication). */
+static void test_a_restored_copy_reconciles_a_newer_blob(void) {
+    for (int lost = 0; lost < 2; lost++) {
+        world w;
+        world_open(&w);
+        const ta_host_effect *effects;
+        uint32_t count = run_batch(&w, &effects);
+        uint64_t first = ta_host_effect_number(w.host, find(w.host, count, TA_EFFECT_INVOKE),
+                                               TA_EFFECT_FIELD_INVOCATION);
+        ta_host_effects_ack(w.host);
+        if (lost) { /* at the snapshot, its service has ended */
+            CHECK_EQUAL(from_service(&w, first, TA_EVENT_IN_INVOKE_DONE), TA_OK);
+            run_batch(&w, &effects);
+            ta_host_effects_ack(w.host);
+        }
+        world_pack older = hibernate_caller(&w);
+        world_pack pack = pack_world(&w);
+        /* the live host goes on: woken, its service ends (or a new one starts), asleep again */
+        CHECK_EQUAL(ta_host_wake(w.host, w.session, (ta_bytes){older.bytes, older.length}), TA_OK);
+        if (lost) {
+            send_event(&w, "again");
+        } else {
+            CHECK_EQUAL(from_service(&w, first, TA_EVENT_IN_INVOKE_DONE), TA_OK);
+        }
+        run_batch(&w, &effects);
+        ta_host_effects_ack(w.host);
+        world_pack newer = hibernate_caller(&w);
+        /* a copy restored from the snapshot, with the store's newer blob */
+        restore_pack(&w, pack);
+        CHECK_EQUAL(ta_host_wake(w.host, w.session, (ta_bytes){newer.bytes, newer.length}), TA_OK);
+        count = run_batch(&w, &effects);
+        uint32_t uninvoke = find(w.host, count, TA_EFFECT_UNINVOKE), log = find(w.host, count, TA_EFFECT_LOG);
+        if (lost) {
+            CHECK_EQUAL(uninvoke, TA_NIL);
+            CHECK(log != TA_NIL && text_is(ta_host_effect_text(w.host, log, TA_EFFECT_FIELD_AUXILIARY), "lost"));
+        } else {
+            CHECK(uninvoke != TA_NIL);
+            CHECK_EQUAL(ta_host_effect_number(w.host, uninvoke, TA_EFFECT_FIELD_INVOCATION), first);
+            CHECK_EQUAL(find(w.host, count, TA_EFFECT_INVOKE), TA_NIL); /* not announced: it is over */
+        }
+        ta_host_effects_ack(w.host);
+        CHECK_EQUAL(from_service(&w, first, TA_EVENT_IN_FROM_INVOKE), TA_ERROR_STALE);
+        /* and it hibernates again: its requests are what its slots name */
+        world_pack last = hibernate_caller(&w);
+        free(last.bytes);
+        free(older.bytes);
+        free(newer.bytes);
+        free(pack.bytes);
+        world_close(&w);
+    }
+}
+
 int main(void) {
     RUN(test_take_freezes_batch_across_growth);
     RUN(test_run_refuses_open_batch);
@@ -636,5 +769,7 @@ int main(void) {
     RUN(test_an_event_from_a_service_names_its_origin);
     RUN(test_migration_carries_a_kept_service);
     RUN(test_migration_stops_a_dropped_service);
+    RUN(test_an_actor_hibernates_with_its_service);
+    RUN(test_a_restored_copy_reconciles_a_newer_blob);
     TEST_MAIN_END();
 }

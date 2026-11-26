@@ -572,8 +572,8 @@ host = tinyactors.Host(compiled, system="shop", store=store, resident=1000)
   left more, the host takes the coldest past the bound (the CLOCK sweep:
   actors that did not run since the previous sweep), hibernates them and
   saves their blobs. An actor that cannot hibernate now stays resident:
-  one not at rest (events waiting, in a macrostep, an invoked child, a
-  running invocation), or a `"python"` actor holding a value outside the
+  one not at rest (events waiting, in a macrostep, an invoked child
+  chart), or a `"python"` actor holding a value outside the
   value table (a `set`, a `tuple`, an object). A pending delayed send
   stays in the host and wakes its actor when it falls due.
 - **When an event comes for a hibernated actor** (or its delayed send

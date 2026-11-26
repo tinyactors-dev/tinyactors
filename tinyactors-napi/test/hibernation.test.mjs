@@ -111,6 +111,35 @@ test('events wait until the wake: one WAKE however many come, then they run in o
   host.close();
 });
 
+test('an actor running a service hibernates, and what the service sends wakes it', async () => {
+  const logs = new Logs();
+  const store = new Store();
+  const invocations = [];
+  const services = { svc: (invocation) => { invocations.push(invocation); return {}; } };
+  const waiter = scxml('waiter', `
+    <state id="s">
+      <invoke type="svc" id="call" src="svc:x"/>
+      <transition event="answer"><log label="w" expr="'answer ' + _event.data.v"/></transition>
+      <transition event="done.invoke.call" target="done"/>
+    </state>
+    <final id="done"/>`);
+  const host = hostWith({ waiter }, { log: logs.handler, store, services });
+  const session = host.spawn(host.chart('waiter'));
+  await host.idle();
+  equal(invocations.length, 1, 'its service started');
+  store.put(session, host.hibernate(session)); // the service does not hold it
+  invocations[0].sendBack('answer', { v: 7 });
+  await host.idle();
+  equal(store.wakes.length, 1, 'the service\'s event woke it, from the store');
+  equal(logs.labelled('w').join('|'), 'answer 7', 'and it took the event');
+  store.put(session, host.hibernate(session));
+  invocations[0].done();
+  await host.idle();
+  equal(store.wakes.length, 2, 'its done woke it again');
+  throws(() => host.actor(session.id), status('TA_ERROR_STALE'), 'and it ended');
+  host.close();
+});
+
 test('without a store the effect is dropped: the actor stays hibernated until wake', async () => {
   const logs = new Logs();
   const host = hostWith({ counter: counter() }, { log: logs.handler });

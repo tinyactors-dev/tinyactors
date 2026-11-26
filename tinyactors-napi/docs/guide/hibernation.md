@@ -185,7 +185,9 @@ the actor when it falls due.
     turn, an event another actor sent, a delayed send that fell due);
   - its step is not over: called, for example, from the handler of a
     send it made in this turn;
-  - it runs an invoked child chart or a service;
+  - it runs an invoked child chart (a service does not hold it: the
+    service goes on while the actor sleeps, and what it sends wakes the
+    actor, loaded from your store);
   - it is not resident: already hibernated, including one whose blob the
     host is loading from the store.
 - **`TA_ERROR_STALE`:** the session ended, or never was.

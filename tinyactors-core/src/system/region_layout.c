@@ -144,6 +144,9 @@ static const layout_member system_members[] = {
     MEMBER(ta_system, names_relative, "i64", "relative"),
     MEMBER(ta_system, name_capacity, "u32", 0),
     MEMBER(ta_system, name_count, "u32", 0),
+    MEMBER(ta_system, invocations_relative, "i64", "relative"),
+    MEMBER(ta_system, invocation_capacity, "u32", 0),
+    MEMBER(ta_system, invocation_count, "u32", 0),
     MEMBER(ta_system, effects_head, "u32", 0),
     MEMBER(ta_system, effects_length, "u32", 0),
     MEMBER(ta_system, effects_capacity, "u32", 0),
@@ -889,6 +892,7 @@ static const layout_array arrays[] = {
     {"chart_stats", "chart_stats_relative", "ta_chart_stats", "chart_count"},
     {"actor_links", "actor_links_relative", "ta_actor_links", "actors.capacity"},
     {"names", "names_relative", "u32", "name_capacity"},
+    {"invocations", "invocations_relative", "u32", "invocation_capacity"},
     {"rules", "rules_relative", "ta_trace_rule_compiled", "config.trace_rules"},
     /* chart_count of them when config.trace_rules is not 0, else none */
     {"chart_points", "chart_points_relative", "u8", "chart_count"},

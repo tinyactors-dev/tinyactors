@@ -350,8 +350,10 @@ typedef struct ta_actor_info {
     uint64_t serial;             /* _sessionid */
     uint64_t datamodel_instance; /* its datamodel instance handle (0 while hibernated), for
                              datamodel-side inspection such as ta_datamodel_ecmascript_payload_eval */
-    uint32_t invocations; /* running invocations (SCXML sessions it invoked, external ones) */
-    uint32_t services;    /* of those, the external ones (a migration carries them along) */
+    uint32_t invocations; /* running invocations (SCXML sessions it invoked, external ones);
+                             0 while it is hibernated: its slots are in its blob */
+    uint32_t services;    /* of those, the external ones (a migration carries them along, and
+                             they run on while it is hibernated) */
 } ta_actor_info;
 
 /* Watch an actor (on: 1) or stop (0): when a watched actor finishes its
@@ -493,7 +495,7 @@ TA_API uint32_t ta_system_cold_actors(ta_system *system, ta_sweep *sweep, ta_uin
  * which path keeps which part of it: docs/durability.md. Every session of the tree must be
  * idle at a stable point with an empty mailbox and no pending request, and
  * awake (not hibernated); invocations the host carries out (external
- * invokes) cannot move: TA_ERROR_STATE. TA_ERROR_UNSUPPORTED if a datamodel
+ * invokes) move with it, each under its id. TA_ERROR_UNSUPPORTED if a datamodel
  * cannot serialize a session; TA_ERROR_NO_MEMORY if `out` is too small (ta_buffer;
  * nothing changes).
  *

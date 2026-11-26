@@ -5,9 +5,9 @@
 > {"jsonrpc":"2.0","id":6,"method":"run.sweep","params":{"maxScan":16,"limit":16}}
 < {"jsonrpc":"2.0","id":6,"result":{"sessions":[1,2,3]}}
 > {"jsonrpc":"2.0","id":7,"method":"run.hibernate","params":{"session":1}}
-< {"jsonrpc":"2.0","id":7,"result":{"blob":"VEFIQgQAAAAAAAAASAAAAAQAAAA5KacD1X0pOI5i5ccBAAAAAAAAACcAAAAAAAAAAAAAAAYAAAABAAAAAAAAAP____________________8BAAABAAAAAAAAAAAAAAAAAQAAAAAAAAABAAAA_____wIAAAAAAAAAAAAAAByMfS_nAgEKdG90YWwBDGNoYXJnZQkDBQQIAgIF0EEEAQgBAgXQQQ"}}
+< {"jsonrpc":"2.0","id":7,"result":{"blob":"VEFIQgUAAAAAAAAASAAAAAQAAAA5KacD1X0pOI5i5ccBAAAAAAAAACcAAAAAAAAAAAAAAAYAAAABAAAAAAAAAP____________________8BAAABAAAAAAAAAAAAAAAAAQAAAAAAAAABAAAA_____wIAAAAAAAAAAAAAAByMfS_nAgEKdG90YWwBDGNoYXJnZQkDBQQIAgIF0EEEAQgBAgXQQQ"}}
 > {"jsonrpc":"2.0","id":8,"method":"run.hibernate","params":{"session":2}}
-< {"jsonrpc":"2.0","id":8,"result":{"blob":"VEFIQgQAAAAAAAAASAAAAAQAAAA5KacD1X0pOI5i5ccCAAAAAAAAACcAAAAAAAAAAAAAAAYAAAABAAAAAAAAAP____________________8CAAABAAAAAAAAAAAAAAAAAQAAAAAAAAABAAAA_____wIAAAAAAAAAAAAAABxkGf99AgEKdG90YWwBDGNoYXJnZQkDBQQIAgIFvA8EAQgBAgW8Dw"}}
+< {"jsonrpc":"2.0","id":8,"result":{"blob":"VEFIQgUAAAAAAAAASAAAAAQAAAA5KacD1X0pOI5i5ccCAAAAAAAAACcAAAAAAAAAAAAAAAYAAAABAAAAAAAAAP____________________8CAAABAAAAAAAAAAAAAAAAAQAAAAAAAAABAAAA_____wIAAAAAAAAAAAAAABxkGf99AgEKdG90YWwBDGNoYXJnZQkDBQQIAgIFvA8EAQgBAgW8Dw"}}
 > {"jsonrpc":"2.0","id":9,"method":"run.hibernate","params":{"session":2}}
 < {"jsonrpc":"2.0","id":9,"error":{"code":-32002,"message":"the actor is not at rest, or hibernated already","data":{"reason":"state","path":"params.session","status":"TA_ERROR_STATE"}}}
 > {"jsonrpc":"2.0","id":10,"method":"actor.state","params":{"session":2}}
@@ -17,19 +17,19 @@
 > {"jsonrpc":"2.0","id":12,"method":"run.turn"}
 < {"jsonrpc":"2.0","method":"effect.wake","params":{"batch":2,"index":0,"session":1}}
 < {"jsonrpc":"2.0","id":12,"result":{"status":"idle","runs":1,"fuel":0,"time":0,"nextDeadline":null}}
-> {"jsonrpc":"2.0","id":13,"method":"run.wake","params":{"session":1,"blob":"VEFIQgQAAAAAAAAASAAAAAQAAAA5KacD1X0pOI5i5ccCAAAAAAAAACcAAAAAAAAAAAAAAAYAAAABAAAAAAAAAP____________________8CAAABAAAAAAAAAAAAAAAAAQAAAAAAAAABAAAA_____wIAAAAAAAAAAAAAABxkGf99AgEKdG90YWwBDGNoYXJnZQkDBQQIAgIFvA8EAQgBAgW8Dw"}}
+> {"jsonrpc":"2.0","id":13,"method":"run.wake","params":{"session":1,"blob":"VEFIQgUAAAAAAAAASAAAAAQAAAA5KacD1X0pOI5i5ccCAAAAAAAAACcAAAAAAAAAAAAAAAYAAAABAAAAAAAAAP____________________8CAAABAAAAAAAAAAAAAAAAAQAAAAAAAAABAAAA_____wIAAAAAAAAAAAAAABxkGf99AgEKdG90YWwBDGNoYXJnZQkDBQQIAgIFvA8EAQgBAgW8Dw"}}
 < {"jsonrpc":"2.0","id":13,"error":{"code":-32005,"message":"not this session's blob, or not this host's","data":{"reason":"invalid","path":"params.blob","status":"TA_ERROR_INVALID"}}}
 > {"jsonrpc":"2.0","id":14,"method":"run.wake","params":{"session":99,"blob":"AA"}}
 < {"jsonrpc":"2.0","id":14,"error":{"code":-32001,"message":"the session or name does not exist (any more)","data":{"reason":"stale","path":"params.session","status":"TA_ERROR_STALE"}}}
 > {"jsonrpc":"2.0","id":15,"method":"run.wake","params":{"session":1,"blob":"A"}}
 < {"jsonrpc":"2.0","id":15,"error":{"code":-32006,"message":"not base64url text","data":{"reason":"malformed","path":"params.blob"}}}
-> {"jsonrpc":"2.0","id":16,"method":"run.wake","params":{"session":1,"blob":"VEFIQgQAAAAAAAAASAAAAAQAAAA5KacD1X0pOI5i5ccBAAAAAAAAACcAAAAAAAAAAAAAAAYAAAABAAAAAAAAAP____________________8BAAABAAAAAAAAAAAAAAAAAQAAAAAAAAABAAAA_____wIAAAAAAAAAAAAAAByMfS_nAgEKdG90YWwBDGNoYXJnZQkDBQQIAgIF0EEEAQgBAgXQQQ"}}
+> {"jsonrpc":"2.0","id":16,"method":"run.wake","params":{"session":1,"blob":"VEFIQgUAAAAAAAAASAAAAAQAAAA5KacD1X0pOI5i5ccBAAAAAAAAACcAAAAAAAAAAAAAAAYAAAABAAAAAAAAAP____________________8BAAABAAAAAAAAAAAAAAAAAQAAAAAAAAABAAAA_____wIAAAAAAAAAAAAAAByMfS_nAgEKdG90YWwBDGNoYXJnZQkDBQQIAgIF0EEEAQgBAgXQQQ"}}
 < {"jsonrpc":"2.0","id":16,"result":{}}
 > {"jsonrpc":"2.0","id":17,"method":"run.turn","params":{"hold":true}}
 < {"jsonrpc":"2.0","method":"effect.send","params":{"batch":3,"index":0,"session":1,"type":"payments","target":"charges","event":"charge","sendid":"pay","data":{"amount":4200,"card":"tok_visa"},"traceparent":"00-1d42993fa43f2a5411361bf526a14bb5-f075787b740f4422-03","waiting":true}}
 < {"jsonrpc":"2.0","id":17,"result":{"status":"held","runs":1,"fuel":7,"time":0,"nextDeadline":null}}
 > {"jsonrpc":"2.0","id":18,"method":"run.hibernate","params":{"session":3}}
-< {"jsonrpc":"2.0","id":18,"result":{"blob":"VEFIQgQAAAAAAAAASAAAAAQAAAA5KacD1X0pOI5i5ccDAAAAAAAAACcAAAAAAAAAAAAAAAYAAAABAAAAAAAAAP____________________8DAAABAAAAAAAAAAAAAAAAAQAAAAAAAAABAAAA_____wIAAAAAAAAAAAAAABxE_z7EAgEKdG90YWwBDGNoYXJnZQkDBQQIAgIFrAIEAQgBAgWsAg"}}
+< {"jsonrpc":"2.0","id":18,"result":{"blob":"VEFIQgUAAAAAAAAASAAAAAQAAAA5KacD1X0pOI5i5ccDAAAAAAAAACcAAAAAAAAAAAAAAAYAAAABAAAAAAAAAP____________________8DAAABAAAAAAAAAAAAAAAAAQAAAAAAAAABAAAA_____wIAAAAAAAAAAAAAABxE_z7EAgEKdG90YWwBDGNoYXJnZQkDBQQIAgIFrAIEAQgBAgWsAg"}}
 > {"jsonrpc":"2.0","id":19,"method":"run.hibernate","params":{"session":1}}
 < {"jsonrpc":"2.0","id":19,"error":{"code":-32002,"message":"the actor is not at rest, or hibernated already","data":{"reason":"state","path":"params.session","status":"TA_ERROR_STATE"}}}
 > {"jsonrpc":"2.0","id":20,"method":"run.send","params":{"target":1,"event":"charge.ok","sendid":"pay","origintype":"payments","data":{"charge":"ch_81"}}}
@@ -38,7 +38,7 @@
 < {"jsonrpc":"2.0","method":"effect.log","params":{"batch":4,"index":0,"session":1,"label":"order","text":"paid ch_81"}}
 < {"jsonrpc":"2.0","method":"effect.done","params":{"batch":4,"index":1,"session":1,"name":"order-1","final":"paid","data":{"charge":"ch_81"}}}
 < {"jsonrpc":"2.0","id":21,"result":{"status":"idle","runs":1,"fuel":17,"time":0,"nextDeadline":null}}
-> {"jsonrpc":"2.0","id":22,"method":"run.wake","params":{"session":2,"blob":"VEFIQgQAAAAAAAAASAAAAAQAAAA5KacD1X0pOI5i5ccCAAAAAAAAACcAAAAAAAAAAAAAAAYAAAABAAAAAAAAAP____________________8CAAABAAAAAAAAAAAAAAAAAQAAAAAAAAABAAAA_____wIAAAAAAAAAAAAAABxkGf99AgEKdG90YWwBDGNoYXJnZQkDBQQIAgIFvA8EAQgBAgW8Dw"}}
+> {"jsonrpc":"2.0","id":22,"method":"run.wake","params":{"session":2,"blob":"VEFIQgUAAAAAAAAASAAAAAQAAAA5KacD1X0pOI5i5ccCAAAAAAAAACcAAAAAAAAAAAAAAAYAAAABAAAAAAAAAP____________________8CAAABAAAAAAAAAAAAAAAAAQAAAAAAAAABAAAA_____wIAAAAAAAAAAAAAABxkGf99AgEKdG90YWwBDGNoYXJnZQkDBQQIAgIFvA8EAQgBAgW8Dw"}}
 < {"jsonrpc":"2.0","id":22,"result":{}}
 > {"jsonrpc":"2.0","id":23,"method":"run.send","params":{"target":2,"event":"checkout","data":{"card":"tok_expired"}}}
 < {"jsonrpc":"2.0","id":23,"result":{}}
@@ -46,20 +46,20 @@
 < {"jsonrpc":"2.0","method":"effect.send","params":{"batch":5,"index":0,"session":2,"type":"payments","target":"charges","event":"charge","sendid":"pay","data":{"amount":990,"card":"tok_expired"},"traceparent":"00-4ff52157533fe2707e61475b87242f2e-dd8d121244a64d16-03","waiting":true}}
 < {"jsonrpc":"2.0","id":24,"result":{"status":"idle","runs":2,"fuel":10,"time":0,"nextDeadline":30000}}
 > {"jsonrpc":"2.0","id":25,"method":"run.hibernate","params":{"session":2}}
-< {"jsonrpc":"2.0","id":25,"result":{"blob":"VEFIQgQAAAAAAAAASAAAAAQAAAA5KacD1X0pOI5i5ccCAAAAAAAAAJoAAAAAAAAAAAAAAAYAAAABAAAAAAAAAP____________________8CAAABAAAAAAAAAAAAAAAAAgAAAAAAAAABAAAA_____wQAAAAAAAAAAAAAABxOgyXWCwEKdG90YWwBDGNoYXJnZQEMX2V2ZW50ugEIdHlwZQEMc2VuZGlkAQxvcmlnaW4BFG9yaWdpbnR5cGUBEGludm9rZWlkAQhkYXRhAQhjYXJkCQMFBAgDAgW8DwQBBggHCAcQY2hlY2tvdXQKBxBleHRlcm5hbAwCDgIQAhICFAgBFgcWdG9rX2V4cGlyZWQIAQIFvA8"}}
+< {"jsonrpc":"2.0","id":25,"result":{"blob":"VEFIQgUAAAAAAAAASAAAAAQAAAA5KacD1X0pOI5i5ccCAAAAAAAAAJoAAAAAAAAAAAAAAAYAAAABAAAAAAAAAP____________________8CAAABAAAAAAAAAAAAAAAAAgAAAAAAAAABAAAA_____wQAAAAAAAAAAAAAABxOgyXWCwEKdG90YWwBDGNoYXJnZQEMX2V2ZW50ugEIdHlwZQEMc2VuZGlkAQxvcmlnaW4BFG9yaWdpbnR5cGUBEGludm9rZWlkAQhkYXRhAQhjYXJkCQMFBAgDAgW8DwQBBggHCAcQY2hlY2tvdXQKBxBleHRlcm5hbAwCDgIQAhICFAgBFgcWdG9rX2V4cGlyZWQIAQIFvA8"}}
 > {"jsonrpc":"2.0","id":26,"method":"run.advanceTime","params":{"by":"30s"}}
 < {"jsonrpc":"2.0","id":26,"result":{"time":30000,"wallNs":30000000000}}
 > {"jsonrpc":"2.0","id":27,"method":"run.turn"}
 < {"jsonrpc":"2.0","method":"effect.wake","params":{"batch":6,"index":0,"session":2}}
 < {"jsonrpc":"2.0","id":27,"result":{"status":"idle","runs":1,"fuel":0,"time":30000,"nextDeadline":null}}
-> {"jsonrpc":"2.0","id":28,"method":"run.wake","params":{"session":2,"blob":"VEFIQgQAAAAAAAAASAAAAAQAAAA5KacD1X0pOI5i5ccCAAAAAAAAACcAAAAAAAAAAAAAAAYAAAABAAAAAAAAAP____________________8CAAABAAAAAAAAAAAAAAAAAQAAAAAAAAABAAAA_____wIAAAAAAAAAAAAAABxkGf99AgEKdG90YWwBDGNoYXJnZQkDBQQIAgIFvA8EAQgBAgW8Dw"}}
+> {"jsonrpc":"2.0","id":28,"method":"run.wake","params":{"session":2,"blob":"VEFIQgUAAAAAAAAASAAAAAQAAAA5KacD1X0pOI5i5ccCAAAAAAAAACcAAAAAAAAAAAAAAAYAAAABAAAAAAAAAP____________________8CAAABAAAAAAAAAAAAAAAAAQAAAAAAAAABAAAA_____wIAAAAAAAAAAAAAABxkGf99AgEKdG90YWwBDGNoYXJnZQkDBQQIAgIFvA8EAQgBAgW8Dw"}}
 < {"jsonrpc":"2.0","id":28,"error":{"code":-32001,"message":"not the session's latest blob","data":{"reason":"stale","path":"params.blob","status":"TA_ERROR_STALE"}}}
-> {"jsonrpc":"2.0","id":29,"method":"run.wake","params":{"session":2,"blob":"VEFIQgQAAAAAAAAASAAAAAQAAAA5KacD1X0pOI5i5ccCAAAAAAAAAJoAAAAAAAAAAAAAAAYAAAABAAAAAAAAAP____________________8CAAABAAAAAAAAAAAAAAAAAgAAAAAAAAABAAAA_____wQAAAAAAAAAAAAAABxOgyXWCwEKdG90YWwBDGNoYXJnZQEMX2V2ZW50ugEIdHlwZQEMc2VuZGlkAQxvcmlnaW4BFG9yaWdpbnR5cGUBEGludm9rZWlkAQhkYXRhAQhjYXJkCQMFBAgDAgW8DwQBBggHCAcQY2hlY2tvdXQKBxBleHRlcm5hbAwCDgIQAhICFAgBFgcWdG9rX2V4cGlyZWQIAQIFvA8"}}
+> {"jsonrpc":"2.0","id":29,"method":"run.wake","params":{"session":2,"blob":"VEFIQgUAAAAAAAAASAAAAAQAAAA5KacD1X0pOI5i5ccCAAAAAAAAAJoAAAAAAAAAAAAAAAYAAAABAAAAAAAAAP____________________8CAAABAAAAAAAAAAAAAAAAAgAAAAAAAAABAAAA_____wQAAAAAAAAAAAAAABxOgyXWCwEKdG90YWwBDGNoYXJnZQEMX2V2ZW50ugEIdHlwZQEMc2VuZGlkAQxvcmlnaW4BFG9yaWdpbnR5cGUBEGludm9rZWlkAQhkYXRhAQhjYXJkCQMFBAgDAgW8DwQBBggHCAcQY2hlY2tvdXQKBxBleHRlcm5hbAwCDgIQAhICFAgBFgcWdG9rX2V4cGlyZWQIAQIFvA8"}}
 < {"jsonrpc":"2.0","id":29,"result":{}}
 > {"jsonrpc":"2.0","id":30,"method":"run.turn"}
 < {"jsonrpc":"2.0","method":"effect.log","params":{"batch":7,"index":0,"session":2,"label":"order","text":"payment failed: payment.timeout"}}
 < {"jsonrpc":"2.0","id":30,"result":{"status":"idle","runs":1,"fuel":12,"time":30000,"nextDeadline":null}}
-> {"jsonrpc":"2.0","id":31,"method":"run.wake","params":{"session":3,"blob":"VEFIQgQAAAAAAAAASAAAAAQAAAA5KacD1X0pOI5i5ccDAAAAAAAAACcAAAAAAAAAAAAAAAYAAAABAAAAAAAAAP____________________8DAAABAAAAAAAAAAAAAAAAAQAAAAAAAAABAAAA_____wIAAAAAAAAAAAAAABxE_z7EAgEKdG90YWwBDGNoYXJnZQkDBQQIAgIFrAIEAQgBAgWsAg"}}
+> {"jsonrpc":"2.0","id":31,"method":"run.wake","params":{"session":3,"blob":"VEFIQgUAAAAAAAAASAAAAAQAAAA5KacD1X0pOI5i5ccDAAAAAAAAACcAAAAAAAAAAAAAAAYAAAABAAAAAAAAAP____________________8DAAABAAAAAAAAAAAAAAAAAQAAAAAAAAABAAAA_____wIAAAAAAAAAAAAAABxE_z7EAgEKdG90YWwBDGNoYXJnZQkDBQQIAgIFrAIEAQgBAgWsAg"}}
 < {"jsonrpc":"2.0","id":31,"result":{}}
 > {"jsonrpc":"2.0","id":32,"method":"actor.state","params":{"session":3}}
 < {"jsonrpc":"2.0","id":32,"result":{"value":"open","history":{}}}

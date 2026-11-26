@@ -425,6 +425,7 @@ static uint32_t invoke(ta_system *system, uint32_t parent, const ta_core_out *ou
 
 void ta_system_external_free(ta_system *system, uint32_t ri) {
     ta_core *core = &system->core;
+    ta_system_invocation_remove(system, ri);
     ta_request *request = (ta_request *)ta_pool_at(&system->requests, ri);
     ta_shared_string_release(core, request->invokeid);
     ta_shared_string_release(core, request->source);
@@ -513,6 +514,7 @@ static uint32_t invoke(ta_system *system, uint32_t parent, const ta_core_out *ou
         }
         uint32_t tok = ta_pool_handle(&system->requests, ri);
         request->invocation = ++system->next_invocation;
+        ta_system_invocation_insert(system, ri);
         effect->invocation = request->invocation;
         effect->target = out->source;
         ta_shared_string_retain(core, out->source);
