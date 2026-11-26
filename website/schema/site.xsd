@@ -372,7 +372,7 @@
         </xs:simpleType>
       </xs:attribute>
       <xs:assert test="(: never 'formal verification': there is no model checker :) not(contains(lower-case(normalize-space(.)), 'formal verification'))"/>
-      <xs:assert test="(: a passage is the deep-dive voice, for explanation pages only :) not(.//passage) or purpose/@kind = 'explanation'"/>
+      <xs:assert test="(: a passage is the deep-dive or the tutorial voice, for explanation and tutorial pages only :) not(.//passage) or purpose/@kind = ('explanation', 'tutorial')"/>
       <xs:assert test="(: a problem opens a section of an explanation page, right under its heading :) not(.//problem) or (purpose/@kind = 'explanation' and (every $p in .//problem satisfies $p/preceding-sibling::*[1][self::heading]))"/>
       <xs:assert test="(: every page but the 404 declares its purpose :) exists(purpose) or @path = '/404'"/>
       <xs:assert test="(: a section's kind differs from its page's :) every $kind in section/@kind satisfies $kind != string(purpose/@kind)"/>
@@ -1022,11 +1022,13 @@
 
   <xs:complexType name="passage" mixed="true">
     <xs:annotation><xs:documentation>
-      A paragraph in the deep-dive voice (website/AGENTS.md): the prose of
-      an explanation page that a reader follows from start to end, as a
-      chapter of a book. Up to five sentences, each at most 32 words, with
-      the same sentence rules as a paragraph. Only an explanation page has
-      them (the page's assertion).
+      A paragraph in the deep-dive voice or the tutorial voice
+      (website/AGENTS.md): the prose of an explanation page that a reader
+      follows from start to end, as a chapter of a book, or of a tutorial
+      step that says what you do, what you see and why. Up to five
+      sentences, each at most 32 words, with the same sentence rules as a
+      paragraph. Only explanation and tutorial pages have them (the page's
+      assertion).
     </xs:documentation></xs:annotation>
     <xs:complexContent>
       <xs:extension base="inline">

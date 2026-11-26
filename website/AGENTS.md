@@ -56,6 +56,18 @@ rules.
   section ends where the next one's question starts. The rest of the
   voice holds: literal, measured, no metaphors or hype; headings stay
   findings of at most 8 words.
+- **The tutorial voice** (the maintainer, 2026-11-26: the CLI tutorial's
+  sentences were "a bit too short"). A tutorial step is prose a learner
+  reads while doing it, in `<passage>` blocks: two or three sentences
+  each, up to 32 words a sentence (the schema's `passage` type, which
+  tutorial pages may use). A step says what you do, what you will see,
+  and why it matters for the thing you are building, joining cause and
+  result in one sentence ("because", "so", "which") rather than stating
+  each fact alone. The reader is "you"; the sentences vary in length.
+  Headings stay steps of at most 8 words, and the rest of the voice
+  holds: literal, measured, no metaphors, hype or rhetorical questions,
+  and no fact the step's own output does not show. A short `<p>` stays
+  right for a one-line instruction.
 - **Copy never names its audience** (the maintainer, 2026-11-25). The
   roles a page is written for (the tech lead, the operator, the workflow
   developer, the agent-platform engineer) are the writer's target and the

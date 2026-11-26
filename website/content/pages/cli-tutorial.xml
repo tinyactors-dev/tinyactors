@@ -6,7 +6,7 @@
 
   <hero>
     <headline>Compile, lint, draw and run an order chart</headline>
-    <lede>In seven commands, you compile an order chart and catch a misspelt timeout event with <code>lint</code>, without running it. After the fix, a scripted session retries an unanswered charge after 30 seconds and ends in <code>paid</code>.</lede>
+    <lede>In seven commands, you compile an order chart and catch a misspelt timeout event with <code>lint</code> without running it. After the fix, a scripted session retries an unanswered charge after 30 seconds and ends in <code>paid</code>.</lede>
     <install>
       <command package="c">mise use github:tinyactors-dev/tinyactors-core@{version}</command>
     </install>
@@ -17,9 +17,9 @@
 
   <section id="compile">
     <heading>1. Compile the order chart</heading>
-    <p>Your order chart collects items, starts checkout and requests a charge. When the payment service does not answer within 30 seconds, it tries up to three times.</p>
+    <passage>Your order chart starts in <code>open</code> to collect items, moves to <code>paying</code> at <code>checkout</code> and sends a charge request for the order total. When the payment service does not answer within 30 seconds, <code>paying</code> sends a delayed timeout event so the order retries up to three times before moving to <code>cancelled</code>.</passage>
     <code src="../../examples/cli/tutorial/draft.scxml" language="scxml" file="order.scxml"/>
-    <p>Save this chart as <code>order.scxml</code> and run <code>tinyactors compile</code> to build <code>order.tai</code> for your application. The chart compiles with zero diagnostics.</p>
+    <passage>Save this chart as <code>order.scxml</code> and run <code>tinyactors compile</code> with <code>-o</code> so the compiler writes an image file at <code>order.tai</code> for your application. You will see zero diagnostics because the SCXML syntax is valid, which still leaves logic errors in your state transitions unchecked.</passage>
     <example>
       <code language="shell">tinyactors compile order.scxml -o order.tai</code>
       <code src="../../examples/cli/tutorial/compile.txt" language="markdown" role="output"/>
@@ -28,24 +28,24 @@
 
   <section id="lint">
     <heading>2. Catch unhandled events with lint</heading>
-    <p>Valid syntax does not guarantee your order can finish. Run <code>tinyactors lint</code> to inspect the chart's transition logic without executing it.</p>
+    <passage>Valid syntax does not guarantee your order can finish, so run <code>tinyactors lint</code> to inspect the chart's transition logic without executing a session. The linter compares events sent to the chart against its transitions, which lets you catch unhandled events before testing a live session.</passage>
     <example>
       <code language="shell">tinyactors lint order.scxml</code>
       <code src="../../examples/cli/tutorial/lint.txt" language="markdown" role="output"/>
     </example>
-    <p>The output reports an <code>unhandled-event</code> warning because <code>paying</code> sends <code>payment.timeout</code> while its transitions expect <code>payment.timedout</code>. Without a matching transition, an order whose payment service never answers waits forever.</p>
+    <passage>The report shows one <code>unhandled-event</code> warning in <code>paying</code> because that state sends <code>payment.timeout</code> to the chart while its transitions listen for <code>payment.timedout</code>. Without a matching transition, an order whose payment service never answers misses the 30-second timeout event and stays in <code>paying</code> instead of retrying or cancelling.</passage>
   </section>
 
   <section id="fix">
     <heading>3. Fix the event and check again</heading>
-    <p>Update both transitions in <code>paying</code> from <code>payment.timedout</code> to <code>payment.timeout</code>. That fixes both the retry transition and the final cancellation after three attempts.</p>
+    <passage>Update both transitions in <code>paying</code> from <code>payment.timedout</code> to <code>payment.timeout</code> so their event list matches what the state sends after 30 seconds. Changing both lines fixes the retry loop when <code>attempts &lt; 3</code> and restores the final transition to <code>cancelled</code> after three failed attempts.</passage>
     <code src="../../examples/cli/tutorial/order.scxml" lines="28-29" language="scxml" file="order.scxml"/>
-    <p>Next, run <code>check -W</code> to validate the chart without writing an output file. Because <code>-W</code> turns warnings into errors, seeing <code>Valid: yes</code> confirms no errors or warnings remain.</p>
+    <passage>Next, run <code>tinyactors check</code> with <code>-W</code> to validate <code>order.scxml</code> and turn compiler warnings into errors without writing an output file. Seeing <code>Valid: yes</code> and zero diagnostics confirms that the updated chart compiles with neither syntax errors nor warnings.</passage>
     <example>
       <code language="shell">tinyactors check -W order.scxml</code>
       <code src="../../examples/cli/tutorial/check.txt" language="markdown" role="output"/>
     </example>
-    <p>Now run <code>lint --deny all</code> so any remaining finding fails with exit code 1. This time <code>lint</code> finds nothing and exits with 0.</p>
+    <passage>Now run <code>tinyactors lint</code> with <code>--deny all</code> so any remaining warning or note fails the command with exit code 1. Because both transitions now handle <code>payment.timeout</code>, <code>lint</code> reports zero findings and exits with 0, which shows no unhandled timeout events remain.</passage>
     <example>
       <code language="shell">tinyactors lint --deny all order.scxml</code>
       <code src="../../examples/cli/tutorial/lint-fixed.txt" language="markdown" role="output"/>
@@ -54,7 +54,7 @@
 
   <section id="path">
     <heading>4. Trace the path to shipped</heading>
-    <p>Check that your order can reach <code>shipped</code> by running <code>tinyactors path</code> from <code>open</code>. The command lists three transitions and notes that <code>checkout</code> requires <code>total &gt; 0</code>.</p>
+    <passage>Run <code>tinyactors path</code> with <code>--to shipped</code> to verify that an order starting in <code>open</code> can reach the final <code>shipped</code> state. The output lists three transitions through <code>paying</code> and <code>paid</code> and notes the <code>total &gt; 0</code> condition on <code>checkout</code>, so an order must have a positive total before charging.</passage>
     <example>
       <code language="shell">tinyactors path order.scxml --to shipped</code>
       <code src="../../examples/cli/tutorial/path.txt" language="markdown" role="output"/>
@@ -63,26 +63,26 @@
 
   <section id="graph">
     <heading>5. Draw the order chart</heading>
-    <p>Run <code>graph -f svg</code> to inspect your order flow as state boxes and labelled routes. The resulting SVG follows your system's light or dark setting.</p>
+    <passage>Run <code>tinyactors graph</code> with <code>-f svg</code> and redirect the output to <code>order.svg</code> to inspect your order chart as state boxes and labelled transition routes. The resulting diagram adapts to your system's light or dark setting and lets you verify that <code>paying</code> loops back to itself on retries before reaching <code>paid</code> or <code>cancelled</code>.</passage>
     <code language="shell">tinyactors graph -f svg order.scxml &gt; order.svg</code>
     <drawing src="../../examples/cli/tutorial/order.svg" alt="The order chart showing open, paying, paid, shipped and cancelled, with paying's retry looping back to itself"/>
   </section>
 
   <section id="run">
     <heading>6. Run an order session</heading>
-    <p>To test the retry flow, pipe JSON-RPC requests into <code>tinyactors run</code>, one request per line. This script adds a pen, checks out, lets 30 seconds pass and answers the second charge.</p>
+    <passage>To test your retry flow, save these JSON-RPC requests in <code>session.jsonl</code> so you can pipe them into <code>tinyactors run</code> one request per line. The script spawns an order actor, adds a pen priced at 1200, sends <code>checkout</code>, advances the clock by 30 seconds and answers the second charge.</passage>
     <code src="../../examples/cli/tutorial/session.jsonl" language="text" file="session.jsonl"/>
-    <p>Passing <code>--io-processor payments</code> lets your session act as the payment service. Each <code>effect.send</code> notification represents a charge request from your order.</p>
+    <passage>Run <code>tinyactors run</code> with <code>--io-processor payments</code> and redirect <code>session.jsonl</code> to standard input so your session handles outgoing <code>payments</code> requests without an external service. When the order enters <code>paying</code>, the command writes an <code>effect.send</code> notification for each <code>charge</code> event, which lets your script observe and answer outgoing payment requests.</passage>
     <example>
       <code language="shell">tinyactors run --io-processor payments order.scxml &lt; session.jsonl</code>
       <code src="../../examples/cli/tutorial/run.txt" language="jsonl" role="output"/>
     </example>
-    <p>After request 5 advances the clock 30 seconds, request 6 fires your fixed timeout and emits a second charge. Request 9 shows the order in <code>paid</code>.</p>
+    <passage>Request 4 leaves the actor idle with a 30-second deadline, so advancing the clock in request 5 lets request 6 fire <code>payment.timeout</code> and emit a second <code>charge</code> notification. Request 7 then supplies <code>charge.ok</code>, which cancels the next 30-second deadline in request 8 when the actor leaves <code>paying</code>. Request 9 inspects the actor state and finds it in <code>paid</code>.</passage>
   </section>
 
   <section id="next">
     <heading>Put the checks in your build</heading>
-    <p>Once your chart works locally, run these checks in CI to catch mistakes before a pull request merges. Pair <code>check</code> and <code>lint</code> with <code>fmt</code> and <code>diff</code>, or drive sessions from a script.</p>
+    <passage>Once your chart works locally, run <code>check</code> and <code>lint</code> in CI so your build catches syntax errors or unhandled events before a pull request merges. You can pair those checks with <code>fmt</code> and <code>diff</code>, or drive sessions from a script that pauses and answers outgoing sends.</passage>
     <list>
       <item><term><link to="cli-ci">Check charts in CI</link></term><text>Automate <code>check</code>, <code>lint</code>, <code>fmt</code> and <code>diff</code> on every pull request.</text></item>
       <item><term><link to="cli-protocol">Drive a host from a script</link></term><text>Pause an outgoing send until your script replies to it.</text></item>
