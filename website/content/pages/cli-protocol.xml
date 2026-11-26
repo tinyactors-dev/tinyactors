@@ -22,7 +22,7 @@
     <p>Send <code>run.*</code> requests to control the host and forwarded methods such as <code>actor.state</code> to query actors. Reply to each <code>effect.send</code> notification with <code>run.send</code>.</p>
     <example>
       <code src="../../examples/cli/requests.jsonl" language="text" file="requests.jsonl"/>
-      <code src="../../examples/cli/requests.txt" language="text" role="output"/>
+      <code src="../../examples/cli/requests.txt" language="jsonl" role="output"/>
       <caption>The first order is paid and shipped; the second gets no answer, and its charge goes out again at 30 seconds.</caption>
     </example>
   </section>

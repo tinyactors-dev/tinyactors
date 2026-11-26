@@ -1167,6 +1167,9 @@
       <xs:enumeration value="shell"/>
       <xs:enumeration value="yaml"/>
       <xs:enumeration value="toml"/>
+      <xs:enumeration value="json"/>
+      <xs:enumeration value="jsonl"/>
+      <xs:enumeration value="markdown"/>
       <xs:enumeration value="text"/>
     </xs:restriction>
   </xs:simpleType>

@@ -21,7 +21,7 @@
     <p>Order 6 is in <code>paying</code>, waiting for its charge. Its <code>payment.timeout</code> fires 20 seconds after the snapshot's time.</p>
     <example>
       <code language="shell">tinyactors actors --session 6 shop.snapshot</code>
-      <code src="../../examples/cli/actor-6.txt" language="text" role="output"/>
+      <code src="../../examples/cli/actor-6.txt" language="markdown" role="output"/>
     </example>
     <p>Without <code>--session</code>, <code>actors</code> lists every actor, and <code>--chart order</code> keeps one chart's.</p>
   </section>
@@ -31,7 +31,7 @@
     <p>Order 17 was hibernated: its state is in a blob in your store, which wakes only in its own host. <code>inspect</code> reads the blob and checks that this snapshot's host can wake it.</p>
     <example>
       <code language="shell">tinyactors inspect order-17.blob shop.snapshot</code>
-      <code src="../../examples/cli/blob-17.txt" language="text" role="output"/>
+      <code src="../../examples/cli/blob-17.txt" language="markdown" role="output"/>
     </example>
   </section>
 

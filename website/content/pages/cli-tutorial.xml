@@ -22,7 +22,7 @@
     <p>Save it as <code>order.scxml</code>; <code>compile</code> turns it into <code>order.tai</code>, the image your application loads. The chart compiles with no diagnostics.</p>
     <example>
       <code language="shell">tinyactors compile order.scxml -o order.tai</code>
-      <code src="../../examples/cli/tutorial/compile.txt" language="text" role="output"/>
+      <code src="../../examples/cli/tutorial/compile.txt" language="markdown" role="output"/>
     </example>
   </section>
 
@@ -31,7 +31,7 @@
     <p>A chart that compiles can still wait for an event that never comes. <code>lint</code> reads the chart without running it.</p>
     <example>
       <code language="shell">tinyactors lint order.scxml</code>
-      <code src="../../examples/cli/tutorial/lint.txt" language="text" role="output"/>
+      <code src="../../examples/cli/tutorial/lint.txt" language="markdown" role="output"/>
     </example>
     <p><code>paying</code> sends itself <code>payment.timeout</code>, but its transitions wait for <code>payment.timedout</code>. An order whose payment service never answers would wait forever.</p>
   </section>
@@ -43,12 +43,12 @@
     <p><code>check -W</code> compiles the chart, writes nothing, and fails on a warning as on an error.</p>
     <example>
       <code language="shell">tinyactors check -W order.scxml</code>
-      <code src="../../examples/cli/tutorial/check.txt" language="text" role="output"/>
+      <code src="../../examples/cli/tutorial/check.txt" language="markdown" role="output"/>
     </example>
     <p>With <code>--deny all</code>, any finding makes <code>lint</code> exit with 1. It now finds nothing and exits with 0.</p>
     <example>
       <code language="shell">tinyactors lint --deny all order.scxml</code>
-      <code src="../../examples/cli/tutorial/lint-fixed.txt" language="text" role="output"/>
+      <code src="../../examples/cli/tutorial/lint-fixed.txt" language="markdown" role="output"/>
     </example>
   </section>
 
@@ -57,7 +57,7 @@
     <p><code>path</code> finds the shortest sequence of transitions from <code>open</code> to a state. An order ships after three events, and checkout needs a total above 0.</p>
     <example>
       <code language="shell">tinyactors path order.scxml --to shipped</code>
-      <code src="../../examples/cli/tutorial/path.txt" language="text" role="output"/>
+      <code src="../../examples/cli/tutorial/path.txt" language="markdown" role="output"/>
     </example>
   </section>
 
@@ -75,7 +75,7 @@
     <p><code>--io-processor payments</code> makes your session the payment service. Each <code>effect.send</code> is a charge the order asks of it.</p>
     <example>
       <code language="shell">tinyactors run --io-processor payments order.scxml &lt; session.jsonl</code>
-      <code src="../../examples/cli/tutorial/run.txt" language="text" role="output"/>
+      <code src="../../examples/cli/tutorial/run.txt" language="jsonl" role="output"/>
     </example>
     <p>With request 5 the clock moves 30 seconds, so the next turn fires the timeout you fixed. Request 9 reads the order in <code>paid</code>.</p>
   </section>

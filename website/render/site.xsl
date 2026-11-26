@@ -154,7 +154,7 @@
           <link rel="stylesheet" href="/vendor/scxmljs/dist/themes/tinyactors.css"/>
           <script type="module" src="/assets/components/chart.mjs?v={$version}"></script>
         </xsl:if>
-        <xsl:if test=".//s:code[not(@role = 'output') and not(@language = 'text')] or .//s:commands">
+        <xsl:if test=".//s:code[not(@language = 'text')] or .//s:commands">
           <script type="module" src="/assets/components/highlight.mjs?v={$version}"></script>
         </xsl:if>
         <xsl:if test=".//s:code[parent::s:section or parent::s:example or parent::s:program or parent::s:in] or .//s:live or .//s:install">
@@ -162,6 +162,9 @@
         </xsl:if>
         <xsl:if test=".//s:demo">
           <script type="module" src="/assets/components/demo.mjs?v={$version}"></script>
+        </xsl:if>
+        <xsl:if test=".//s:code[@role = 'output'][@language = $output-formats]">
+          <script type="module" src="/assets/components/output.mjs?v={$version}"></script>
         </xsl:if>
         <xsl:if test=".//s:playground">
           <script type="module" src="/assets/components/playground.mjs?v={$version}"></script>
@@ -500,16 +503,47 @@
   </xsl:template>
 
   <xsl:template match="s:code[parent::s:section or parent::s:example or parent::s:program]">
+    <xsl:variable name="viewable" select="@role = 'output' and @language = $output-formats"/>
     <figure class="ta-code code{if (@role = 'output') then ' code--output' else ''}">
       <figcaption class="ta-code__head">
         <span>{if (@role = 'output') then 'output' else (@file, @language)[1]}</span>
         <xsl:if test="@file and not(@role = 'output')">
           <span class="code__language">{@language}</span>
         </xsl:if>
+        <!-- an output in a format the page can show: its switch between the
+             preview and the source (components/output.mjs shows it) -->
+        <xsl:if test="$viewable">
+          <span class="output__switch" role="group" aria-label="View" hidden="hidden">
+            <button type="button" data-view="preview" aria-pressed="false">Preview</button>
+            <button type="button" data-view="source" aria-pressed="true">Source</button>
+          </span>
+        </xsl:if>
       </figcaption>
-      <xsl:sequence select="f:copyable(f:pre(.))"/>
+      <xsl:choose>
+        <xsl:when test="$viewable">
+          <ta-output class="output" data-format="{@language}"><xsl:sequence select="f:copyable(f:pre(.))"/></ta-output>
+        </xsl:when>
+        <xsl:otherwise><xsl:sequence select="f:copyable(f:pre(.))"/></xsl:otherwise>
+      </xsl:choose>
     </figure>
   </xsl:template>
+
+  <!-- The formats an output can be previewed in (components/output.mjs). -->
+  <xsl:variable name="output-formats" as="xs:string+" select="('markdown', 'json', 'jsonl', 'xml')"/>
+
+  <!-- What a command's example prints: what its line asks for with
+       format, the protocol's JSON lines of run, the SCXML fmt writes;
+       else the command's default answer, Markdown. -->
+  <xsl:function name="f:output-language" as="xs:string">
+    <xsl:param name="line" as="xs:string"/>
+    <xsl:param name="command" as="xs:string"/>
+    <xsl:variable name="format" select="replace($line, '^.*(-f|--format)[ =]?([a-z]+).*$', '$2')[matches($line, '(-f|--format)[ =]?[a-z]+')]"/>
+    <xsl:sequence select="if ($format = ('json', 'xml', 'markdown')) then $format
+                          else if ($format = 'svg') then 'xml'
+                          else if ($command = 'run') then 'jsonl'
+                          else if ($command = 'fmt') then 'xml'
+                          else 'markdown'"/>
+  </xsl:function>
 
   <!-- A live example: the button runs the module's export; until the
        components load, it stays disabled. -->
@@ -1180,7 +1214,7 @@
                   if (@status != '0') then f:fill($commands/s:status, 'status', @status) else ()), ' ')"/>
               <s:example>
                 <s:code language="shell">{@line}</s:code>
-                <xsl:if test="normalize-space(output)"><s:code language="text" role="output">{output}</s:code></xsl:if>
+                <xsl:if test="normalize-space(output)"><s:code language="{f:output-language(@line, $name)}" role="output">{output}</s:code></xsl:if>
                 <xsl:if test="$caption"><s:caption><xsl:sequence select="f:help-text($caption)"/></s:caption></xsl:if>
               </s:example>
               <xsl:for-each select="svg">

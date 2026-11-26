@@ -1,5 +1,5 @@
 // Syntax highlighting for the page's code: every <code data-language> in a
-// <pre>, but output and plain text, highlighted with the vendored
+// <pre> but plain text (an output in Markdown, JSON or XML too: its source), highlighted with the vendored
 // highlight.js (its browser ES modules: the core and the languages below,
 // mise/website.rb VENDOR).
 // The colours are the design system's (style/site.css, .hljs-*). Without
@@ -13,9 +13,11 @@ import typescript from '/vendor/highlight.js/es/languages/typescript.min.js';
 import ini from '/vendor/highlight.js/es/languages/ini.min.js';
 import xml from '/vendor/highlight.js/es/languages/xml.min.js';
 import yaml from '/vendor/highlight.js/es/languages/yaml.min.js';
+import json from '/vendor/highlight.js/es/languages/json.min.js';
+import markdown from '/vendor/highlight.js/es/languages/markdown.min.js';
 
-const languages = { scxml: 'xml', xml: 'xml', javascript: 'javascript', typescript: 'typescript', python: 'python', c: 'c', shell: 'bash', yaml: 'yaml', toml: 'ini' };
-for (const [name, language] of Object.entries({ bash, c, ini, javascript, python, typescript, xml, yaml })) hljs.registerLanguage(name, language);
+const languages = { scxml: 'xml', xml: 'xml', json: 'json', jsonl: 'json', markdown: 'markdown', javascript: 'javascript', typescript: 'typescript', python: 'python', c: 'c', shell: 'bash', yaml: 'yaml', toml: 'ini' };
+for (const [name, language] of Object.entries({ bash, c, ini, javascript, json, markdown, python, typescript, xml, yaml })) hljs.registerLanguage(name, language);
 
 for (const code of document.querySelectorAll('pre code[data-language]')) {
   const language = languages[code.dataset.language];

@@ -27,7 +27,7 @@
     <p>Compile the chart when you deploy it and store <code>deployed.tai</code> where the next build can fetch it. The deployed chart here is the <link to="cli-tutorial">tutorial's</link> order.</p>
     <example>
       <code language="shell">tinyactors compile order.scxml -o deployed.tai</code>
-      <code src="../../examples/cli/ci/deployed.txt" language="text" role="output"/>
+      <code src="../../examples/cli/ci/deployed.txt" language="markdown" role="output"/>
     </example>
   </section>
 
@@ -37,17 +37,17 @@
     <code src="../../examples/cli/ci/next.scxml" lines="11-14" language="scxml" file="order.scxml"/>
     <example>
       <code language="shell">tinyactors check -W order.scxml</code>
-      <code src="../../examples/cli/ci/check.txt" language="text" role="output"/>
+      <code src="../../examples/cli/ci/check.txt" language="markdown" role="output"/>
     </example>
     <p>With <code>--deny all</code>, any finding of <code>lint</code> exits with 1, such as an unreachable state. The renamed chart has none.</p>
     <example>
       <code language="shell">tinyactors lint --deny all order.scxml</code>
-      <code src="../../examples/cli/ci/lint.txt" language="text" role="output"/>
+      <code src="../../examples/cli/ci/lint.txt" language="markdown" role="output"/>
     </example>
     <p>Charts in one layout keep a pull request's diff to its real edits. <code>fmt --check</code> fails on a file out of layout and changes nothing; <code>fmt -w</code> rewrites it.</p>
     <example>
       <code language="shell">tinyactors fmt --check order.scxml</code>
-      <code src="../../examples/cli/ci/fmt.txt" language="text" role="output"/>
+      <code src="../../examples/cli/ci/fmt.txt" language="markdown" role="output"/>
     </example>
   </section>
 
@@ -56,7 +56,7 @@
     <p>The change passes every check, yet orders waiting in <code>paying</code> would lose their state. <code>diff --breaking --exit-code</code> lists the changes that break them and exits with 1.</p>
     <example>
       <code language="shell">tinyactors diff --breaking --exit-code deployed.tai order.scxml</code>
-      <code src="../../examples/cli/ci/diff.txt" language="text" role="output"/>
+      <code src="../../examples/cli/ci/diff.txt" language="markdown" role="output"/>
       <caption>It exits with status 1: a migration would put each order waiting in <code>paying</code> back in <code>open</code>, its charge already sent.</caption>
     </example>
     <claims>

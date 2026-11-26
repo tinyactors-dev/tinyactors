@@ -208,7 +208,7 @@ module Website
     'quickjs-emscripten-core' => ['quickjs-emscripten-core', %w[LICENSE dist/*.mjs]],
     'quickjs-singlefile-browser-release-sync' => ['@jitl/quickjs-singlefile-browser-release-sync', %w[LICENSE dist/*.mjs]],
     'quickjs-ffi-types' => ['@jitl/quickjs-ffi-types', %w[LICENSE dist/*.mjs]],
-    'highlight.js' => ['@highlightjs/cdn-assets', %w[LICENSE es/core.min.js es/languages/{xml,javascript,typescript,python,c,bash,yaml,ini}.min.js]],
+    'highlight.js' => ['@highlightjs/cdn-assets', %w[LICENSE es/core.min.js es/languages/{xml,javascript,typescript,python,c,bash,yaml,ini,json,markdown}.min.js]],
     # The presence ants' flags, one fetched per country seen (presence/layer.mjs).
     'flag-icons' => ['flag-icons', %w[LICENSE flags/4x3/*.svg]],
     # The icons render/site.xsl inlines (f:lucide): only their licence.

@@ -1071,3 +1071,65 @@ html:has(> #tinyactors-copywriter) .app { --app-inset-start: 68px; --app-inset-b
 .command-nav__all a, .command-nav__current { display: inline-block; padding: var(--space-1) var(--space-2); border: 1px solid var(--border-1); border-radius: var(--radius-1); text-decoration: none; }
 .command-nav__all a:hover { border-color: var(--border-2); background: var(--surface-2); }
 .command-nav__current { background: var(--accent-subtle); border-color: var(--accent); color: var(--fg-1); }
+
+/* ---------------------------------------------------- outputs: preview and source
+   An output in Markdown, JSON or XML (components/output.mjs): a switch in
+   its head between the preview, which shows first, and the source. The
+   preview stops at the same height as the source and scrolls inside. */
+.output__switch { display: inline-flex; gap: 2px; margin-left: auto; padding: 2px; border: 1px solid var(--code-border); border-radius: var(--radius-2); background: var(--surface-code); }
+.output__switch button { font: var(--fw-medium) var(--fs-12)/1 var(--font-sans); color: var(--code-muted); background: none; border: 0; border-radius: var(--radius-1); padding: 4px 10px; cursor: pointer; }
+.output__switch button[aria-pressed="true"] { background: var(--surface-1); color: var(--fg-1); box-shadow: 0 0 0 1px var(--border-2); }
+.output__switch button:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 1px; }
+.code--output .ta-code__head { align-items: center; gap: var(--space-3); }
+.code--output[data-view="preview"] .output > .copy { display: none; }
+.code--output:not([data-view="preview"]) .output__preview { display: none; }
+.output__preview {
+  max-height: calc(var(--fs-13) * 1.6 * 18 + 2 * var(--space-4)); overflow: auto; padding: var(--space-4) var(--space-5);
+  background: var(--surface-1); scrollbar-width: thin;
+}
+.output__preview:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: -2px; }
+
+/* a Markdown report, as a document */
+.output-md { font: var(--type-body-sm); color: var(--fg-1); display: grid; gap: var(--space-2); justify-items: start; }
+.output-md > * { margin: 0; max-width: 100%; }
+.output-md__heading { font: var(--fw-semibold) var(--fs-14)/1.3 var(--font-sans); margin-top: var(--space-2); }
+.output-md > .output-md__heading:first-child { margin-top: 0; }
+h3.output-md__heading { font: var(--fw-regular) var(--fs-22)/1.2 var(--font-serif); letter-spacing: var(--tracking-tight); }
+h4.output-md__heading { font: var(--fw-regular) var(--fs-18)/1.25 var(--font-serif); }
+.output-md code { font: var(--fs-12)/1.4 var(--font-mono); background: var(--surface-code); border: 1px solid var(--code-border); border-radius: var(--radius-1); padding: 0 4px; }
+.output-md__list { margin: 0; padding-left: 1.25em; display: grid; gap: 2px; }
+.output-md__list .output-md__list { margin-top: 2px; }
+.output-md__scroll { overflow-x: auto; max-width: 100%; }
+.output-md__table { border-collapse: collapse; font-variant-numeric: tabular-nums; }
+.output-md__table th, .output-md__table td { text-align: left; padding: 4px 10px; border-bottom: 1px solid var(--border-1); vertical-align: top; }
+.output-md__table th { font-weight: var(--fw-medium); color: var(--fg-2); background: var(--surface-2); white-space: nowrap; }
+.output-md__pre { background: var(--surface-code); border: 1px solid var(--code-border); padding: var(--space-3); overflow-x: auto; font: var(--type-code); }
+.output-md__pre code { background: none; border: 0; padding: 0; }
+.output-md hr { width: 100%; border: 0; border-top: 1px solid var(--border-1); }
+
+/* JSON and XML as trees whose branches open and close */
+.output-tree { font: var(--type-code); color: var(--code-fg); }
+.output-tree ul, .output-tree ol { list-style: none; margin: 0; padding: 0; }
+.output-tree__children { padding-left: 1.5em !important; border-left: 1px dotted var(--border-2); margin-left: 0.35em !important; }
+.output-tree__branch > summary { cursor: pointer; list-style: none; display: inline; }
+.output-tree__branch > summary::-webkit-details-marker { display: none; }
+.output-tree__branch > summary::before { content: "▸"; display: inline-block; width: 1em; margin-left: -1em; color: var(--code-muted); transition: transform var(--dur-fast); }
+.output-tree__branch[open] > summary::before { transform: rotate(90deg); }
+.output-tree__branch > summary:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 1px; }
+.output-tree__count { color: var(--code-muted); font-size: var(--fs-12); margin: 0 0.5em; }
+.output-tree__branch[open] > summary .output-tree__count, .output-tree__branch[open] > summary .output-tree__close-inline { display: none; }
+.output-tree__branch:not([open]) > .output-tree__close { display: none; }
+.output-tree > .output-tree__branch, .output-tree--lines > li { margin-left: 1em; }
+.output-tree--lines { counter-reset: line; display: grid; gap: var(--space-1); list-style: none; margin: 0; }
+.output-tree--lines > li { counter-increment: line; position: relative; }
+.output-tree--lines > li::before { content: counter(line); position: absolute; left: -3.4em; width: 1.6em; text-align: right; color: var(--code-muted); font-size: var(--fs-12); }
+.output-tree--lines { padding-left: 2.6em !important; }
+.output-tree__key { color: var(--accent-fg); }
+.output-tree__string { color: var(--state-waiting); }
+.output-tree__number, .output-tree__boolean, .output-tree__null { color: var(--state-done); }
+.output-tree__punct { color: var(--code-muted); }
+.output-tree__tag { color: var(--state-done); }
+.output-tree__text { color: var(--code-fg); }
+.output-tree__comment { color: var(--fg-3); font-style: italic; }
+.output-svg__frame { background: var(--surface-1); }
+.output-svg { display: block; max-width: 100%; height: auto; }
