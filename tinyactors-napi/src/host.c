@@ -356,7 +356,7 @@ static bool ta_napi_handlers_read(napi_env env, const ta_napi_options *options, 
         }
         if (napi_set_named_property(env, handlers, maps[i], value) != napi_ok) return false;
     }
-    /* the invoked services that run, by core's (segment, token), and the
+    /* the invoked services that run, by core's id of each, and the
      * last invocation's strings, shared with the next (effects.c) */
     napi_value global, map_class, map, last;
     return napi_get_global(env, &global) == napi_ok && napi_get_named_property(env, global, "Map", &map_class) == napi_ok &&

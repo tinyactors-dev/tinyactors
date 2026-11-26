@@ -170,13 +170,13 @@ TA_API uint32_t ta_system_actors(const ta_system *system, uint32_t *cursor, ta_u
 
 /* ---- inbound ------------------------------------------------------------ */
 enum {
-    TA_EVENT_IN_FROM_INVOKE = 1u << 0, /* invoke_token identifies an external invoke */
-    TA_EVENT_IN_INVOKE_DONE = 1u << 1, /* generate done.invoke.<id> for invoke_token; once accepted,
-                                          the token's later events are refused (TA_ERROR_STALE) */
+    TA_EVENT_IN_FROM_INVOKE = 1u << 0, /* `invocation` names an external invocation of the target */
+    TA_EVENT_IN_INVOKE_DONE = 1u << 1, /* generate done.invoke.<id> for `invocation`; once accepted,
+                                          its later events are refused (TA_ERROR_STALE) */
     TA_EVENT_IN_ERROR_COMMUNICATION = 1u
         << 2 /* failure of an earlier TA_EFFECT_SEND: error.communication is
    placed in the target's internal queue (sendid copied). With
-   TA_EVENT_IN_FROM_INVOKE and the token: the external invocation failed (it
+   TA_EVENT_IN_FROM_INVOKE and `invocation`: the external invocation failed (it
    could not start, or crashed); its FROM_INVOKE / INVOKE_DONE are refused
    from then on, and a restore does not announce it again */
 };
@@ -184,7 +184,9 @@ typedef struct ta_event_in {
     uint32_t size;
     uint32_t target; /* actor handle */
     uint32_t flags;
-    uint32_t token;   /* invoke token / send token, depending on flags */
+    /* with a traceparent from another system of this process: the sender's
+     * context flags above the W3C byte (its detail class: ta_effect.trace.flags) */
+    uint32_t trace_flags;
     uint64_t session; /* ta_host_send, _send_many: the target session (target is ignored) */
     ta_string_view name;
     ta_string_view sendid;
@@ -195,10 +197,10 @@ typedef struct ta_event_in {
     /* W3C traceparent: the macrostep this event starts runs under it (keeping
      * its sampled flag); without one, it starts a new trace */
     ta_string_view traceparent;
-    /* with a traceparent from another system of this process: the sender's
-     * context flags above the W3C byte (its detail class: ta_effect.trace.flags) */
-    uint32_t trace_flags;
-    uint32_t pad;
+    /* TA_EVENT_IN_FROM_INVOKE, _INVOKE_DONE, a failure from a service: the
+     * invocation's id (ta_effect.invocation of its INVOKE). It names the
+     * invocation wherever its actor lives: a migration keeps it (docs/adr/0018) */
+    uint64_t invocation;
 } ta_event_in;
 
 TA_API ta_status ta_system_send(ta_system *system, const ta_event_in *event);
@@ -281,17 +283,19 @@ enum {
     TA_EFFECT_FLAG_WAITING = 1u << 2
 };
 /* Field use per kind (unused fields are empty / 0):
- *   SEND      target, event (name), sendid, payload, io_processor; token = external
- *             invoke token when sending to an external invoke ("#_<id>")
+ *   SEND      target, event (name), sendid, payload, io_processor; invocation = the
+ *             external invocation's id when sending to it ("#_<id>")
  *   REQUEST   aux = unresolved invoke src; answer with
  *             ta_system_resume with {.request = token, .status = TA_OK,
  *             .result = chart_index + 1} or an error
  *   INVOKE    event = type, target = src, sendid = invokeid, payload = params;
- *             report back with ta_event_in{.token, TA_EVENT_IN_FROM_INVOKE /
+ *             invocation = its id, unique in the host and never reused, the same
+ *             for as long as it runs, across a migration of its actor too;
+ *             report back with ta_event_in{.invocation, TA_EVENT_IN_FROM_INVOKE /
  *             TA_EVENT_IN_INVOKE_DONE}, a failure with TA_EVENT_IN_FROM_INVOKE |
  *             TA_EVENT_IN_ERROR_COMMUNICATION; flags TA_EFFECT_FLAG_RESTORED when
  *             a restored host announces a running one again
- *   UNINVOKE  token
+ *   UNINVOKE  invocation
  *   LOG       aux = label, event = text
  *   DONE      target = actor name, payload = donedata, aux = id of the top-level
  *             <final> that ended the session (root actors only)
@@ -302,7 +306,7 @@ typedef struct ta_effect {
     uint32_t size;
     uint32_t kind;
     uint32_t actor;
-    uint32_t token;
+    uint32_t token; /* REQUEST: ta_resume.request */
     uint32_t io_processor;
     uint32_t flags;
     ta_string_view target;
@@ -318,6 +322,7 @@ typedef struct ta_effect {
      * `trace.parent`), so an I/O processor writes a traceparent without
      * calling core (ta_traceparent_format); no trace if untraced */
     ta_trace_context trace;
+    uint64_t invocation; /* INVOKE, UNINVOKE, a SEND to a service: the external invocation's id */
 } ta_effect;
 
 TA_API uint32_t ta_system_effects(ta_system *system, const ta_effect **out);
@@ -346,7 +351,7 @@ typedef struct ta_actor_info {
     uint64_t datamodel_instance; /* its datamodel instance handle (0 while hibernated), for
                              datamodel-side inspection such as ta_datamodel_ecmascript_payload_eval */
     uint32_t invocations; /* running invocations (SCXML sessions it invoked, external ones) */
-    uint32_t pad;
+    uint32_t services;    /* of those, the external ones (a migration carries them along) */
 } ta_actor_info;
 
 /* Watch an actor (on: 1) or stop (0): when a watched actor finishes its

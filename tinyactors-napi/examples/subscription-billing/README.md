@@ -45,10 +45,10 @@ What makes the migration interesting:
   there it moves at once. Once release 2 is deployed, the application
   holds a new coupon for a subscription still on release 1 and sends it
   when the migration moves it, so no new stamp keeps it back.
-- **A payment in flight.** An actor running an invocation moves only when
-  it ends. A bank that answers in three days holds its subscription past
-  the migration's timeout: the result lists it as pending, and a second
-  migration moves it once the charge has answered.
+- **A payment in flight.** An actor running a service moves at once, its
+  invocation with it, when release 2's state has the same `<invoke>` (the
+  same `id` and `type`): a bank that answers in three days answers
+  release 2, which handles the invoice.
 - **Hibernated actors.** With `wake: true` the migration asks the host
   for each; the host, given a `store` and a `resident` bound, loads them
   as room allows and hibernates the surplus after each turn, so the
@@ -79,13 +79,12 @@ day 45 of four months of business:
    business go on for ten minutes of the host's clock, while the host
    loads the hibernated actors the migration asked for as its resident
    bound allows. The timeout keeps an actor that cannot be reached (a
-   payment in flight) from holding the migration open.
+   hibernated one nothing loads) from holding the migration open.
 4. **Find who is left** on release 1. `migrationDone` counts the actors
    that failed but does not name them, so `leftBehind` asks the host about
    every live actor (`actorList`, then `actorGet` for its segment).
 5. **Come back for them** with a migration per session (`retry`): their
-   payments have answered by then, and their coupons have run out. Repeat
-   until nothing is left.
+   coupons have run out by then. Repeat until nothing is left.
 6. **Check that release 1 is gone:** `hostStats` counts the retired
    segments, and release 1's retires once no actor runs on it.
 
@@ -123,7 +122,8 @@ name with `host.chart` first.
   hibernation and migration.
 - **Invoked services** (`urn:billing:payments`): one invocation per
   charge, answered with `done` or `sendBack` from the gateway's promise;
-  an invocation in flight holds its actor's migration.
+  an invocation in flight moves with its actor to release 2, which
+  keeps its `<invoke>`.
 - **Hibernation** (the host's `store` and `resident` options): most
   subscriptions spend their month waiting. The host hibernates the
   coldest past the bound after each turn and loads an actor back when an

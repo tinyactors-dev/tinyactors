@@ -159,6 +159,7 @@ static const layout_member system_members[] = {
     MEMBER(ta_system, sequence, "u64", 0),
     MEMBER(ta_system, next_serial, "u64", 0),
     MEMBER(ta_system, serial_high, "u64", 0),
+    MEMBER(ta_system, next_invocation, "u64", 0),
     MEMBER(ta_system, stats_delivered, "u64", 0),
     MEMBER(ta_system, stats_fuel, "u64", 0),
     MEMBER(ta_system, stats_turns, "u64", 0),
@@ -252,6 +253,7 @@ static const layout_member request_members[] = {
     MEMBER_WHEN(ta_request, type, "u32", "string", &request_external),
     MEMBER_WHEN(ta_request, next, "u32", "index:requests", &request_spawn),
     MEMBER(ta_request, ended, "u32", 0),
+    MEMBER(ta_request, invocation, "u64", 0),
 };
 static const layout_member effect_record_members[] = {
     MEMBER(ta_effect_record, kind, "u32", 0),
@@ -269,6 +271,7 @@ static const layout_member effect_record_members[] = {
     MEMBER(ta_effect_record, payload, "u64", 0),
     MEMBER(ta_effect_record, delay, "u64", 0),
     MEMBER(ta_effect_record, serial, "u64", 0),
+    MEMBER(ta_effect_record, invocation, "u64", 0),
     MEMBER(ta_effect_record, trace, "ta_trace_context", 0),
 };
 static const layout_member effect_members[] = {
@@ -288,6 +291,7 @@ static const layout_member effect_members[] = {
     MEMBER(ta_effect, datamodel, "u32", 0),
     MEMBER(ta_effect, pad, "u32", 0),
     MEMBER(ta_effect, trace, "ta_trace_context", 0),
+    MEMBER(ta_effect, invocation, "u64", 0),
 };
 static const layout_member trace_rule_compiled_members[] = {
     MEMBER(ta_trace_rule_compiled, at, "u8", 0),

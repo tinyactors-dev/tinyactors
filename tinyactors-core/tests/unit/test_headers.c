@@ -25,6 +25,9 @@ ABI_CHECK(sizeof(ta_version) == 16 && offsetof(ta_version, abi) == 12, version_i
 ABI_CHECK(sizeof(ta_image) == 256, image_view_fixed);
 ABI_CHECK(offsetof(ta_event_in, size) == 0, event_in_size_first);
 ABI_CHECK(offsetof(ta_event_in, session) == 16, event_in_session_offset);
+ABI_CHECK(offsetof(ta_event_in, trace_flags) == 12, event_in_trace_flags_offset);
+ABI_CHECK(offsetof(ta_event_in, invocation) % 8 == 0, event_in_invocation_aligned);
+ABI_CHECK(offsetof(ta_effect, invocation) % 8 == 0, effect_invocation_aligned);
 ABI_CHECK(offsetof(ta_effect, size) == 0, effect_size_first);
 ABI_CHECK(offsetof(ta_system_config, size) == 0, config_size_first);
 ABI_CHECK(offsetof(ta_datamodel_ecmascript_config, size) == 0, ecmascript_config_size_first);

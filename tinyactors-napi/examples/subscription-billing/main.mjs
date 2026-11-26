@@ -37,7 +37,7 @@ export async function run({ customers = 200, trials = 40, seed = 1, maxResident 
   const pick = (list) => list[Math.floor(next() * list.length)];
   const clock = new SimulatedClock();
   // some banks answer three days later: their renewals may be in flight
-  // when the rollout reaches them
+  // when the rollout reaches them, and move with their subscriptions
   const slow = new Set();
   const gateway = new PaymentGateway({ clock, latencyMs: (customer) => (slow.has(customer) ? 3 * DAY : 0) });
   const billing = new Billing({

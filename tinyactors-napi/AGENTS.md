@@ -355,11 +355,11 @@ The rules the Python binding follows hold here too (bindings.md, sections
   invokeid are the last invocation's strings when the text is the same,
   so a population shares them. What the handler returns is the service,
   kept with its record as `[invocation, service]` in a `Map` keyed by
-  core's (`SEGMENT`, `TOKEN`) as one `bigint`, on the handlers object the
+  core's `INVOCATION` id, a `bigint`, on the handlers object the
   wrapper holds: no `napi_ref`, no table of invoke ids, and gone with the
   handlers at close (dropped, not stopped).
   **`invocation.sendBack(event, data?, {traceparent}?)`** is `ta_host_send`
-  with `TA_EVENT_IN_FROM_INVOKE` and the token, **`invocation.done(data?,
+  with `TA_EVENT_IN_FROM_INVOKE` and the id, **`invocation.done(data?,
   {traceparent}?)`** with `TA_EVENT_IN_INVOKE_DONE` (the entry goes); both
   keep the invoke's trace unless given one (`null`: a new trace) and throw
   `TA_ERROR_STALE` once it ended or the host closed. A `TA_EFFECT_SEND`
@@ -382,7 +382,7 @@ The rules the Python binding follows hold here too (bindings.md, sections
   (unhandled, as a handler's promise's); after `close()` a settling
   promise is ignored. No handler, or a handler that throws: `ta_host_send`
   with `TA_EVENT_IN_ERROR_COMMUNICATION | TA_EVENT_IN_FROM_INVOKE` to the
-  invoker, none when an UNINVOKE of the same token follows in the open
+  invoker, none when an UNINVOKE of the same invocation follows in the open
   batch; a handler's error is reported as "The loop" says, while a type
   with no handler throws nothing (a chart picks the type: an untrusted
   one must not end the process). A failed start

@@ -112,9 +112,11 @@ void ta_system_deliver(ta_system *system, uint32_t sender, uint32_t event_index,
     }
     case TA_ROUTE_CHILD:
         if (arg & TA_EXTERNAL_INVOKE_BIT) { /* external invoke: hand to host */
-            ta_effect_record *effect = ta_system_effect_push(system, TA_EFFECT_SEND, sender);
+            uint32_t ri = ta_pool_resolve(&system->requests, arg & ~TA_EXTERNAL_INVOKE_BIT);
+            ta_effect_record *effect =
+                ri == TA_NIL ? (ta_effect_record *)0 : ta_system_effect_push(system, TA_EFFECT_SEND, sender);
             if (effect) {
-                effect->token = arg & ~TA_EXTERNAL_INVOKE_BIT;
+                effect->invocation = ((const ta_request *)ta_pool_at(&system->requests, ri))->invocation;
                 effect->event_name = event->name;
                 ta_shared_string_retain(core, event->name);
                 effect->event = event_index;
@@ -447,7 +449,7 @@ uint32_t ta_system_external_invocation(ta_system *system, uint32_t from, ta_effe
         out->kind = TA_EFFECT_INVOKE;
         out->actor = request->actor;
         out->session = actor_at(system, parent)->serial;
-        out->token = ta_pool_handle(&system->requests, i);
+        out->invocation = request->invocation;
         out->io_processor = TA_NIL;
         out->flags = TA_EFFECT_FLAG_RESTORED;
         out->target = ta_shared_string_get(core, request->source);
@@ -473,6 +475,13 @@ static uint32_t invoke(ta_system *system, uint32_t parent, const ta_core_out *ou
     ta_actor *pa = actor_at(system, parent);
     ta_instance *pin = ta_actor_instance(system, pa);
     if (out->type != TA_NIL) { /* external invoke: the host runs it */
+        if (system->next_invocation >= system->config.last_serial) {
+            /* every id of the system's range was handed out: an id is never
+             * given twice in a host (docs/adr/0018) */
+            release_invoke_payload(system, ta_actor_chart(system, pa), out->payload);
+            ta_core_raise_platform(core, pin, "error.execution", TA_NIL);
+            return TA_POOL_NONE;
+        }
         uint32_t ri = ta_system_request_alloc(system, parent);
         ta_effect_record *effect = ri == TA_NIL
                                        ? (ta_effect_record *)0
@@ -503,7 +512,8 @@ static uint32_t invoke(ta_system *system, uint32_t parent, const ta_core_out *ou
             request->payload = out->payload;
         }
         uint32_t tok = ta_pool_handle(&system->requests, ri);
-        effect->token = tok;
+        request->invocation = ++system->next_invocation;
+        effect->invocation = request->invocation;
         effect->target = out->source;
         ta_shared_string_retain(core, out->source);
         effect->event_name = out->type;
@@ -671,7 +681,7 @@ void ta_system_uninvoke(ta_system *system, uint32_t parent, const ta_core_out *o
         uint32_t ri = ta_pool_resolve(&system->requests, out->child & ~TA_EXTERNAL_INVOKE_BIT);
         if (ri == TA_NIL) return;
         ta_effect_record *effect = ta_system_effect_push(system, TA_EFFECT_UNINVOKE, parent);
-        if (effect) effect->token = out->child & ~TA_EXTERNAL_INVOKE_BIT;
+        if (effect) effect->invocation = ((const ta_request *)ta_pool_at(&system->requests, ri))->invocation;
         purge_from(system, parent, out->child);
         ta_system_external_free(system, ri);
         return;
@@ -700,9 +710,11 @@ void ta_system_autoforward(ta_system *system, uint32_t parent, const ta_core_out
     /* the copy is caused by the parent's macrostep, which took the event */
     ta_instance *pin = ta_actor_instance(system, actor_at(system, parent));
     if (out->child & TA_EXTERNAL_INVOKE_BIT) { /* external invoke: forward via host */
-        ta_effect_record *effect = ta_system_effect_push(system, TA_EFFECT_SEND, TA_NIL);
+        uint32_t ri = ta_pool_resolve(&system->requests, out->child & ~TA_EXTERNAL_INVOKE_BIT);
+        ta_effect_record *effect =
+            ri == TA_NIL ? (ta_effect_record *)0 : ta_system_effect_push(system, TA_EFFECT_SEND, TA_NIL);
         if (effect) {
-            effect->token = out->child & ~TA_EXTERNAL_INVOKE_BIT;
+            effect->invocation = ((const ta_request *)ta_pool_at(&system->requests, ri))->invocation;
             effect->event_name = ta_event_at(core, source)->name;
             ta_shared_string_retain(core, effect->event_name);
             effect->payload = ta_event_at(core, source)->payload;

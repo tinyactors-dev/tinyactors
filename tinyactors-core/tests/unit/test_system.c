@@ -231,7 +231,8 @@ static void test_external_invoke_and_request(void) {
     uint32_t n = ta_system_effects(t.system, &effect);
     CHECK_EQUAL(n, 1);
     CHECK_EQUAL(effect[0].kind, TA_EFFECT_INVOKE);
-    uint32_t tok = effect[0].token;
+    uint64_t invocation = effect[0].invocation;
+    CHECK(invocation != 0);
     CHECK(effect[0].event.length == 22); /* type */
     CHECK(effect[0].target.length == 7 && memcmp(effect[0].target.pointer, "svc://x", 7) == 0);
     CHECK(effect[0].sendid.length == 3 &&
@@ -242,13 +243,13 @@ static void test_external_invoke_and_request(void) {
     memset(&event, 0, sizeof event);
     event.size = sizeof event;
     event.target = a;
-    event.token = tok;
+    event.invocation = invocation;
     event.flags = TA_EVENT_IN_FROM_INVOKE;
     event.name = (ta_string_view){"progress", 8};
     CHECK_EQUAL(ta_system_send(t.system, &event), TA_OK);
     event.flags = TA_EVENT_IN_INVOKE_DONE;
     CHECK_EQUAL(ta_system_send(t.system, &event), TA_OK);
-    event.token = tok + 12345; /* bogus token */
+    event.invocation = invocation + 12345; /* no invocation of the actor */
     CHECK_EQUAL(ta_system_send(t.system, &event), TA_ERROR_STALE);
     ta_system_run(t.system, 100000);
     CHECK(strcmp(tsys_var(&t, a, "got"), "progress") == 0); /* finalize ran for child events */

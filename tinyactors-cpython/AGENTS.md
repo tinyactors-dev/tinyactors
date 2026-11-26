@@ -433,10 +433,10 @@ Decided by the maintainer (2026-10-13); every item is in
   of `session`, `invokeid` (`SENDID`), `type`, `src` (`TARGET`), `data`
   (the payload's value), `traceparent`; the type, src and invokeid are
   interned, shared by a population. What the handler returns is the
-  service, kept in a dict on the host keyed by core's (`SEGMENT`,
-  `TOKEN`), as bindings.md says: no table of invoke ids.
+  service, kept in a dict on the host keyed by core's `INVOCATION`
+  id, as bindings.md says: no table of invoke ids.
   **`invocation.send_back(event, data=None)`** is `ta_host_send` with
-  `TA_EVENT_IN_FROM_INVOKE` and the token, **`invocation.done(data=None)`**
+  `TA_EVENT_IN_FROM_INVOKE` and the id, **`invocation.done(data=None)`**
   with `TA_EVENT_IN_INVOKE_DONE` (the service is dropped then); both
   refuse with `TA_ERROR_STALE` once it ended. A `TA_EFFECT_SEND` with
   `IO_PROCESSOR` `TA_NIL` goes to the service's **`receive(send)`**
@@ -445,7 +445,7 @@ Decided by the maintainer (2026-10-13); every item is in
   handler that raises: `ta_host_send` with
   `TA_EVENT_IN_ERROR_COMMUNICATION` to the invoker, and a handler's
   exception is raised after the turn (no handler raises nothing: a chart
-  picks the type); none when an UNINVOKE of the same token follows
+  picks the type); none when an UNINVOKE of the same invocation follows
   in the open batch (cancelled in the run that started it). A failed
   start stays as an entry marked failed, so each send to it gets
   `ERROR_COMMUNICATION` with its sendid, until the UNINVOKE (no `stop`).

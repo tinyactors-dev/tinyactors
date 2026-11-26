@@ -119,7 +119,7 @@ read in one sitting and have no dependencies.
 |-------|------|---------|
 | `ta_arena` | Bump allocator over a caller buffer with *measure mode* (NULL base): the **same carving code** computes `ta_system_layout()` and performs `ta_system_init()`, so sizing and placement can never disagree. Mark/reset for scratch. | system init, compiler scratch (chunked variant via `ta_allocator`), image verifier |
 | `ta_pool` | Fixed-stride slot pool, `u32` indices, intrusive free list, 8-bit generation per slot. Self-relative offsets ⇒ relocatable with `memcpy`. | actors, events, timers, workspaces, requests, invoke records |
-| `ta_handle` | `u32` = `generation:8 | index+1:24`; `0` is invalid. Stale handles fail cheaply. Index width is a compile-time constant. | every ABI-visible id (actor, request, invoke token) |
+| `ta_handle` | `u32` = `generation:8 | index+1:24`; `0` is invalid. Stale handles fail cheaply. Index width is a compile-time constant. | every ABI-visible id (actor, request) |
 | `ta_slab` | Page-based size-class allocator over a fixed region (pages assigned to a class on demand, returned when empty). | variable-size instances (chart-dependent size), refcounted dynamic strings (dynamic event names, `idlocation` sendids, external origins) |
 | `ta_bitset` | Inline ops over `u32` words: test/set/clear, and/or/andnot, range-mask, find-next/prev set bit, popcount. `u32` words keep snapshots portable across 32/64-bit hosts. | configuration, exit/entry sets, history, enabled-transition sets, invoke-pending |
 | `ta_index_queue` | Intrusive FIFO of `u32` indices: `{head, tail}` + a `next` field at a known offset inside each record. Zero allocation per enqueue. | internal queues, mailboxes, run queue, per-actor timer lists, free lists |
@@ -710,7 +710,7 @@ typedef struct ta_run {
 typedef struct ta_effect {   /* fixed layout, size-prefixed */
   uint32_t size, kind;       /* TA_EFFECT_SEND, TA_EFFECT_REQUEST, TA_EFFECT_INVOKE, TA_EFFECT_UNINVOKE,
                                 TA_EFFECT_LOG, TA_EFFECT_DONE, TA_EFFECT_ERROR */
-  uint32_t actor, token;     /* token: request id / invoke token / send token */
+  uint32_t actor, token;     /* token: a REQUEST's id */
   uint32_t io_processor, flags;    /* NEEDS_RESPONSE, ... */
   ta_string_view   target, event, sendid, aux;
   uint64_t payload;
@@ -724,7 +724,7 @@ One FFI crossing drains the whole batch.
 Requests (`NEEDS_RESPONSE`): dynamic `srcexpr` for invoke/data, custom actions
 declared asynchronous. Fire-and-forget: external sends, external invoke
 start/cancel, log, done. External invokes report back via
-`ta_system_send` with `ta_event_in.invoke_token` set (and a
+`ta_system_send` with `ta_event_in.invocation` set (and a
 `TA_EVENT_IN_INVOKE_DONE` flag), so the system can generate
 `done.invoke.<id>`, apply `finalize`, and drop events from cancelled invokes.
 
@@ -876,7 +876,7 @@ from the sections above, this list is authoritative:
 | Requests | `TA_EFFECT_REQUEST` is used for dynamic `<invoke srcexpr>` that names no chart in the image; answer with `ta_system_resume` and `{.request = token, .status = TA_OK, .result = chart_index + 1}`. The actor is **not** blocked meanwhile (invoke is asynchronous). `srcexpr` values `file:x.scxml` / `./x.scxml` resolve to linked charts named `x.scxml`. |
 | Dynamic documents | Images are immutable, so `<invoke><content expr>` resolves the document *text* against SCXML documents that appear literally in the image (e.g. inside `<assign>`/`<data>`), which the compiler precompiles under their whitespace-normalized text; anything else becomes a host request. |
 | BasicHTTP / I/O | a send that leaves the system parks its sender (`TA_ACTOR_WAIT_EXTERNAL`, `TA_EFFECT_FLAG_WAITING`) until the effect is acknowledged, so the host can answer within the sender's macrostep while the other actors run (`ta_host_run` reports `TA_RUN_EFFECTS` while a sender waits); `TA_EVENT_IN_ERROR_COMMUNICATION` places `error.communication` in the sender's **internal** queue; `ta_event_in.raw` becomes `_event.raw`. |
-| Effect field mapping | `LOG`: `auxiliary`=label, `event`=text. `SEND`: `target`, `event`, `sendid`, `payload`, `io_processor`. `INVOKE`: `event`=type, `target`=src, `sendid`=invokeid, `payload`=params, `token`. `DONE`: `target`=actor name, `payload`=donedata, `auxiliary`=id of the top-level `<final>` that ended the session. `REQUEST`: `auxiliary`=src, `token`. Views are materialized when `ta_system_effects` is called. |
+| Effect field mapping | `LOG`: `auxiliary`=label, `event`=text. `SEND`: `target`, `event`, `sendid`, `payload`, `io_processor`. `INVOKE`: `event`=type, `target`=src, `sendid`=invokeid, `payload`=params, `invocation` (its id, unique in the system's session range and kept across a migration). `DONE`: `target`=actor name, `payload`=donedata, `auxiliary`=id of the top-level `<final>` that ended the session. `REQUEST`: `auxiliary`=src, `token`. Views are materialized when `ta_system_effects` is called. |
 | Exhaustion | Event/slab **and timer** exhaustion makes the kernel return without executing the instruction (retried after growth) — a full timer pool is backpressure (`TA_RUN_EXHAUSTED`, `detail = TA_POOL_TIMERS`), never a dropped `<send delay>`. The `TA_POOL_*` codes are public (`tinyactors/system.h`). `ta_system_deinit` drops the run queues before reclaiming, so tearing down hundreds of thousands of runnable actors is linear. Actor/slab exhaustion while spawning an invoked child parks the spawn as a pending request; `run` returns `TA_RUN_EXHAUSTED` and retries it first next time. `ta_runtime_run` grows by relocation automatically. |
 | Memory | Actor record 48 B; instance = 64 B header (with the step counters and the current macrostep's trace context, ADR 0006) + configuration and to-invoke bitsets (+ late-binding / history bitsets only when the chart needs them) + history storage + 2 words per invoke — 56 B for a 2-state chart. Slab classes are half-steps (16, 24, 32, 48, …). Measured: 100 000 actors ⇒ 14.3 MB region (143 B/actor including all pools). |
 | Cross-system SCXML | The system's base URI (`ta_system_config.base`, e.g. `tinyactors://a/`) makes sessions advertise `<base>#_scxml_<id>`; SCXML sends to the own base are delivered locally, other non-`#` SCXML targets become `TA_EFFECT_SEND` for the SCXML processor (`io_processor` 0); the host delivers them with `ta_system_actor_by_session()` and an `origin` so replies via `_event.origin` work. Used by the Node binding's segments and the torture chamber. |
@@ -999,7 +999,7 @@ A chart version is a new image, so a new version of a system is a new
 - **`ta_actor_export`** = hibernate + leave, for a root actor and the
   sessions it invoked (its session tree): every session idle at a stable
   point with an empty mailbox and no pending request; host-run (external)
-  invocations cannot move. The export blob is a header and one record per
+  invocations move with their actor. The export blob is a header and one record per
   session in preorder: its state (as hibernation writes it), its pending
   delayed sends (absolute due ticks on the shared clock, their rank in the
   tree's firing order, route, target/name/sendid as text, the payload as a
@@ -1014,12 +1014,22 @@ A chart version is a new image, so a new version of a system is a new
   adopts parents before children, re-links slots and timers, and rolls back
   children-first on failure. `ta_blob_migrate` translates a blob of one
   session and refuses larger trees (`TA_ERROR_UNSUPPORTED`); `ta_host`
-  migrates an actor with running invocations (`ta_actor_info.invocations`)
-  once they have finished, if the migration has a timeout to wait until;
-  without one it fails the actor with `TA_ERROR_STATE` at once, since an
-  invocation may never finish.
+  migrates an actor with running SCXML invocations (`ta_actor_info.invocations`
+  less its `services`) once they have finished, if the migration has a
+  timeout to wait until; without one it fails the actor with
+  `TA_ERROR_STATE` at once, since an invocation may never finish. An
+  actor's external invocations (its services, `ta_actor_info.services`) do
+  not hold it back: the blob carries each one (its id, slot, type, src,
+  invoke id and params), and it goes on where the actor is adopted, under
+  the same id.
 - **`ta_blob_migrate`** (pure) translates the blob to another chart: states by
-  id; the mapped set plus ancestors is completed top-down to a legal
+  id; an external invocation goes on in the new chart's slot when its state
+  is kept and active and has an `<invoke>` of the type it runs with and the
+  same authored id (one without an id: when its state has exactly one such
+  `<invoke>` in both versions), and its delayed sends to it follow it; the
+  others are left out, and the host stops their services
+  (`TA_EFFECT_UNINVOKE`), and a kept state whose services were all stopped
+  starts the new version's invokes; the mapped set plus ancestors is completed top-down to a legal
   configuration (compound without an active child → its initial targets,
   history defaults resolved; parallel → all regions; extra children dropped);
   history recordings kept only if every stored state still exists under the

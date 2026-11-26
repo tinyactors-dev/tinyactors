@@ -71,7 +71,7 @@ Not session state, by design:
 | 14 | ✓ stays (and keeps accepting events) | ✗ unless empty | ✗ | ✓ |
 | 15 | ✗ unless empty; a parked `error.communication` moves in on wake | ✗ unless empty | ✗ | ✓ |
 | 16 | ✗ not at a stable point | ✗ | ✗ | ✓ (mid-macrostep snapshots are valid) |
-| 17 | ✗ | ✗ (external invocations cannot move) | ✗ | ✓ |
+| 17 | ✗ | ✗ pending requests; ✓ external invocations, in the blob (id, slot, type, src, invoke id, params as a value) | ✓ kept when their state and `<invoke>` are, else stopped (`TA_EFFECT_UNINVOKE`) | ✓ |
 | 18 | ✓ applied on wake | ✗ | ✗ | ✓ |
 | 19 | ✓ instance header | ✓ instance header | ✓ copied with the header | ✓ |
 | 20 | ✓ stays in the region | ✓ in the blob, as values (re-created on adoption; untraced if the adopting system's pool is full or its tracing is off) | ✓ | ✓ region |
@@ -85,7 +85,12 @@ Why the refusals:
   first) or export the tree.
 - **Export needs every session idle with empty queues** (14–18): queued events
   and requests are in flight *to* the session; the host runs the system first
-  (the next `ta_system_run` drains them) and exports then.
+  (the next `ta_system_run` drains them) and exports then. An external
+  invocation is no request in flight: it is a service the embedder runs,
+  named by an id that does not change with the segment, so it leaves with
+  its actor. Its id is unique in the host, not across a
+  host and a copy restored from its snapshot, which go on giving the same
+  ids: it is no idempotency key for a service outside the process.
 - **Snapshots** are a copy of the whole host, every segment and chart version
   at once: for rehearsing a deploy on a copy, capturing a host for a
   developer, preparing tests, and taking a host out of the process for a

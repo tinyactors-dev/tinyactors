@@ -1298,6 +1298,7 @@ static ta_status effect_copy(ta_host *host, uint32_t si, const ta_effect *effect
                             : root_of(&host->segments[si], effect->actor);
     if (!host_effect->root) host_effect->root = effect->session;
     host_effect->token = effect->token;
+    host_effect->invocation = effect->invocation;
     host_effect->io_processor = io_processor;
     host_effect->flags = effect->flags;
     host_effect->delay_hint = effect->delay_hint;
@@ -1376,6 +1377,7 @@ uint64_t ta_host_effect_number(const ta_host *host, uint32_t index, uint32_t fie
     case TA_EFFECT_FIELD_SESSION: return effect->session;
     case TA_EFFECT_FIELD_ROOT: return effect->root;
     case TA_EFFECT_FIELD_TOKEN: return effect->token;
+    case TA_EFFECT_FIELD_INVOCATION: return effect->invocation;
     case TA_EFFECT_FIELD_IO_PROCESSOR: return effect->io_processor;
     case TA_EFFECT_FIELD_FLAGS: return effect->flags;
     case TA_EFFECT_FIELD_MIGRATION: return effect->migration;
@@ -1811,11 +1813,15 @@ static int migrate_one(ta_host *host, host_migration *migration, uint64_t sessio
     if (!version) return MIGRATE_SKIP;
     host_segment *from = &host->segments[si], *to = &host->segments[version->segment];
     if (actor_info.state == TA_ACTOR_HIBERNATED) return MIGRATE_ASLEEP;
-    if (actor_info.invocations) return migrate_invoking(host, migration, session);
+    /* SCXML invocations: their sessions move as a tree, untranslated. Its
+     * services (external invocations) move with it (docs/adr/0018) */
+    if (actor_info.invocations > actor_info.services) return migrate_invoking(host, migration, session);
     uint32_t chart = version->chart, tseg = version->segment;
     ta_string_view key = chart_key(to->image, chart);
-    /* everything the move needs once the actor has left its segment */
-    if (!host_effects_reserve(host, 1, key.length) || !moved_reserve(host, 1) || !failure_reserve(host, migration))
+    /* everything the move needs once the actor has left its segment: its
+     * MIGRATED, and an UNINVOKE for each service the new version drops */
+    if (!host_effects_reserve(host, 1 + actor_info.services, key.length) || !moved_reserve(host, 1) ||
+        !failure_reserve(host, migration))
         return MIGRATE_NO_MEMORY;
     /* between the segments' runs (ta_host_run's migration step): the blob grows
      * through the host's allocator while it is written, once */
@@ -1861,9 +1867,23 @@ static int migrate_one(ta_host *host, host_migration *migration, uint64_t sessio
     moved_put(host, session, (uint32_t)(session >> SERIALS_SHIFT) == tseg ? TA_NIL : tseg);
     to->busy = 1;
     host->migrated++;
-    ta_host_effect *effect = host_effect_new(host, TA_HOST_EFFECT_MIGRATED, tseg);
     uint32_t na = 0;
     host_locate(host, session, NULL, &na);
+    /* the services the translation cancelled (in the export, not in the
+     * migrated blob): stopped as leaving their state stops them */
+    uint64_t id, kept;
+    for (uint32_t k = 0; ta_blob_invocation((ta_bytes){host->blob.bytes, length}, k, &id); k++) {
+        int carried = 0;
+        for (uint32_t j = 0; !carried && ta_blob_invocation((ta_bytes){host->blob2, migrated.length}, j, &kept); j++)
+            carried = kept == id;
+        if (carried) continue;
+        ta_host_effect *uninvoke = host_effect_new(host, TA_EFFECT_UNINVOKE, tseg);
+        uninvoke->actor = na;
+        uninvoke->session = uninvoke->root = session;
+        uninvoke->io_processor = TA_NIL;
+        uninvoke->invocation = id;
+    }
+    ta_host_effect *effect = host_effect_new(host, TA_HOST_EFFECT_MIGRATED, tseg);
     effect->actor = na;
     effect->session = effect->root = session;
     effect->migration = migration->id;

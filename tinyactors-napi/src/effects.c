@@ -596,7 +596,7 @@ static void ta_napi_dispatch_service_send(napi_env env, ta_napi_host *host, uint
  * ioProcessors[i]) or to the transport (0, another system's address): its
  * handler gets the host and a thin view; without a handler the send is
  * failed. A send to an invoked service (TA_NIL) goes to its service, by
- * (segment, token). */
+ * its invocation's id. */
 static void ta_napi_dispatch_send(napi_env env, ta_napi_host *host, uint32_t index) {
     uint32_t processor = (uint32_t)ta_host_effect_number(host->host, index, TA_EFFECT_FIELD_IO_PROCESSOR);
     if (processor == TA_NIL) {
@@ -848,16 +848,16 @@ void ta_napi_take(napi_env env, ta_napi_host *host, bool traces) {
  * INVOKE said, read once before the ack (the service runs until done or
  * cancelled), and how to answer the invoker. Its state is an array under
  * the instance's `invocation` symbol, as a view's is: the Host's wrapper,
- * core's segment and token, its flags, then its fields. The services that
- * run are kept on the handlers object the wrapper holds, in a Map keyed by
- * core's (segment, token) as one bigint, each entry [invocation, service]:
- * nothing but the wrapper holds them, so they go with it at close (dropped,
- * not stopped) and a service that closes over its host is still collected.
- * No table of invoke ids: core's token is the key. */
+ * core's id of the invocation (a bigint), its flags, then its fields. The
+ * services that run are kept on the handlers object the wrapper holds, in a
+ * Map keyed by that id, each entry [invocation, service]: nothing but the
+ * wrapper holds them, so they go with it at close (dropped, not stopped)
+ * and a service that closes over its host is still collected. No table of
+ * invoke ids: core's id is the key, unique in the host and kept when a
+ * migration moves the invoker to another segment. */
 enum {
     TA_NAPI_INVOCATION_HOST,
-    TA_NAPI_INVOCATION_SEGMENT,
-    TA_NAPI_INVOCATION_TOKEN,
+    TA_NAPI_INVOCATION_ID,
     TA_NAPI_INVOCATION_FLAGS,
     TA_NAPI_INVOCATION_SESSION,
     TA_NAPI_INVOCATION_INVOKEID,
@@ -894,21 +894,22 @@ enum { TA_NAPI_INVOCATION_GET_RESTORED = 100, TA_NAPI_INVOCATION_GET_RUNNING = 1
 typedef struct ta_napi_invocation {
     napi_value self, state, wrapper;
     ta_napi_host *host;
-    uint32_t segment, token, flags;
+    uint64_t id;
+    uint32_t flags;
 } ta_napi_invocation;
 
 /* `self` as an invocation; false with a TypeError when it is none. */
 static bool ta_napi_invocation_of(napi_env env, napi_value self, ta_napi_invocation *invocation) {
-    napi_value key = ta_napi_key(env, "invocation");
-    bool array = false;
+    napi_value key = ta_napi_key(env, "invocation"), id;
+    bool array = false, lossless = false;
     memset(invocation, 0, sizeof *invocation);
     invocation->self = self;
     if (key == NULL) return false;
     if (!ta_napi_is(env, self, napi_object) || napi_get_property(env, self, key, &invocation->state) != napi_ok ||
         napi_is_array(env, invocation->state, &array) != napi_ok || !array ||
         napi_get_element(env, invocation->state, TA_NAPI_INVOCATION_HOST, &invocation->wrapper) != napi_ok ||
-        !ta_napi_state_uint32(env, &(ta_napi_slot){invocation->state, TA_NAPI_INVOCATION_SEGMENT, &invocation->segment}) ||
-        !ta_napi_state_uint32(env, &(ta_napi_slot){invocation->state, TA_NAPI_INVOCATION_TOKEN, &invocation->token}) ||
+        napi_get_element(env, invocation->state, TA_NAPI_INVOCATION_ID, &id) != napi_ok ||
+        napi_get_value_bigint_uint64(env, id, &invocation->id, &lossless) != napi_ok || !lossless ||
         !ta_napi_state_uint32(env, &(ta_napi_slot){invocation->state, TA_NAPI_INVOCATION_FLAGS, &invocation->flags})) {
         napi_value ignored;
         napi_get_and_clear_last_exception(env, &ignored);
@@ -940,10 +941,10 @@ static bool ta_napi_invocation_unflag(napi_env env, ta_napi_invocation *invocati
            napi_set_element(env, invocation->state, TA_NAPI_INVOCATION_FLAGS, flags) == napi_ok;
 }
 
-/* The key of an invocation in the Map: core's (segment, token). */
-static napi_value ta_napi_invocation_key(napi_env env, uint32_t segment, uint32_t token) {
+/* The key of an invocation in the Map: core's id of it. */
+static napi_value ta_napi_invocation_key(napi_env env, uint64_t id) {
     napi_value key = NULL;
-    napi_create_bigint_uint64(env, (uint64_t)segment << 32 | token, &key);
+    napi_create_bigint_uint64(env, id, &key);
     return key;
 }
 
@@ -966,12 +967,12 @@ static napi_value ta_napi_services(napi_env env, napi_value wrapper, const ta_na
     return result;
 }
 
-/* The [invocation, service] kept for (segment, token), or undefined. */
+/* The [invocation, service] kept for an invocation's id, or undefined. */
 static napi_value ta_napi_invocation_entry(napi_env env, napi_value wrapper, const ta_napi_invocation *of) {
-    return ta_napi_services(env, wrapper, &(ta_napi_services_call){"get", ta_napi_invocation_key(env, of->segment, of->token), NULL});
+    return ta_napi_services(env, wrapper, &(ta_napi_services_call){"get", ta_napi_invocation_key(env, of->id), NULL});
 }
 
-/* The entry of effect `index`'s (segment, token) and its invocation read;
+/* The entry of effect `index`'s invocation and its invocation read;
  * false when there is none (done, or never kept) or the read failed (the
  * error kept on the host). */
 typedef struct ta_napi_effect_entry {
@@ -985,8 +986,7 @@ static bool ta_napi_effect_entry_of(napi_env env, ta_napi_effect_entry *found) {
     ta_napi_host *host = found->host;
     uint32_t index = found->index;
     napi_value wrapper = ta_napi_self(env, host), record;
-    ta_napi_invocation of = {NULL, NULL, NULL, host, (uint32_t)ta_host_effect_number(host->host, index, TA_EFFECT_FIELD_SEGMENT),
-                             (uint32_t)ta_host_effect_number(host->host, index, TA_EFFECT_FIELD_TOKEN), 0};
+    ta_napi_invocation of = {NULL, NULL, NULL, host, ta_host_effect_number(host->host, index, TA_EFFECT_FIELD_INVOCATION), 0};
     if (wrapper == NULL) return false;
     found->entry = ta_napi_invocation_entry(env, wrapper, &of);
     if (found->entry == NULL) {
@@ -1034,7 +1034,7 @@ static bool ta_napi_invocation_post(napi_env env, ta_napi_invocation *invocation
     memset(&event, 0, sizeof event);
     event.size = sizeof event;
     event.flags = what->flags;
-    event.token = invocation->token;
+    event.invocation = invocation->id;
     bool lossless = false;
     ta_napi_text name_text = {&host->arena, "a service's event is a string", {NULL, 0}};
     ta_napi_text trace_text = {&host->arena, "a traceparent is W3C text, a string, or null for a new trace", {NULL, 0}};
@@ -1068,7 +1068,7 @@ static bool ta_napi_invocation_post(napi_env env, ta_napi_invocation *invocation
 static bool ta_napi_invocation_end(napi_env env, ta_napi_invocation *invocation) {
     if (!ta_napi_invocation_flag(env, invocation, TA_NAPI_INVOCATION_ENDED)) return false;
     return ta_napi_services(env, invocation->wrapper,
-                            &(ta_napi_services_call){"delete", ta_napi_invocation_key(env, invocation->segment, invocation->token), NULL}) != NULL;
+                            &(ta_napi_services_call){"delete", ta_napi_invocation_key(env, invocation->id), NULL}) != NULL;
 }
 
 /* The invocation failed (its start, or its service crashed): unless it
@@ -1091,7 +1091,7 @@ static void ta_napi_invocation_fail(napi_env env, ta_napi_invocation *invocation
         napi_create_array_with_length(env, 2, &entry) == napi_ok && napi_set_element(env, entry, 0, invocation->self) == napi_ok &&
         napi_set_element(env, entry, 1, ta_napi_undefined(env)) == napi_ok &&
         ta_napi_services(env, invocation->wrapper,
-                         &(ta_napi_services_call){"set", ta_napi_invocation_key(env, invocation->segment, invocation->token), entry}) != NULL &&
+                         &(ta_napi_services_call){"set", ta_napi_invocation_key(env, invocation->id), entry}) != NULL &&
         failure->tell) {
         ta_napi_service_event failed = {TA_NAPI_INVOCATION_FAILURE, NULL, ta_napi_undefined(env), NULL, failure->sendid};
         ta_napi_invocation_post(env, invocation, &failed);
@@ -1236,12 +1236,11 @@ static napi_value ta_napi_invocation_new(napi_env env, ta_napi_host *host, uint3
         napi_create_array_with_length(env, TA_NAPI_INVOCATION_COUNT, &state) != napi_ok ||
         napi_set_element(env, state, TA_NAPI_INVOCATION_HOST, wrapper) != napi_ok)
         return NULL;
-    const uint32_t numbers[] = {(uint32_t)ta_host_effect_number(host->host, index, TA_EFFECT_FIELD_SEGMENT),
-                                (uint32_t)ta_host_effect_number(host->host, index, TA_EFFECT_FIELD_TOKEN), flags};
-    for (uint32_t i = 0; i < 3; i++)
-        if (napi_create_uint32(env, numbers[i], &value) != napi_ok ||
-            napi_set_element(env, state, TA_NAPI_INVOCATION_SEGMENT + i, value) != napi_ok)
-            return NULL;
+    if (napi_create_bigint_uint64(env, ta_host_effect_number(host->host, index, TA_EFFECT_FIELD_INVOCATION), &value) != napi_ok ||
+        napi_set_element(env, state, TA_NAPI_INVOCATION_ID, value) != napi_ok ||
+        napi_create_uint32(env, flags, &value) != napi_ok ||
+        napi_set_element(env, state, TA_NAPI_INVOCATION_FLAGS, value) != napi_ok)
+        return NULL;
     napi_value fields[] = {
         ta_napi_effect_session(env, &view),
         ta_napi_invocation_text(env, &view, &(ta_napi_shared_text){last, 0, TA_EFFECT_FIELD_SENDID, false}),
@@ -1261,16 +1260,14 @@ static napi_value ta_napi_invocation_new(napi_env env, ta_napi_host *host, uint3
     return napi_new_instance(env, class, 2, argv, &self) == napi_ok ? self : NULL;
 }
 
-/* An UNINVOKE of the same (segment, token) later in the open batch: the
- * invoker cancelled it in the run that started it, so a failure to start
- * is nobody's news. */
+/* An UNINVOKE of the same invocation later in the open batch: the invoker
+ * cancelled it in the run that started it, so a failure to start is
+ * nobody's news. */
 static bool ta_napi_uninvoked_in_batch(const ta_napi_batch *batch, uint32_t index) {
     ta_host *core = batch->state->host->host;
-    uint64_t segment = ta_host_effect_number(core, index, TA_EFFECT_FIELD_SEGMENT);
-    uint64_t token = ta_host_effect_number(core, index, TA_EFFECT_FIELD_TOKEN);
+    uint64_t id = ta_host_effect_number(core, index, TA_EFFECT_FIELD_INVOCATION);
     for (uint32_t i = index + 1; i < batch->count; i++)
-        if (batch->effects[i].kind == TA_EFFECT_UNINVOKE && ta_host_effect_number(core, i, TA_EFFECT_FIELD_SEGMENT) == segment &&
-            ta_host_effect_number(core, i, TA_EFFECT_FIELD_TOKEN) == token)
+        if (batch->effects[i].kind == TA_EFFECT_UNINVOKE && ta_host_effect_number(core, i, TA_EFFECT_FIELD_INVOCATION) == id)
             return true;
     return false;
 }
@@ -1326,11 +1323,11 @@ static bool ta_napi_invocation_start(napi_env env, ta_napi_invocation *invocatio
     return napi_create_array_with_length(env, 2, &entry) == napi_ok && napi_set_element(env, entry, 0, invocation->self) == napi_ok &&
            napi_set_element(env, entry, 1, ta_napi_undefined(env)) == napi_ok &&
            ta_napi_services(env, invocation->wrapper,
-                            &(ta_napi_services_call){"set", ta_napi_invocation_key(env, invocation->segment, invocation->token), entry}) != NULL;
+                            &(ta_napi_services_call){"set", ta_napi_invocation_key(env, invocation->id), entry}) != NULL;
 }
 
 /* TA_EFFECT_INVOKE: the handler registered for the type starts the
- * service; what it returns is kept, by (segment, token), until done or
+ * service; what it returns is kept, by its invocation's id, until done or
  * UNINVOKE. A promise of the service (an async handler) makes the
  * invocation starting until it settles (ta_napi_invocation_start). No
  * handler, or one that throws: error.communication for the invoker
@@ -1377,7 +1374,7 @@ static void ta_napi_dispatch_invoke(napi_env env, const ta_napi_batch *batch, ui
     if (invocation.flags & TA_NAPI_INVOCATION_ENDED) return; /* the handler called done(): nothing to keep */
     if (napi_create_array_with_length(env, 2, &entry) != napi_ok || napi_set_element(env, entry, 0, record) != napi_ok ||
         napi_set_element(env, entry, 1, result) != napi_ok ||
-        ta_napi_services(env, wrapper, &(ta_napi_services_call){"set", ta_napi_invocation_key(env, invocation.segment, invocation.token), entry}) == NULL)
+        ta_napi_services(env, wrapper, &(ta_napi_services_call){"set", ta_napi_invocation_key(env, invocation.id), entry}) == NULL)
         ta_napi_keep_error(env, host);
 }
 
@@ -1473,7 +1470,7 @@ static napi_value ta_napi_service_method(napi_env env, ta_napi_method *of) {
  * promise has its view filled before the ack, and a rejection is a crash.
  * A service that is starting gets the send as a record, queued for it. */
 static void ta_napi_dispatch_service_send(napi_env env, ta_napi_host *host, uint32_t index) {
-    ta_napi_effect_entry found = {host, index, NULL, NULL, {NULL, NULL, NULL, NULL, 0, 0, 0}};
+    ta_napi_effect_entry found = {host, index, NULL, NULL, {NULL, NULL, NULL, NULL, 0, 0}};
     if (!ta_napi_effect_entry_of(env, &found)) return;
     if (found.invocation.flags & TA_NAPI_INVOCATION_FAILED) { /* a service that never ran: the send fails, as core's do */
         napi_value sendid = ta_napi_effect_text(env, &(ta_napi_view){NULL, NULL, found.invocation.wrapper, host, (double)host->acks, index, TA_NIL, 0},
@@ -1507,7 +1504,7 @@ static void ta_napi_dispatch_service_send(napi_env env, ta_napi_host *host, uint
  * service; none for one that failed or crashed. One that is starting is
  * marked uninvoked: it is stopped once it resolves. */
 static void ta_napi_dispatch_uninvoke(napi_env env, ta_napi_host *host, uint32_t index) {
-    ta_napi_effect_entry found = {host, index, NULL, NULL, {NULL, NULL, NULL, NULL, 0, 0, 0}};
+    ta_napi_effect_entry found = {host, index, NULL, NULL, {NULL, NULL, NULL, NULL, 0, 0}};
     if (!ta_napi_effect_entry_of(env, &found)) return; /* done already, or never kept */
     bool failed = (found.invocation.flags & TA_NAPI_INVOCATION_FAILED) != 0;
     bool starting = (found.invocation.flags & TA_NAPI_INVOCATION_STARTING) != 0;
@@ -1569,7 +1566,7 @@ static napi_value ta_napi_service_started(napi_env env, napi_callback_info info)
     if (napi_create_array_with_length(env, 2, &entry) != napi_ok || napi_set_element(env, entry, 0, invocation.self) != napi_ok ||
         napi_set_element(env, entry, 1, service) != napi_ok ||
         ta_napi_services(env, invocation.wrapper,
-                         &(ta_napi_services_call){"set", ta_napi_invocation_key(env, invocation.segment, invocation.token), entry}) == NULL ||
+                         &(ta_napi_services_call){"set", ta_napi_invocation_key(env, invocation.id), entry}) == NULL ||
         napi_get_array_length(env, queue, &length) != napi_ok)
         return NULL;
     for (uint32_t i = 0; i < length && invocation.host->host != NULL; i++) {

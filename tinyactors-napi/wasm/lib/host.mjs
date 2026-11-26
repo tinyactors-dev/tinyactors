@@ -28,7 +28,7 @@ import { instance } from './state.mjs';
 
 const FIELD = {
   KIND: 1, SEGMENT: 2, SESSION: 4, TOKEN: 6, IO_PROCESSOR: 7, FLAGS: 8, MIGRATION: 9, PAYLOAD: 10, DATAMODEL: 11,
-  CHART: 13, MIGRATED: 14, FAILED: 15, PENDING: 16,
+  CHART: 13, MIGRATED: 14, FAILED: 15, PENDING: 16, INVOCATION: 17,
   TARGET: 32, EVENT: 33, SENDID: 34, AUXILIARY: 35, TRACEPARENT: 36, ORIGIN: 37, WIRE: 64,
 };
 const EFFECT = {
@@ -47,7 +47,7 @@ const NEXT = { YIELD: 0, IDLE: 1, EXHAUSTED: 2, FAULT: 3, REFUSED: 4 };
 const OUTPUT = { METRICS: 1, BLOB: 2, SNAPSHOT: 3, CONFIG: 4, TRACES: 5, LOGS: 6 };
 const TAKE_REFUSED = 0xFFFFFFFF;
 const DATAMODEL_NATIVE = 1, DATAMODEL_QUICKJS = 2;
-const EVENT_WORDS = 19;
+const EVENT_WORDS = 20;
 const SLICE = 256;
 const CONFIG_ERROR = 8192;
 // The longest delay setTimeout keeps (2^31 - 1 ms); a deadline further away
@@ -730,20 +730,21 @@ class HostState {
     this.invocations()?.set(state.key, [record, result]);
   }
 
-  // An UNINVOKE of the same (segment, token) later in the open batch: the
+  // An UNINVOKE of the same invocation later in the open batch: the
   // invoker cancelled it in the run that started it.
   uninvokedInBatch(index) {
-    const segment = this.word(index, FIELD.SEGMENT), token = this.word(index, FIELD.TOKEN);
+    const id = this.number(index, FIELD.INVOCATION);
     for (let i = index + 1; ; i++) {
       const kind = this.word(i, FIELD.KIND);
       if (kind === 0) return false; // past the batch
-      if (kind === EFFECT.UNINVOKE && this.word(i, FIELD.SEGMENT) === segment && this.word(i, FIELD.TOKEN) === token) return true;
+      if (kind === EFFECT.UNINVOKE && this.number(i, FIELD.INVOCATION) === id) return true;
     }
   }
 
+  // Services are keyed by core's id of their invocation: unique in the
+  // host, and kept when a migration moves the invoker to another segment.
   entryOf(index) {
-    const key = invocationKey(this.word(index, FIELD.SEGMENT), this.word(index, FIELD.TOKEN));
-    return this.invocations()?.get(key);
+    return this.invocations()?.get(this.number(index, FIELD.INVOCATION));
   }
 
   dispatchServiceSend(index) {
@@ -821,7 +822,7 @@ function eventWords(words, at, event) {
   words[at] = Number(session & 0xFFFFFFFFn);
   words[at + 1] = Number(session >> 32n);
   words[at + 2] = event.flags ?? 0;
-  words[at + 3] = event.token ?? 0;
+  words[at + 3] = 0; // trace_flags: none from JavaScript
   words[at + 4] = name[0]; words[at + 5] = name[1];
   words[at + 6] = sendid[0]; words[at + 7] = sendid[1];
   words[at + 8] = origin[0]; words[at + 9] = origin[1];
@@ -830,7 +831,9 @@ function eventWords(words, at, event) {
   words[at + 13] = Number(data >> 32n);
   words[at + 14] = raw[0]; words[at + 15] = raw[1];
   words[at + 16] = traceparent[0]; words[at + 17] = traceparent[1];
-  words[at + 18] = 0;
+  const invocation = event.invocation ?? 0n;
+  words[at + 18] = Number(invocation & 0xFFFFFFFFn);
+  words[at + 19] = Number(invocation >> 32n);
 }
 
 // ---- thin views ------------------------------------------------------------------------------
@@ -1094,8 +1097,6 @@ const INVOCATION = { ENDED: 1, FAILED: 2, RESTORED: 4, STARTING: 8, UNINVOKED: 1
 
 let invocationState;
 
-const invocationKey = (segment, token) => (BigInt(segment) << 32n) | BigInt(token);
-
 // A text field of the INVOKE shared with the last invocation's when the
 // text is the same, so a population holds one string of its type, src
 // and invokeid.
@@ -1115,13 +1116,12 @@ class Invocation {
 
   constructor(making, state, index) {
     if (making !== MAKING) throw new TypeError('an Invocation is made by the host and given to its service handler');
-    const segment = state.word(index, FIELD.SEGMENT), token = state.word(index, FIELD.TOKEN);
+    const id = state.number(index, FIELD.INVOCATION);
     this.#state = {
       self: this,
       host: state,
-      segment,
-      token,
-      key: invocationKey(segment, token),
+      id,
+      key: id,
       flags: state.word(index, FIELD.FLAGS) & FLAG_RESTORED ? INVOCATION.RESTORED : 0,
       session: state.number(index, FIELD.SESSION),
       invokeid: sharedText(state, index, 0, FIELD.SENDID),
@@ -1198,7 +1198,7 @@ function postInvocation(state, what) {
     const event = {
       session: state.session,
       flags: what.flags,
-      token: state.token,
+      invocation: state.id,
       name: what.name === undefined ? undefined : module.text(scratch, textOf(what.name, 'a service\'s event is a string')),
       traceparent: module.text(scratch, optionalText(traceparent, 'a traceparent is W3C text, a string, or null for a new trace')),
       sendid: what.sendid === undefined ? undefined : module.text(scratch, optionalText(what.sendid, 'a sendid is a string')),

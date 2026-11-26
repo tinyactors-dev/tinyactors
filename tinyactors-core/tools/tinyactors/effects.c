@@ -103,7 +103,7 @@ static void send_notice(notice *note) {
         ta_cbor_write_end(writer);
     } else {
         if (effect->io_processor == TA_NIL) { /* to a service the client runs */
-            member_number(writer, "invocation", effect->token);
+            member_number(writer, "invocation", effect->invocation);
             member_number(writer, "segment", effect->segment);
         } else if (effect->io_processor - 1 < note->server->processor_count) {
             member_text(writer, "type", note->server->processors[effect->io_processor - 1]);
@@ -183,7 +183,7 @@ static void invoke_notice(notice *note) {
     ta_cbor_writer *writer = &note->writer;
     notice_begin(note, "effect.invoke");
     member_number(writer, "segment", effect->segment);
-    member_number(writer, "invocation", effect->token);
+    member_number(writer, "invocation", effect->invocation);
     member_text(writer, "type", effect->event);
     member_text(writer, "src", effect->target);
     member_text(writer, "invokeid", effect->sendid);
@@ -198,11 +198,11 @@ static void invoke_notice(notice *note) {
 }
 
 /* An invocation cancelled: the client stops what stands in for it; its
- * token is stale from now on. */
+ * id is stale from now on. */
 static void uninvoke_notice(notice *note) {
     notice_begin(note, "effect.uninvoke");
     member_number(&note->writer, "segment", note->effect->segment);
-    member_number(&note->writer, "invocation", note->effect->token);
+    member_number(&note->writer, "invocation", note->effect->invocation);
     notice_end(note);
 }
 

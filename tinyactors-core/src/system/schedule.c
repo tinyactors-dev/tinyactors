@@ -350,12 +350,24 @@ static uint32_t opt_str(ta_core *core, ta_string_view v, int *oom) {
 /* The running external invocation an event from a service names: its
  * token's request, which must be an external invocation of the target
  * actor. NULL otherwise. */
-static ta_request *external_request(ta_system *system, const ta_event_in *event_in) {
-    uint32_t ri = ta_pool_resolve(&system->requests, event_in->token);
-    ta_request *request = ri == TA_NIL ? (ta_request *)0 : (ta_request *)ta_pool_at(&system->requests, ri);
-    return request && request->kind == REQUEST_EXTERNAL_INVOKE && request->actor == event_in->target
-               ? request
-               : (ta_request *)0;
+/* The request of the external invocation `invocation` of the actor at
+ * `index`, found among its invoke slots (at most its chart's <invoke>
+ * count): TA_NIL when it runs none with that id. A hibernated actor runs
+ * none (hibernation refuses an actor with invocations). */
+static uint32_t external_request(ta_system *system, uint32_t index, uint64_t invocation) {
+    ta_actor *actor = ta_actor_at(system, index);
+    if (actor->state == TA_ACTOR_HIBERNATED || !invocation) return TA_NIL;
+    ta_instance *instance = ta_actor_instance(system, actor);
+    const ta_chart_record *chart = &system->core.image_view.charts[instance->chart];
+    const uint32_t *children = ta_instance_word(instance, ta_instance_layout_of(chart).invoke_children);
+    for (uint32_t i = 0; i < chart->invoke_count; i++) {
+        if (!(children[i] & TA_EXTERNAL_INVOKE_BIT)) continue;
+        uint32_t ri = ta_pool_resolve(&system->requests, children[i] & ~TA_EXTERNAL_INVOKE_BIT);
+        if (ri == TA_NIL) continue;
+        const ta_request *request = (const ta_request *)ta_pool_at(&system->requests, ri);
+        if (request->kind == REQUEST_EXTERNAL_INVOKE && request->invocation == invocation) return ri;
+    }
+    return TA_NIL;
 }
 
 /* Also during a run, from a datamodel (system.h): the event takes the path
@@ -377,18 +389,15 @@ ta_status ta_system_send(ta_system *system, const ta_event_in *event_in) {
     ta_string_view traceparent = {(const char *)0, 0};
     if (event_in->size >= offsetof(ta_event_in, traceparent) + sizeof event_in->traceparent)
         traceparent = event_in->traceparent;
-    uint32_t trace_flags =
-        event_in->size >= offsetof(ta_event_in, trace_flags) + sizeof event_in->trace_flags
-            ? event_in->trace_flags
-            : 0;
+    uint32_t trace_flags = event_in->trace_flags;
     ta_trace_ask ask = {TA_TRACE_AT_START, TA_TRACE_FROM_HOST, index, ta_actor_chart(system, actor),
                         TA_NIL};
     if ((event_in->flags & TA_EVENT_IN_ERROR_COMMUNICATION) &&
         (event_in->flags & TA_EVENT_IN_FROM_INVOKE)) {
-        /* the external invocation of the token failed: it is over for the service's side */
-        ta_request *failed = external_request(system, event_in);
-        if (!failed) return TA_ERROR_STALE;
-        failed->ended = 1;
+        /* the external invocation failed: it is over for the service's side */
+        uint32_t failed = external_request(system, index, event_in->invocation);
+        if (failed == TA_NIL) return TA_ERROR_STALE;
+        ((ta_request *)ta_pool_at(&system->requests, failed))->ended = 1;
     }
     if ((event_in->flags & TA_EVENT_IN_ERROR_COMMUNICATION) &&
         actor->state == TA_ACTOR_HIBERNATED) {
@@ -432,7 +441,8 @@ ta_status ta_system_send(ta_system *system, const ta_event_in *event_in) {
     int oom = 0;
     ta_request *request = (ta_request *)0;
     if (event_in->flags & (TA_EVENT_IN_FROM_INVOKE | TA_EVENT_IN_INVOKE_DONE)) {
-        request = external_request(system, event_in);
+        uint32_t ri = external_request(system, index, event_in->invocation);
+        request = ri == TA_NIL ? (ta_request *)0 : (ta_request *)ta_pool_at(&system->requests, ri);
         if (!request || request->ended) { /* not this actor's, or the service said done or failed */
             event->payload = 0; /* the caller's */
             ta_event_release(core, event_index);
@@ -441,7 +451,7 @@ ta_status ta_system_send(ta_system *system, const ta_event_in *event_in) {
         event->invokeid = request->invokeid;
         ta_shared_string_retain(core, event->invokeid);
         event->invoke_slot = (uint16_t)request->slot;
-        event->origin = event_in->token | TA_EXTERNAL_INVOKE_BIT;
+        event->origin = ta_pool_handle(&system->requests, ri) | TA_EXTERNAL_INVOKE_BIT;
         event->flags = TA_EVENT_FLAG_FROM_CHILD | TA_EVENT_FLAG_FROM_EXTERNAL_INVOKE;
     }
     if (event_in->flags & TA_EVENT_IN_INVOKE_DONE) {

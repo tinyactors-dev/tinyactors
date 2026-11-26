@@ -360,16 +360,16 @@ TA_WEB_EXPORT int32_t ta_web_host_spawn(ta_web_host *host) {
 }
 
 /* An event's words, from `at` (TA_WEB_EVENT_WORDS of them): session (2),
- * flags, token, name (2), sendid (2), origin (2), origintype (2), data (a
- * payload handle, 2), raw (2), traceparent (2), trace_flags. */
-enum { TA_WEB_EVENT_WORDS = 19 };
+ * flags, trace_flags, name (2), sendid (2), origin (2), origintype (2), data
+ * (a payload handle, 2), raw (2), traceparent (2), invocation (2). */
+enum { TA_WEB_EVENT_WORDS = 20 };
 static ta_event_in ta_web_event_at(const uint32_t *word) {
     ta_event_in event;
     memset(&event, 0, sizeof event);
     event.size = sizeof event;
     event.session = ta_web_word64(word, 0);
     event.flags = word[2];
-    event.token = word[3];
+    event.trace_flags = word[3];
     event.name = ta_web_text_at(word, 4);
     event.sendid = ta_web_text_at(word, 6);
     event.origin = ta_web_text_at(word, 8);
@@ -377,7 +377,7 @@ static ta_event_in ta_web_event_at(const uint32_t *word) {
     event.data = ta_web_word64(word, 12);
     event.raw = ta_web_text_at(word, 14);
     event.traceparent = ta_web_text_at(word, 16);
-    event.trace_flags = word[18];
+    event.invocation = ta_web_word64(word, 18);
     return event;
 }
 

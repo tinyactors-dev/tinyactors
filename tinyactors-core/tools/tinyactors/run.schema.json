@@ -66,10 +66,10 @@
       "maximum": 4294967295
     },
     "invocation": {
-      "description": "The token of an invocation the client runs, from its `effect.invoke`.",
+      "description": "The id of an invocation the client runs, from its `effect.invoke`: unique in the host, and kept when a migration moves its invoker.",
       "type": "integer",
-      "minimum": 0,
-      "maximum": 4294967295
+      "minimum": 1,
+      "maximum": 18446744073709551615
     },
     "ticks": {
       "description": "The host's clock in ticks at `system.ticksPerSecond` (default 1e9: nanoseconds); it reaches 2^64-1.",
@@ -1107,7 +1107,7 @@
       "additionalProperties": false
     },
     "effect.uninvoke.params": {
-      "description": "An invocation cancelled: stop its stand-in. `session` is its invoker's; the token is stale from now on.",
+      "description": "An invocation cancelled: stop its stand-in. `session` is its invoker's; its id is stale from now on.",
       "type": "object",
       "properties": {
         "batch": {"$ref": "#/$defs/uint64"},

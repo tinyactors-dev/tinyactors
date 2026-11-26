@@ -209,6 +209,10 @@
       "value": 8
     },
     {
+      "name": "TA_EFFECT_FIELD_INVOCATION",
+      "value": 17
+    },
+    {
       "name": "TA_EFFECT_FIELD_IO_PROCESSOR",
       "value": 7
     },
@@ -5322,7 +5326,7 @@
           "type": "uint32_t"
         },
         {
-          "name": "token",
+          "name": "trace_flags",
           "type": "uint32_t"
         },
         {
@@ -5358,12 +5362,8 @@
           "type": "ta_string_view"
         },
         {
-          "name": "trace_flags",
-          "type": "uint32_t"
-        },
-        {
-          "name": "pad",
-          "type": "uint32_t"
+          "name": "invocation",
+          "type": "uint64_t"
         }
       ],
       "layout": {
@@ -5374,7 +5374,7 @@
             "size": 0,
             "target": 4,
             "flags": 8,
-            "token": 12,
+            "trace_flags": 12,
             "session": 16,
             "name": 24,
             "sendid": 40,
@@ -5383,8 +5383,7 @@
             "data": 88,
             "raw": 96,
             "traceparent": 112,
-            "trace_flags": 128,
-            "pad": 132
+            "invocation": 128
           }
         },
         "aarch64": {
@@ -5394,7 +5393,7 @@
             "size": 0,
             "target": 4,
             "flags": 8,
-            "token": 12,
+            "trace_flags": 12,
             "session": 16,
             "name": 24,
             "sendid": 40,
@@ -5403,8 +5402,7 @@
             "data": 88,
             "raw": 96,
             "traceparent": 112,
-            "trace_flags": 128,
-            "pad": 132
+            "invocation": 128
           }
         },
         "wasm32": {
@@ -5414,7 +5412,7 @@
             "size": 0,
             "target": 4,
             "flags": 8,
-            "token": 12,
+            "trace_flags": 12,
             "session": 16,
             "name": 24,
             "sendid": 32,
@@ -5423,8 +5421,7 @@
             "data": 56,
             "raw": 64,
             "traceparent": 72,
-            "trace_flags": 80,
-            "pad": 84
+            "invocation": 80
           }
         }
       }
@@ -5654,11 +5651,15 @@
         {
           "name": "trace",
           "type": "ta_trace_context"
+        },
+        {
+          "name": "invocation",
+          "type": "uint64_t"
         }
       ],
       "layout": {
         "x86_64": {
-          "size": 152,
+          "size": 160,
           "align": 8,
           "offsets": {
             "size": 0,
@@ -5676,11 +5677,12 @@
             "session": 104,
             "datamodel": 112,
             "pad": 116,
-            "trace": 120
+            "trace": 120,
+            "invocation": 152
           }
         },
         "aarch64": {
-          "size": 152,
+          "size": 160,
           "align": 8,
           "offsets": {
             "size": 0,
@@ -5698,11 +5700,12 @@
             "session": 104,
             "datamodel": 112,
             "pad": 116,
-            "trace": 120
+            "trace": 120,
+            "invocation": 152
           }
         },
         "wasm32": {
-          "size": 120,
+          "size": 128,
           "align": 8,
           "offsets": {
             "size": 0,
@@ -5720,7 +5723,8 @@
             "session": 72,
             "datamodel": 80,
             "pad": 84,
-            "trace": 88
+            "trace": 88,
+            "invocation": 120
           }
         }
       }
@@ -5773,7 +5777,7 @@
           "type": "uint32_t"
         },
         {
-          "name": "pad",
+          "name": "services",
           "type": "uint32_t"
         }
       ],
@@ -5793,7 +5797,7 @@
             "serial": 32,
             "datamodel_instance": 40,
             "invocations": 48,
-            "pad": 52
+            "services": 52
           }
         },
         "aarch64": {
@@ -5811,7 +5815,7 @@
             "serial": 32,
             "datamodel_instance": 40,
             "invocations": 48,
-            "pad": 52
+            "services": 52
           }
         },
         "wasm32": {
@@ -5829,7 +5833,7 @@
             "serial": 32,
             "datamodel_instance": 40,
             "invocations": 48,
-            "pad": 52
+            "services": 52
           }
         }
       }
@@ -7893,11 +7897,15 @@
         {
           "name": "wire",
           "type": "ta_bytes"
+        },
+        {
+          "name": "invocation",
+          "type": "uint64_t"
         }
       ],
       "layout": {
         "x86_64": {
-          "size": 200,
+          "size": 208,
           "align": 8,
           "offsets": {
             "size": 0,
@@ -7923,11 +7931,12 @@
             "datamodel": 144,
             "pad": 148,
             "trace": 152,
-            "wire": 184
+            "wire": 184,
+            "invocation": 200
           }
         },
         "aarch64": {
-          "size": 200,
+          "size": 208,
           "align": 8,
           "offsets": {
             "size": 0,
@@ -7953,11 +7962,12 @@
             "datamodel": 144,
             "pad": 148,
             "trace": 152,
-            "wire": 184
+            "wire": 184,
+            "invocation": 200
           }
         },
         "wasm32": {
-          "size": 160,
+          "size": 168,
           "align": 8,
           "offsets": {
             "size": 0,
@@ -7983,7 +7993,8 @@
             "datamodel": 112,
             "pad": 116,
             "trace": 120,
-            "wire": 152
+            "wire": 152,
+            "invocation": 160
           }
         }
       }

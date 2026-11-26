@@ -90,8 +90,9 @@ group, the words build on each other.
   a chart index, the current version of that chart.
 - **Migration.** Moving running actors from an old version of their
   chart to the current one, each at its stable point, keeping its session
-  id, its state configuration (states match by id) and its delayed sends;
-  each actor gets the upgrade event first. One is started with
+  id, its state configuration (states match by id), its delayed sends and
+  the services it invoked (each under its invocation id, unless the new
+  version drops its `<invoke>`); each actor gets the upgrade event first. One is started with
   `ta_host_migrate`, which returns its id, and runs over the next runs: it
   moves actors a few per run, retries the busy ones, asks for the
   hibernated ones with a WAKE when told to wake them, waits for them
@@ -113,10 +114,13 @@ group, the words build on each other.
   application runs (an HTTP client, a database, a model). The host
   hands it out as an `INVOKE` effect, sends to it as `SEND` effects with
   no I/O processor, its cancel as `UNINVOKE`; the application answers
-  with events that carry its *token*.
-- **Token.** The handle of an external invocation in its segment's
-  request pool. A service is keyed by (segment, token), never by invoke
-  id.
+  with events that carry its *invocation id*.
+- **Invocation id.** The id of an external invocation: unique in the
+  host, never reused, and kept when a migration moves its actor to
+  another segment, so the service goes on. A service is keyed by it,
+  never by invoke id.
+- **Token.** The handle of a pending request (a fetch at run time) in its
+  segment's request pool, which `ta_host_resume` answers.
 - **Control plane.** Questions to the host about itself (an actor's
   state, the host's stats, traces): a message posted with `ta_host_post`
   and answered by a `REPLY` effect in a later batch. A binding offers a

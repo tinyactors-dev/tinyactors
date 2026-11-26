@@ -476,7 +476,7 @@ static ta_status event_read(tool_call *call, const params_at *at, ta_event_in *e
     event->session = target.session;
     if (invocation != TA_NIL) {
         event->flags = done ? TA_EVENT_IN_INVOKE_DONE : TA_EVENT_IN_FROM_INVOKE;
-        event->token = (uint32_t)token(call, invocation)->value;
+        event->invocation = token(call, invocation)->value;
     }
     event->name = text_of(call, name);
     event->sendid = text_of(call, member_of(call, at, "sendid"));
@@ -561,7 +561,7 @@ static void fail(tool_call *call) {
     event.sendid = text_of(call, param(call, "sendid"));
     if (invocation != TA_NIL) {
         event.flags |= TA_EVENT_IN_FROM_INVOKE;
-        event.token = (uint32_t)token(call, invocation)->value;
+        event.invocation = token(call, invocation)->value;
     }
     ta_status status = ta_host_send(server->host, &event);
     if (status != TA_OK) refused_at(call, status, refusal_path(call, &at));

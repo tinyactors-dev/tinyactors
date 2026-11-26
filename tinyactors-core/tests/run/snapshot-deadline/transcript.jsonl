@@ -4,7 +4,7 @@
 > {"jsonrpc":"2.0","id":4,"method":"run.advanceTime","params":{"by":"10s"}}
 < {"jsonrpc":"2.0","id":4,"result":{"time":10000,"wallNs":10000000000}}
 > {"jsonrpc":"2.0","id":5,"method":"run.snapshot","params":{"path":"orders.snapshot"}}
-< {"jsonrpc":"2.0","id":5,"result":{"bytes":326704}}
+< {"jsonrpc":"2.0","id":5,"result":{"bytes":328056}}
 > [{"jsonrpc":"2.0","id":6,"method":"run.advanceTime","params":{"to":30000}},{"jsonrpc":"2.0","id":7,"method":"run.turn"}]
 < {"jsonrpc":"2.0","method":"effect.log","params":{"batch":2,"index":0,"session":1,"label":"order","text":"payment failed: payment.timeout"}}
 < [{"jsonrpc":"2.0","id":6,"result":{"time":30000,"wallNs":30000000000}},{"jsonrpc":"2.0","id":7,"result":{"status":"idle","runs":1,"fuel":12,"time":30000,"nextDeadline":null}}]

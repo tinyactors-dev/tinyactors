@@ -42,9 +42,11 @@
  *              hibernated ones wait until ta_host_wake brings them back,
  *              asked for with TA_HOST_MIGRATE_WAKE (a TA_EFFECT_WAKE whose
  *              migration is the migration's id), again each time the migration finds one
- *              hibernated after a wake; actors with running invocations wait until those
+ *              hibernated after a wake; actors running SCXML invocations wait until those
  *              finish (a session tree moves unchanged, but is not
- *              translated); a timeout (system ticks) ends the migration with the
+ *              translated); an actor's external invocations move with it, each
+ *              under its id, and the service of one the new version drops is
+ *              stopped (TA_EFFECT_UNINVOKE); a timeout (system ticks) ends the migration with the
  *              stragglers, and a migration with an actor nobody wakes ends only
  *              there.
  *   hibernation ta_host_sweep() runs the CLOCK sweep over all segments;
@@ -303,7 +305,7 @@ typedef struct ta_host_effect {
     uint32_t actor;        /* handle in the segment (system effects) */
     uint64_t session;      /* the actor's session id (0: none) */
     uint64_t root;         /* the session of its host-spawned ancestor (attribution) */
-    uint32_t token;        /* request / invoke token (per segment) */
+    uint32_t token;        /* REQUEST: the request's token (ta_resume.request; per segment) */
     uint32_t io_processor; /* TA_EFFECT_SEND, as _ioprocessors numbers them: 0 the SCXML
                               processor (another system: the host's transport), i + 1 the
                               config's ioProcessors[i], TA_NIL an invoked service */
@@ -320,6 +322,7 @@ typedef struct ta_host_effect {
     uint32_t pad;
     ta_trace_context trace; /* as in ta_effect */
     ta_bytes wire;          /* REPLY, NOTIFICATION: the message, CBOR */
+    uint64_t invocation;    /* as in ta_effect: an external invocation's id */
 } ta_host_effect;
 /* First nonempty take opens one batch. Further takes return that same
  * pointer and count, including after calls append effects or grow storage.
@@ -334,7 +337,7 @@ TA_API void ta_host_effects_ack(ta_host *h);
 
 /* A field of effect `index` of the batch ta_host_effects published, so that a
  * binding reads effects without knowing ta_host_effect's layout. Numbers:
- * KIND .. PENDING (ta_host_effect_number); text: TARGET .. ORIGIN
+ * KIND .. INVOCATION (ta_host_effect_number); text: TARGET .. ORIGIN
  * (ta_host_effect_text); bytes: WIRE (ta_host_effect_bytes). An index past
  * the batch, a field the effect kind does not set, or a field asked through
  * the wrong accessor answers 0 or empty. Text and bytes are borrowed like the effect
@@ -345,9 +348,10 @@ TA_API void ta_host_effects_ack(ta_host *h);
  *
  * A send to a service the host runs (an SCXML <send target="#_<invokeid>">
  * to an external invocation) is a TA_EFFECT_SEND with IO_PROCESSOR
- * TA_NIL and TOKEN the invocation's token: the TOKEN of the
- * TA_EFFECT_INVOKE that started the service, in the same SEGMENT. A binding
- * keys its services by (segment, token); it never matches invoke ids. */
+ * TA_NIL and INVOCATION the id of the TA_EFFECT_INVOKE that started the
+ * service. The id is unique in the host, never reused, and kept when a
+ * migration moves the invoker to another segment, so a binding keys its
+ * services by INVOCATION alone; it never matches invoke ids. */
 enum {
     TA_EFFECT_FIELD_KIND = 1,
     TA_EFFECT_FIELD_SEGMENT = 2,
@@ -365,6 +369,7 @@ enum {
     TA_EFFECT_FIELD_MIGRATED = 14,
     TA_EFFECT_FIELD_FAILED = 15,
     TA_EFFECT_FIELD_PENDING = 16,
+    TA_EFFECT_FIELD_INVOCATION = 17, /* INVOKE, UNINVOKE, a SEND to a service: its id */
     TA_EFFECT_FIELD_TARGET = 32,
     TA_EFFECT_FIELD_EVENT = 33,
     TA_EFFECT_FIELD_SENDID = 34,
@@ -411,9 +416,9 @@ TA_API uint32_t ta_host_migration_pending(const ta_host *h, uint32_t migration, 
 /* A session a migration could not move: it stays on its version. `status`
  * says why: TA_ERROR_UNSUPPORTED when its datamodel cannot write its state
  * out (a value outside the value table, in a variable or a pending delayed
- * send's data), TA_ERROR_STATE when it runs invocations (an SCXML child or an
- * external service) and the migration has no timeout to wait for them to
- * finish, another TA_ERROR_* when the new version refused it. */
+ * send's data), TA_ERROR_STATE when it runs SCXML invocations (an invoked
+ * chart) and the migration has no timeout to wait for them to finish,
+ * another TA_ERROR_* when the new version refused it. */
 typedef struct ta_host_migration_failure {
     uint64_t session;
     int32_t status;

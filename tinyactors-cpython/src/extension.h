@@ -238,7 +238,7 @@ struct ta_python_host {
     PyObject *telemetry;               /* telemetry handler(signal, data) or None */
     PyObject *migrated;                /* migrated handler(migrated) or None */
     PyObject *services;                /* dict: an invoke's type -> handler(invocation) */
-    PyObject *invocations;             /* dict: segment << 32 | token -> (invocation, service), while it runs
+    PyObject *invocations;             /* dict: core's invocation id -> (invocation, service), while it runs
                                           (core's keys: no table of ours) */
     PyObject *migration_done;          /* migration_done handler(result) or None: every migration's end */
     PyObject *on_done;                 /* on_done(actor, donedata) or None: a top-level actor's TA_EFFECT_DONE */

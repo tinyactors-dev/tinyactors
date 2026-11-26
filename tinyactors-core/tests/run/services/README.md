@@ -2,7 +2,7 @@
 
 The client runs every service a chart invokes. Each order of `order.scxml`
 invokes a `payment` service while it pays; the three orders' invocations
-come as `effect.invoke`, each with its invoker, its segment and its token
+come as `effect.invoke`, each with its invoker, its segment and its id
 (`invocation`) and the invoke's params as `data`. As the payment service
 the client authorizes the first order (`run.send` with `invocation`), and
 the order's `<send target="#_payment">` comes back as an `effect.send` to

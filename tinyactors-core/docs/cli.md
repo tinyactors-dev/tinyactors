@@ -769,7 +769,7 @@ integer) or a local address (`ta_host_resolve`). Every result is an object.
 | `run.boot` | `segment` | `{}` | `ta_host_boot` (a manifest's boot actors) |
 | `run.chart` | `name` | `segment`, `chart` | `ta_host_chart` |
 | `run.spawn` | `chart` (a name: its current version) or `segment` and `chart` (an index); `name`, `params` or `paramsCBOR`, `traceparent` | `session`, `address` | `ta_host_chart`, the chart's datamodel's `from_wire`, `ta_host_spawn` |
-| `run.send` | `target`, `event`; `data` or `cbor`; `sendid`, `origin`, `origintype`, `raw`, `traceparent`; as a service the client runs, `invocation` (the token of its `effect.invoke`), and `done` (no `event`: core's `done.invoke.<id>`) | `{}` | `ta_host_resolve`, `ta_host_locate`, the target's chart's datamodel's `from_wire`, `ta_host_send` (`TA_EVENT_IN_FROM_INVOKE`, `TA_EVENT_IN_INVOKE_DONE`) |
+| `run.send` | `target`, `event`; `data` or `cbor`; `sendid`, `origin`, `origintype`, `raw`, `traceparent`; as a service the client runs, `invocation` (the id of its `effect.invoke`), and `done` (no `event`: core's `done.invoke.<id>`) | `{}` | `ta_host_resolve`, `ta_host_locate`, the target's chart's datamodel's `from_wire`, `ta_host_send` (`TA_EVENT_IN_FROM_INVOKE`, `TA_EVENT_IN_INVOKE_DONE`) |
 | `run.sendMany` | `events`: `run.send`'s params each | `accepted`: the accepted prefix's length | every event read first (one the server cannot read refuses the request, and nothing is sent), then `ta_host_send_many` |
 | `run.fail` | `target` and `sendid` (a send), or `target` and `invocation` (an invocation the client runs) | `{}` | `ta_host_send` with `TA_EVENT_IN_ERROR_COMMUNICATION` (and `TA_EVENT_IN_FROM_INVOKE`): `error.communication` for the sender or the invoker |
 | `run.terminate` | `target` | `{}` | `ta_host_terminate` |
@@ -960,9 +960,9 @@ effect does not set is left out.
 |---|---|---|
 | `TA_EFFECT_SEND` to an I/O processor of the config | `effect.send`: `session`, `type`, `target`, `event`, `sendid`, `data`/`cbor`, `traceparent`, `waiting` | answer: `run.send` to `session` with `sendid`, `origintype` the `type`, `traceparent` |
 | `TA_EFFECT_SEND` to another system (the transport) | `effect.send`: `session`, `message` (`target`, `event`, `data`/`cbor`, `sendid`, `origin`, `traceparent`), `waiting` | pass `message` to another server's `run.send` as it is; nothing (success is silence) |
-| `TA_EFFECT_SEND` to an invoked service | `effect.send`: `session`, `invocation` (the token), `segment`, `target`, `event`, `sendid`, `data`/`cbor`, `traceparent`, `waiting` | answer as the service: `run.send` with `invocation` |
-| `TA_EFFECT_INVOKE` | `effect.invoke`: `session` (the invoker), `segment`, `invocation` (the token), `type`, `src`, `invokeid`, `data`/`cbor` (the invoke's params), `restored` | run the service: `run.send` with `invocation` (and `done` to end it), or `run.fail` with `invocation` |
-| `TA_EFFECT_UNINVOKE` | `effect.uninvoke`: `session` (the invoker), `segment`, `invocation` | stop the service; its token is stale from now on |
+| `TA_EFFECT_SEND` to an invoked service | `effect.send`: `session`, `invocation` (its id), `segment`, `target`, `event`, `sendid`, `data`/`cbor`, `traceparent`, `waiting` | answer as the service: `run.send` with `invocation` |
+| `TA_EFFECT_INVOKE` | `effect.invoke`: `session` (the invoker), `segment`, `invocation` (its id), `type`, `src`, `invokeid`, `data`/`cbor` (the invoke's params), `restored` | run the service: `run.send` with `invocation` (and `done` to end it), or `run.fail` with `invocation` |
+| `TA_EFFECT_UNINVOKE` | `effect.uninvoke`: `session` (the invoker), `segment`, `invocation` | stop the service; its id is stale from now on |
 | `TA_EFFECT_LOG` | `effect.log`: `session`, `label`, `text` | |
 | `TA_EFFECT_DONE` | `effect.done`: `session`, `name`, `final`, `data`/`cbor` (the donedata) | |
 | `TA_EFFECT_ERROR` | `effect.error`: `session`, `status` (the fault's name) | |
@@ -976,8 +976,8 @@ effect does not set is left out.
 | `TA_HOST_EFFECT_NOTIFICATION` | written as it is, its `method` and `params` (none is defined) | |
 
 The client runs every service a chart invokes (`<invoke>` of a type
-that is not a chart): an invocation is its segment and token, never its
-invoke id. Every view an effect's notification reads is read and written before the
+that is not a chart): an invocation is its id, unique in the host and kept
+when a migration moves its invoker, never its invoke id. Every view an effect's notification reads is read and written before the
 ack, held batch or not.
 
 ### Values

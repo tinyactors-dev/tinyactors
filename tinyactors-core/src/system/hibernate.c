@@ -121,9 +121,9 @@ static uint32_t tree_rank(const ta_system *system, uint32_t root, uint32_t ti) {
 
 /* Idle at a stable point, nothing queued, no request that will write into
  * it. Invoked children: none for hibernation (they read the parent's
- * instance); for export, only SCXML sessions of this system linked back to
- * it (they leave with it) — an invocation the host carries out (external
- * invoke) cannot move. */
+ * instance); for export, SCXML sessions of this system linked back to it
+ * and the invocations the host carries out (external invokes): both leave
+ * with it (docs/adr/0018). */
 static ta_status stable_member(const ta_system *system, uint32_t index, int children) {
     const ta_actor *actor = ta_actor_at(system, index);
     if (actor->state != TA_ACTOR_IDLE || actor->mailbox_length ||
@@ -136,10 +136,15 @@ static ta_status stable_member(const ta_system *system, uint32_t index, int chil
     const ta_chart_record *chart = &system->core.image_view.charts[instance->chart];
     ta_instance_layout l = ta_instance_layout_of(chart);
     uint32_t self = ta_pool_handle(&system->actors, index);
+    uint32_t services = 0; /* external invocations: requests that leave with it */
     for (uint32_t i = 0; i < chart->invoke_count; i++) {
         uint32_t k = ta_instance_word(instance, l.invoke_children)[i];
         if (!k) continue;
-        if (!children || (k & TA_EXTERNAL_INVOKE_BIT)) return TA_ERROR_STATE;
+        if (!children) return TA_ERROR_STATE;
+        if (k & TA_EXTERNAL_INVOKE_BIT) {
+            services++;
+            continue;
+        }
         /* gone without done.invoke (it faulted or was terminated): not part
          * of the tree. A child that finished normally left done.invoke in
          * our mailbox, which is empty here. */
@@ -150,7 +155,7 @@ static ta_status stable_member(const ta_system *system, uint32_t index, int chil
     }
     /* a pending fetch or a parked spawn is in no invoke slot: the count says
      * whether one will write into it, O(1) whatever the requests */
-    if (ta_system_actor_requests(system, index)) return TA_ERROR_STATE;
+    if (ta_system_actor_requests(system, index) > services) return TA_ERROR_STATE;
     return datamodel_can_hibernate(ta_core_datamodel(&system->core, instance->chart))
                ? TA_OK
                : TA_ERROR_UNSUPPORTED;
@@ -167,7 +172,7 @@ static uint32_t align4(uint32_t n) {
 /* ---- blob formats ------------------------------------------------------------------ */
 
 #define EXPORT_MAGIC    0x58454154u /* "TAEX" */
-#define EXPORT_VERSION  3u /* 3: the 64-byte instance header, delayed sends' trace contexts */
+#define EXPORT_VERSION  4u /* 4: external invocations (docs/adr/0018) */
 #define EXPORT_MIGRATED 1u /* translated by ta_blob_migrate: one session, to be upgraded */
 
 typedef struct export_header {
@@ -183,7 +188,8 @@ typedef struct session_header {
     uint32_t instance_bytes, ids_bytes;
     uint32_t timer_count, timers_bytes;
     uint32_t init_count, name_length;
-    uint32_t bytes, pad; /* the whole record, 8-aligned */
+    uint32_t bytes; /* the whole record, 8-aligned */
+    uint32_t invocation_count, invocations_bytes, pad; /* its external invocations */
 } session_header;
 
 /* payload of a delayed send in a blob */
@@ -200,6 +206,18 @@ typedef struct blob_timer { /* followed by target, name and sendid text, then th
     uint64_t trace_high, trace_low, cause_session, cause_macrostep;
     uint32_t cause_microstep, pad;
 } blob_timer;
+
+/* An external invocation in a blob: it leaves with its actor and goes on
+ * where the actor is adopted, under the same id (docs/adr/0018). Followed
+ * by its type, src and invoke id text, then the params' bytes (TP_BYTES;
+ * each 4-aligned). */
+typedef struct blob_invocation {
+    uint64_t invocation, payload; /* payload: the handle (TP_HANDLE) */
+    uint32_t slot, ended;         /* its invoke slot; the service finished or failed */
+    uint32_t payload_kind, payload_length;
+    uint32_t type_length, source_length, invokeid_length; /* TA_NIL length: none */
+    uint32_t pad;
+} blob_invocation;
 
 static int datamodel_payload_bytes(const ta_datamodel_binding *binding) {
     const ta_datamodel_vtable *vtable = binding->vtable;
@@ -388,9 +406,9 @@ static ta_status write_timer(ta_system *system, uint32_t root, uint32_t ti, ta_o
         r.payload_kind = TP_HANDLE;
         r.payload = event->payload;
     }
-    /* a send to an invoked child (#_<invokeid>) holds the child's handle:
-     * stored as the owner's invoke slot + 1 (0: the child is gone), which
-     * adoption maps to the child adopted with it */
+    /* a send to an invoked child or service (#_<invokeid>) holds its handle:
+     * stored as the owner's invoke slot + 1 (0: it is gone), which adoption
+     * maps to the child or service adopted with it */
     r.route = timer->route;
     r.arg = timer->arg;
     if (timer->route == TA_ROUTE_CHILD) {
@@ -401,7 +419,7 @@ static ta_status write_timer(ta_system *system, uint32_t root, uint32_t ti, ta_o
             ta_instance_word((ta_instance *)instance, ta_instance_layout_of(chart).invoke_children);
         r.arg = 0;
         for (uint32_t i = 0; i < chart->invoke_count && !r.arg; i++)
-            if (kids[i] == timer->arg && !(timer->arg & TA_EXTERNAL_INVOKE_BIT)) r.arg = i + 1;
+            if (kids[i] == timer->arg) r.arg = i + 1;
     }
     r.type = event->type;
     r.flags = event->flags;
@@ -429,9 +447,48 @@ static ta_status write_timer(ta_system *system, uint32_t root, uint32_t ti, ta_o
     return TA_OK;
 }
 
+/* External invocation `ri` into an export blob: its id, slot, type, src,
+ * invoke id and params, the params as a value when the datamodel writes
+ * one (as a delayed send's payload). */
+static ta_status write_invocation(ta_system *system, uint32_t ri, ta_output *out) {
+    ta_core *core = &system->core;
+    const ta_request *request = (const ta_request *)ta_pool_at(&system->requests, ri);
+    blob_invocation r;
+    ta_memset(&r, 0, sizeof r);
+    r.invocation = request->invocation;
+    r.slot = request->slot;
+    r.ended = request->ended;
+    const ta_datamodel_binding *pb = request->payload && request->pad < core->datamodel_count
+                                         ? &core->datamodels[request->pad]
+                                         : 0;
+    ta_bytes value = {(const void *)0, 0};
+    if (pb && datamodel_payload_bytes(pb)) {
+        ta_status status = pb->vtable->payload_serialize(pb->datamodel, request->payload, &value);
+        if (status != TA_OK) return status;
+        if (value.length >= TA_NIL) return TA_ERROR_UNSUPPORTED;
+        r.payload_kind = TP_BYTES;
+        r.payload_length = (uint32_t)value.length;
+    } else if (pb) {
+        r.payload_kind = TP_HANDLE;
+        r.payload = request->payload;
+    }
+    r.type_length = string_ref_length(core, request->type);
+    r.source_length = string_ref_length(core, request->source);
+    r.invokeid_length = string_ref_length(core, request->invokeid);
+    ta_output_write(out, &r, sizeof r);
+    blob_text(out, ta_shared_string_get(core, request->type), r.type_length);
+    blob_text(out, ta_shared_string_get(core, request->source), r.source_length);
+    blob_text(out, ta_shared_string_get(core, request->invokeid), r.invokeid_length);
+    if (r.payload_kind == TP_BYTES) {
+        ta_output_write(out, value.pointer, value.length);
+        blob_zeros(out, align4(r.payload_length) - r.payload_length);
+    }
+    return TA_OK;
+}
+
 /* The session record of actor `index` in an export blob, its header filled
- * last (nothing changes yet): its state, delayed sends and name, and its
- * place in the tree. */
+ * last (nothing changes yet): its state, delayed sends, external
+ * invocations and name, and its place in the tree. */
 static ta_status write_session(ta_system *system, uint32_t index, uint32_t root, ta_output *out) {
     ta_core *core = &system->core;
     ta_actor *actor = ta_actor_at(system, index);
@@ -464,6 +521,20 @@ static ta_status write_session(ta_system *system, uint32_t index, uint32_t root,
     }
     if (timer_bytes > 0xFFFFFFFFu) return TA_ERROR_UNSUPPORTED;
     h.timers_bytes = (uint32_t)timer_bytes;
+    const ta_chart_record *chart = &core->image_view.charts[instance->chart];
+    const uint32_t *children = ta_instance_word(instance, ta_instance_layout_of(chart).invoke_children);
+    size_t invocations_start = out->length;
+    for (uint32_t i = 0; i < chart->invoke_count; i++) {
+        uint32_t ri = children[i] & TA_EXTERNAL_INVOKE_BIT
+                          ? ta_pool_resolve(&system->requests, children[i] & ~TA_EXTERNAL_INVOKE_BIT)
+                          : TA_NIL;
+        if (ri == TA_NIL) continue;
+        status = write_invocation(system, ri, out);
+        if (status != TA_OK) return status;
+        h.invocation_count++;
+    }
+    if (out->length - invocations_start > 0xFFFFFFFFu) return TA_ERROR_UNSUPPORTED;
+    h.invocations_bytes = (uint32_t)(out->length - invocations_start);
     blob_text(out, ta_shared_string_get(core, actor->name), h.name_length);
     size_t used = out->length - start, bytes = align8(used);
     if (bytes > 0xFFFFFFFFu) return TA_ERROR_UNSUPPORTED;
@@ -548,6 +619,28 @@ ta_status ta_actor_hibernate(ta_system *system, uint32_t actor, ta_buffer *out) 
 /* Remove an exported actor silently (no done event, no effects); its delayed
  * sends left with the blob: payloads written as values are released here,
  * handles now belong to the blob. */
+/* Free the external invocations of resident actor `index` without an
+ * UNINVOKE: it leaves with them, or a half-done adoption takes them back.
+ * Params a blob carries as a handle stay the blob's (as a delayed send's). */
+static void release_invocations(ta_system *system, uint32_t index) {
+    ta_core *core = &system->core;
+    ta_instance *instance = ta_actor_instance(system, ta_actor_at(system, index));
+    const ta_chart_record *chart = &core->image_view.charts[instance->chart];
+    uint32_t *children = ta_instance_word(instance, ta_instance_layout_of(chart).invoke_children);
+    for (uint32_t i = 0; i < chart->invoke_count; i++) {
+        uint32_t ri = children[i] & TA_EXTERNAL_INVOKE_BIT
+                          ? ta_pool_resolve(&system->requests, children[i] & ~TA_EXTERNAL_INVOKE_BIT)
+                          : TA_NIL;
+        if (ri == TA_NIL) continue;
+        ta_request *request = (ta_request *)ta_pool_at(&system->requests, ri);
+        if (request->payload && !(request->pad < core->datamodel_count &&
+                                  datamodel_payload_bytes(&core->datamodels[request->pad])))
+            request->payload = 0;
+        ta_system_external_free(system, ri);
+        children[i] = 0;
+    }
+}
+
 static void leave(ta_system *system, uint32_t index) {
     ta_core *core = &system->core;
     ta_actor *actor = ta_actor_at(system, index);
@@ -564,6 +657,7 @@ static void leave(ta_system *system, uint32_t index) {
         ta_shared_string_release(core, timer->target);
         ta_pool_free(&system->timers, ti);
     }
+    release_invocations(system, index); /* they go on where it is adopted: no UNINVOKE */
     unload(system, index);
     /* it leaves, it is not destroyed: it goes on where the blob is adopted */
     ta_system_reclaim(system, index, RECLAIM_LEFT);
@@ -624,9 +718,10 @@ ta_status ta_actor_export(ta_system *system, uint32_t actor, ta_buffer *out) {
 typedef struct blob_view {
     uint32_t chart, instance_bytes, ids_bytes, slot;
     uint32_t timer_count, timers_bytes, init_count, name_length;
+    uint32_t invocation_count, invocations_bytes;
     uint32_t identity; /* a hibernation blob's writer */
     uint64_t serial, parent, datamodel_bytes, image_hash;
-    const unsigned char *instance, *ids, *datamodel, *timers, *init, *name;
+    const unsigned char *instance, *ids, *datamodel, *timers, *invocations, *init, *name;
 } blob_view;
 
 static int body_ok(const blob_view *view) {
@@ -672,20 +767,25 @@ static int next_session(const unsigned char **q, const unsigned char *end, uint6
     view->timers_bytes = h.timers_bytes;
     view->init_count = h.init_count;
     view->name_length = h.name_length;
+    view->invocation_count = h.invocation_count;
+    view->invocations_bytes = h.invocations_bytes;
     view->serial = h.serial;
     view->parent = h.parent;
     view->datamodel_bytes = h.datamodel_bytes;
     view->image_hash = image_hash;
     if (h.bytes < sizeof h || h.bytes > (size_t)(end - *q) || !body_ok(view) ||
         h.datamodel_bytes > h.bytes || h.init_count > h.bytes ||
+        h.invocation_count > h.bytes ||
         h.bytes < sizeof h + (uint64_t)h.instance_bytes + h.ids_bytes + h.datamodel_bytes +
-                      h.timers_bytes + (uint64_t)h.init_count * 4 + align4(h.name_length))
+                      h.timers_bytes + h.invocations_bytes + (uint64_t)h.init_count * 4 +
+                      align4(h.name_length))
         return 0;
     view->instance = *q + sizeof h;
     view->ids = view->instance + view->instance_bytes;
     view->datamodel = view->ids + view->ids_bytes;
     view->timers = view->datamodel + view->datamodel_bytes;
-    view->init = view->timers + view->timers_bytes;
+    view->invocations = view->timers + view->timers_bytes;
+    view->init = view->invocations + view->invocations_bytes;
     view->name = view->init + (size_t)view->init_count * 4;
     *q += h.bytes;
     return 1;
@@ -846,6 +946,83 @@ static int timer_rec(const unsigned char **q, const unsigned char *qe, blob_time
     return r->name_length != TA_NIL;
 }
 
+/* A place in a blob's section and the section's end. */
+typedef struct blob_cursor {
+    const unsigned char *at, *end;
+} blob_cursor;
+
+/* The next external invocation record at the cursor, and its type, src,
+ * invoke id and params' bytes (texts[0..3]); 0 if it is malformed. */
+static int invocation_rec(blob_cursor *cursor, blob_invocation *r, const char **texts) {
+    if ((size_t)(cursor->end - cursor->at) < sizeof *r) return 0;
+    ta_memcpy(r, cursor->at, sizeof *r);
+    cursor->at += sizeof *r;
+    if (r->payload_kind > TP_HANDLE || (r->payload_kind != TP_BYTES && r->payload_length)) return 0;
+    uint32_t lengths[4] = {r->type_length, r->source_length, r->invokeid_length,
+                           r->payload_kind == TP_BYTES ? r->payload_length : TA_NIL};
+    for (int i = 0; i < 4; i++) {
+        texts[i] = (const char *)cursor->at;
+        if (lengths[i] == TA_NIL) continue;
+        uint32_t room = (uint32_t)(cursor->end - cursor->at);
+        if ((i < 3 && lengths[i] > TA_SYSTEM_MAX_STRING) || lengths[i] > room || text_bytes(lengths[i]) > room)
+            return 0;
+        cursor->at += text_bytes(lengths[i]);
+    }
+    return r->type_length != TA_NIL && r->invocation != 0;
+}
+
+/* A text of a blob as a string of the system: TA_NIL for none, and *failed
+ * set when the system has no room for it. */
+static uint32_t blob_string(ta_core *core, ta_string_view text, int *failed) {
+    if (text.length == TA_NIL) return TA_NIL;
+    uint32_t string = ta_shared_string_new(core, text.pointer, text.length);
+    if (string == TA_NIL) *failed = 1;
+    return string;
+}
+
+/* Give adopted actor `index` the external invocations of its blob record:
+ * a request of this system each, in its slot, under the id it had. */
+static ta_status restore_invocations(ta_system *system, uint32_t index, const blob_view *view) {
+    ta_core *core = &system->core;
+    ta_instance *instance = ta_actor_instance(system, ta_actor_at(system, index));
+    uint32_t chart = instance->chart;
+    const ta_chart_record *record = &core->image_view.charts[chart];
+    uint32_t *children = ta_instance_word(instance, ta_instance_layout_of(record).invoke_children);
+    const ta_datamodel_binding *binding = ta_core_datamodel(core, chart);
+    blob_cursor cursor = {view->invocations, view->invocations + view->invocations_bytes};
+    for (uint32_t k = 0; k < view->invocation_count; k++) {
+        blob_invocation r;
+        const char *texts[4];
+        if (!invocation_rec(&cursor, &r, texts) || r.slot >= record->invoke_count || children[r.slot])
+            return TA_ERROR_INVALID;
+        if (r.payload_kind == TP_BYTES && !datamodel_payload_bytes(binding)) return TA_ERROR_UNSUPPORTED;
+        uint32_t ri = ta_system_request_alloc(system, index);
+        if (ri == TA_NIL) return TA_ERROR_NO_MEMORY;
+        ta_request *request = (ta_request *)ta_pool_at(&system->requests, ri);
+        request->kind = REQUEST_EXTERNAL_INVOKE;
+        request->slot = r.slot;
+        request->ended = r.ended;
+        request->invocation = r.invocation;
+        request->pad = core->chart_datamodel[chart];
+        children[r.slot] = ta_pool_handle(&system->requests, ri) | TA_EXTERNAL_INVOKE_BIT;
+        int failed = 0;
+        request->type = blob_string(core, (ta_string_view){texts[0], r.type_length}, &failed);
+        request->source = blob_string(core, (ta_string_view){texts[1], r.source_length}, &failed);
+        request->invokeid = blob_string(core, (ta_string_view){texts[2], r.invokeid_length}, &failed);
+        if (failed) return TA_ERROR_NO_MEMORY;
+        if (r.payload_kind == TP_BYTES) { /* a new payload, ours */
+            ta_payload payload = 0;
+            ta_status status = binding->vtable->payload_deserialize(
+                binding->datamodel, (ta_bytes){texts[3], r.payload_length}, &payload);
+            if (status != TA_OK) return status == TA_ERROR_NO_MEMORY ? status : TA_ERROR_INVALID;
+            request->payload = payload;
+        } else if (r.payload_kind == TP_HANDLE) { /* the blob's until the adoption succeeds */
+            request->payload = r.payload;
+        }
+    }
+    return cursor.at == cursor.end ? TA_OK : TA_ERROR_INVALID;
+}
+
 /* Drop the timers of a half-adopted actor: payloads made from bytes go, those
  * passed as handles stay with the blob. */
 static void drop_timers(ta_system *system, ta_actor *actor) {
@@ -960,7 +1137,9 @@ static ta_status adopt_member(ta_system *system, const blob_view *view, uint64_t
         actor->instance = offset;
         actor->state = TA_ACTOR_IDLE;
         status = arm_timers(system, index, chart, view, seq0, rank_count);
+        if (status == TA_OK) status = restore_invocations(system, index, view);
         if (status != TA_OK) {
+            release_invocations(system, index);
             drop_timers(system, actor);
             ta_core_instance_deinit(core, ta_actor_instance(system, actor));
             ta_slab_free(&system->slab, offset);
@@ -984,6 +1163,7 @@ static ta_status adopt_member(ta_system *system, const blob_view *view, uint64_t
 /* Remove an adopted member again (a tree adoption failed): its delayed
  * sends' payloads stay with the blob. */
 static void unadopt(ta_system *system, uint32_t index) {
+    release_invocations(system, index);
     drop_timers(system, ta_actor_at(system, index));
     ta_system_reclaim(system, index, RECLAIM_LEFT); /* it was never here */
 }
@@ -1008,7 +1188,7 @@ ta_status ta_system_adopt(ta_system *system, ta_bytes bytes, uint32_t *actor) {
     if (!read_exp(blob, length, core->image_view.hash, &th)) return TA_ERROR_INVALID;
     const unsigned char *base = (const unsigned char *)blob, *end = base + length;
     /* check everything first: a failed adoption changes nothing */
-    uint32_t timers = 0;
+    uint32_t timers = 0, services = 0;
     const unsigned char *q = base + sizeof th;
     for (uint32_t k = 0; k < th.session_count; k++) {
         blob_view view;
@@ -1037,14 +1217,17 @@ ta_status ta_system_adopt(ta_system *system, ta_bytes bytes, uint32_t *actor) {
         }
         if (!parent_ok) return TA_ERROR_INVALID;
         timers += view.timer_count;
+        services += view.invocation_count;
     }
     /* room for the whole tree first; a pool without it is marked refused, so
      * the host grows that one (ta_system_exhausted) */
     if (ta_pool_free_count(&system->actors) < th.session_count) system->actors.refused = th.session_count;
     if (ta_pool_free_count(&system->timers) < timers) system->timers.refused = timers;
+    if (ta_pool_free_count(&system->requests) < services) system->requests.refused = services;
     if (ta_pool_free_count(&system->events) < timers + core->reserve + 1)
         system->events.refused = timers + core->reserve + 1;
-    if (system->actors.refused || system->timers.refused || system->events.refused)
+    if (system->actors.refused || system->timers.refused || system->events.refused ||
+        system->requests.refused)
         return TA_ERROR_NO_MEMORY;
     /* sessions in preorder: each one's parent is already here */
     uint32_t root = TA_NIL;
@@ -1110,6 +1293,27 @@ ta_status ta_system_adopt(ta_system *system, ta_bytes bytes, uint32_t *actor) {
     return TA_OK;
 }
 
+/* The id of external invocation `k` of an export blob's root session, in
+ * *id; 0 past its last one, or for bytes that are no export blob. */
+int ta_blob_invocation(ta_bytes blob, uint32_t k, uint64_t *id) {
+    export_header h;
+    blob_view view;
+    if (!blob.pointer || blob.length < sizeof h) return 0;
+    ta_memcpy(&h, blob.pointer, sizeof h);
+    const unsigned char *q = (const unsigned char *)blob.pointer + sizeof h;
+    if (h.magic != EXPORT_MAGIC || h.version != EXPORT_VERSION || !h.session_count ||
+        !next_session(&q, (const unsigned char *)blob.pointer + blob.length, h.image_hash, &view) ||
+        k >= view.invocation_count)
+        return 0;
+    blob_cursor cursor = {view.invocations, view.invocations + view.invocations_bytes};
+    blob_invocation r;
+    const char *texts[4];
+    for (uint32_t i = 0; i <= k; i++)
+        if (!invocation_rec(&cursor, &r, texts)) return 0;
+    *id = r.invocation;
+    return 1;
+}
+
 /* ---- migration: translate a blob to another version of its chart ----------------------- */
 
 typedef struct migration_context {
@@ -1119,6 +1323,8 @@ typedef struct migration_context {
     const ta_chart_record *from_chart_record, *to_chart_record;
     const ta_state_record *from_states, *to_states;
     ta_instance_layout from_layout, to_layout;
+    const blob_view *view;  /* the session translated */
+    const uint32_t *config; /* the new configuration, once it is legal */
 } migration_context;
 
 static uint32_t map_state(const migration_context *migration, uint32_t old) {
@@ -1269,6 +1475,96 @@ static void translate_history(const migration_context *migration, const unsigned
     }
 }
 
+/* An <invoke> of a chart, by its slot. */
+static const ta_invoke_record *invoke_at(const ta_image_view *view, const ta_chart_record *chart,
+                                         uint32_t slot) {
+    return &view->invokes[chart->first_invoke + slot];
+}
+
+/* How many invokes of `state` have no authored id. */
+static uint32_t unnamed_invokes(const ta_image_view *view, const ta_chart_record *chart,
+                                const ta_state_record *state) {
+    uint32_t count = 0;
+    for (uint32_t i = 0; i < state->invoke_count; i++)
+        count += invoke_at(view, chart, state->first_invoke + i)->id == TA_NIL;
+    return count;
+}
+
+/* The external invocation in old slot `slot` of the session translated,
+ * with its texts; 0 if it runs none there. */
+typedef struct running_invocation {
+    blob_invocation record;
+    const char *texts[4];
+} running_invocation;
+
+static int running_at(const migration_context *migration, uint32_t slot, running_invocation *out) {
+    blob_cursor cursor = {migration->view->invocations,
+                          migration->view->invocations + migration->view->invocations_bytes};
+    for (uint32_t k = 0; k < migration->view->invocation_count; k++) {
+        if (!invocation_rec(&cursor, &out->record, out->texts)) return 0;
+        if (out->record.slot == slot) return 1;
+    }
+    return 0;
+}
+
+/* The slot of the new chart that the external invocation running in old
+ * slot `slot` goes on in, or TA_NIL: the migration cancels it
+ * (docs/adr/0018). It goes on when its state is kept, active in the new
+ * configuration, and has an <invoke> of the same static type (the type it
+ * runs with) and the same authored id; an invocation with no authored id
+ * goes on only when its state has exactly one such <invoke> in both
+ * versions. */
+static uint32_t carried_slot(const migration_context *migration, uint32_t slot) {
+    running_invocation running;
+    if (slot >= migration->from_chart_record->invoke_count || !running_at(migration, slot, &running))
+        return TA_NIL;
+    const ta_invoke_record *old = invoke_at(migration->from_view, migration->from_chart_record, slot);
+    uint32_t y = map_state(migration, old->state);
+    if (y == TA_NIL || !ta_bitset_test(migration->config, y)) return TA_NIL;
+    const ta_state_record *state = &migration->to_states[y];
+    ta_string_view type = {running.texts[0], running.record.type_length};
+    ta_string_view id = old->id == TA_NIL ? (ta_string_view){(const char *)0, 0}
+                                          : ta_image_view_string(migration->from_view, old->id);
+    if (old->id == TA_NIL &&
+        (unnamed_invokes(migration->from_view, migration->from_chart_record,
+                         &migration->from_states[old->state]) != 1 ||
+         unnamed_invokes(migration->to_view, migration->to_chart_record, state) != 1))
+        return TA_NIL;
+    for (uint32_t i = 0; i < state->invoke_count; i++) {
+        uint32_t candidate = state->first_invoke + i;
+        const ta_invoke_record *invoke = invoke_at(migration->to_view, migration->to_chart_record, candidate);
+        if (invoke->typeexpr != TA_NIL || invoke->type == TA_NIL ||
+            !string_equal_(ta_image_view_string(migration->to_view, invoke->type), type))
+            continue;
+        if ((old->id == TA_NIL) != (invoke->id == TA_NIL)) continue;
+        if (old->id != TA_NIL && !string_equal_(ta_image_view_string(migration->to_view, invoke->id), id))
+            continue;
+        return candidate;
+    }
+    return TA_NIL;
+}
+
+/* The invoke id text the blob holds for old slot `slot`; 0 if none. */
+static int blob_invoke_id(const blob_view *view, uint32_t slot, ta_string_view *out) {
+    const unsigned char *q = view->ids, *end = q + view->ids_bytes;
+    uint32_t count;
+    if (view->ids_bytes < 4) return 0;
+    ta_memcpy(&count, q, 4);
+    q += 4;
+    for (uint32_t k = 0; k < count && (size_t)(end - q) >= 8; k++) {
+        uint32_t at, length;
+        ta_memcpy(&at, q, 4);
+        ta_memcpy(&length, q + 4, 4);
+        if (length > (size_t)(end - q - 8)) return 0;
+        if (at == slot) {
+            *out = (ta_string_view){(const char *)q + 8, length};
+            return 1;
+        }
+        q += 8 + align4(length);
+    }
+    return 0;
+}
+
 ta_status ta_blob_migrate(const ta_blob_migration *request, ta_buffer *destination) {
     const ta_image *from_image = request->from_image, *to_image = request->to_image;
     uint32_t to_chart = request->to_chart;
@@ -1312,8 +1608,10 @@ ta_status ta_blob_migrate(const ta_blob_migration *request, ta_buffer *destinati
             new_count++;
     }
     size_t fixed = sizeof(export_header) + sizeof(session_header);
-    uint64_t raw = fixed + (uint64_t)migration.to_layout.size + 4 + view.datamodel_bytes +
-                   view.timers_bytes + (uint64_t)new_count * 4 + align4(view.name_length);
+    /* at most: the carried invocations' ids and records are a part of the old ones */
+    uint64_t raw = fixed + (uint64_t)migration.to_layout.size + view.ids_bytes + view.datamodel_bytes +
+                   view.timers_bytes + view.invocations_bytes + (uint64_t)new_count * 4 +
+                   align4(view.name_length);
     if (raw > (size_t)-1 - 8) return TA_ERROR_NO_MEMORY; /* cannot be addressed here */
     size_t need = align8((size_t)raw);
     *out_length = need;
@@ -1341,6 +1639,34 @@ ta_status ta_blob_migrate(const ta_blob_migration *request, ta_buffer *destinati
             ta_bitset_set(inv, state);
         else
             ta_bitset_clear(inv, state);
+    }
+    migration.view = &view;
+    migration.config = config;
+    /* a kept state whose running invocations were all cancelled starts the
+     * new version's invokes, as entering it would: its service is replaced */
+    {
+        blob_cursor cursor = {view.invocations, view.invocations + view.invocations_bytes};
+        for (uint32_t k = 0; k < view.invocation_count; k++) {
+            blob_invocation r;
+            const char *texts[4];
+            if (!invocation_rec(&cursor, &r, texts) || r.slot >= migration.from_chart_record->invoke_count)
+                return TA_ERROR_INVALID;
+            if (carried_slot(&migration, r.slot) != TA_NIL) continue;
+            uint32_t y = map_state(&migration,
+                                   invoke_at(migration.from_view, migration.from_chart_record, r.slot)->state);
+            if (y == TA_NIL || !ta_bitset_test(config, y) || !migration.to_states[y].invoke_count) continue;
+            int kept = 0;
+            blob_cursor other = {view.invocations, view.invocations + view.invocations_bytes};
+            for (uint32_t j = 0; j < view.invocation_count && !kept; j++) {
+                blob_invocation other_record;
+                const char *other_texts[4];
+                if (!invocation_rec(&other, &other_record, other_texts)) return TA_ERROR_INVALID;
+                uint32_t to = carried_slot(&migration, other_record.slot);
+                kept = to != TA_NIL && invoke_at(migration.to_view, migration.to_chart_record, to)->state == y;
+            }
+            if (!kept) ta_bitset_set(inv, y);
+        }
+        if (cursor.at != cursor.end) return TA_ERROR_INVALID;
     }
     /* late binding: data flags follow their states; active states have data */
     if (migration.to_chart_record->binding == TA_BINDING_LATE) {
@@ -1379,17 +1705,73 @@ ta_status ta_blob_migrate(const ta_blob_migration *request, ta_buffer *destinati
     sh.datamodel_bytes = view.datamodel_bytes;
     sh.chart = migration.to_chart;
     sh.instance_bytes = migration.to_layout.size;
-    sh.ids_bytes = 4; /* no invokes are running (one session) */
     sh.timer_count = view.timer_count;
     sh.timers_bytes = view.timers_bytes;
     sh.name_length = view.name_length;
     unsigned char *q = o + fixed + migration.to_layout.size;
-    ta_memset(q, 0, 4);
+    /* the invoke ids of the invocations that go on, in their new slots */
+    unsigned char *ids = q;
+    uint32_t id_count = 0;
     q += 4;
+    {
+        blob_cursor cursor = {view.invocations, view.invocations + view.invocations_bytes};
+        for (uint32_t k = 0; k < view.invocation_count; k++) {
+            blob_invocation r;
+            const char *texts[4];
+            ta_string_view id;
+            if (!invocation_rec(&cursor, &r, texts)) return TA_ERROR_INVALID;
+            uint32_t to = carried_slot(&migration, r.slot);
+            if (to == TA_NIL || !blob_invoke_id(&view, r.slot, &id)) continue;
+            uint32_t id_length = (uint32_t)id.length;
+            ta_memcpy(q, &to, 4);
+            ta_memcpy(q + 4, &id_length, 4);
+            ta_memcpy(q + 8, id.pointer, id_length);
+            ta_memset(q + 8 + id_length, 0, align4(id_length) - id_length);
+            q += 8 + align4(id_length);
+            id_count++;
+        }
+    }
+    ta_memcpy(ids, &id_count, 4);
+    sh.ids_bytes = (uint32_t)(q - ids);
     ta_memcpy(q, view.datamodel, (size_t)view.datamodel_bytes);
     q += view.datamodel_bytes;
+    /* delayed sends to a service (#_<invokeid>) follow it to its new slot,
+     * or fail as sends to an invocation that ended (slot 0) */
     ta_memcpy(q, view.timers, view.timers_bytes);
+    {
+        const unsigned char *t = q, *te = q + view.timers_bytes;
+        for (uint32_t k = 0; k < view.timer_count; k++) {
+            unsigned char *record = q + (t - q);
+            blob_timer r;
+            const char *texts[4];
+            if (!timer_rec(&t, te, &r, texts)) return TA_ERROR_INVALID;
+            if (r.route != TA_ROUTE_CHILD || !r.arg) continue;
+            uint32_t to = carried_slot(&migration, r.arg - 1);
+            uint32_t arg = to == TA_NIL ? 0 : to + 1;
+            ta_memcpy(record + offsetof(blob_timer, arg), &arg, 4);
+        }
+    }
     q += view.timers_bytes;
+    /* the invocations that go on, in their new slots; the others are
+     * cancelled: the host stops their services (ta_host_migrate) */
+    {
+        unsigned char *start = q;
+        blob_cursor cursor = {view.invocations, view.invocations + view.invocations_bytes};
+        for (uint32_t k = 0; k < view.invocation_count; k++) {
+            const unsigned char *record = cursor.at;
+            blob_invocation r;
+            const char *texts[4];
+            if (!invocation_rec(&cursor, &r, texts)) return TA_ERROR_INVALID;
+            uint32_t to = carried_slot(&migration, r.slot);
+            if (to == TA_NIL) continue;
+            size_t bytes = (size_t)(cursor.at - record);
+            ta_memcpy(q, record, bytes);
+            ta_memcpy(q + offsetof(blob_invocation, slot), &to, 4);
+            q += bytes;
+            sh.invocation_count++;
+        }
+        sh.invocations_bytes = (uint32_t)(q - start);
+    }
     for (uint32_t d = 0; d < migration.to_chart_record->data_count; d++) {
         ta_data_info di;
         if (ta_image_data(to_image, (ta_chart_item){migration.to_chart, d}, &di) != TA_OK ||

@@ -555,7 +555,7 @@ int ta_python_ask_reply(ta_python_host *host, uint32_t index) {
 static void ta_python_dispatch_send(ta_python_host *host, uint32_t index) {
     uint32_t processor = (uint32_t)ta_host_effect_number(host->host, index, TA_EFFECT_FIELD_IO_PROCESSOR);
     if (processor == 0 && ta_python_ask_reply(host, index)) return; /* an ask's reply, not the transport's */
-    if (processor == TA_NIL) { /* a send to an invoked service: by (segment, token) */
+    if (processor == TA_NIL) { /* a send to an invoked service: by its invocation's id */
         ta_python_dispatch_service_send(host, index);
         return;
     }
@@ -629,7 +629,7 @@ typedef struct ta_python_invocation {
     PyObject_HEAD
     ta_python_host *host; /* a reference */
     uint64_t session;     /* the invoker */
-    uint32_t segment, token;
+    uint64_t id;          /* core's id of the invocation: unique in the host, kept by a migration */
     uint32_t ended;       /* done, cancelled or failed: answers refused */
     uint32_t failed;      /* it never ran: sends to it are answered with error.communication */
     uint32_t restored;    /* started again after a restore (TA_EFFECT_FLAG_RESTORED) */
@@ -637,9 +637,9 @@ typedef struct ta_python_invocation {
     PyObject *invokeid, *type, *src, *data, *traceparent;
 } ta_python_invocation;
 
-/* The key of an invocation: core's (segment, token). */
-static PyObject *ta_python_invocation_key(uint32_t segment, uint32_t token) {
-    return PyLong_FromUnsignedLongLong((uint64_t)segment << 32 | token);
+/* The key of an invocation: core's id of it. */
+static PyObject *ta_python_invocation_key(uint64_t id) {
+    return PyLong_FromUnsignedLongLong(id);
 }
 
 /* An event from the service to its invoker (TA_EVENT_IN_FROM_INVOKE), its
@@ -671,7 +671,7 @@ static int ta_python_invocation_post(ta_python_invocation *invocation, const ta_
     event.size = sizeof event;
     event.session = invocation->session;
     event.flags = what->flags;
-    event.token = invocation->token;
+    event.invocation = invocation->id;
     event.sendid = what->sendid;
     ta_python_payload_for payload = {event.session, {0, 0}, what->data, 0, TA_NIL};
     int status = 0;
@@ -696,7 +696,7 @@ static int ta_python_invocation_post(ta_python_invocation *invocation, const ta_
 static void ta_python_invocation_end(ta_python_invocation *invocation) {
     invocation->ended = 1;
     ta_python_host *host = invocation->host;
-    PyObject *key = host->invocations ? ta_python_invocation_key(invocation->segment, invocation->token) : NULL;
+    PyObject *key = host->invocations ? ta_python_invocation_key(invocation->id) : NULL;
     if (key && PyDict_DelItem(host->invocations, key) < 0) PyErr_Clear(); /* not there: never stored */
     Py_XDECREF(key);
 }
@@ -828,25 +828,23 @@ static PyObject *ta_python_effect_str(ta_python_host *host, const ta_python_effe
     return value;
 }
 
-/* An UNINVOKE of the same (segment, token) later in the open batch: the
- * invoker cancelled it in the run that started it, so a failure to start
- * is nobody's news. */
+/* An UNINVOKE of the same invocation later in the open batch: the invoker
+ * cancelled it in the run that started it, so a failure to start is
+ * nobody's news. */
 static int ta_python_uninvoked_in_batch(ta_python_host *host, uint32_t index) {
     ta_host *core = host->host;
     const ta_host_effect *effects;
     uint32_t count = ta_host_effects(core, &effects);
-    uint64_t segment = ta_host_effect_number(core, index, TA_EFFECT_FIELD_SEGMENT);
-    uint64_t token = ta_host_effect_number(core, index, TA_EFFECT_FIELD_TOKEN);
+    uint64_t id = ta_host_effect_number(core, index, TA_EFFECT_FIELD_INVOCATION);
     for (uint32_t i = index + 1; i < count; i++)
         if (ta_host_effect_number(core, i, TA_EFFECT_FIELD_KIND) == TA_EFFECT_UNINVOKE &&
-            ta_host_effect_number(core, i, TA_EFFECT_FIELD_SEGMENT) == segment &&
-            ta_host_effect_number(core, i, TA_EFFECT_FIELD_TOKEN) == token)
+            ta_host_effect_number(core, i, TA_EFFECT_FIELD_INVOCATION) == id)
             return 1;
     return 0;
 }
 
 /* TA_EFFECT_INVOKE: the handler registered for the type starts the service;
- * what it returns is kept, keyed by (segment, token), until done or
+ * what it returns is kept, keyed by its invocation's id, until done or
  * UNINVOKE. No handler, or one that raises: error.communication for the
  * invoker (a service it cannot have, unless it cancelled it already), the
  * exception raised after the turn, and the entry kept as failed. */
@@ -859,8 +857,7 @@ static void ta_python_dispatch_invoke(ta_python_host *host, uint32_t index) {
     }
     invocation->host = (ta_python_host *)Py_NewRef((PyObject *)host);
     invocation->session = ta_host_effect_number(core, index, TA_EFFECT_FIELD_SESSION);
-    invocation->segment = (uint32_t)ta_host_effect_number(core, index, TA_EFFECT_FIELD_SEGMENT);
-    invocation->token = (uint32_t)ta_host_effect_number(core, index, TA_EFFECT_FIELD_TOKEN);
+    invocation->id = ta_host_effect_number(core, index, TA_EFFECT_FIELD_INVOCATION);
     invocation->ended = 0;
     invocation->failed = 0;
     invocation->restored = (ta_host_effect_number(core, index, TA_EFFECT_FIELD_FLAGS) & TA_EFFECT_FLAG_RESTORED) != 0;
@@ -891,7 +888,7 @@ static void ta_python_dispatch_invoke(ta_python_host *host, uint32_t index) {
         PyErr_SetRaisedException(raised);
         if (raised) ta_python_handler_failed(host, (PyObject *)invocation);
     }
-    key = ta_python_invocation_key(invocation->segment, invocation->token);
+    key = ta_python_invocation_key(invocation->id);
     entry = key ? PyTuple_Pack(2, (PyObject *)invocation, service) : NULL;
     if (!entry || PyDict_SetItem(host->invocations, key, entry) < 0) ta_python_host_keep_error(host);
 done:
@@ -902,10 +899,9 @@ done:
     Py_DECREF((PyObject *)invocation);
 }
 
-/* The (invocation, service) of an effect's (segment, token), or NULL. */
+/* The (invocation, service) of an effect's invocation, or NULL. */
 static PyObject *ta_python_invocation_entry(ta_python_host *host, uint32_t index) {
-    PyObject *key = ta_python_invocation_key((uint32_t)ta_host_effect_number(host->host, index, TA_EFFECT_FIELD_SEGMENT),
-                                             (uint32_t)ta_host_effect_number(host->host, index, TA_EFFECT_FIELD_TOKEN));
+    PyObject *key = ta_python_invocation_key(ta_host_effect_number(host->host, index, TA_EFFECT_FIELD_INVOCATION));
     PyObject *entry = NULL;
     if (key && PyDict_GetItemRef(host->invocations, key, &entry) < 0) PyErr_Clear();
     Py_XDECREF(key);
@@ -922,7 +918,7 @@ static void ta_python_invocation_crashed(ta_python_host *host, uint32_t index) {
     ta_python_invocation *invocation = entry ? (ta_python_invocation *)PyTuple_GetItem(entry, 0) : NULL;
     if (invocation && !invocation->ended) {
         invocation->ended = invocation->failed = 1;
-        PyObject *key = ta_python_invocation_key(invocation->segment, invocation->token);
+        PyObject *key = ta_python_invocation_key(invocation->id);
         PyObject *failed_entry = PyTuple_Pack(2, (PyObject *)invocation, Py_None);
         if (!key || !failed_entry || PyDict_SetItem(host->invocations, key, failed_entry) < 0) PyErr_Clear();
         Py_XDECREF(failed_entry);

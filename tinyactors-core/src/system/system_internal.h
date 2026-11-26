@@ -95,6 +95,8 @@ typedef struct ta_request {
     uint32_t ended;    /* REQUEST_EXTERNAL_INVOKE: the service finished (its INVOKE_DONE was accepted,
                           the done.invoke not taken yet) or failed (ERROR_COMMUNICATION from it): not
                           announced after a restore, and its FROM_INVOKE / INVOKE_DONE refused */
+    uint64_t invocation; /* REQUEST_EXTERNAL_INVOKE: its id, unique in the host and kept when its
+                            actor moves to another system (docs/adr/0018) */
 } ta_request;
 
 /* Internal effect record; ta_effect views are materialized on demand. */
@@ -107,6 +109,7 @@ typedef struct ta_effect_record {
     uint64_t payload; /* released on ack if `owned` */
     uint64_t delay;
     uint64_t serial;        /* the actor's session id at push time */
+    uint64_t invocation;    /* INVOKE, UNINVOKE, a SEND to a service: the invocation's id */
     ta_trace_context trace; /* SEND, INVOKE, LOG, DONE: the step's (docs/adr/0006) */
 } ta_effect_record;
 
@@ -150,6 +153,9 @@ struct ta_system {
      * last_serial) */
     uint32_t serials_exported;
     uint64_t now, wall_ns, sequence, next_serial, serial_high; /* now: ta_system_time.monotonic */
+    /* the last external invocation id handed out: ids start after first_serial,
+     * so the systems of a host, whose ranges differ, never give the same one */
+    uint64_t next_invocation;
     uint64_t stats_delivered, stats_fuel, stats_turns, stats_timers, stats_spawned,
         stats_traces_started, stats_traces_sampled; /* ta_system_stats */
     /* tracing (docs/adr/0006): the journal and the context pool (carved only
@@ -427,6 +433,9 @@ uint32_t ta_system_request_alloc(ta_system *s, uint32_t index);
 void ta_system_request_free(ta_system *s, uint32_t ri);
 /* the live requests actor `index` made */
 uint32_t ta_system_actor_requests(const ta_system *s, uint32_t index);
+/* The id of external invocation `k` of an export blob's root session (hibernate.c): what a
+ * migration compares to find the invocations its translation cancelled. 0 past the last. */
+int ta_blob_invocation(ta_bytes blob, uint32_t k, uint64_t *id);
 ta_actor_links *ta_system_actor_links(const ta_system *s);
 /* Retry spawns parked by pool exhaustion; returns TA_POOL_* still exhausted. */
 uint32_t ta_system_retry_pending(ta_system *s);

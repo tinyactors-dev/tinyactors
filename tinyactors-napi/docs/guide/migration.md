@@ -205,10 +205,16 @@ next deadline 7000
 ## When a migration ends
 
 A migration ends when every actor it looks at has moved, or at its
-`timeout`. An actor that is running an invocation (an invoked chart or
-a service) moves once the invocation ends: a migration with a `timeout`
-waits for that until the timeout, and one without fails the actor at
-once with `'TA_ERROR_STATE'`, since an invocation may never end. A
+`timeout`. An actor that is running a service moves at once, and the
+service goes on: its `Invocation` keeps answering, and what it sends
+reaches the new version, as long as the new version's state has the same
+`<invoke>` (the same `id` and `type`; one without an `id` when it is the
+state's only one). A service the new version drops is stopped (its
+`stop()`), as leaving its state would stop it. An actor that is running
+an invoked chart moves once that chart ends: a migration with a
+`timeout` waits for that until the timeout, and one without fails the
+actor at once with `'TA_ERROR_STATE'`, since an invocation may never
+end. A
 hibernated actor moves once it is woken: with `wake: true` the migration
 asks the host for it, and the host loads it from its
 [store](hibernation.md), and asks again if it finds the actor hibernated

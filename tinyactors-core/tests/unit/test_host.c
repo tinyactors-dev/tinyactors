@@ -787,9 +787,11 @@ static void test_migration_waits_for_invocations(void) {
     world_close(&e);
 }
 
-/* without a timeout a migration does not wait for invocations, which may
- * never finish: an actor running an SCXML child or an external service fails
- * with TA_ERROR_STATE, stays on its version, and the migration ends */
+/* without a timeout a migration does not wait for SCXML invocations, which
+ * may never finish: an actor running an SCXML child fails with
+ * TA_ERROR_STATE, stays on its version, and the migration ends. One running
+ * a service moves at once, its service carried or, as here, stopped when the
+ * new version drops it (docs/adr/0018; test_host_effects.c) */
 #define Q1                                                                                         \
     SC("q", "initial='a'><state id='a'><invoke type='urn:svc' src='x:y'/>"                         \
             "<transition event='which'><log expr=\"'v1'\"/></transition></state>")
@@ -810,20 +812,18 @@ static void test_migration_fails_invoking_actors_without_timeout(void) {
     CHECK_EQUAL(ta_host_migrate(e.host, &(ta_host_migration){(ta_string_view){0, 0}, 0, 0, 0, 0}, &migration),
                 TA_OK);
     run(&e);
-    CHECK_EQUAL(e.migrated_count, 0);
-    CHECK(e.last_migration == migration && e.last_done.migrated == 0 && e.last_done.failed == 2 &&
+    CHECK_EQUAL(e.migrated_count, 1);
+    CHECK(e.last_migration == migration && e.last_done.migrated == 1 && e.last_done.failed == 1 &&
           e.last_done.pending == 0);
-    CHECK_EQUAL(e.failure_count, 2u);
-    for (uint32_t i = 0; i < 2; i++) {
-        CHECK(e.failures[i].session == p || e.failures[i].session == q);
-        CHECK_EQUAL(e.failures[i].status, TA_ERROR_STATE);
-    }
+    CHECK_EQUAL(e.failure_count, 1u);
+    CHECK_EQUAL(e.failures[0].session, p);
+    CHECK_EQUAL(e.failures[0].status, TA_ERROR_STATE);
     e.log[0] = 0;
     CHECK_EQUAL(send(&e, q, "which", NULL), TA_OK);
     run(&e);
-    CHECK(strcmp(e.log, "v1;") == 0); /* still on its version, its service still running */
+    CHECK(strcmp(e.log, "v2;") == 0); /* moved, its service stopped */
     /* one session, with a timeout: pending at the deadline, never failed */
-    CHECK_EQUAL(ta_host_migrate(e.host, &(ta_host_migration){(ta_string_view){0, 0}, q, 0, 0, 50}, &migration),
+    CHECK_EQUAL(ta_host_migrate(e.host, &(ta_host_migration){(ta_string_view){0, 0}, p, 0, 0, 50}, &migration),
                 TA_OK);
     run(&e);
     CHECK_EQUAL(e.last_migration, migration - 1); /* waiting */

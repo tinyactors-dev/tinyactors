@@ -352,6 +352,7 @@ ta_status ta_system_init(const ta_system_setup *setup, ta_system **out) {
     system->policy.rule_count = 0;
     system->chart_count = view->chart_count;
     system->next_serial = normalized.first_serial;
+    system->next_invocation = normalized.first_serial;
     ta_pool_init(&system->actors, ta_arena_pointer(&arena, o.actor_slots),
                  (unsigned char *)ta_arena_pointer(&arena, o.actor_generations), sizeof(ta_actor),
                  normalized.max_actors);
@@ -1038,6 +1039,8 @@ ta_status ta_actor_info_get(const ta_system *system, uint32_t actor, ta_actor_in
              i++) /* not children that vanished (faulted) */
             r.invocations += kids[i] && ((kids[i] & TA_EXTERNAL_INVOKE_BIT) ||
                                          ta_system_resolve_actor(system, kids[i]) != TA_NIL);
+        for (uint32_t i = 0; i < chart->invoke_count; i++)
+            r.services += (kids[i] & TA_EXTERNAL_INVOKE_BIT) != 0;
     }
     size_t n = out->size && out->size < sizeof r ? out->size : sizeof r; /* size-first */
     r.size = (uint32_t)n;

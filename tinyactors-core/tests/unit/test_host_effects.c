@@ -1,6 +1,6 @@
 /* ta_host_effect_number / ta_host_effect_text (host.h): every field an effect
  * has, read without the struct's layout, and a send to an invoked service
- * carrying the token of the invoke that started it. */
+ * carrying the id of the invoke that started it. */
 #include "../harness/harness.h"
 #include "../support/compile_util.h"
 #include "../support/host_config.h"
@@ -17,6 +17,7 @@
     "<send target='#_svc' event='poke' id='p1'/></transition>"                                     \
     "<transition event='news'><log label='origin' expr=\"_event.origin + ' ' + _event.origintype\"/>"   \
     "</transition>"                                                                                \
+    "<transition event='later'><send target='#_svc' event='tick' delay='1s'/></transition>"        \
     "<transition event='end' target='f'/></state><final id='f'/></scxml>"
 
 typedef struct world {
@@ -28,11 +29,11 @@ typedef struct world {
     uint64_t session;
 } world;
 
-static void *compile_caller(size_t *length) {
+static void *compile_caller(const char *text, size_t *length) {
     ta_compile_options options;
     memset(&options, 0, sizeof options);
     options.size = sizeof options;
-    ta_source source = {{"caller.scxml", 12}, {CHART, sizeof CHART - 1}};
+    ta_source source = {{"caller.scxml", 12}, {text, (uint32_t)strlen(text)}};
     ta_compile_result *result = NULL;
     void *copy = NULL;
     if (ta_compile_charts(&options, (ta_source_list){&source, 1}, &result) == TA_OK) {
@@ -62,7 +63,7 @@ static void world_open(world *w) {
     config.allocator = ta_runtime_malloc();
     CHECK_EQUAL(test_host_new(&config, &w->host), TA_OK);
     size_t length;
-    w->image_bytes = compile_caller(&length);
+    w->image_bytes = compile_caller(CHART, &length);
     CHECK(w->image_bytes != NULL);
     CHECK_EQUAL(ta_host_add_image(w->host, (ta_bytes){w->image_bytes, length}, &w->segment), TA_OK);
     free(w->image_bytes); /* the host keeps a copy */
@@ -83,6 +84,8 @@ static void world_close(world *w) {
 static uint32_t run_batch(world *w, const ta_host_effect **effects) {
     ta_host_effects_ack(w->host);
     ta_run result = ta_host_run(w->host, 1000000);
+    while (result.status == TA_RUN_YIELDED) /* a migration moves actors in steps */
+        result = ta_host_run(w->host, 1000000);
     CHECK(result.status == TA_RUN_IDLE || result.status == TA_RUN_EFFECTS);
     return ta_host_effects(w->host, effects);
 }
@@ -107,16 +110,17 @@ static uint32_t find(ta_host *host, uint32_t count, uint32_t kind) {
     return TA_NIL;
 }
 
-static void test_invoked_service_is_keyed_by_token(void) {
+static void test_invoked_service_is_keyed_by_invocation(void) {
     world w;
     world_open(&w);
     const ta_host_effect *effects;
     uint32_t count = run_batch(&w, &effects);
     uint32_t invoke = find(w.host, count, TA_EFFECT_INVOKE);
     CHECK(invoke != TA_NIL);
-    uint64_t token = ta_host_effect_number(w.host, invoke, TA_EFFECT_FIELD_TOKEN);
+    uint64_t invocation = ta_host_effect_number(w.host, invoke, TA_EFFECT_FIELD_INVOCATION);
     uint64_t segment = ta_host_effect_number(w.host, invoke, TA_EFFECT_FIELD_SEGMENT);
-    CHECK(token != 0);
+    CHECK(invocation != 0);
+    CHECK_EQUAL(ta_host_effect_number(w.host, invoke, TA_EFFECT_FIELD_TOKEN), 0);
     CHECK_EQUAL(segment, w.segment);
     CHECK(text_is(ta_host_effect_text(w.host, invoke, TA_EFFECT_FIELD_TARGET), "svc:x"));
     CHECK(text_is(ta_host_effect_text(w.host, invoke, TA_EFFECT_FIELD_EVENT),
@@ -126,7 +130,7 @@ static void test_invoked_service_is_keyed_by_token(void) {
     count = run_batch(&w, &effects);
     uint32_t send = find(w.host, count, TA_EFFECT_SEND);
     CHECK(send != TA_NIL);
-    CHECK_EQUAL(ta_host_effect_number(w.host, send, TA_EFFECT_FIELD_TOKEN), token);
+    CHECK_EQUAL(ta_host_effect_number(w.host, send, TA_EFFECT_FIELD_INVOCATION), invocation);
     CHECK_EQUAL(ta_host_effect_number(w.host, send, TA_EFFECT_FIELD_SEGMENT), segment);
     CHECK_EQUAL(ta_host_effect_number(w.host, send, TA_EFFECT_FIELD_IO_PROCESSOR), (uint64_t)TA_NIL);
     CHECK(text_is(ta_host_effect_text(w.host, send, TA_EFFECT_FIELD_EVENT), "poke"));
@@ -150,6 +154,7 @@ static void check_fields(world *w, const ta_host_effect *effects, uint32_t count
         CHECK_EQUAL(ta_host_effect_number(w->host, i, TA_EFFECT_FIELD_SESSION), e->session);
         CHECK_EQUAL(ta_host_effect_number(w->host, i, TA_EFFECT_FIELD_ROOT), e->root);
         CHECK_EQUAL(ta_host_effect_number(w->host, i, TA_EFFECT_FIELD_TOKEN), e->token);
+        CHECK_EQUAL(ta_host_effect_number(w->host, i, TA_EFFECT_FIELD_INVOCATION), e->invocation);
         CHECK_EQUAL(ta_host_effect_number(w->host, i, TA_EFFECT_FIELD_IO_PROCESSOR), e->io_processor);
         CHECK_EQUAL(ta_host_effect_number(w->host, i, TA_EFFECT_FIELD_FLAGS), e->flags);
         CHECK_EQUAL(ta_host_effect_number(w->host, i, TA_EFFECT_FIELD_MIGRATION), e->migration);
@@ -387,9 +392,9 @@ static void restore_world(world *w) {
 
 /* A host restored from a snapshot announces each external invocation that
  * was running again, at its first run (after the datamodels' state is
- * back): the same segment, token, type, src and invoke id, its params, the
- * invoker's session, flagged TA_EFFECT_FLAG_RESTORED; once. Its token stays
- * good for the service's answers. */
+ * back): the same segment, invocation id, type, src and invoke id, its
+ * params, the invoker's session, flagged TA_EFFECT_FLAG_RESTORED; once. Its
+ * id stays good for the service's answers. */
 static void test_restore_announces_external_invocations(void) {
     world w;
     world_open(&w);
@@ -397,7 +402,7 @@ static void test_restore_announces_external_invocations(void) {
     uint32_t count = run_batch(&w, &effects);
     uint32_t invoke = find(w.host, count, TA_EFFECT_INVOKE);
     CHECK(invoke != TA_NIL);
-    uint64_t token = ta_host_effect_number(w.host, invoke, TA_EFFECT_FIELD_TOKEN);
+    uint64_t invocation = ta_host_effect_number(w.host, invoke, TA_EFFECT_FIELD_INVOCATION);
     CHECK_EQUAL(ta_host_effect_number(w.host, invoke, TA_EFFECT_FIELD_FLAGS) & TA_EFFECT_FLAG_RESTORED, 0u);
     ta_host_effects_ack(w.host);
     restore_world(&w);
@@ -408,7 +413,7 @@ static void test_restore_announces_external_invocations(void) {
     CHECK(invoke != TA_NIL);
     CHECK_EQUAL(ta_host_effect_number(w.host, invoke, TA_EFFECT_FIELD_FLAGS) & TA_EFFECT_FLAG_RESTORED,
                 (uint64_t)TA_EFFECT_FLAG_RESTORED);
-    CHECK_EQUAL(ta_host_effect_number(w.host, invoke, TA_EFFECT_FIELD_TOKEN), token);
+    CHECK_EQUAL(ta_host_effect_number(w.host, invoke, TA_EFFECT_FIELD_INVOCATION), invocation);
     CHECK_EQUAL(ta_host_effect_number(w.host, invoke, TA_EFFECT_FIELD_SEGMENT), w.segment);
     CHECK_EQUAL(ta_host_effect_number(w.host, invoke, TA_EFFECT_FIELD_SESSION), w.session);
     CHECK(text_is(ta_host_effect_text(w.host, invoke, TA_EFFECT_FIELD_TARGET), "svc:x"));
@@ -425,19 +430,19 @@ static void test_restore_announces_external_invocations(void) {
     back.size = sizeof back;
     back.session = w.session;
     back.flags = TA_EVENT_IN_INVOKE_DONE;
-    back.token = (uint32_t)token;
-    CHECK_EQUAL(ta_host_send(w.host, &back), TA_OK); /* the token is the invocation's still */
+    back.invocation = invocation;
+    CHECK_EQUAL(ta_host_send(w.host, &back), TA_OK); /* the id is the invocation's still */
     CHECK_EQUAL(ta_host_run(w.host, 1000000).status, TA_RUN_IDLE);
     world_close(&w);
 }
 
-static ta_status from_service(world *w, uint32_t token, uint32_t flags) {
+static ta_status from_service(world *w, uint64_t invocation, uint32_t flags) {
     ta_event_in event;
     memset(&event, 0, sizeof event);
     event.size = sizeof event;
     event.session = w->session;
     event.flags = flags;
-    event.token = token;
+    event.invocation = invocation;
     event.name = (ta_string_view){"news", 4};
     return ta_host_send(w->host, &event);
 }
@@ -451,13 +456,13 @@ static void test_restore_skips_ended_invocations(void) {
         world_open(&w);
         const ta_host_effect *effects;
         uint32_t count = run_batch(&w, &effects);
-        uint32_t token = (uint32_t)ta_host_effect_number(w.host, find(w.host, count, TA_EFFECT_INVOKE),
-                                                         TA_EFFECT_FIELD_TOKEN);
+        uint64_t invocation = ta_host_effect_number(w.host, find(w.host, count, TA_EFFECT_INVOKE),
+                                               TA_EFFECT_FIELD_INVOCATION);
         ta_host_effects_ack(w.host);
         uint32_t ended = failed ? TA_EVENT_IN_ERROR_COMMUNICATION | TA_EVENT_IN_FROM_INVOKE : TA_EVENT_IN_INVOKE_DONE;
-        CHECK_EQUAL(from_service(&w, token, ended), TA_OK); /* not run: the actor has not taken it */
-        CHECK_EQUAL(from_service(&w, token, TA_EVENT_IN_FROM_INVOKE), TA_ERROR_STALE);
-        CHECK_EQUAL(from_service(&w, token, TA_EVENT_IN_INVOKE_DONE), TA_ERROR_STALE);
+        CHECK_EQUAL(from_service(&w, invocation, ended), TA_OK); /* not run: the actor has not taken it */
+        CHECK_EQUAL(from_service(&w, invocation, TA_EVENT_IN_FROM_INVOKE), TA_ERROR_STALE);
+        CHECK_EQUAL(from_service(&w, invocation, TA_EVENT_IN_INVOKE_DONE), TA_ERROR_STALE);
         restore_world(&w);
         CHECK_EQUAL(ta_host_run(w.host, 1000000).status, TA_RUN_IDLE);
         count = ta_host_effects(w.host, &effects);
@@ -474,10 +479,10 @@ static void test_an_event_from_a_service_names_its_origin(void) {
     world_open(&w);
     const ta_host_effect *effects;
     uint32_t count = run_batch(&w, &effects);
-    uint32_t token = (uint32_t)ta_host_effect_number(w.host, find(w.host, count, TA_EFFECT_INVOKE),
-                                                     TA_EFFECT_FIELD_TOKEN);
+    uint64_t invocation = ta_host_effect_number(w.host, find(w.host, count, TA_EFFECT_INVOKE),
+                                           TA_EFFECT_FIELD_INVOCATION);
     ta_host_effects_ack(w.host);
-    CHECK_EQUAL(from_service(&w, token, TA_EVENT_IN_FROM_INVOKE), TA_OK);
+    CHECK_EQUAL(from_service(&w, invocation, TA_EVENT_IN_FROM_INVOKE), TA_OK);
     count = run_batch(&w, &effects);
     uint32_t log = find(w.host, count, TA_EFFECT_LOG);
     CHECK(log != TA_NIL);
@@ -489,14 +494,147 @@ static void test_an_event_from_a_service_names_its_origin(void) {
     world_close(&w);
 }
 
+/* ---- a migration carries the services along (docs/adr/0018) ---- */
+
+/* Versions 2 of the caller: its state keeps the service (same id and type),
+ * drops it, or replaces it with another <invoke>. */
+#define CALLER_HEAD                                                                                \
+    "<scxml xmlns='http://www.w3.org/2005/07/scxml' datamodel='ecmascript' name='caller' "         \
+    "initial='s'><state id='s'>"
+#define CALLER_TAIL                                                                                \
+    "<transition event='news'><log label='news' expr=\"'v2'\"/></transition>"                    \
+    "<transition event='end' target='f'/></state><state id='added'/><final id='f'/></scxml>"
+static const char kept_chart[] = CALLER_HEAD
+    "<invoke id='svc' type='http://example.com/service' src='svc:x'>"
+    "<finalize><log label='finalize' expr=\"'v2'\"/></finalize></invoke>" CALLER_TAIL;
+static const char dropped_chart[] = CALLER_HEAD CALLER_TAIL;
+static const char replaced_chart[] = CALLER_HEAD
+    "<invoke id='other' type='http://example.com/service' src='svc:y'/>" CALLER_TAIL;
+
+/* A migration of the world's caller: version 2's text, whether a delayed
+ * send to the service waits, and the batch of the migration's run. */
+typedef struct migration_case {
+    const char *chart;
+    int later;
+    const ta_host_effect *effects;
+    uint32_t count;
+} migration_case;
+
+/* The world's caller with its service started, then version 2 added and the
+ * caller migrated to it; the batch of the migration's run is published.
+ * Returns the service's id. */
+static uint64_t migrate_caller(world *w, migration_case *c) {
+    const ta_host_effect **effects = &c->effects;
+    uint32_t *count = &c->count;
+    *count = run_batch(w, effects);
+    uint64_t invocation =
+        ta_host_effect_number(w->host, find(w->host, *count, TA_EFFECT_INVOKE), TA_EFFECT_FIELD_INVOCATION);
+    CHECK(invocation != 0);
+    if (c->later) {
+        send_event(w, "later");
+        run_batch(w, effects);
+    }
+    size_t length;
+    void *image = compile_caller(c->chart, &length);
+    CHECK(image != NULL);
+    uint32_t segment;
+    CHECK_EQUAL(ta_host_add_image(w->host, (ta_bytes){image, length}, &segment), TA_OK);
+    free(image);
+    uint32_t migration;
+    CHECK_EQUAL(ta_host_migrate(w->host, &(ta_host_migration){(ta_string_view){"caller", 6}, 0, 0, 0, 0},
+                                &migration),
+                TA_OK);
+    *count = run_batch(w, effects);
+    CHECK(find(w->host, *count, TA_HOST_EFFECT_MIGRATED) != TA_NIL);
+    CHECK_EQUAL(ta_host_effect_number(w->host, find(w->host, *count, TA_HOST_EFFECT_MIGRATED),
+                                      TA_EFFECT_FIELD_SEGMENT),
+                segment);
+    return invocation;
+}
+
+/* A kept service goes on under its id: nothing tells it of the move, its
+ * events reach the new version (its transitions and <finalize>), and a
+ * delayed send to it follows it. */
+static void test_migration_carries_a_kept_service(void) {
+    world w;
+    world_open(&w);
+    migration_case c = {kept_chart, 1, NULL, 0};
+    uint64_t invocation = migrate_caller(&w, &c);
+    const ta_host_effect *effects = c.effects;
+    uint32_t count = c.count;
+    CHECK_EQUAL(find(w.host, count, TA_EFFECT_UNINVOKE), TA_NIL);
+    CHECK_EQUAL(find(w.host, count, TA_EFFECT_INVOKE), TA_NIL);
+    ta_host_effects_ack(w.host);
+    CHECK_EQUAL(from_service(&w, invocation, TA_EVENT_IN_FROM_INVOKE), TA_OK);
+    count = run_batch(&w, &effects);
+    int finalized = 0, handled = 0;
+    for (uint32_t i = 0; i < count; i++) {
+        if (ta_host_effect_number(w.host, i, TA_EFFECT_FIELD_KIND) != TA_EFFECT_LOG) continue;
+        ta_string_view label = ta_host_effect_text(w.host, i, TA_EFFECT_FIELD_AUXILIARY);
+        finalized += text_is(label, "finalize");
+        handled += text_is(label, "news");
+    }
+    CHECK(finalized == 1 && handled == 1);
+    ta_host_effects_ack(w.host);
+    ta_host_advance_time(w.host, (ta_system_time){2000000000u, 0});
+    count = run_batch(&w, &effects);
+    uint32_t send = find(w.host, count, TA_EFFECT_SEND);
+    CHECK(send != TA_NIL);
+    CHECK_EQUAL(ta_host_effect_number(w.host, send, TA_EFFECT_FIELD_IO_PROCESSOR), (uint64_t)TA_NIL);
+    CHECK_EQUAL(ta_host_effect_number(w.host, send, TA_EFFECT_FIELD_INVOCATION), invocation);
+    CHECK(text_is(ta_host_effect_text(w.host, send, TA_EFFECT_FIELD_EVENT), "tick"));
+    ta_host_effects_ack(w.host);
+    CHECK_EQUAL(from_service(&w, invocation, TA_EVENT_IN_INVOKE_DONE), TA_OK);
+    run_batch(&w, &effects);
+    ta_host_effects_ack(w.host);
+    world_close(&w);
+}
+
+/* A service the new version drops is stopped (UNINVOKE with its id), and
+ * its later events are refused; one it replaces with another <invoke> is
+ * stopped, and the new one starts under a new id. */
+static void test_migration_stops_a_dropped_service(void) {
+    for (int replaced = 0; replaced < 2; replaced++) {
+        world w;
+        world_open(&w);
+        migration_case c = {replaced ? replaced_chart : dropped_chart, 0, NULL, 0};
+        uint64_t invocation = migrate_caller(&w, &c);
+        const ta_host_effect *effects = c.effects;
+        uint32_t count = c.count;
+        uint32_t uninvoke = find(w.host, count, TA_EFFECT_UNINVOKE);
+        CHECK(uninvoke != TA_NIL);
+        CHECK_EQUAL(ta_host_effect_number(w.host, uninvoke, TA_EFFECT_FIELD_INVOCATION), invocation);
+        CHECK_EQUAL(ta_host_effect_number(w.host, uninvoke, TA_EFFECT_FIELD_SESSION), w.session);
+        uint32_t invoke = find(w.host, count, TA_EFFECT_INVOKE);
+        if (!replaced) {
+            CHECK_EQUAL(invoke, TA_NIL);
+        } else {
+            if (invoke == TA_NIL) { /* the new one starts in the migration's run or the next */
+                ta_host_effects_ack(w.host);
+                count = run_batch(&w, &effects);
+                invoke = find(w.host, count, TA_EFFECT_INVOKE);
+            }
+            CHECK(invoke != TA_NIL);
+            uint64_t started = ta_host_effect_number(w.host, invoke, TA_EFFECT_FIELD_INVOCATION);
+            CHECK(started != 0 && started != invocation);
+            CHECK(text_is(ta_host_effect_text(w.host, invoke, TA_EFFECT_FIELD_SENDID), "other"));
+        }
+        ta_host_effects_ack(w.host);
+        CHECK_EQUAL(from_service(&w, invocation, TA_EVENT_IN_FROM_INVOKE), TA_ERROR_STALE);
+        world_close(&w);
+    }
+}
+
 int main(void) {
     RUN(test_take_freezes_batch_across_growth);
     RUN(test_run_refuses_open_batch);
-    RUN(test_invoked_service_is_keyed_by_token);
+    RUN(test_invoked_service_is_keyed_by_invocation);
     RUN(test_fields_match_the_struct);
     RUN(test_traceparents_last_until_the_ack);
     RUN(test_restore_announces_external_invocations);
     RUN(test_restore_skips_ended_invocations);
     RUN(test_an_event_from_a_service_names_its_origin);
+    RUN(test_migration_carries_a_kept_service);
+    RUN(test_migration_stops_a_dropped_service);
     TEST_MAIN_END();
 }

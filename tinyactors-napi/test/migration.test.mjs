@@ -358,32 +358,77 @@ const INVOKING = scxml('counter', `
     <transition event="report"><log label="n" expr="'v1'"/></transition>
   </state>`);
 
-test('an actor running an invocation fails a migration without a timeout, and keeps its service', async () => {
-  const logs = new Logs();
+/** Version 2 keeps the service: the same invoke id and type in the same state. */
+const KEEPS = scxml('counter', `
+  <state id="s">
+    <invoke type="thing" id="svc" src="thing://here"/>
+    <transition event="done.invoke.svc" target="after"/>
+    <transition event="news"><log label="n" expr="'v2 news'"/></transition>
+    <transition event="report"><log label="n" expr="'v2'"/></transition>
+  </state>
+  <state id="after">
+    <transition event="report"><log label="n" expr="'v2 after'"/></transition>
+  </state>`);
+
+test('an actor running a service moves at once: a kept service goes on, a dropped one is stopped', async () => {
+  for (const [version, kept] of [[KEEPS, true], [V2, false]]) {
+    const logs = new Logs();
+    const done = [];
+    const stopped = [];
+    const invocations = [];
+    const services = { thing: (invocation) => { invocations.push(invocation); return { stop: () => stopped.push('stop') }; } };
+    const host = hostWith({ counter: INVOKING }, { log: logs.handler, services, migrationDone: (result) => done.push(result) });
+    const session = host.spawn(host.chart('counter'));
+    await host.idle();
+    add(host, version);
+    const migration = host.migrate();
+    await host.idle();
+    equal(json(done), json([{ migration, migrated: 1, failed: [], pending: [] }]), 'it moved at once');
+    if (kept) {
+      equal(stopped.length, 0, 'the kept service was not stopped');
+      invocations[0].sendBack('news');
+      await host.idle();
+      invocations[0].done();
+      await host.idle();
+      host.send(session, 'report');
+      await host.idle();
+      equal(logs.labelled('n').join('|'), 'v2 news|v2 after', 'its events reach version 2');
+    } else {
+      equal(stopped.length, 1, 'the dropped service was stopped');
+      throws(() => invocations[0].sendBack('news'), status('TA_ERROR_STALE'), 'and its invocation ended');
+    }
+    host.close();
+  }
+});
+
+/** Version 1 invokes a chart, which runs until it is told to finish. */
+const INVOKING_CHART = scxml('counter', `
+  <state id="s">
+    <invoke id="kid"><content><scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0" datamodel="ecmascript" initial="k">
+      <state id="k"><transition event="finish" target="f"/></state><final id="f"/>
+    </scxml></content></invoke>
+    <transition event="finish"><send target="#_kid" event="finish"/></transition>
+    <transition event="done.invoke.kid" target="after"/>
+  </state>
+  <state id="after"/>`);
+
+test('an actor running an invoked chart fails a migration without a timeout', async () => {
   const done = [];
-  const stopped = [];
-  const services = { thing: () => ({ stop: () => stopped.push('stop') }) };
-  const host = hostWith({ counter: INVOKING }, { log: logs.handler, services, migrationDone: (result) => done.push(result) });
+  const host = hostWith({ counter: INVOKING_CHART }, { migrationDone: (result) => done.push(result) });
   const session = host.spawn(host.chart('counter'));
   await host.idle();
   add(host, V2);
   const migration = host.migrate();
   await host.idle();
-  host.send(session, 'report');
-  await host.idle();
   host.close();
   equal(json(done), json([{ migration, migrated: 0, failed: [{ session: session.id, reason: 'TA_ERROR_STATE' }], pending: [] }]),
     'it ends at once, the actor failed, and why');
-  equal(stopped.length, 0, 'the service was not stopped');
-  equal(logs.labelled('n').join('|'), 'v1', 'still version 1');
 });
 
-test('with a timeout, an actor running an invocation moves once it ends, or is pending at the timeout', async () => {
+test('with a timeout, an actor running an invoked chart moves once it ends, or is pending at the timeout', async () => {
   const done = [];
-  const invocations = [];
   const clock = new SimulatedClock();
-  const services = { thing: (invocation) => { invocations.push(invocation); return {}; } };
-  const host = hostWith({ counter: INVOKING }, { clock, services, migrationDone: (result) => done.push(result) });
+  const host = hostWith({ counter: INVOKING_CHART }, { clock, migrationDone: (result) => done.push(result) });
   const ends = host.spawn(host.chart('counter'));
   const runs = host.spawn(host.chart('counter'));
   await host.idle();
@@ -391,7 +436,7 @@ test('with a timeout, an actor running an invocation moves once it ends, or is p
   const migration = host.migrate({ timeout: 500 });
   await host.idle();
   equal(done.length, 0, 'waiting for the invocations');
-  invocations.find((invocation) => invocation.session === ends.id).done();
+  host.send(ends, 'finish');
   await host.idle();
   clock.increment(500);
   await host.idle();

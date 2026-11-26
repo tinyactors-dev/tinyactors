@@ -162,7 +162,7 @@ for (const datamodel of ['native', 'quickjs']) {
     }
   });
 
-  test(`${datamodel}: a payment in flight holds its subscription past the migration's timeout`, async () => {
+  test(`${datamodel}: a payment in flight moves with its subscription, and release 2 takes its answer`, async () => {
     const { gateway, billing } = setup(datamodel);
     try {
       const ada = billing.subscribe('ada');
@@ -174,22 +174,16 @@ for (const datamodel of ['native', 'quickjs']) {
       billing.deploy(2);
       const migration = billing.migrate({ chart: 'subscription', timeout: 60_000 });
       await billing.advance(30_000);
-      assert.equal(migration.result, undefined, 'an actor running an invocation waits for it');
-      gateway.held.find((charge) => charge.call.customer === 'bob').answer();
-      await billing.advance(30_000);
-      assert.deepEqual(migration.result, { migration: migration.id, migrated: 1, failed: 0, pending: [ada] });
-      assert.deepEqual(migration.moved.map((moved) => moved.session), [bob]);
-
-      // after its timeout the migration takes nothing more: a second one does
-      gateway.held.find((charge) => charge.call.customer === 'ada').answer();
-      await billing.settle();
-      assert.deepEqual(of(billing, ada, 'invoice.paid').map((m) => m.version), [1]);
-      assert.deepEqual(of(billing, bob, 'invoice.paid').map((m) => m.version), [1], 'its charge ended on release 1, then it moved');
-      assert.equal(await billing.releaseOf(ada), 1);
-      const second = billing.migrate({ session: ada });
-      await billing.settle();
-      assert.equal(second.result.migrated, 1);
+      assert.deepEqual(migration.result, { migration: migration.id, migrated: 2, failed: 0, pending: [] },
+        'an actor running a service moves at once: release 2 keeps its <invoke>');
+      assert.deepEqual(migration.moved.map((moved) => moved.session).sort(), [ada, bob].sort());
       assert.equal(await billing.releaseOf(ada), 2);
+
+      // the charges answer the invocations they started, now release 2's
+      for (const charge of gateway.held) charge.answer();
+      await billing.settle();
+      assert.deepEqual(of(billing, ada, 'invoice.paid').map((m) => m.version), [2]);
+      assert.deepEqual(of(billing, bob, 'invoice.paid').map((m) => m.version), [2]);
     } finally {
       billing.close();
     }
