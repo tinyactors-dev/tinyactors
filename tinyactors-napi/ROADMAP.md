@@ -250,6 +250,21 @@ it into the root ROADMAP.md's "Requests to core" and answers there.
   by a snapshot; `ta_host_wake` refuses another identity with
   `TA_ERROR_INVALID`.
 
+- **A snapshot reader in core's library** (2026-11-26, `mcp/`). The MCP
+  server (`@tinyactors/mcp`) answers its snapshot tools from a snapshot's
+  bytes: the actors, their states, mailboxes and delayed sends, the
+  charts and the trace history. Nothing in core's library reads a pack.
+  `tinyactors snapshot` reads one in the CLI's own code, and the website
+  Inspector reads one in JavaScript (`website/examples/inspector/decode.mjs`),
+  so `mcp/lib/snapshot.mjs` is a copy of the Inspector's decoder, held
+  equal to it by `mcp/test/mcp.test.mjs`. A copy restored from the snapshot
+  cannot answer instead: its queued events run after the first await, so
+  what it shows is no longer the moment of the snapshot. Asked: the CLI's
+  reader moved into core's library, with a call that gives a pack's
+  actors and segments as values (for the addon to expose), so that the
+  CLI, the bindings and the MCP server read a snapshot one way. The
+  package keeps its copy until then.
+
 The first addon's two requests were answered on 2026-10-12
 (the runner skips envelope-level vectors for a binding, `34c09cfa`; the
 tick rate through `host.config`, `9bd33f03`); their text is in this file's

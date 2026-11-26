@@ -1,0 +1,29 @@
+{
+  "name": "@tinyactors/mcp",
+  "version": "0.0.0",
+  "description": "A Model Context Protocol server over running tinyactors hosts: inspect, send, read traces, snapshot, rehearse and deploy chart versions",
+  "keywords": ["actor", "statechart", "scxml", "mcp", "model-context-protocol"],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/tinyactors-dev/tinyactors.git",
+    "directory": "tinyactors-napi/mcp"
+  },
+  "engines": { "node": ">=22.3.0" },
+  "type": "module",
+  "exports": {
+    ".": { "types": "./index.d.ts", "default": "./index.mjs" },
+    "./package.json": "./package.json"
+  },
+  "files": ["index.mjs", "index.d.ts", "lib", "README.md"],
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "1.32.2",
+    "zod": "3.25.76"
+  },
+  "peerDependencies": {
+    "@tinyactors/node": ">=0.4.0"
+  },
+  "devDependencies": {
+    "@tinyactors/node": "link:.."
+  }
+}

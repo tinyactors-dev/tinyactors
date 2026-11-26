@@ -1037,6 +1037,24 @@ file.
   no idle() waiting, is thrown from the turn's callback; the host goes
   on'`.
 
+## The MCP server (`mcp/`)
+
+`@tinyactors/mcp` is a package of its own, beside this one and opt-in: an
+MCP server for an agent that inspects running hosts, sends to them, reads
+their spans and logs, takes snapshots, and rehearses and deploys chart
+versions (`mcp/README.md`). It is JavaScript over this package's public
+exports and `@modelcontextprotocol/sdk` only, never the addon or
+`lib/direct.mjs`, so it adds nothing to the binding: a tap wraps the
+host's handlers at construction, and live tools are typed methods and
+inputs. Its snapshot tools read a pack's bytes with `mcp/lib/snapshot.mjs`,
+a copy of the website Inspector's decoder that a test holds equal to it,
+until core reads snapshots (ROADMAP.md, "Requests to core"); variables and
+rehearsals come from a copy restored from the snapshot, with stand-ins for
+its I/O processors, services and transport. `mise run test` installs its
+dependencies from its lockfile with the pinned pnpm, checks its types
+with tsc and runs its test under node and bun on both datamodels. It is not
+packed or published yet.
+
 ## What not to build
 
 - No synchronous request, no raw `post`, no request facade: typed methods
@@ -1276,6 +1294,8 @@ ROADMAP.md           the work in progress: plan, progress, how it runs, requests
 index.mjs, index.d.ts   the package: both layers' exports; the types
 lib/direct.mjs       the direct layer: loads the platform's .node and re-exports it
 lib/convenience.mjs  the convenience layer: JavaScript over lib/direct.mjs only
+mcp/                 @tinyactors/mcp, opt-in: an MCP server over the public API and the MCP SDK (its own package.json,
+                     lockfile, README, types and test; lib/snapshot.mjs a copy of the website Inspector's decoder)
 docs/api-map.md      each API item → ta_* function, method or effect (checked)
 docs/values.md       the JavaScript side of the value table
 src/                 addon.h, module.c, host.c, loop.c, effects.c, methods.c, values.c,

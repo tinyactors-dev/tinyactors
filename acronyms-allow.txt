@@ -95,3 +95,10 @@ windowId       copywriter/**/*                                           # chrom
 RssAnon        tinyactors-cpython/examples/memory/*                        # /proc/self/status field
 RssAnon        tinyactors-napi/examples/memory/*                           # /proc/self/status field
 RssAnon        docs/proposals/memory-accounting.md                         # /proc/self/status field
+
+# The MCP SDK (@modelcontextprotocol/sdk) names its server class `McpServer`.
+McpServer                                                                # @modelcontextprotocol/sdk class
+# Its transports: the module streamableHttp.js, a session's sessionId and the option sessionIdGenerator.
+streamableHttp      tinyactors-napi/mcp/**/*                            # @modelcontextprotocol/sdk module path
+sessionId           tinyactors-napi/mcp/**/*                            # @modelcontextprotocol/sdk transport field
+sessionIdGenerator  tinyactors-napi/mcp/**/*                            # @modelcontextprotocol/sdk transport option
