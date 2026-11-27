@@ -1,6 +1,6 @@
 #!/usr/bin/env ruby
-#MISE description="Test tinyactors-support: the charts compiled with warnings as errors, every behaviour through the gateway on a SimulatedClock with the stand-ins (test/scenario.test.mjs), and the server over HTTP: MCP, OAuth through the stand-in login, a report, an upload and a download (test/http.test.mjs), and Jev's client against a recorded fetch (test/jev.test.mjs)"
-#MISE sources=["charts/**/*", "lib/**/*", "skills/**/*", "test/**/*", "server.mjs", "package.json", "package-lock.json", "mise.toml", "mise/**/*"]
+#MISE description="Test tinyactors-support: the issue list app built from its source and the design tokens (tools/build-app.mjs --check), the charts compiled with warnings as errors, every behaviour through the gateway on a SimulatedClock with the stand-ins (test/scenario.test.mjs), and the server over HTTP: MCP, OAuth through the stand-in login, a report, an upload and a download (test/http.test.mjs), Jev's client against a recorded fetch (test/jev.test.mjs), every tool's typed results and short text and deleting an issue (test/tools.test.mjs), and the app in Chromium (test/app.test.mjs)"
+#MISE sources=["charts/**/*", "lib/**/*", "skills/**/*", "test/**/*", "server.mjs", "package.json", "package-lock.json", "mise.toml", "mise/**/*", "tools/**/*", "../.agents/skills/tinyactors-design/tokens/**/*"]
 #MISE outputs={auto=true}
 # vim:ft=ruby
 
@@ -9,5 +9,6 @@
 # of a binding reaches this project when it is released.
 Dir.chdir(File.expand_path('../..', __dir__)) do
   system('npm', 'ci', '--no-audit', '--no-fund', '--loglevel=error', exception: true) unless File.exist?('node_modules/.package-lock.json')
+  system('node', 'tools/build-app.mjs', '--check', exception: true)
   system({ 'NODE_NO_WARNINGS' => '1' }, 'node', '--test', *Dir['test/*.test.mjs'].sort, exception: true)
 end

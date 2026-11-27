@@ -32,7 +32,9 @@
     <data id="name"/>                     <!-- given at spawn: owner/name -->
     <data id="slug"/>                     <!-- given at spawn: the <project> of its issues' identifiers -->
     <data id="components" expr="[]"/>
-    <data id="next" expr="1"/>
+    <data id="next" expr="1"/>          <!-- never goes back: a deleted issue's number is not reused -->
+    <data id="deleted" expr="({})"/>     <!-- n -> true: deleted issues, so a read says so -->
+    <data id="deleting" expr="({})"/>    <!-- n -> {entry, fingerprint}: out of the index while its delete is written -->
     <data id="fingerprints" expr="({})"/> <!-- fingerprint -> n -->
     <data id="index" expr="({})"/>        <!-- n -> {title, component, kind, state, count, minutes, workaround} -->
     <data id="creating" expr="({})"/>     <!-- spawn sendid -> {n, replyTo, waiting: [{event, data}]} -->
@@ -68,7 +70,7 @@
         </transition>
         <transition event="report" cond="_event.data.n !== undefined">
           <send targetexpr="replyTo(_event)" event="refused">
-            <param name="reason" expr="'no issue #' + _event.data.n + ' in ' + name"/>
+            <param name="reason" expr="gone(deleted, deleting, slug, _event.data.n, name)"/>
           </send>
         </transition>
         <!-- no exact match: one decision at a time, the others wait -->
@@ -131,6 +133,12 @@
         </transition>
 
         <!-- an occurrence of issue n, as the model matched it -->
+        <!-- the model matched an issue that was deleted meanwhile: the report is a new issue, not lost -->
+        <transition event="file.occurrence" cond="!has(index, _event.data.n) &amp;&amp; inFlight(creating, _event.data.n) === null">
+          <send target="#_internal" event="file.new">
+            <content expr="({ report: _event.data, kind: _event.data.kind || 'tooling', possible: null })"/>
+          </send>
+        </transition>
         <transition event="file.occurrence" cond="inFlight(creating, _event.data.n) !== null">
           <assign location="creating" expr="waitFor(creating, inFlight(creating, _event.data.n), { name: 'report', data: _event.data })"/>
         </transition>
@@ -164,20 +172,55 @@
       </state>
 
       <!-- in both states: reads, a maintainer's actions, the issues' news -->
+      <transition event="project.get">
+        <send targetexpr="replyTo(_event)" event="project">
+          <param name="repoID" expr="String(repoID)"/>
+          <param name="repo" expr="name"/>
+          <param name="slug" expr="slug"/>
+          <param name="components" expr="components"/>
+          <param name="archived" expr="In('archived')"/>
+        </send>
+      </transition>
       <transition event="issues.list">
         <send targetexpr="replyTo(_event)" event="issues">
           <param name="repo" expr="name"/>
           <param name="issues" expr="listing(index, _event.data, slug)"/>
         </send>
       </transition>
-      <transition event="triage close wontfix" cond="!maintains(_event.data.caller, repoID)">
+      <transition event="triage close wontfix issue.delete" cond="!maintains(_event.data.caller, repoID)">
         <send targetexpr="replyTo(_event)" event="refused">
           <param name="reason" expr="'only a maintainer of ' + name + ' may ' + _event.name"/>
         </send>
       </transition>
-      <transition event="issue.get workaround triage close wontfix attach.open attachment.get" cond="!has(index, _event.data.n)">
+      <!-- a maintainer's delete: out of the index and the fingerprints at once, so no report finds it;
+           refused while its spawn is in flight, so the reports waiting for that spawn are delivered -->
+      <transition event="issue.delete" cond="has(index, _event.data.n) &amp;&amp; inFlight(creating, _event.data.n) !== null">
         <send targetexpr="replyTo(_event)" event="refused">
-          <param name="reason" expr="'no issue #' + _event.data.n + ' in ' + name"/>
+          <param name="reason" expr="issueID(slug, _event.data.n) + ' is still being filed: try again'"/>
+        </send>
+      </transition>
+      <transition event="issue.delete" cond="has(index, _event.data.n)">
+        <assign location="deleting" expr="put(deleting, _event.data.n, { entry: index[_event.data.n], fingerprint: fingerprintOf(fingerprints, _event.data.n) })"/>
+        <assign location="index" expr="drop(index, _event.data.n)"/>
+        <assign location="fingerprints" expr="withoutNumber(fingerprints, _event.data.n)"/>
+        <send targetexpr="addr('issue.' + repoID + '.' + _event.data.n)" event="issue.delete">
+          <content expr="forwarded(_event)"/>
+        </send>
+      </transition>
+      <transition event="issue.deleted">
+        <assign location="deleted" expr="put(deleted, _event.data.n, true)"/>
+        <assign location="deleting" expr="drop(deleting, _event.data.n)"/>
+      </transition>
+      <transition event="issue.undeleted" cond="has(deleting, _event.data.n)">
+        <assign location="index" expr="put(index, _event.data.n, deleting[_event.data.n].entry)"/>
+        <if cond="deleting[_event.data.n].fingerprint !== null">
+          <assign location="fingerprints" expr="put(fingerprints, deleting[_event.data.n].fingerprint, Number(_event.data.n))"/>
+        </if>
+        <assign location="deleting" expr="drop(deleting, _event.data.n)"/>
+      </transition>
+      <transition event="issue.get workaround triage close wontfix attach.open attachment.get issue.delete" cond="!has(index, _event.data.n)">
+        <send targetexpr="replyTo(_event)" event="refused">
+          <param name="reason" expr="gone(deleted, deleting, slug, _event.data.n, name)"/>
         </send>
       </transition>
       <transition event="issue.get workaround triage close wontfix attach.open attachment.get">
@@ -195,6 +238,7 @@
       <transition event="fixed.mention">
         <log label="project" expr="'a commit fixes ' + issueID(slug, _event.data.n) + ', which is not filed'"/>
       </transition>
+      <transition event="issue.changed" cond="has(deleting, _event.data.n) || has(deleted, _event.data.n)"/>
       <transition event="issue.changed">
         <assign location="index" expr="put(index, _event.data.n, _event.data)"/>
       </transition>

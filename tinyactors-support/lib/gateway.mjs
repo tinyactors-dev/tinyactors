@@ -21,53 +21,8 @@ const secret = () => randomBytes(24).toString('base64url');
 const id = () => randomBytes(6).toString('hex');
 const ISSUE = /^tinyactors:([a-z0-9._-]+):([0-9]+)$/;
 
-const text = (description) => ({ type: 'string', description });
-const number = (description) => ({ type: 'number', description });
-const object = (properties, required = []) => ({ type: 'object', properties, required, additionalProperties: false });
-const issueID = text('the issue, tinyactors:<project>:<n>');
-
-export const TOOLS = {
-  // anyone
-  list_skills: { access: 'anyone', description: 'The skills for working with tinyactors (each also a resource)',
-    input: object({}) },
-  get_skill: { access: 'anyone', description: "A skill's SKILL.md", input: object({ name: text('the skill') }, ['name']) },
-  search_docs: { access: 'anyone', description: 'Search the documentation of tinyactors',
-    input: object({ query: text('words to look for') }, ['query']) },
-  get_doc: { access: 'anyone', description: 'A document search_docs found, whole', input: object({ path: text('its path, as search_docs gives it') }, ['path']) },
-  known_issues: { access: 'anyone', description: 'The open issues, costliest first, with their workarounds: look here before you report',
-    input: object({ repo: text('owner/name, or a project\'s slug; all when absent'), component: text('a top-level directory') }) },
-  get_issue: { access: 'anyone', description: 'One issue: its state, workaround, fix and attachments',
-    input: object({ id: issueID }, ['id']) },
-  // signed in
-  whoami: { access: 'user', description: 'Who you are, and what changed for you since your last call', input: object({}) },
-  report_issue: { access: 'user',
-    description: 'Report what got in your way with tinyactors. The answer says whether it is new, known (with its workaround), fixed (update), or regressed.',
-    input: object({
-      repo: text('the repository, owner/name (tinyactors-dev/tinyactors for the monorepo)'),
-      component: text('its top-level directory (tinyactors-napi, docs, ...); a refusal lists the valid ones'),
-      title: text('what went wrong, in a line'),
-      body: text('what you did, what happened, what you expected; the relevant lines of output'),
-      kind: { type: 'string', enum: ['docs', 'error', 'tooling', 'api', 'environment'] },
-      minutes: number('the minutes it cost you'),
-      commit: text('the commit you were on (git rev-parse HEAD)'),
-      session: text('a link to your session, if you have one'),
-      id: text('an issue it is an occurrence of, tinyactors:<project>:<n>'),
-    }, ['repo', 'component', 'title']) },
-  attach_workaround: { access: 'user', description: 'Tell the next agent how you got past an issue',
-    input: object({ id: issueID, text: text('the workaround') }, ['id', 'text']) },
-  attach_file: { access: 'user',
-    description: 'Open a slot for a file (a log, screenshot, recording, zip, snapshot), then PUT its bytes there with curl: a tool call cannot carry them',
-    input: object({ id: issueID, name: text('the file name'), type: text('its media type (text/plain, image/png, application/zip, ...)'),
-      size: number('its size in bytes'), sha256: text('its SHA-256, hexadecimal') }, ['id', 'name', 'type', 'size', 'sha256']) },
-  get_attachment: { access: 'user', description: "A signed link to one of an issue's attachments",
-    input: object({ id: issueID, upload: text('the attachment, as get_issue lists it') }, ['id', 'upload']) },
-  // a maintainer of the repository
-  triage: { access: 'maintainer', description: 'Accept a new issue, set its kind or title',
-    input: object({ id: issueID, kind: text('docs, error, tooling, api or environment'), title: text('a better title') }, ['id']) },
-  close: { access: 'maintainer', description: 'Close a fixed issue', input: object({ id: issueID }, ['id']) },
-  wontfix: { access: 'maintainer', description: 'Decline an issue, with the reason agents will see',
-    input: object({ id: issueID, reason: text('why') }, ['id', 'reason']) },
-};
+export { TOOLS } from './tools.mjs';
+import { TOOLS } from './tools.mjs';
 
 export const INSTRUCTIONS = 'This is the support channel of tinyactors (statecharts as actors; @tinyactors/node, ' +
   'the tinyactors Python package, tinyactors-core). When tinyactors gets in your way (wrong or missing docs, an unclear error, ' +
@@ -226,10 +181,18 @@ export class Gateway {
         return doc ? { path: doc.path, title: doc.title, text: doc.text } : { answer: 'refused', reason: `no document ${args.path}` };
       }
       // reads from the projects' indexes: one actor per repository
+      case 'list_projects': {
+        const { data } = await s.request('tracker', 'projects.list', {});
+        const answers = await Promise.all((data?.projects ?? []).map((p) => s.request('tracker', 'project.get', { repo: p.name })));
+        return { projects: answers.filter((a) => a.event === 'project')
+          .map(({ data: p }) => ({ repoID: p.repoID, repo: p.repo, slug: p.slug, archived: !!p.archived, components: p.components ?? [] })) };
+      }
       case 'known_issues': {
         const { data } = await s.request('tracker', 'projects.list', {});
-        const repos = (data?.projects ?? []).filter((p) => !p.archived && (!args.repo || p.name === args.repo || p.slug === args.repo));
-        const lists = await Promise.all(repos.map((p) => s.request('tracker', 'issues.list', { repo: p.name, open: true, component: args.component })));
+        const all = args.state === 'all';
+        const repos = (data?.projects ?? []).filter((p) => (all || !p.archived) && (!args.repo || p.name === args.repo || p.slug === args.repo));
+        const filter = all ? {} : !args.state || args.state === 'open' ? { open: true } : { state: args.state };
+        const lists = await Promise.all(repos.map((p) => s.request('tracker', 'issues.list', { repo: p.name, ...filter, component: args.component })));
         return { issues: lists.flatMap((a) => a.event === 'issues' ? a.data.issues.map((i) => ({ repo: a.data.repo, ...i })) : []) };
       }
       case 'get_issue': return this.#answer(await s.request('tracker', 'issue.get', { ...args, caller }));
@@ -246,9 +209,16 @@ export class Gateway {
       case 'get_attachment': return this.#answer(await s.request('tracker', 'attachment.get', { ...args, caller }));
       case 'triage': case 'close': case 'wontfix':
         return this.#answer(await s.request('tracker', name, { ...args, caller }));
+      case 'delete_issue': return this.#answer(await s.request('tracker', 'issue.delete', { ...args, caller }));
     }
     return { answer: 'refused', reason: `no tool ${name}` };
   }
 
-  #answer({ event, data }) { return { answer: event, ...(data ?? {}) }; }
+  // An actor's answer as a tool's: its event is the answer. No answer in
+  // time, or no actor, is a failure the caller can retry.
+  #answer({ event, data }) {
+    if (event === 'timeout' || event === 'stale' || event === 'unanswered')
+      return { answer: 'failed', reason: 'the tracker did not answer in time' };
+    return { answer: event, ...(data ?? {}) };
+  }
 }

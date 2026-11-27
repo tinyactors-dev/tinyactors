@@ -11,7 +11,13 @@
      Every change is written to the ledger before it is answered: the
      answer waits in answers, keyed by the ledger send's sendid. Each
      change goes to the project's index, and the reporters' users hear of
-     a fix, a regression or a workaround. It never ends. -->
+     a fix, a regression or a workaround.
+
+     A maintainer may delete it (spam, a test report): deleting writes who,
+     why and its title to the ledger, then answers, deletes its
+     attachments' blobs, cancels the uploads in flight, tells its project
+     and ends. Its reporters are not told. A delete the ledger refuses
+     answers failed and puts it back where it was (a deep history). -->
 <scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0"
        datamodel="ecmascript" name="issue" initial="issue">
   <script src="issue.js"/>
@@ -38,9 +44,18 @@
     <data id="uploading" expr="({})"/>   <!-- uploadID -> true, while its upload actor runs -->
     <data id="uploads" expr="0"/>        <!-- the last upload's number -->
     <data id="purged" expr="false"/>
+    <data id="deletion" expr="null"/>    <!-- {sid, to, by, reason}: the delete being written -->
   </datamodel>
 
   <state id="issue" initial="starting">
+    <history id="was" type="deep"><transition target="open"/></history>  <!-- where a refused delete returns -->
+    <!-- a maintainer's delete (the project checked who): written first -->
+    <transition event="issue.delete" target="deleting">
+      <send type="ledger" event="ledger.append" idlocation="lsid">
+        <content expr="record('deleted', slug, n, { by: _event.data.caller.login, reason: _event.data.reason || null, title: title })"/>
+      </send>
+      <assign location="deletion" expr="({ sid: lsid, to: replyTo(_event), by: _event.data.caller.login })"/>
+    </transition>
     <!-- the first report, written, then answered -->
     <state id="starting">
       <onentry>
@@ -221,9 +236,25 @@
         </send>
       </foreach>
     </transition>
+    <!-- a maintainer's action in a state that does not take it: refused, never left unanswered -->
+    <transition event="triage">
+      <send targetexpr="replyTo(_event)" event="refused">
+        <param name="reason" expr="issueID(slug, n) + ' is ' + state + ': only a new issue is triaged'"/>
+      </send>
+    </transition>
+    <transition event="close">
+      <send targetexpr="replyTo(_event)" event="refused">
+        <param name="reason" expr="issueID(slug, n) + ' is ' + state + ': only a fixed issue is closed; decline an open one with wontfix'"/>
+      </send>
+    </transition>
+    <transition event="wontfix">
+      <send targetexpr="replyTo(_event)" event="refused">
+        <param name="reason" expr="issueID(slug, n) + ' is ' + state + ': only an open issue is declined'"/>
+      </send>
+    </transition>
     <transition event="issue.get">
       <send targetexpr="replyTo(_event)" event="issue">
-        <content expr="details(_event.data.caller, { id: issueID(slug, n), n: n, title: title, component: component, kind: kind,
+        <content expr="details(_event.data.caller, { id: issueID(slug, n), n: n, title: title, state: state, component: component, kind: kind,
                        body: body, count: count, minutes: minutes, workaround: workaround, reason: reason,
                        fix: fix, occurrences: occurrences,
                        attachments: attachments }, mayRead(_event.data.caller, reporters, repoID))"/>
@@ -323,4 +354,30 @@
       </send>
     </transition>
   </state>
+
+  <!-- the delete, written: answered, its files and uploads gone, its project told; then it ends -->
+  <state id="deleting">
+    <transition event="ledger.written" cond="_event.sendid === deletion.sid" target="deleted">
+      <send targetexpr="deletion.to" event="deleted"><param name="id" expr="issueID(slug, n)"/></send>
+      <foreach array="attachments" item="item">
+        <send type="blobs" event="blob.delete"><param name="key" expr="item.key"/></send>
+      </foreach>
+      <foreach array="Object.keys(uploading)" item="item">
+        <send targetexpr="addr('upload.' + item)" event="issue.deleted"/>
+      </foreach>
+      <send targetexpr="addr('project.' + repoID)" event="issue.deleted"><param name="n" expr="n"/></send>
+    </transition>
+    <transition event="error.communication" cond="_event.sendid === deletion.sid" target="was">
+      <send targetexpr="deletion.to" event="failed"><param name="reason" expr="'the delete could not be written'"/></send>
+      <send targetexpr="addr('project.' + repoID)" event="issue.undeleted"><param name="n" expr="n"/></send>
+      <assign location="deletion" expr="null"/>
+    </transition>
+    <!-- what was already on its way to it: refused, never answered by an issue that is going -->
+    <transition event="report issue.get workaround triage close wontfix attach.open attachment.get issue.delete">
+      <send targetexpr="replyTo(_event)" event="refused"><param name="reason" expr="issueID(slug, n) + ' is being deleted'"/></send>
+    </transition>
+  </state>
+  <final id="deleted">
+    <donedata><content expr="({ deleted: issueID(slug, n), by: deletion.by })"/></donedata>
+  </final>
 </scxml>

@@ -26,6 +26,8 @@
   </datamodel>
 
   <state id="upload" initial="checking">
+    <!-- its issue was deleted: the bytes go, and nobody is told -->
+    <transition event="issue.deleted" target="cancelled"/>
     <!-- the declared file, against the kinds the tracker takes -->
     <state id="checking">
       <transition cond="refusal(file) !== null" target="refused">
@@ -130,6 +132,14 @@
   <final id="refused">
     <onentry><send targetexpr="issue" event="upload.ended"><param name="uploadID" expr="uploadID"/></send></onentry>
     <donedata><content expr="({ upload: uploadID, outcome: 'refused', reason: refusal(file) })"/></donedata>
+  </final>
+  <final id="cancelled">
+    <onentry>
+      <if cond="key !== null">
+        <send type="blobs" event="blob.delete"><param name="key" expr="key"/></send>
+      </if>
+    </onentry>
+    <donedata><content expr="({ upload: uploadID, outcome: 'cancelled' })"/></donedata>
   </final>
   <final id="expired">
     <onentry><send targetexpr="issue" event="upload.ended"><param name="uploadID" expr="uploadID"/></send></onentry>

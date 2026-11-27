@@ -153,3 +153,17 @@ function mentions(commits, repoID) {
 }
 
 function newest(commits, lastSha) { return commits.length ? commits[commits.length - 1].sha : lastSha; }
+
+// Why an issue a request names is not there: deleted, being deleted, or never filed.
+function gone(deleted, deleting, slug, n, name) {
+  if (has(deleted, n)) return issueID(slug, n) + ' was deleted';
+  if (has(deleting, n)) return issueID(slug, n) + ' is being deleted';
+  return 'no issue #' + n + ' in ' + name;
+}
+
+// The fingerprint that names issue n, or null.
+function fingerprintOf(fingerprints, n) {
+  var found = null;
+  Object.keys(fingerprints).forEach(function (key) { if (fingerprints[key] === Number(n)) found = key; });
+  return found;
+}

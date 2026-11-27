@@ -75,18 +75,18 @@
 
     <state id="serving">
       <!-- every request about a repository's issues is routed by repository -->
-      <transition event="report issues.list issue.get workaround triage close wontfix attach.open attachment.get"
+      <transition event="report issues.list issue.get workaround triage close wontfix attach.open attachment.get project.get issue.delete"
                   cond="refusal(repos, byName, _event) !== null">
         <send targetexpr="replyTo(_event)" event="refused">
           <param name="reason" expr="refusal(repos, byName, _event)"/>
           <param name="valid" expr="validNames(repos)"/>
         </send>
       </transition>
-      <transition event="report issues.list issue.get workaround triage close wontfix attach.open attachment.get"
+      <transition event="report issues.list issue.get workaround triage close wontfix attach.open attachment.get project.get issue.delete"
                   cond="has(starting, byName[_event.data.repo])">
         <assign location="creating" expr="waitFor(creating, starting[byName[_event.data.repo]], _event)"/>
       </transition>
-      <transition event="report issues.list issue.get workaround triage close wontfix attach.open attachment.get">
+      <transition event="report issues.list issue.get workaround triage close wontfix attach.open attachment.get project.get issue.delete">
         <send targetexpr="addr('project.' + byName[_event.data.repo])" eventexpr="_event.name">
           <content expr="forwarded(_event)"/>
         </send>

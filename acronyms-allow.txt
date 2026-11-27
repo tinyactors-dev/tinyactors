@@ -108,3 +108,8 @@ sessionIdGenerator  tinyactors-napi/mcp/**/*                            # @model
 streamableHttp      tinyactors-support/**/*                             # @modelcontextprotocol/sdk module path
 sessionIdGenerator  tinyactors-support/**/*                             # @modelcontextprotocol/sdk transport option
 enableJsonResponse  tinyactors-support/**/*                             # @modelcontextprotocol/sdk transport option
+# The MCP Apps extension (io.modelcontextprotocol/ui) names a tool's UI
+# `_meta.ui.resourceUri`; the SDK's JSON Schema validator class is
+# `AjvJsonSchemaValidator`, which the tests use to check output schemas.
+resourceUri            tinyactors-support/**/*                          # MCP Apps tool metadata field
+AjvJsonSchemaValidator tinyactors-support/test/**/*                     # @modelcontextprotocol/sdk validator class

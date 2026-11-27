@@ -15,6 +15,30 @@ import { MemoryBlobs } from '../lib/processors/blobs.mjs';
 import { Ledger } from '../lib/processors/ledger.mjs';
 import { Scanner } from '../lib/processors/scan.mjs';
 import { FakeGitHub, FakeJev } from '../lib/processors/standins.mjs';
+import { AjvJsonSchemaValidator } from '@modelcontextprotocol/sdk/validation/ajv';
+import { TOOLS, summarize } from '../lib/tools.mjs';
+
+// Every tool result a test sees is checked as a client would: its structured
+// content against the tool's output schema (with the SDK's own validator,
+// the one its client uses), and its text: short, never JSON.
+const validator = new AjvJsonSchemaValidator();
+const schemas = Object.fromEntries(Object.entries(TOOLS).map(([name, t]) => [name, validator.getValidator(t.output)]));
+export const seen = {};   // tool -> the answers it gave: what the tests reached
+export function checked(name, structured) {
+  if (!schemas[name]) {   // no such tool: an error, said in a line
+    assert.ok(structured.error && !/[{[]/.test(summarize(name, structured)), `${name}: ${JSON.stringify(structured)}`);
+    (seen.unknown ??= new Set()).add('error');
+    return summarize(name, structured);
+  }
+  const verdict = schemas[name](structured);
+  assert.ok(verdict.valid, `${name}: ${verdict.errorMessage}\n${JSON.stringify(structured)}`);
+  const text = summarize(name, structured);
+  assert.ok(!/^\s*[[{]/.test(text) && !/"\w+"\s*:/.test(text), `${name}: JSON in the text: ${text}`);
+  if (!['get_skill', 'get_doc'].includes(name))   // a document is its own text
+    assert.ok(text.split('\n').length <= 12 && text.length <= 2000, `${name}: the text is long: ${text}`);
+  (seen[name] ??= new Set()).add(structured.error ? 'error' : structured.answer ?? 'ok');
+  return text;
+}
 
 export const BASE = 'https://support.test';
 const CLI = new URL('../../tinyactors-core/build/dev/bin/tinyactors', import.meta.url).pathname;
@@ -48,6 +72,7 @@ export async function stack({ data = mkdtempSync(join(tmpdir(), 'support-')), re
     const caller = token ? await gateway.caller(token) : null;
     const answer = await gateway.callTool(name, args, caller);
     await idle();
+    checked(name, answer.error ? { error: answer.error } : answer.result);
     return answer.result ?? answer;
   }
 

@@ -33,7 +33,9 @@ describe('the server over HTTP', () => {
   }
   const call = async (name, args, token) => {
     const { status, body, headers } = await rpc('tools/call', { name, arguments: args }, token);
-    return { status, headers, value: body?.result ? JSON.parse(body.result.content[0].text) : body };
+    // the result's data is its structured content; its text is a line for people, never JSON
+    if (body?.result) assert.doesNotThrow(() => assert.throws(() => JSON.parse(body.result.content[0].text)), 'JSON in the text');
+    return { status, headers, value: body?.result ? body.result.structuredContent : body, text: body?.result?.content[0].text };
   };
 
   it('describes itself for discovery: the protected resource and its authorization server', async () => {
@@ -54,8 +56,15 @@ describe('the server over HTTP', () => {
     assert.match(init.body.result.instructions, /known_issues first/);
     const tools = (await rpc('tools/list', {})).body.result.tools;
     assert.ok(tools.some((t) => t.name === 'report_issue' && t.inputSchema.required.includes('title')));
+    assert.ok(tools.every((t) => t.outputSchema?.type === 'object'), 'every tool has an output schema');
+    for (const name of ['known_issues', 'get_issue'])
+      assert.equal(tools.find((t) => t.name === name)._meta.ui.resourceUri, 'ui://tinyactors-support/issues');
     const resources = (await rpc('resources/list', {})).body.result.resources;
-    assert.deepEqual(resources.map((r) => r.uri), ['skill://reporting-tinyactors-issues']);
+    assert.deepEqual(resources.map((r) => r.uri), ['ui://tinyactors-support/issues', 'skill://reporting-tinyactors-issues']);
+    const app = (await rpc('resources/read', { uri: 'ui://tinyactors-support/issues' })).body.result.contents[0];
+    assert.equal(app.mimeType, 'text/html;profile=mcp-app');
+    assert.match(app.text, /^<!doctype html>/);
+    assert.deepEqual(app._meta.ui, { prefersBorder: true, csp: {} });
     const skill = (await rpc('resources/read', { uri: 'skill://reporting-tinyactors-issues' })).body.result.contents[0];
     assert.match(skill.text, /# Reporting tinyactors issues/);
     assert.deepEqual((await call('known_issues', {})).value.issues, []);

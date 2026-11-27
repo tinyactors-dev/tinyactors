@@ -18,6 +18,8 @@ import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/
 import { CallToolRequestSchema, ListResourcesRequestSchema, ListToolsRequestSchema, ReadResourceRequestSchema }
   from '@modelcontextprotocol/sdk/types.js';
 import { INSTRUCTIONS, TOOLS } from './gateway.mjs';
+import { APP_URI, summarize } from './tools.mjs';
+import { APP } from './app/index.mjs';
 
 const VERSION = '0.1.0';
 const LIMIT = 1024 * 1024;   // a JSON or form body; uploads stream past it
@@ -111,16 +113,25 @@ export function serve({ support, gateway, port = 0, clientsPath = ':memory:', st
     const server = new Server({ name: 'tinyactors-support', version: VERSION },
       { capabilities: { tools: {}, resources: {} }, instructions: INSTRUCTIONS });
     server.setRequestHandler(ListToolsRequestSchema, async () => ({
-      tools: Object.entries(TOOLS).map(([name, t]) => ({ name, description: t.description, inputSchema: t.input })) }));
+      tools: Object.entries(TOOLS).map(([name, t]) => ({ name, description: t.description, inputSchema: t.input,
+                                                          outputSchema: t.output, ...(t.meta ? { _meta: t.meta } : {}) })) }));
+    // A result is its structured content and a line of text; JSON only in
+    // the structured content (lib/tools.mjs).
     server.setRequestHandler(CallToolRequestSchema, async (request) => {
       const { name, arguments: args } = request.params;
       const answer = await gateway.callTool(name, args ?? {}, caller);
-      if (answer.error) return { content: [{ type: 'text', text: answer.error }], isError: true };
-      return { content: [{ type: 'text', text: JSON.stringify(answer.result, null, 2) }] };
+      const structured = answer.error ? { error: answer.error } : answer.result;
+      return { content: [{ type: 'text', text: summarize(name, structured) }], structuredContent: structured,
+               ...(answer.error ? { isError: true } : {}) };
     });
     server.setRequestHandler(ListResourcesRequestSchema, async () => ({
-      resources: gateway.content.skills.map((k) => ({ uri: `skill://${k.name}`, name: k.name, description: k.description, mimeType: 'text/markdown' })) }));
+      resources: [
+        { uri: APP_URI, name: 'Issues', description: 'The issue list: filter, open, report, triage, close', mimeType: APP.mimeType },
+        ...gateway.content.skills.map((k) => ({ uri: `skill://${k.name}`, name: k.name, description: k.description, mimeType: 'text/markdown' })),
+      ] }));
     server.setRequestHandler(ReadResourceRequestSchema, async (request) => {
+      if (request.params.uri === APP_URI)
+        return { contents: [{ uri: APP_URI, mimeType: APP.mimeType, text: APP.html, _meta: APP.meta }] };
       const skill = gateway.content.skills.find((k) => `skill://${k.name}` === request.params.uri);
       if (!skill) throw new Error(`no resource ${request.params.uri}`);
       return { contents: [{ uri: request.params.uri, mimeType: 'text/markdown', text: skill.text }] };
@@ -134,9 +145,11 @@ export function serve({ support, gateway, port = 0, clientsPath = ':memory:', st
     let message;
     try { message = JSON.parse(text); } catch { return send(response, 400, { jsonrpc: '2.0', id: null, error: { code: -32700, message: 'not JSON' } }); }
     const token = /^Bearer (.+)$/i.exec(request.headers.authorization ?? '')?.[1];
-    const caller = token ? await gateway.caller(token) : null;
-    if (token && !caller) return send(response, 401, { error: 'invalid_token' }, { 'www-authenticate': `${challenge()}, error="invalid_token"` });
     const calls = Array.isArray(message) ? message : [message];
+    // The user's news since their last call goes out with a tool's result:
+    // any other request (initialize, tools/list) only peeks, leaving it.
+    const caller = token ? await gateway.caller(token, !calls.some((m) => m?.method === 'tools/call')) : null;
+    if (token && !caller) return send(response, 401, { error: 'invalid_token' }, { 'www-authenticate': `${challenge()}, error="invalid_token"` });
     if (!caller && calls.some((m) => m?.method === 'tools/call' && gateway.needsCaller(m.params?.name)))
       return send(response, 401, { error: 'sign in to use this tool' }, { 'www-authenticate': challenge() });
     const server = mcpServer(caller);
