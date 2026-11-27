@@ -56,6 +56,7 @@ import {
   Host as DirectHost,
   InvalidError,
   parseHTTPRequest,
+  readSnapshot,
   ResolveError,
   Send,
   SimulatedClock,
@@ -65,10 +66,6 @@ import {
   UnsupportedError,
 } from '#direct';
 export { version } from './version.mjs';
-import * as direct from '#direct';
-// A snapshot read without a host (src/snapshot.c): the addon's; the wasm
-// package does not have it yet, and exports undefined.
-export const readSnapshot = direct.readSnapshot;
 export {
   Address,
   CompileError,
@@ -80,6 +77,7 @@ export {
   encodeHTTPPost,
   InvalidError,
   parseHTTPRequest,
+  readSnapshot,
   ResolveError,
   SimulatedClock,
   StaleError,

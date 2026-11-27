@@ -29,21 +29,10 @@ export const DIFFERENCES = [
   },
   { path: 'objects.snapshot', reason: 'snapshot(): a Buffer, or a Uint8Array (as objects.image)' },
   { path: 'objects.metrics', reason: 'metrics(): a Buffer, or a Uint8Array (as objects.image)' },
-  {
-    path: 'exports.readSnapshot.*',
-    reason: 'readSnapshot, a snapshot read with core\'s readers and no host, is the addon\'s alone for now: the wasm package ' +
-      'does not export core\'s snapshot readers yet (ROADMAP.md, "Requests to core": the snapshot reader)',
-  },
 ];
 
 // What index.d.ts declares that a package does not have, or the reverse.
-export const DECLARED = [
-  {
-    path: 'exports.readSnapshot',
-    packages: ['wasm'],
-    reason: 'index.d.ts declares readSnapshot, which the wasm package does not have yet (as exports.readSnapshot.* above)',
-  },
-];
+export const DECLARED = [];
 
 const pattern = (path) => new RegExp(`^${path.split('*').map((part) => part.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('.*')}$`);
 

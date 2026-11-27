@@ -7,7 +7,6 @@ export const REASONS = {
   childProcess: 'needs node:child_process',
   workerThreads: 'needs node:worker_threads',
   addon: 'reads the addon\'s own count of its blocks (bindingMemory), which lib/direct.mjs does not export and the wasm package does not have',
-  readSnapshot: 'readSnapshot is the addon\'s alone for now: the wasm package does not export core\'s snapshot readers yet (ROADMAP.md, "Plan and progress")',
 };
 
 // file -> case -> reason, or [reason, runtimes...] for a case excluded in
@@ -81,7 +80,6 @@ export const EXCLUDED = {
 // Whole files that do not load in a page: what they import at their top
 // needs the runtime (a file is excluded where it would not load).
 export const EXCLUDED_FILES = {
-  'read-snapshot.test.mjs': 'readSnapshot',
   'addon.test.mjs': ['fs', 'browser'], // copies the addon's loader into a temporary directory
   'crossing.test.mjs': ['childProcess', 'browser'], // the other package's snapshot is made by a process (browser.test.mjs crosses in a page)
   'docs.test.mjs': ['childProcess', 'browser'], // runs each example of the documentation as a process (wasm/test/documentation.mjs runs them in pages)

@@ -11,4 +11,5 @@ export {
 } from './errors.mjs';
 export { Host, Send, SimulatedClock } from './host.mjs';
 export { decodeTraces, encodeHTTPPost, parseHTTPRequest } from './http.mjs';
+export { readSnapshot } from './snapshot.mjs';
 export { decode, encode } from './values.mjs';

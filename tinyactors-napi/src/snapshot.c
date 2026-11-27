@@ -567,20 +567,19 @@ static napi_value ta_napi_snapshot_trace_kept(napi_env env, napi_callback_info i
 static napi_value ta_napi_snapshot_traces(napi_env env, napi_callback_info info) {
     ta_napi_snapshot_call call = {1, NULL, 0};
     if (!ta_napi_snapshot_enter(env, info, &call)) return NULL;
-    ta_trace_kept kept;
-    kept.size = sizeof kept;
-    if (ta_system_trace_kept(call.segment->system, &kept) != TA_OK) return ta_napi_null(env);
     ta_allocator allocator = ta_napi_allocator(env);
-    ta_otlp_history_input input = {sizeof input, call.segment->index, &kept, &call.segment->image, &allocator};
+    ta_host_trace_history_input input = {sizeof input, call.segment->index, call.segment->system, &call.segment->image,
+                                         &allocator};
     ta_buffer probe = {NULL, 0, 0};
-    ta_status status = ta_otlp_history(&input, &probe);
+    ta_status status = ta_host_trace_history(&input, &probe);
+    if (status == TA_ERROR_STATE) return ta_napi_null(env); /* the segment does not trace */
     if (status != TA_OK && status != TA_ERROR_NO_MEMORY)
         return ta_napi_throw(env, &(ta_napi_refusal){status, "the journal's records could not be written as spans"});
     void *data = NULL;
     napi_value result;
     if (napi_create_buffer(env, probe.length, &data, &result) != napi_ok) return NULL;
     ta_buffer room = {data, probe.length, 0};
-    status = probe.length ? ta_otlp_history(&input, &room) : TA_OK;
+    status = probe.length ? ta_host_trace_history(&input, &room) : TA_OK;
     if (status != TA_OK) return ta_napi_throw(env, &(ta_napi_refusal){status, "the journal's records could not be written as spans"});
     return result;
 }

@@ -2,8 +2,7 @@
 // section 12). Core's readers answer the moment of the snapshot: an
 // actor's state, mailbox and delayed sends, its chart's structure, and
 // the spans its journal kept, while the host goes on.
-import * as tinyactors from '@tinyactors/node';
-import { decodeTraces, InvalidError, SimulatedClock } from '@tinyactors/node';
+import { decodeTraces, InvalidError, readSnapshot, SimulatedClock } from '@tinyactors/node';
 import { equal, hostWith, scxml, throws, typeError } from './charts.mjs';
 import { run, test } from './harness.mjs';
 
@@ -12,12 +11,10 @@ const ORDER = scxml('order', `
   <state id="s">
     <onentry><send event="nag" id="nag" delay="10s"/></onentry>
     <transition event="order.pay" cond="n &lt; 3" target="paid"/>
+    <transition event="nudge"><assign location="n" expr="n + 1"/></transition>
     <transition event="*"><assign location="n" expr="n + 1"/></transition>
   </state>
   <state id="paid"/>`);
-
-// by name from the namespace: the wasm package has neither yet, and skips the file
-const { readSnapshot } = tinyactors;
 
 const OPTIONS = { config: { system: { ticksPerSecond: 1000 }, telemetry: { flushInterval: 100 } }, telemetry() {} };
 
@@ -27,6 +24,7 @@ async function shop() {
   const actor = host.spawn('order', { name: 'order-1' });
   await host.idle();
   actor.send('poke');
+  actor.send('nudge');
   await host.idle();
   clock.increment(200);
   await host.idle();
@@ -86,6 +84,13 @@ test('the spans the journal kept, read from the snapshot', async () => {
   equal(spans.some((s) => s.name === 'scxml.spawned'), true, 'the spawn');
   equal(spans.filter((s) => s.name.startsWith('scxml.macrostep')).length >= 2, true, 'its macrosteps');
   equal(spans.every((s) => s.start <= s.end), true, 'each span ends after it starts');
+  // what the host exported is named as the Inspector names it: its event from the image, a
+  // microstep by its macrostep, its actor by its record while resident, nothing left empty
+  equal(spans.filter((s) => s.name === 'scxml.macrostep nudge' || s.name === 'scxml.microstep nudge').length, 2, 'an event of the image');
+  equal(spans.some((s) => s.name === 'scxml.macrostep (unread)'), true, 'an event given at run time');
+  equal(spans.some((s) => s.name.endsWith(' ')), false, 'no name left empty');
+  const named = spans.filter((s) => 'tinyactors.actor.name' in s.attributes);
+  equal(named.length > 0 && named.every((s) => s.attributes['tinyactors.actor.name'] === 'order-1'), true, 'actors named');
   const untraced = hostWith({ order: ORDER }, { config: { system: { tracing: false } } });
   untraced.spawn('order');
   await untraced.idle();

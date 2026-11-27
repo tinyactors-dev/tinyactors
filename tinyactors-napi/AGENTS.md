@@ -1047,9 +1047,12 @@ region read with `ta_system_read` into a second one beside its
 out, and gone with the object (no finalizer, no allocator call). Its
 methods mirror core's readers a segment at a time: `actors`, `actor`,
 `configuration`, `mailbox`, `timers`, `stats`, `charts`, `traceKept`,
-`traces` (`ta_otlp_history`, its encoder through the environment's
-allocator for the call). The wasm package has none of it yet. Test:
-`test/read-snapshot.test.mjs`.
+`traces` (`ta_host_trace_history`, its encoder through the environment's
+allocator for the call). The wasm package has the same, over its module's
+`wasm/src/snapshot.c` (the pack and the regions in blocks of the
+environment's allocator, freed when the `Snapshot` is collected; each
+method one query answered as CBOR). Test: `test/read-snapshot.test.mjs`,
+run against both packages.
 
 ## The MCP server (`mcp/`)
 
