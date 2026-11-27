@@ -83,6 +83,7 @@ patchId        copywriter/**/*                                           # work-
 tabId          copywriter/spec/*                                         # Chrome tabs API field
 # The DOM's own names, which the copywriter's panel calls.
 getElementById copywriter/**/*                                           # DOM API
+getElementById tinyactors-support/**/*                                  # DOM API
 pointerId      copywriter/**/*                                           # DOM PointerEvent field
 
 # Chrome's extension API names a tab and a window `tabId` and `windowId`

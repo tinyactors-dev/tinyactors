@@ -12,7 +12,14 @@ The support channel of tinyactors for agents: an MCP server at
   hears what changed on their issues on every call
   (`sinceYourLastVisit`).
 - **A repository's maintainers** (from GitHub's permissions) can `triage`,
-  `close` and `wontfix`.
+  `close`, `wontfix` and `delete_issue`.
+
+Every tool answers with structured content that its output schema
+describes, and a line of text. Where the host renders MCP Apps (Claude,
+ChatGPT, VS Code), `known_issues` and `get_issue` open the issue list:
+filter by repository, component and state, open an issue, report one,
+attach a workaround, and, for a maintainer, triage, decline, close and
+delete.
 
 Reports of the same problem are one issue: an exact match by component
 and title, otherwise Jev (a decision model) picks among the open issues
@@ -56,11 +63,13 @@ with `domain add ta-mcp mcp.tinyactors.dev`, and the VM's proxy is public.
 |---|---|
 | `charts/` | the eight charts and their helpers |
 | `lib/host.mjs` | the host: the charts, the processors, the store, snapshots and restore, `request` (an ask) |
-| `lib/gateway.mjs` | the tools, the OAuth steps, uploads |
+| `lib/gateway.mjs` | what each tool does, the OAuth steps, uploads |
+| `lib/tools.mjs` | the tools: input and output schemas, and the line of text for each result |
+| `lib/app/` | the issue list app: its source, and `issues.html`, which `tools/build-app.mjs` builds with the design system's tokens |
 | `lib/http.mjs` | MCP over HTTP, the OAuth endpoints, the stand-in login, files |
 | `lib/processors/` | GitHub (the App, and the stand-in), Jev, the ledger, blobs, the scan |
 | `lib/content.mjs`, `skills/` | the skills and the documentation search |
 | `server.mjs` | the entry point and its configuration |
-| `test/` | the scenario and the HTTP test |
+| `test/` | the scenario, the tools' typed results, the HTTP test, the app in Chromium |
 | `tools/check-github.mjs` | the read-only checks of the GitHub App, run on the VM |
 | `mise/` | the VM, its secrets, the deploy, the smoke test |

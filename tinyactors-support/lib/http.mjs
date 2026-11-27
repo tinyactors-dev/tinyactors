@@ -22,6 +22,15 @@ import { APP_URI, summarize } from './tools.mjs';
 import { APP } from './app/index.mjs';
 
 const VERSION = '0.1.0';
+
+// A tool's result as MCP carries it: its structured content (the data, per
+// its outputSchema) and a line of text for people; an error is both too.
+export async function toolResult(gateway, caller, name, args) {
+  const answer = await gateway.callTool(name, args ?? {}, caller);
+  const structured = answer.error ? { error: answer.error } : answer.result;
+  return { content: [{ type: 'text', text: summarize(name, structured) }], structuredContent: structured,
+           ...(answer.error ? { isError: true } : {}) };
+}
 const LIMIT = 1024 * 1024;   // a JSON or form body; uploads stream past it
 
 // The OAuth clients: registered ones in SQLite, metadata documents fetched and kept a while.
@@ -117,13 +126,8 @@ export function serve({ support, gateway, port = 0, clientsPath = ':memory:', st
                                                           outputSchema: t.output, ...(t.meta ? { _meta: t.meta } : {}) })) }));
     // A result is its structured content and a line of text; JSON only in
     // the structured content (lib/tools.mjs).
-    server.setRequestHandler(CallToolRequestSchema, async (request) => {
-      const { name, arguments: args } = request.params;
-      const answer = await gateway.callTool(name, args ?? {}, caller);
-      const structured = answer.error ? { error: answer.error } : answer.result;
-      return { content: [{ type: 'text', text: summarize(name, structured) }], structuredContent: structured,
-               ...(answer.error ? { isError: true } : {}) };
-    });
+    server.setRequestHandler(CallToolRequestSchema, async (request) =>
+      toolResult(gateway, caller, request.params.name, request.params.arguments));
     server.setRequestHandler(ListResourcesRequestSchema, async () => ({
       resources: [
         { uri: APP_URI, name: 'Issues', description: 'The issue list: filter, open, report, triage, close', mimeType: APP.mimeType },

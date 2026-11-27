@@ -367,6 +367,7 @@ a { color: var(--text-link); text-underline-offset: 3px; }
     const filters = document.getElementById('filters');
     const chosen = project(view.filter.repo);
     filters.hidden = view.page !== 'list';
+    if (filters.hidden) return filters.replaceChildren();
     filters.replaceChildren(
       select('repo', [['', 'every repository'], ...view.projects.map((p) => [p.repo, p.repo])], view.filter.repo,
         (v) => { view.filter.repo = v; view.filter.component = ''; loadList(); }, 'Repository'),
@@ -384,13 +385,13 @@ a { color: var(--text-link); text-underline-offset: 3px; }
       h('span', { class: 'dot', dataset: { state: i.state }, title: i.state }),
       h('span', { class: 'id' }, i.id),
       h('span', { class: 'title' }, i.title, h('span', { class: 'tag' }, i.component)),
-      h('span', { class: `cost${i.workaround ? ' has-workaround' : ''}`, title: `${i.count} reports · ${i.minutes} min` },
+      h('span', { class: `cost${i.workaround ? ' has-workaround' : ''}`, title: `${i.count} ${i.count === 1 ? 'report' : 'reports'} · ${i.minutes} min` },
         `${i.count}× · ${i.minutes}m`))));
   }
 
   function detail(i) {
     const mine = maintains(i.repo);
-    const open = OPEN.includes(i.state);
+    const isOpen = OPEN.includes(i.state);
     const cards = [h('div', { class: 'card' },
       h('div', { class: 'actions' }, button('← Issues', 'ghost', () => { view.page = 'list'; loadList(); }),
         h('span', { class: 'spacer' }), h('span', { class: 'badge', dataset: { state: i.state } }, h('span', { class: 'dot' }), i.state)),
@@ -398,7 +399,7 @@ a { color: var(--text-link); text-underline-offset: 3px; }
       h('h2', {}, i.title),
       h('div', { class: 'meta' },
         h('span', {}, 'repository ', h('b', {}, i.repo)), h('span', {}, 'component ', h('b', {}, i.component)),
-        h('span', {}, 'kind ', h('b', {}, i.kind)), h('span', {}, h('b', {}, String(i.count)), ' reports'),
+        h('span', {}, 'kind ', h('b', {}, i.kind)), h('span', {}, h('b', {}, String(i.count)), i.count === 1 ? ' report' : ' reports'),
         h('span', {}, h('b', {}, String(i.minutes)), ' min')),
       i.body ? h('p', { class: 'prose' }, i.body) : null,
       i.fix ? h('p', {}, 'Fixed in ', h('a', { href: i.fix.url, target: '_blank', rel: 'noopener' }, i.fix.sha.slice(0, 10))) : null,
@@ -416,11 +417,11 @@ a { color: var(--text-link); text-underline-offset: 3px; }
         h('div', { class: 'actions' }, h('button', { class: 'btn btn--secondary', type: 'submit' }, 'Attach workaround')));
       cards.push(form);
     }
-    if (mine) cards.push(maintainerCard(i, open));
+    if (mine) cards.push(maintainerCard(i, isOpen));
     return h('div', { class: 'app-body', style: 'display:flex;flex-direction:column;gap:var(--space-3)' }, cards);
   }
 
-  function maintainerCard(i, open) {
+  function maintainerCard(i, isOpen) {
     const card = h('div', { class: `card${view.confirming ? ' confirm' : ''}` }, h('h3', {}, 'Maintainer'));
     if (view.confirming) {
       card.append(h('p', {}, `Delete ${i.id} for good? It leaves every list, its files are deleted, and its number is not reused.`),
@@ -436,7 +437,7 @@ a { color: var(--text-link); text-underline-offset: 3px; }
       field('Title', input('title', 'A better title', i.title))),
       h('div', { class: 'actions' }, button('Triage', 'primary', () => act('triage',
         { id: i.id, kind: valueOf(card, 'kind'), title: valueOf(card, 'title') || undefined }, () => open(i.id)))));
-    if (open) card.append(input('reason', 'Why it will not be fixed'), h('div', { class: 'actions' },
+    if (isOpen) card.append(input('reason', 'Why it will not be fixed'), h('div', { class: 'actions' },
       button('Decline', 'secondary', () => {
         const reason = valueOf(card, 'reason');
         if (!reason) return say('A decline needs a reason agents will read.', true);
