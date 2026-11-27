@@ -83,6 +83,23 @@ class ReadSnapshot(unittest.TestCase):
         self.assertIsNone(snapshot.traces(0))
         quiet.__exit__(None, None, None)
 
+    def test_request_asks_core_of_the_whole_snapshot(self):
+        for datamodel in ("python", "ecmascript"):
+            host, actor, snapshot = shop(datamodel)
+            summary = snapshot.request("snapshot.summary")
+            self.assertEqual(summary["states"], {"order": {"s": 1}})
+            listed = snapshot.request("snapshot.actors", {"state": "s", "name": "order-"})
+            self.assertEqual(listed["total"], 1)
+            row = listed["actors"][0]
+            self.assertEqual((row["session"], row["states"], row["queued"]), (actor.id, ["s"], ["order.pay"]))
+            self.assertEqual(row["delayed"][0]["dueInMs"], 9800)
+            chart = snapshot.request("snapshot.chart", {"chart": "order"})
+            self.assertEqual([(s["id"], s["actors"]) for s in chart["states"]], [("s", 1), ("paid", 0)])
+            with self.assertRaises(tinyactors.TinyactorsError) as refused:
+                snapshot.request("snapshot.chart", {"chart": "nothing"})
+            self.assertEqual((refused.exception.reason, refused.exception.path), ("stale", "params.chart"))
+            host.__exit__(None, None, None)
+
     def test_refusals(self):
         host, _, snapshot = shop("python")
         with self.assertRaises(tinyactors.InvalidError):

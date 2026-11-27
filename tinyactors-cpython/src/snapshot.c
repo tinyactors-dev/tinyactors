@@ -1,41 +1,29 @@
-/* tinyactors.read_snapshot(data): a snapshot read without a host
- * (tinyactors-core/docs/embedding.md, section 12).
+/* tinyactors.read_snapshot(data): a snapshot read without a host, over
+ * core's snapshot reader (tinyactors-core/docs/snapshot-requests.md).
  *
- * The pack is copied into a bytearray, 8-aligned, and each live segment's
- * region (ta_host_snapshot_region) is read with ta_system_read into a
- * second bytearray, beside the segment's ta_image: a system no one runs,
- * which no datamodel is bound to. The Snapshot holds both bytearrays,
- * never hands them out and never resizes them, so their bytes do not
- * move; the scratch arrays of a call are a bytearray of their own. The
- * methods mirror the system's and the image's readers, one segment at a
- * time. */
+ * The reader is one bytearray: ta_host_snapshot_reader_open copies the
+ * pack and reads each live segment's region into it. The Snapshot holds
+ * it, never hands it out and never resizes it, so its bytes do not move.
+ * The pack is copied into an 8-aligned bytearray for the open only.
+ * request(method, params) is the reader's request (host.c's
+ * ta_python_snapshot_answer, its working memory through the binding's
+ * allocator for the call); the other methods mirror core's readers over
+ * it, in Python's shapes: keys and the names of statuses and kinds in
+ * snake_case, a segment or handle the snapshot does not have an
+ * IndexError. */
 #include "extension.h"
 #include "docs.h"
 
 #include <string.h>
 
-typedef struct ta_python_snapshot_segment {
-    ta_image image;
-    ta_system *system; /* NULL: retired */
-    uint32_t index, pad;
-} ta_python_snapshot_segment;
-
-typedef struct ta_python_snapshot_view {
-    uint32_t segment_count, pad;
-    ta_python_snapshot_segment *segments;
-} ta_python_snapshot_view;
-
 typedef struct ta_python_snapshot {
     PyObject_HEAD
-    PyObject *pack, *block; /* bytearrays: the pack's copy, and the segments' systems */
+    PyObject *block; /* a bytearray: the reader */
     PyObject *system_id, *datamodel, *state;
     ta_time time;
-    ta_python_snapshot_view *view; /* in block */
+    uint32_t segments, pad;
+    const ta_host_snapshot_reader *reader; /* in block */
 } ta_python_snapshot;
-
-static size_t ta_python_pad8(size_t length) {
-    return (length + 7u) & ~(size_t)7u;
-}
 
 /* A bytearray of at least `length` bytes, and the 8-aligned start in it. */
 typedef struct ta_python_aligned {
@@ -48,24 +36,11 @@ static int ta_python_aligned_new(size_t length, ta_python_aligned *out) {
     if (!out->array) return -1;
     unsigned char *data = (unsigned char *)PyByteArray_AsString(out->array);
     out->data = data + ((8u - ((uintptr_t)data & 7u)) & 7u);
-    memset(out->data, 0, length);
     return 0;
 }
 
 static PyObject *ta_python_snapshot_text(ta_string_view text) {
     return PyUnicode_FromStringAndSize(text.pointer ? text.pointer : "", (Py_ssize_t)text.length);
-}
-
-static PyObject *ta_python_text_or_none(ta_string_view text) {
-    return text.length ? ta_python_snapshot_text(text) : Py_NewRef(Py_None);
-}
-
-/* `value` (stolen) set as `key` of `dict`; -1 when either failed. */
-static int ta_python_put(PyObject *dict, const char *key, PyObject *value) {
-    if (!value) return -1;
-    int result = PyDict_SetItemString(dict, key, value);
-    Py_DECREF(value);
-    return result;
 }
 
 static void ta_python_snapshot_refused(ta_python_module_state *state, const char *message) {
@@ -80,42 +55,29 @@ static void ta_python_snapshot_refused(ta_python_module_state *state, const char
 
 /* ---- read_snapshot ---------------------------------------------------------------------- */
 
-/* Each live segment's image opened and region read, into the block. */
-static int ta_python_snapshot_read(ta_python_module_state *state, ta_python_snapshot *snapshot, ta_bytes pack) {
+/* The reader made in a bytearray of its size, the header from the pack. */
+static int ta_python_snapshot_open(ta_python_module_state *state, ta_python_snapshot *snapshot, ta_bytes pack) {
     ta_host_snapshot_contents contents;
     contents.size = sizeof contents;
-    if (ta_host_snapshot_unpack(pack, &contents) != TA_OK) {
+    size_t size = ta_host_snapshot_reader_size(pack);
+    if (!size || ta_host_snapshot_unpack(pack, &contents) != TA_OK) {
         ta_python_snapshot_refused(state, "not a snapshot of this build (another format or layout, or damaged)");
         return -1;
     }
-    uint32_t count = contents.image_count;
-    size_t at = ta_python_pad8(sizeof(ta_python_snapshot_view)) + ta_python_pad8(sizeof(ta_python_snapshot_segment) * count);
-    size_t total = at;
-    for (uint32_t i = 0; i < count; i++) total += ta_python_pad8(ta_host_snapshot_region(pack, i).length);
     ta_python_aligned block;
-    if (ta_python_aligned_new(total, &block) < 0) return -1;
+    if (ta_python_aligned_new(size, &block) < 0) return -1;
     snapshot->block = block.array;
-    snapshot->view = (ta_python_snapshot_view *)(void *)block.data;
-    snapshot->view->segment_count = count;
-    snapshot->view->segments =
-        (ta_python_snapshot_segment *)(void *)(block.data + ta_python_pad8(sizeof(ta_python_snapshot_view)));
-    for (uint32_t i = 0; i < count; i++) {
-        ta_python_snapshot_segment *segment = &snapshot->view->segments[i];
-        segment->index = i;
-        ta_bytes image = ta_host_snapshot_image(pack, i), region = ta_host_snapshot_region(pack, i);
-        if (!image.length || !region.length) continue; /* retired */
-        ta_system_setup setup = {{block.data + at, region.length}, &segment->image, NULL, NULL, 0, 0};
-        if (ta_image_open(image, &segment->image) != TA_OK || ta_system_read(&setup, region, &segment->system) != TA_OK) {
-            segment->system = NULL;
-            ta_python_snapshot_refused(state, "a segment of the snapshot is not this build's, or is damaged");
-            return -1;
-        }
-        at += ta_python_pad8(region.length);
+    ta_host_snapshot_reader_input input = {sizeof input, 0, pack, {block.data, size, 0}};
+    if (ta_host_snapshot_reader_open(&input, &snapshot->reader) != TA_OK) {
+        snapshot->reader = NULL;
+        ta_python_snapshot_refused(state, "a segment of the snapshot is not this build's, or is damaged");
+        return -1;
     }
     snapshot->system_id = ta_python_snapshot_text(contents.system_id);
     snapshot->datamodel = ta_python_snapshot_text(contents.datamodel);
     snapshot->state = PyBytes_FromStringAndSize(contents.state_length ? contents.state : "", (Py_ssize_t)contents.state_length);
     snapshot->time = contents.time;
+    snapshot->segments = contents.image_count;
     return snapshot->system_id && snapshot->datamodel && snapshot->state ? 0 : -1;
 }
 
@@ -134,324 +96,201 @@ PyObject *ta_python_read_snapshot(PyObject *module, PyObject *data) {
     PyBuffer_Release(&view);
     PyTypeObject *type = (PyTypeObject *)state->snapshot_type;
     ta_python_snapshot *snapshot = (ta_python_snapshot *)PyType_GenericAlloc(type, 0);
-    if (!snapshot) {
-        Py_DECREF(pack.array);
-        return NULL;
-    }
-    snapshot->pack = pack.array;
-    if (ta_python_snapshot_read(state, snapshot, copied) < 0) {
-        Py_DECREF(snapshot);
+    int opened = snapshot ? ta_python_snapshot_open(state, snapshot, copied) : -1;
+    Py_DECREF(pack.array); /* the reader keeps its own copy */
+    if (opened < 0) {
+        Py_XDECREF((PyObject *)snapshot);
         return NULL;
     }
     return (PyObject *)snapshot;
 }
 
-/* ---- the methods -------------------------------------------------------------------------- */
+/* ---- request ------------------------------------------------------------------------------ */
 
-/* A call's segment, and its handle when the method takes one. */
+/* The result of `method` with `params` (a dict, or NULL for none): a new
+ * reference, or NULL with the reply's error raised as a TinyactorsError. */
 typedef struct ta_python_snapshot_call {
-    int handles; /* 1: (segment, handle) */
-    ta_python_snapshot_segment *segment;
-    unsigned int handle;
+    const char *method;
+    PyObject *params;
 } ta_python_snapshot_call;
 
-static int ta_python_snapshot_enter(PyObject *self, PyObject *arguments, ta_python_snapshot_call *call) {
-    ta_python_snapshot *snapshot = (ta_python_snapshot *)self;
-    unsigned int index = 0;
-    if (call->handles ? !PyArg_ParseTuple(arguments, "II", &index, &call->handle) : !PyArg_ParseTuple(arguments, "I", &index))
-        return -1;
-    if (!snapshot->view || index >= snapshot->view->segment_count || !snapshot->view->segments[index].system) {
-        PyErr_SetString(PyExc_IndexError, "no live segment of that index in the snapshot");
-        return -1;
+static PyObject *ta_python_snapshot_ask(ta_python_snapshot *snapshot, const ta_python_snapshot_call *call) {
+    ta_python_module_state *state = ta_python_state_of_type(Py_TYPE((PyObject *)snapshot));
+    if (state == NULL || snapshot->reader == NULL) return NULL;
+    ta_cbor_writer writer;
+    unsigned char room[256];
+    ta_python_cbor_init(&writer, &(ta_python_room){{room, sizeof room, 0}, NULL});
+    ta_cbor_write_map(&writer, call->params ? 3 : 2);
+    ta_cbor_write_text(&writer, ta_string("id"));
+    ta_cbor_write_uint(&writer, 1);
+    ta_cbor_write_text(&writer, ta_string("method"));
+    ta_cbor_write_text(&writer, ta_string(call->method));
+    PyObject *result = NULL;
+    if (call->params) {
+        ta_cbor_write_text(&writer, ta_string("params"));
+        if (ta_python_value_write(state, &writer, call->params) < 0) {
+            ta_cbor_writer_free(&writer);
+            return NULL;
+        }
     }
-    call->segment = &snapshot->view->segments[index];
-    ta_actor_info actor;
-    actor.size = sizeof actor;
-    if (call->handles && ta_actor_info_get(call->segment->system, call->handle, &actor) != TA_OK) {
-        PyErr_SetString(PyExc_IndexError, "no actor of that handle in the segment");
-        return -1;
+    ta_bytes message;
+    if (ta_cbor_writer_bytes(&writer, &message) != TA_OK) {
+        ta_cbor_writer_free(&writer);
+        PyErr_NoMemory();
+        return NULL;
     }
-    return 0;
+    PyObject *reply = ta_python_snapshot_answer(&(ta_python_snapshot_asking){snapshot->reader, message});
+    ta_cbor_writer_free(&writer);
+    if (!reply) return NULL;
+    PyObject *decoded = ta_python_value_read(state, (ta_bytes){PyByteArray_AsString(reply), (size_t)PyByteArray_Size(reply)});
+    Py_DECREF(reply);
+    if (!decoded) return NULL;
+    PyObject *error = NULL;
+    if (PyDict_GetItemStringRef(decoded, "result", &result) == 0 && PyDict_GetItemStringRef(decoded, "error", &error) > 0) {
+        PyObject *raised = ta_python_error_from_reply(state, error);
+        if (raised) PyErr_SetObject((PyObject *)Py_TYPE(raised), raised);
+        Py_XDECREF(raised);
+        Py_DECREF(error);
+    }
+    Py_DECREF(decoded);
+    return result;
 }
+
+static PyObject *ta_python_snapshot_request(PyObject *self, PyObject *arguments) {
+    const char *method = NULL;
+    PyObject *params = Py_None;
+    if (!PyArg_ParseTuple(arguments, "s|O:request", &method, &params)) return NULL;
+    return ta_python_snapshot_ask((ta_python_snapshot *)self, &(ta_python_snapshot_call){method, params == Py_None ? NULL : params});
+}
+
+/* ---- the mirrored readers, in Python's shapes ------------------------------------------------ */
+
+/* camelCase as snake_case: "chartName" -> "chart_name"; core's
+ * "wallNanoseconds" is wall_ns, as the system's own field. A new reference. */
+static PyObject *ta_python_snake(PyObject *text) {
+    Py_ssize_t length = 0;
+    const char *from = PyUnicode_AsUTF8AndSize(text, &length);
+    if (!from) return NULL;
+    if (length == 15 && memcmp(from, "wallNanoseconds", 15) == 0) return PyUnicode_FromString("wall_ns");
+    char into[64];
+    Py_ssize_t at = 0;
+    for (Py_ssize_t i = 0; i < length; i++) {
+        if (at + 2 >= (Py_ssize_t)sizeof into) return Py_NewRef(text); /* longer than any key of core's */
+        if (from[i] >= 'A' && from[i] <= 'Z') {
+            into[at++] = '_';
+            into[at++] = (char)(from[i] - 'A' + 'a');
+        } else {
+            into[at++] = from[i];
+        }
+    }
+    return PyUnicode_FromStringAndSize(into, at);
+}
+
+/* A value of a reply with its keys snake_case, and the values of
+ * `status` and `kind` (names, not data); a new reference. */
+static PyObject *ta_python_shaped(PyObject *value, int depth) {
+    if (depth > 8) return Py_NewRef(value);
+    if (PyList_CheckExact(value)) {
+        Py_ssize_t count = PyList_Size(value);
+        PyObject *list = PyList_New(count);
+        for (Py_ssize_t i = 0; list && i < count; i++) {
+            PyObject *item = ta_python_shaped(PyList_GetItem(value, i), depth + 1);
+            if (!item) {
+                Py_CLEAR(list);
+                break;
+            }
+            PyList_SetItem(list, i, item);
+        }
+        return list;
+    }
+    if (!PyDict_CheckExact(value)) return Py_NewRef(value);
+    PyObject *dict = PyDict_New(), *key, *item;
+    Py_ssize_t at = 0;
+    while (dict && PyDict_Next(value, &at, &key, &item)) {
+        PyObject *name = ta_python_snake(key);
+        int named = PyUnicode_Check(item) &&
+                    (PyUnicode_CompareWithASCIIString(key, "status") == 0 || PyUnicode_CompareWithASCIIString(key, "kind") == 0);
+        PyObject *shaped = named ? ta_python_snake(item) : ta_python_shaped(item, depth + 1);
+        if (!name || !shaped || PyDict_SetItem(dict, name, shaped) < 0) Py_CLEAR(dict);
+        Py_XDECREF(name);
+        Py_XDECREF(shaped);
+    }
+    return dict;
+}
+
+/* One mirrored reader: its method, and whether it takes a handle. */
+typedef struct ta_python_mirror {
+    const char *method;
+    int handles;
+} ta_python_mirror;
+
+static PyObject *ta_python_snapshot_mirror(PyObject *self, PyObject *arguments, const ta_python_mirror *mirror) {
+    unsigned int segment = 0, handle = 0;
+    if (mirror->handles ? !PyArg_ParseTuple(arguments, "II", &segment, &handle) : !PyArg_ParseTuple(arguments, "I", &segment))
+        return NULL;
+    PyObject *params = mirror->handles ? Py_BuildValue("{s:I,s:I}", "segment", segment, "handle", handle)
+                                       : Py_BuildValue("{s:I}", "segment", segment);
+    if (!params) return NULL;
+    PyObject *result = ta_python_snapshot_ask((ta_python_snapshot *)self, &(ta_python_snapshot_call){mirror->method, params});
+    Py_DECREF(params);
+    if (!result) {
+        /* a segment or handle the snapshot does not have: IndexError, as a sequence's */
+        PyObject *raised = PyErr_GetRaisedException();
+        PyObject *reason = raised ? PyObject_GetAttrString(raised, "reason") : NULL;
+        if (reason && PyUnicode_Check(reason) &&
+            (PyUnicode_CompareWithASCIIString(reason, "range") == 0 || PyUnicode_CompareWithASCIIString(reason, "stale") == 0)) {
+            PyObject *message = PyObject_Str(raised);
+            PyErr_SetObject(PyExc_IndexError, message ? message : Py_None);
+            Py_XDECREF(message);
+            Py_DECREF(raised);
+        } else {
+            PyErr_Clear();
+            PyErr_SetRaisedException(raised);
+        }
+        Py_XDECREF(reason);
+        return NULL;
+    }
+    PyObject *shaped = ta_python_shaped(result, 0);
+    Py_DECREF(result);
+    return shaped;
+}
+
+static const ta_python_mirror ta_python_mirror_actors = {"snapshot.handles", 0};
+static const ta_python_mirror ta_python_mirror_actor = {"snapshot.actor", 1};
+static const ta_python_mirror ta_python_mirror_configuration = {"snapshot.configuration", 1};
+static const ta_python_mirror ta_python_mirror_mailbox = {"snapshot.mailbox", 1};
+static const ta_python_mirror ta_python_mirror_timers = {"snapshot.timers", 1};
+static const ta_python_mirror ta_python_mirror_stats = {"snapshot.stats", 0};
+static const ta_python_mirror ta_python_mirror_charts = {"snapshot.charts", 0};
+static const ta_python_mirror ta_python_mirror_trace_kept = {"snapshot.traceKept", 0};
+static const ta_python_mirror ta_python_mirror_traces = {"snapshot.traces", 0};
 
 static PyObject *ta_python_snapshot_actors(PyObject *self, PyObject *arguments) {
-    ta_python_snapshot_call call = {0, NULL, 0};
-    if (ta_python_snapshot_enter(self, arguments, &call) < 0) return NULL;
-    PyObject *result = PyList_New(0);
-    uint32_t cursor = 0, handles[64];
-    for (uint32_t count; result && (count = ta_system_actors(call.segment->system, &cursor, (ta_uint32_array){handles, 64})) != 0;)
-        for (uint32_t i = 0; i < count && result; i++) {
-            PyObject *handle = PyLong_FromUnsignedLong(handles[i]);
-            if (!handle || PyList_Append(result, handle) < 0) Py_CLEAR(result);
-            Py_XDECREF(handle);
-        }
-    return result;
+    return ta_python_snapshot_mirror(self, arguments, &ta_python_mirror_actors);
 }
-
-static const char *const ta_python_actor_states[] = {"free", "idle", "runnable", "waiting_workspace", "waiting_ack", "done",
-                                                     "hibernated"};
-
 static PyObject *ta_python_snapshot_actor(PyObject *self, PyObject *arguments) {
-    ta_python_snapshot_call call = {1, NULL, 0};
-    if (ta_python_snapshot_enter(self, arguments, &call) < 0) return NULL;
-    ta_system *system = call.segment->system;
-    ta_actor_info actor, parent;
-    actor.size = parent.size = sizeof actor;
-    ta_actor_info_get(system, call.handle, &actor);
-    const char *status = actor.state < sizeof ta_python_actor_states / sizeof ta_python_actor_states[0]
-                             ? ta_python_actor_states[actor.state]
-                             : "unknown";
-    PyObject *result = PyDict_New();
-    if (!result || ta_python_put(result, "session", PyLong_FromUnsignedLongLong(actor.serial)) < 0 ||
-        ta_python_put(result, "name", ta_python_text_or_none(ta_system_actor_name(system, call.handle))) < 0 ||
-        ta_python_put(result, "chart", PyLong_FromUnsignedLong(actor.chart)) < 0 ||
-        ta_python_put(result, "chart_name", ta_python_snapshot_text(ta_image_chart_name(&call.segment->image, actor.chart))) < 0 ||
-        ta_python_put(result, "status", PyUnicode_FromString(status)) < 0 ||
-        ta_python_put(result, "parent", actor.parent && ta_actor_info_get(system, actor.parent, &parent) == TA_OK
-                                            ? PyLong_FromUnsignedLongLong(parent.serial)
-                                            : Py_NewRef(Py_None)) < 0 ||
-        ta_python_put(result, "mailbox", PyLong_FromUnsignedLong(actor.mailbox_length)) < 0 ||
-        ta_python_put(result, "invocations", PyLong_FromUnsignedLong(actor.invocations)) < 0 ||
-        ta_python_put(result, "services", PyLong_FromUnsignedLong(actor.services)) < 0)
-        Py_CLEAR(result);
-    return result;
+    return ta_python_snapshot_mirror(self, arguments, &ta_python_mirror_actor);
 }
-
-/* A bytearray for a call's scratch array of `size` bytes; `*data` its start. */
-static PyObject *ta_python_scratch(size_t size, void **data) {
-    ta_python_aligned aligned;
-    if (ta_python_aligned_new(size ? size : 8u, &aligned) < 0) return NULL;
-    *data = aligned.data;
-    return aligned.array;
-}
-
-static PyObject *ta_python_u32_list(ta_uint32_array values) {
-    PyObject *result = PyList_New((Py_ssize_t)values.capacity);
-    for (uint32_t i = 0; result && i < values.capacity; i++) {
-        PyObject *value = PyLong_FromUnsignedLong(values.pointer[i]);
-        if (!value) Py_CLEAR(result);
-        else PyList_SetItem(result, (Py_ssize_t)i, value);
-    }
-    return result;
-}
-
 static PyObject *ta_python_snapshot_configuration(PyObject *self, PyObject *arguments) {
-    ta_python_snapshot_call call = {1, NULL, 0};
-    if (ta_python_snapshot_enter(self, arguments, &call) < 0) return NULL;
-    uint32_t count = ta_actor_config(call.segment->system, call.handle, (ta_uint32_array){NULL, 0});
-    void *data = NULL;
-    PyObject *scratch = ta_python_scratch(sizeof(uint32_t) * count, &data);
-    if (!scratch) return NULL;
-    ta_actor_config(call.segment->system, call.handle, (ta_uint32_array){(uint32_t *)data, count});
-    PyObject *result = ta_python_u32_list((ta_uint32_array){(uint32_t *)data, count});
-    Py_DECREF(scratch);
-    return result;
+    return ta_python_snapshot_mirror(self, arguments, &ta_python_mirror_configuration);
 }
-
 static PyObject *ta_python_snapshot_mailbox(PyObject *self, PyObject *arguments) {
-    ta_python_snapshot_call call = {1, NULL, 0};
-    if (ta_python_snapshot_enter(self, arguments, &call) < 0) return NULL;
-    uint32_t count = ta_system_actor_mailbox(call.segment->system, call.handle, (ta_actor_queued_array){NULL, 0});
-    void *data = NULL;
-    PyObject *scratch = ta_python_scratch(sizeof(ta_actor_queued) * count, &data);
-    if (!scratch) return NULL;
-    ta_actor_queued *queued = (ta_actor_queued *)data;
-    ta_system_actor_mailbox(call.segment->system, call.handle, (ta_actor_queued_array){queued, count});
-    PyObject *result = PyList_New((Py_ssize_t)count);
-    for (uint32_t i = 0; result && i < count; i++) {
-        PyObject *item = PyDict_New();
-        if (!item || ta_python_put(item, "event", ta_python_snapshot_text(queued[i].event)) < 0 ||
-            ta_python_put(item, "sendid", ta_python_text_or_none(queued[i].sendid)) < 0) {
-            Py_XDECREF(item);
-            Py_CLEAR(result);
-        } else {
-            PyList_SetItem(result, (Py_ssize_t)i, item);
-        }
-    }
-    Py_DECREF(scratch);
-    return result;
+    return ta_python_snapshot_mirror(self, arguments, &ta_python_mirror_mailbox);
 }
-
 static PyObject *ta_python_snapshot_timers(PyObject *self, PyObject *arguments) {
-    ta_python_snapshot_call call = {1, NULL, 0};
-    if (ta_python_snapshot_enter(self, arguments, &call) < 0) return NULL;
-    uint32_t count = ta_system_actor_timers(call.segment->system, call.handle, (ta_actor_timer_array){NULL, 0});
-    void *data = NULL;
-    PyObject *scratch = ta_python_scratch(sizeof(ta_actor_timer) * count, &data);
-    if (!scratch) return NULL;
-    ta_actor_timer *timers = (ta_actor_timer *)data;
-    ta_system_actor_timers(call.segment->system, call.handle, (ta_actor_timer_array){timers, count});
-    PyObject *result = PyList_New((Py_ssize_t)count);
-    for (uint32_t i = 0; result && i < count; i++) {
-        PyObject *item = PyDict_New();
-        if (!item || ta_python_put(item, "due", PyLong_FromUnsignedLongLong(timers[i].due)) < 0 ||
-            ta_python_put(item, "event", ta_python_snapshot_text(timers[i].event)) < 0 ||
-            ta_python_put(item, "sendid", ta_python_text_or_none(timers[i].sendid)) < 0) {
-            Py_XDECREF(item);
-            Py_CLEAR(result);
-        } else {
-            PyList_SetItem(result, (Py_ssize_t)i, item);
-        }
-    }
-    Py_DECREF(scratch);
-    return result;
+    return ta_python_snapshot_mirror(self, arguments, &ta_python_mirror_timers);
 }
-
 static PyObject *ta_python_snapshot_stats(PyObject *self, PyObject *arguments) {
-    ta_python_snapshot_call call = {0, NULL, 0};
-    if (ta_python_snapshot_enter(self, arguments, &call) < 0) return NULL;
-    ta_system_stats stats;
-    stats.size = sizeof stats;
-    ta_system_stats_get(call.segment->system, &stats);
-    PyObject *result = PyDict_New();
-    if (!result || ta_python_put(result, "now", PyLong_FromUnsignedLongLong(stats.now)) < 0 ||
-        ta_python_put(result, "ticks_per_second", PyLong_FromUnsignedLongLong(stats.ticks_per_second)) < 0 ||
-        ta_python_put(result, "next_deadline", PyLong_FromUnsignedLongLong(stats.next_deadline)) < 0 ||
-        ta_python_put(result, "actors", PyLong_FromUnsignedLong(stats.actors)) < 0 ||
-        ta_python_put(result, "hibernated", PyLong_FromUnsignedLong(stats.hibernated)) < 0 ||
-        ta_python_put(result, "runnable", PyLong_FromUnsignedLong(stats.runnable)) < 0 ||
-        ta_python_put(result, "events", PyLong_FromUnsignedLong(stats.events)) < 0 ||
-        ta_python_put(result, "timers", PyLong_FromUnsignedLong(stats.timers)) < 0 ||
-        ta_python_put(result, "requests", PyLong_FromUnsignedLong(stats.requests)) < 0 ||
-        ta_python_put(result, "region_bytes", PyLong_FromUnsignedLongLong(stats.region_bytes)) < 0 ||
-        ta_python_put(result, "wall_ns", PyLong_FromUnsignedLongLong(stats.wall_ns)) < 0)
-        Py_CLEAR(result);
-    return result;
+    return ta_python_snapshot_mirror(self, arguments, &ta_python_mirror_stats);
 }
-
-static const char *const ta_python_state_kinds[] = {"atomic", "compound", "parallel", "final", "shallow_history",
-                                                    "deep_history"};
-static const char *const ta_python_transition_types[] = {"external", "internal", "initial"};
-
-/* A table of names, by index. */
-typedef struct ta_python_names {
-    const char *const *names;
-    uint32_t count;
-} ta_python_names;
-
-static const ta_python_names ta_python_state_kind_names = {ta_python_state_kinds, 6};
-static const ta_python_names ta_python_transition_type_names = {ta_python_transition_types, 3};
-
-static PyObject *ta_python_name_of(const ta_python_names *table, uint32_t index) {
-    return PyUnicode_FromString(index < table->count ? table->names[index] : "unknown");
-}
-
-static PyObject *ta_python_chart_states(const ta_image *image, uint32_t chart) {
-    uint32_t count = ta_image_state_count(image, chart);
-    PyObject *result = PyList_New((Py_ssize_t)count);
-    for (uint32_t i = 0; result && i < count; i++) {
-        ta_state_info state;
-        state.size = sizeof state;
-        PyObject *item = PyDict_New();
-        if (!item || ta_image_state_info(image, (ta_chart_item){chart, i}, &state) != TA_OK ||
-            ta_python_put(item, "id", ta_python_snapshot_text(state.id)) < 0 ||
-            ta_python_put(item, "kind", ta_python_name_of(&ta_python_state_kind_names, state.kind)) < 0 ||
-            ta_python_put(item, "parent", state.parent == TA_NIL ? Py_NewRef(Py_None) : PyLong_FromUnsignedLong(state.parent)) < 0) {
-            Py_XDECREF(item);
-            Py_CLEAR(result);
-        } else {
-            PyList_SetItem(result, (Py_ssize_t)i, item);
-        }
-    }
-    return result;
-}
-
-static PyObject *ta_python_chart_transition(const ta_image *image, ta_chart_item item) {
-    ta_transition_info transition;
-    transition.size = sizeof transition;
-    if (ta_image_transition(image, item, &transition) != TA_OK) return PyErr_NoMemory();
-    PyObject *events = PyList_New((Py_ssize_t)transition.event_count);
-    for (uint32_t i = 0; events && i < transition.event_count; i++) {
-        PyObject *event = ta_python_snapshot_text(ta_image_transition_event(image, item, i));
-        if (!event) Py_CLEAR(events);
-        else PyList_SetItem(events, (Py_ssize_t)i, event);
-    }
-    void *data = NULL;
-    PyObject *scratch = ta_python_scratch(sizeof(uint32_t) * transition.target_count, &data);
-    PyObject *targets = NULL;
-    if (scratch) {
-        ta_image_transition_targets(image, item, (ta_uint32_array){(uint32_t *)data, transition.target_count});
-        targets = ta_python_u32_list((ta_uint32_array){(uint32_t *)data, transition.target_count});
-        Py_DECREF(scratch);
-    }
-    ta_expression_info condition;
-    PyObject *cond = transition.condition != TA_NIL &&
-                             ta_image_expression(image, (ta_chart_item){item.chart, transition.condition}, &condition) == TA_OK
-                         ? ta_python_snapshot_text(condition.source)
-                         : Py_NewRef(Py_None);
-    PyObject *result = PyDict_New();
-    if (!result || !events || !targets || ta_python_put(result, "source", PyLong_FromUnsignedLong(transition.source)) < 0 ||
-        ta_python_put(result, "type", ta_python_name_of(&ta_python_transition_type_names, transition.type)) < 0 ||
-        ta_python_put(result, "events", Py_NewRef(events)) < 0 || ta_python_put(result, "cond", Py_XNewRef(cond)) < 0 ||
-        ta_python_put(result, "targets", Py_NewRef(targets)) < 0)
-        Py_CLEAR(result);
-    Py_XDECREF(events);
-    Py_XDECREF(targets);
-    Py_XDECREF(cond);
-    return result;
-}
-
-static PyObject *ta_python_chart(const ta_image *image, uint32_t chart) {
-    uint32_t transition_count = ta_image_transition_count(image, chart), data_count = ta_image_data_count(image, chart);
-    PyObject *transitions = PyList_New((Py_ssize_t)transition_count), *data = PyList_New((Py_ssize_t)data_count);
-    for (uint32_t i = 0; transitions && i < transition_count; i++) {
-        PyObject *transition = ta_python_chart_transition(image, (ta_chart_item){chart, i});
-        if (!transition) Py_CLEAR(transitions);
-        else PyList_SetItem(transitions, (Py_ssize_t)i, transition);
-    }
-    for (uint32_t i = 0; data && i < data_count; i++) {
-        ta_data_info datum;
-        PyObject *id = ta_image_data(image, (ta_chart_item){chart, i}, &datum) == TA_OK ? ta_python_snapshot_text(datum.id) : NULL;
-        if (!id) Py_CLEAR(data);
-        else PyList_SetItem(data, (Py_ssize_t)i, id);
-    }
-    PyObject *result = PyDict_New();
-    if (!result || !transitions || !data || ta_python_put(result, "name", ta_python_snapshot_text(ta_image_chart_name(image, chart))) < 0 ||
-        ta_python_put(result, "datamodel", ta_python_snapshot_text(ta_image_chart_datamodel(image, chart))) < 0 ||
-        ta_python_put(result, "states", ta_python_chart_states(image, chart)) < 0 ||
-        ta_python_put(result, "transitions", Py_NewRef(transitions)) < 0 || ta_python_put(result, "data", Py_NewRef(data)) < 0)
-        Py_CLEAR(result);
-    Py_XDECREF(transitions);
-    Py_XDECREF(data);
-    return result;
-}
-
 static PyObject *ta_python_snapshot_charts(PyObject *self, PyObject *arguments) {
-    ta_python_snapshot_call call = {0, NULL, 0};
-    if (ta_python_snapshot_enter(self, arguments, &call) < 0) return NULL;
-    ta_image_info info;
-    info.size = sizeof info;
-    ta_image_get_info(&call.segment->image, &info);
-    PyObject *result = PyList_New((Py_ssize_t)info.chart_count);
-    for (uint32_t c = 0; result && c < info.chart_count; c++) {
-        PyObject *chart = ta_python_chart(&call.segment->image, c);
-        if (!chart) Py_CLEAR(result);
-        else PyList_SetItem(result, (Py_ssize_t)c, chart);
-    }
-    return result;
+    return ta_python_snapshot_mirror(self, arguments, &ta_python_mirror_charts);
 }
-
 static PyObject *ta_python_snapshot_trace_kept(PyObject *self, PyObject *arguments) {
-    ta_python_snapshot_call call = {0, NULL, 0};
-    if (ta_python_snapshot_enter(self, arguments, &call) < 0) return NULL;
-    ta_trace_kept kept;
-    kept.size = sizeof kept;
-    if (ta_system_trace_kept(call.segment->system, &kept) != TA_OK) Py_RETURN_NONE;
-    PyObject *result = PyDict_New();
-    if (!result || ta_python_put(result, "records", PyLong_FromUnsignedLong(kept.records)) < 0 ||
-        ta_python_put(result, "acknowledged_records", PyLong_FromUnsignedLong(kept.acknowledged_records)) < 0 ||
-        ta_python_put(result, "bytes", PyLong_FromSize_t((size_t)kept.first.length + kept.second.length)) < 0 ||
-        ta_python_put(result, "acknowledged_bytes", PyLong_FromUnsignedLong(kept.acknowledged)) < 0 ||
-        ta_python_put(result, "lost", PyLong_FromUnsignedLongLong(kept.lost)) < 0)
-        Py_CLEAR(result);
-    return result;
+    return ta_python_snapshot_mirror(self, arguments, &ta_python_mirror_trace_kept);
 }
-
 static PyObject *ta_python_snapshot_traces(PyObject *self, PyObject *arguments) {
-    ta_python_snapshot_call call = {0, NULL, 0};
-    if (ta_python_snapshot_enter(self, arguments, &call) < 0) return NULL;
-    ta_host_trace_history_input input = {sizeof input, call.segment->index, call.segment->system, &call.segment->image, NULL};
-    return ta_python_trace_history(&input);
+    return ta_python_snapshot_mirror(self, arguments, &ta_python_mirror_traces);
 }
 
 /* ---- the type ------------------------------------------------------------------------------- */
@@ -479,13 +318,12 @@ static PyObject *ta_python_snapshot_time(PyObject *self, void *closure) {
 static PyObject *ta_python_snapshot_segments(PyObject *self, void *closure) {
     (void)closure;
     ta_python_snapshot *snapshot = (ta_python_snapshot *)self;
-    return PyLong_FromUnsignedLong(snapshot->view ? snapshot->view->segment_count : 0);
+    return PyLong_FromUnsignedLong(snapshot->segments);
 }
 
 static void ta_python_snapshot_dealloc(PyObject *self) {
     PyTypeObject *type = Py_TYPE(self);
     ta_python_snapshot *snapshot = (ta_python_snapshot *)self;
-    Py_XDECREF(snapshot->pack);
     Py_XDECREF(snapshot->block);
     Py_XDECREF(snapshot->system_id);
     Py_XDECREF(snapshot->datamodel);
@@ -514,6 +352,7 @@ static PyMethodDef ta_python_snapshot_methods[] = {
     {"charts", ta_python_snapshot_charts, METH_VARARGS, ta_python_doc_snapshot_charts},
     {"trace_kept", ta_python_snapshot_trace_kept, METH_VARARGS, ta_python_doc_snapshot_trace_kept},
     {"traces", ta_python_snapshot_traces, METH_VARARGS, ta_python_doc_snapshot_traces},
+    {"request", ta_python_snapshot_request, METH_VARARGS, ta_python_doc_snapshot_request},
     {NULL, NULL, 0, NULL}
 };
 

@@ -96,6 +96,29 @@ PyObject *ta_python_trace_history(ta_host_trace_history_input *input) {
     return bytes;
 }
 
+PyObject *ta_python_snapshot_answer(const ta_python_snapshot_asking *asking) {
+    ta_host_snapshot_request request = {sizeof request, 0, asking->message, &ta_python_allocator};
+    PyObject *reply = PyByteArray_FromStringAndSize(NULL, 16384);
+    for (int tries = 0; reply && tries < 2; tries++) {
+        ta_buffer room = {PyByteArray_AsString(reply), (size_t)PyByteArray_Size(reply), 0};
+        ta_status status = ta_host_snapshot_reader_request(asking->reader, &request, &room);
+        if (status == TA_OK) {
+            if (PyByteArray_Resize(reply, (Py_ssize_t)room.length) < 0) Py_CLEAR(reply);
+            return reply;
+        }
+        if (status != TA_ERROR_NO_MEMORY || room.length <= room.capacity) {
+            Py_DECREF(reply);
+            if (status == TA_ERROR_NO_MEMORY) return PyErr_NoMemory();
+            PyErr_Format(PyExc_RuntimeError, "the snapshot request could not be answered: %s", ta_status_name(status));
+            return NULL;
+        }
+        if (PyByteArray_Resize(reply, (Py_ssize_t)room.length) < 0) Py_CLEAR(reply); /* the room it needs */
+    }
+    Py_XDECREF(reply);
+    if (!PyErr_Occurred()) PyErr_NoMemory();
+    return NULL;
+}
+
 void ta_python_raise_status(ta_python_module_state *state, ta_status status) {
     if (status == TA_ERROR_NO_MEMORY) {
         PyErr_NoMemory();

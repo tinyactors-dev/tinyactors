@@ -223,6 +223,16 @@ static const char ta_python_doc_snapshot_traces[] =
     "it reads no name or value given at run time: an event is named from\n"
     "the image, a microstep by its macrostep, an actor by its record.";
 
+static const char ta_python_doc_snapshot_request[] =
+    "request(method, params=None, /)\n--\n\nAny method of core's snapshot reader\n"
+    "(tinyactors-core/docs/snapshot-requests.md) with its params, a dict:\n"
+    "the readers a segment at a time and what a tool asks of the whole\n"
+    "snapshot (snapshot.summary, snapshot.actors filtered and paged,\n"
+    "snapshot.chart with the actors in each state, snapshot.spans\n"
+    "filtered). Its result in core's shapes (camelCase keys), the shapes\n"
+    "every language's MCP server forwards; an error reply raises a\n"
+    "TinyactorsError with core's code, reason and path.";
+
 static const char ta_python_doc_compiled[] =
     "The result of compile_charts or compile_system: an image and the\n"
     "compilation's notes.\n"

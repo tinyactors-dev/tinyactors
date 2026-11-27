@@ -483,16 +483,19 @@ Decided by the maintainer (2026-10-13); every item is in
   nor the application parses the grammar. No peers, envelopes or routes:
   the transport, the wire encoding and trust are the application's.
 - **`tinyactors.read_snapshot(data) -> Snapshot`** (`src/snapshot.c`) reads
-  a pack of this build without a host (`tinyactors-core/docs/embedding.md`,
-  section 12): the pack copied into a `bytearray`, 8-aligned, and each
-  live segment's region read with `ta_system_read` into a second one
-  beside its `ta_image`, both private to the `Snapshot` and never resized.
-  Its methods mirror core's readers a segment at a time: `actors`,
-  `actor`, `configuration`, `mailbox`, `timers`, `stats`, `charts`,
-  `trace_kept`, `traces` (`ta_host_trace_history`, its encoder through the
-  binding's allocator for the call: `ta_python_trace_history` in
-  `src/host.c`, the one other place it reaches core). Test:
-  `tests/test_read_snapshot.py`.
+  a pack of this build without a host, over core's snapshot reader
+  (`tinyactors-core/docs/snapshot-requests.md`): the reader made in a
+  `bytearray` of its size (`ta_host_snapshot_reader_size`, `_open`: the
+  pack copied and each live segment's region read into it), private to
+  the `Snapshot` and never resized. **`snapshot.request(method,
+  params=None)`** is `ta_host_snapshot_reader_request` in core's shapes,
+  its working memory through the binding's allocator for the call
+  (`ta_python_snapshot_answer` in `src/host.c`, beside
+  `ta_python_trace_history`); the MCP server's snapshot tools forward to
+  it. The other methods mirror core's readers a segment at a time over
+  it, in Python's shapes (snake_case keys and names): `actors`, `actor`,
+  `configuration`, `mailbox`, `timers`, `stats`, `charts`, `trace_kept`,
+  `traces`. Test: `tests/test_read_snapshot.py`.
 - **`log=handler(entry)`** gets this host's `<log>` lines
   (`TA_EFFECT_LOG`) as thin views of `(session, label, text)`, no chart
   (decided 2026-10-13). Without a handler, the lines are discarded.

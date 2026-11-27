@@ -95,6 +95,15 @@ PyObject *ta_python_read_snapshot(PyObject *module, PyObject *data);
  * binding's allocator for the call (host.c, the only file that reaches
  * it): input->allocator is set there. */
 PyObject *ta_python_trace_history(ta_host_trace_history_input *input);
+/* A snapshot reader's reply to `message` (ta_host_snapshot_reader_request)
+ * as a bytearray: a new reference, or NULL with an exception; the
+ * request's working memory through the binding's allocator for the call
+ * (host.c, as the trace history's). */
+typedef struct ta_python_snapshot_asking {
+    const ta_host_snapshot_reader *reader;
+    ta_bytes message;
+} ta_python_snapshot_asking;
+PyObject *ta_python_snapshot_answer(const ta_python_snapshot_asking *asking);
 /* A copy of a value for another actor: mutable containers (list, dict)
  * copied, immutable values shared, anything outside the table refused
  * (TypeError) and nesting past 64 refused (ValueError). */
