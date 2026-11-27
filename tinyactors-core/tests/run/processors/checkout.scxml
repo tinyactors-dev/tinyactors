@@ -1,0 +1,15 @@
+<scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0" name="checkout"
+       datamodel="ecmascript" initial="open">
+  <state id="open">
+    <transition event="place" target="placed"/>
+  </state>
+  <state id="placed">
+    <onentry>
+      <send type="payments" target="charges" event="charge"/>
+      <send type="shipping" target="labels" event="label"/>
+      <send type="email" target="receipts" event="receipt"/>
+      <send type="ledger" target="entries" event="entry"/>
+      <send type="tax" target="returns" event="record"/>
+    </onentry>
+  </state>
+</scxml>

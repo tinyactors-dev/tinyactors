@@ -205,7 +205,7 @@ typedef struct config_build {
     ta_cbor_writer writer;
     ta_allocator allocator;
     processor *processors;
-    uint32_t processor_count;
+    uint32_t processor_count, processor_capacity;
     uint32_t system_item; /* a systemID that is not text or is empty: its token, for core to refuse; else TA_NIL */
     ta_string_view system; /* the config's systemID, empty when it has none */
 } config_build;
@@ -231,8 +231,28 @@ static int processor_add(config_build *build, processor entry) {
             usage(build->t, tool_text_view(&text));
             return 0;
         }
+    if (build->processor_count >= build->processor_capacity) {
+        tool_complain(build->t, ta_string("more I/O processors than the config was sized for"));
+        build->t->exit = TOOL_EXIT_FAILURE;
+        return 0;
+    }
     build->processors[build->processor_count++] = entry;
     return 1;
+}
+
+/* The entries of the config file's ioProcessors: of every member of that
+ * name, since a JSON object may name a key twice and config_members reads
+ * each; one that is not a map has none (config_members refuses it). */
+static uint32_t config_processor_count(const ta_cbor_document *document) {
+    uint32_t count = 0, at = 1;
+    for (uint32_t pair = 0; pair < document->tokens[0].count; pair++) {
+        uint32_t value = at + 1;
+        if (tool_equal(ta_cbor_string(document, at), ta_string("ioProcessors")) &&
+            document->tokens[value].kind == TA_CBOR_MAP)
+            count += document->tokens[value].count;
+        at = ta_cbor_next(document, value);
+    }
+    return count;
 }
 
 /* The config file's members, copied but systemID and ioProcessors, which
@@ -320,9 +340,10 @@ static int config_make(tool *t, ta_bytes *out) {
         }
         if (document.tokens[0].kind != TA_CBOR_MAP) return config_refuse(t, ta_string("it is not a JSON object"));
     }
-    uint32_t configured = document.count ? document.tokens[0].count : 0;
-    uint32_t capacity = configured + tool_count(t, TOOL_RUN_IO_PROCESSOR) + 1;
-    build.processors = (processor *)ta_growable_arena_alloc(t->arena, sizeof *build.processors * capacity, RUN_ALIGN);
+    uint32_t configured = document.count ? config_processor_count(&document) : 0;
+    build.processor_capacity = configured + tool_count(t, TOOL_RUN_IO_PROCESSOR);
+    build.processors = (processor *)ta_growable_arena_alloc(
+        t->arena, sizeof *build.processors * (build.processor_capacity ? build.processor_capacity : 1u), RUN_ALIGN);
     if (!build.processors) {
         tool_complain(t, ta_string("out of memory"));
         t->exit = TOOL_EXIT_FAILURE;

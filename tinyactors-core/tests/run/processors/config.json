@@ -1,0 +1,2 @@
+{"system": {"ticksPerSecond": 1000},
+ "ioProcessors": {"payments": {}, "shipping": {"location": "https://shipping.example/hooks"}, "email": {}, "ledger": {}}}

@@ -1,0 +1,11 @@
+> {"jsonrpc":"2.0","id":1,"method":"run.spawn","params":{"chart":"checkout"}}
+< {"jsonrpc":"2.0","id":1,"result":{"session":1,"address":"tinyactors://tinyactors-run/#_scxml_1"}}
+> {"jsonrpc":"2.0","id":2,"method":"run.send","params":{"target":1,"event":"place"}}
+< {"jsonrpc":"2.0","id":2,"result":{}}
+> {"jsonrpc":"2.0","id":3,"method":"run.turn"}
+< {"jsonrpc":"2.0","method":"effect.send","params":{"batch":1,"index":0,"session":1,"type":"payments","target":"charges","event":"charge","traceparent":"00-1a5f849d4933e6e06aa594f1262d2d2c-f075787b740f4422-03","waiting":true}}
+< {"jsonrpc":"2.0","method":"effect.send","params":{"batch":2,"index":0,"session":1,"type":"shipping","target":"labels","event":"label","traceparent":"00-1a5f849d4933e6e06aa594f1262d2d2c-f075787b740f4422-03","waiting":true}}
+< {"jsonrpc":"2.0","method":"effect.send","params":{"batch":3,"index":0,"session":1,"type":"email","target":"receipts","event":"receipt","traceparent":"00-1a5f849d4933e6e06aa594f1262d2d2c-f075787b740f4422-03","waiting":true}}
+< {"jsonrpc":"2.0","method":"effect.send","params":{"batch":4,"index":0,"session":1,"type":"ledger","target":"entries","event":"entry","traceparent":"00-1a5f849d4933e6e06aa594f1262d2d2c-f075787b740f4422-03","waiting":true}}
+< {"jsonrpc":"2.0","method":"effect.send","params":{"batch":5,"index":0,"session":1,"type":"tax","target":"returns","event":"record","traceparent":"00-1a5f849d4933e6e06aa594f1262d2d2c-f075787b740f4422-03","waiting":true}}
+< {"jsonrpc":"2.0","id":3,"result":{"status":"idle","runs":6,"fuel":15,"time":0,"nextDeadline":null}}
