@@ -110,7 +110,10 @@ snapshot tools are core's snapshot reader (`snapshot.request`). What this
 package writes is what only JavaScript can do: the tap, the copies and
 their stand-ins, compile and deploy, send, ask and terminate. A server for
 another language is the same catalog over its own binding
-(`tinyactors-core/mcp/README.md` says what it implements).
+(`tinyactors-core/mcp/README.md` says what it implements); Python's is
+`tinyactors_mcp` (`tinyactors-cpython/mcp/`). The MCP suite
+(`tinyactors-test/docs/mcp.md`) holds both to the same results, through
+each one's fixture program (here `test/fixture.mjs`).
 
 ## What an agent can and cannot do
 

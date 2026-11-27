@@ -1077,8 +1077,9 @@ operations (`tinyactors-core/mcp/README.md`): the tap, copies restored
 from a snapshot with stand-ins for its I/O processors, services and
 transport, compile, deploy, send, ask and terminate. `mise run test` installs its
 dependencies from its lockfile with the pinned pnpm, checks its types
-with tsc and runs its test under node and bun on both datamodels. It is not
-packed or published yet.
+with tsc and runs its test and the MCP suite (`tinyactors-test/docs/mcp.md`,
+against `mcp/test/fixture.mjs`) under node and bun on both datamodels. It is
+not packed or published yet.
 
 ## What not to build
 

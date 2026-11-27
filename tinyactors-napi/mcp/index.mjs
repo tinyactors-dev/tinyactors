@@ -241,7 +241,7 @@ export function createMCP(systems, options = {}) {
       const out = [];
       for (const [name, s] of Object.entries(systems)) {
         const stats = await s.host.hostStats();
-        out.push({ system: name, charts: stats.charts.map((c) => c.name), actors: stats.host.actors, hibernated: stats.host.hibernated, segments: stats.host.segments, nowMs: s.host.now() });
+        out.push({ system: name, charts: stats.charts.map((c) => c.name), actors: stats.host.actors, hibernated: stats.host.hibernated, segments: stats.host.segments });
       }
       return ok(out);
     },
@@ -329,10 +329,10 @@ export function createMCP(systems, options = {}) {
       }
       const id = `s${shared.nextSnapshot++}`;
       const reader = readSnapshot(bytes);
-      shared.snapshots.set(id, { id, system: name, bytes, reader, hostTimeMs: s.host.now() });
+      shared.snapshots.set(id, { id, system: name, bytes, reader });
       while (shared.snapshots.size > (options.snapshotKeep ?? 8)) shared.snapshots.delete(shared.snapshots.keys().next().value);
       const actors = reader.request('snapshot.summary').segments.reduce((n, segment) => n + (segment.actors ?? 0), 0);
-      return ok({ snapshot: id, system: name, bytes: bytes.length, actors, hostTimeMs: shared.snapshots.get(id).hostTimeMs });
+      return ok({ snapshot: id, system: name, bytes: bytes.length, actors });
     },
     async snapshot_variables({ snapshot, session, chart, state, limit }) {
       const snap = snapshotOf(snapshot);
