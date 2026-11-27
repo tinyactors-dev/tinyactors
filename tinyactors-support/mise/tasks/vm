@@ -5,12 +5,17 @@
 require_relative '../support'
 
 Support.secrets!
-listed = JSON.parse(Support.exe('ls --json'))
-if listed.fetch('vms', []).any? { |vm| vm['vm_name'] == Support::VM }
+find = -> { JSON.parse(Support.exe('ls --json')).fetch('vms', []).find { |vm| vm['vm_name'] == Support::VM } }
+vm = find.call
+if vm
   puts "support: #{Support::VM} is there already"
-  exit 0
+else
+  puts Support.exe("new --name=#{Support::VM} --tag=tinyactors --no-email --json " \
+                   "--comment='tinyactors-support: the support channel for agents (mcp.tinyactors.dev)'", timeout: 600)
+  vm = find.call
 end
-puts Support.exe("new --name=#{Support::VM} --tag=tinyactors --no-email --json " \
-                 "--comment='tinyactors-support: the support channel for agents (mcp.tinyactors.dev)'", timeout: 600)
-puts Support.exe("share port #{Support::VM} #{Support::PORT}")
-puts Support.exe("share set-private #{Support::VM}")
+# A new VM's proxy is private, on port 8000: the share commands only when it
+# is not (this API key is not allowed them; the maintainer runs them then).
+puts Support.exe("share port #{Support::VM} #{Support::PORT}") unless vm['proxy_port'] == Support::PORT
+puts Support.exe("share set-private #{Support::VM}") if vm.dig('sharing', 'public_proxy')
+puts "support: #{Support::VM}: proxy #{vm['proxy_share']} on port #{vm['proxy_port']}, #{vm['region']}"

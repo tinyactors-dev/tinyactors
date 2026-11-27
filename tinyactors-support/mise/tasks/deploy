@@ -11,6 +11,7 @@ require_relative '../support'
 Support.secrets!
 release = Support.release_name
 puts "support: deploying #{release} to #{Support::VM}"
+puts Support.upload(Support.bundle, '/tmp/support-bundle.tar.gz')
 out = Support.vm(Support.deploy_script(release), timeout: 900)
 puts out
 Support.fail!('the server did not answer its health check') unless out.include?('"ok":true')

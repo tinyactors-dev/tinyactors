@@ -66,6 +66,14 @@ module Support
     exe("ssh #{VM} echo #{Base64.strict_encode64(script)} | base64 -d | bash", timeout: timeout)
   end
 
+  # Bytes to a file on the VM, in pieces: exe's API takes a body of at most
+  # 64 KB, and a bundle is larger.
+  def upload(base64, path)
+    vm("rm -f #{path}.b64")
+    base64.scan(/.{1,48000}/).each { |piece| exe("ssh #{VM} echo #{piece} '>>' #{path}.b64") }
+    vm("base64 -d #{path}.b64 > #{path} && rm #{path}.b64 && echo uploaded $(stat -c %s #{path}) bytes")
+  end
+
   # The server's files and the documentation, as a .tar.gz in base64, made
   # with the repository's pinned GNU tar and gzip.
   def bundle
@@ -103,7 +111,7 @@ module Support
       export PATH=/opt/node/bin:$PATH
       dir=#{HOME}/support/releases/#{release}
       mkdir -p $dir #{HOME}/support/data
-      echo '#{bundle}' | base64 -d | tar xzf - -C $dir
+      tar xzf /tmp/support-bundle.tar.gz -C $dir && rm /tmp/support-bundle.tar.gz
       (cd $dir && npm ci --omit=dev --no-audit --no-fund --loglevel=error)
       ln -sfn $dir #{HOME}/support/current
       touch #{HOME}/support/env && chmod 600 #{HOME}/support/env
@@ -142,7 +150,12 @@ module Support
   # and the OpenRouter key when fnox has them (else the server runs on the
   # stand-ins). Values go into the file and nowhere else: nothing prints them.
   def env_script(fields)
-    lines = fields.map { |key, value| "#{key}=#{value.gsub("\n", '\\n')}" }.join("\n")
+    # single-quoted: systemd's EnvironmentFile and bash read the value as it is
+    # (a PEM's spaces included); its newlines go as \n, which server.mjs turns back
+    lines = fields.map do |key, value|
+      fail!("#{key} holds a single quote") if value.include?("'")
+      "#{key}='#{value.gsub("\n", '\\n')}'"
+    end.join("\n")
     <<~BASH
       set -euo pipefail
       mkdir -p #{HOME}/support

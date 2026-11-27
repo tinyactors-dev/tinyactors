@@ -62,6 +62,10 @@ export class Support {
     }
     this.snapshotPath = snapshotPath;
     this.timer = null;
+    // What actors do on their own (a pull from GitHub, a delayed send) is
+    // a change too: a snapshot every five minutes covers it.
+    this.periodic = snapshotPath ? setInterval(() => this.changed(), 300_000) : null;
+    this.periodic?.unref?.();
   }
 
   now() { return this.host.now(); }
@@ -122,6 +126,7 @@ export class Support {
 
   async close() {
     clearTimeout(this.timer);
+    clearInterval(this.periodic);
     if (this.snapshotPath) await this.snapshot();
     this.host.close();
     this.store.close();

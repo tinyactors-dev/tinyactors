@@ -35,6 +35,23 @@ fake repositories, and a login page where you pick who you are. Without
 `OPENROUTER_API_KEY`, a report that matches no issue exactly is filed as
 new. `server.mjs` lists every variable.
 
+## Trying the private server
+
+Until the domain is added, the server is `https://ta-mcp.exe.xyz`, behind
+exe's private proxy: only someone signed in to exe.dev with access to the
+VM gets through. In a browser, that is your exe login. An MCP client
+needs a token of the VM, sent in exe's header (the proxy strips it, and
+`Authorization` stays the server's own OAuth):
+
+```sh
+ssh exe.dev ssh-key generate-api-key --vm=ta-mcp --label=claude-code
+claude mcp add --transport http tinyactors-support https://ta-mcp.exe.xyz/mcp \
+  --header "X-Exedev-Authorization: Bearer <the token>"
+```
+
+claude.ai's connectors cannot send that header: they reach the server once
+its proxy is public.
+
 ## What is where
 
 | Path | What it holds |
