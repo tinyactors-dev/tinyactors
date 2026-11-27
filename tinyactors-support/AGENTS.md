@@ -111,7 +111,18 @@ The maintainer's rules (2026-11-27), and what they rest on:
   repository (`whoami`, `list_projects`), and the charts refuse them to
   anyone else anyway. It loads nothing (an empty CSP: the host's
   restrictive default, `connect-src 'none'`, no `font-src`), so no font
-  is embedded: the tokens' fallback stacks render. Its colours are the
+  is embedded: the tokens' fallback stacks render.
+  Its interaction follows an issue tracker's habits (Linear's, not its
+  look; the maintainer, 2026-11-27): every issue read once
+  (`known_issues`, state `all`) and filtered, searched, grouped (state,
+  component, kind, none) and ordered (cost, reports, newest, recently
+  updated, title) in the view; filters in a menu, shown as removable
+  chips; ids without the leading `tinyactors:`; a side peek beside the
+  list when it is wide, over it when narrow; the keyboard (j/k, Enter,
+  Esc, x, ⇧-click, /, f, c, ?); multi-select with bulk triage, close
+  and decline; optimistic changes undone on a refusal; each tool's line
+  as a toast; full screen only on the expand control
+  (`ui/request-display-mode`). Its colours are the
   tinyactors design system's tokens, light or dark from the host's
   `theme`, `prefers-color-scheme` when the host gives none; the host's
   style variables are not used.
