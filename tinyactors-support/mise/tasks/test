@@ -1,5 +1,5 @@
 #!/usr/bin/env ruby
-#MISE description="Test tinyactors-support: the charts compiled with warnings as errors, every behaviour through the gateway on a SimulatedClock with the stand-ins (test/scenario.test.mjs), and the server over HTTP: MCP, OAuth through the stand-in login, a report, an upload and a download (test/http.test.mjs)"
+#MISE description="Test tinyactors-support: the charts compiled with warnings as errors, every behaviour through the gateway on a SimulatedClock with the stand-ins (test/scenario.test.mjs), and the server over HTTP: MCP, OAuth through the stand-in login, a report, an upload and a download (test/http.test.mjs), and Jev's client against a recorded fetch (test/jev.test.mjs)"
 #MISE sources=["charts/**/*", "lib/**/*", "skills/**/*", "test/**/*", "server.mjs", "package.json", "package-lock.json", "mise.toml", "mise/**/*"]
 #MISE outputs={auto=true}
 # vim:ft=ruby

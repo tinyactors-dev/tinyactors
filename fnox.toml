@@ -50,3 +50,9 @@ value = "tinyactors-support GitHub App/notesPlain"
 [secrets.GEMINI_API_KEY]
 provider = "op"
 value = "tinyactors-copywriter-gemini/credential"
+
+# TypeSafe's API key for Jev, the decision model tinyactors-support asks
+# whether a report is an issue it already has (console.typesafe.ai).
+[secrets.TYPESAFE_API_KEY]
+provider = "op"
+value = "console.typesafe.ai API Key/credential"

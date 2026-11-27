@@ -147,7 +147,7 @@ module Support
   end
 
   # The environment file on the VM: PUBLIC_URL, and the GitHub App's fields
-  # and the OpenRouter key when fnox has them (else the server runs on the
+  # and TypeSafe's key for Jev when fnox has them (else the server runs on the
   # stand-ins). Values go into the file and nowhere else: nothing prints them.
   def env_script(fields)
     # single-quoted: systemd's EnvironmentFile and bash read the value as it is

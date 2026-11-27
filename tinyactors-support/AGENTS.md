@@ -16,7 +16,7 @@ workarounds and files, and hears back when an issue is fixed. The root
   clock: time is delayed sends, and an event's `at` comes from the gateway.
 - **The I/O processors only do I/O** (`lib/processors/`): `github` (the
   App's REST client, or `FakeGitHub`), `ledger` (SQLite), `blobs` (the VM's
-  disk), `scan`, `decide` (Jev through OpenRouter, or unavailable), `spawn`
+  disk), `scan`, `decide` (Jev, through TypeSafe's API, or unavailable), `spawn`
   (the package's `Spawner`). Every processor has a stand-in the tests use.
 - **The gateway says who the caller is** (`lib/gateway.mjs`): it makes the
   secrets and hands actors only their hashes, asks the grant and the user

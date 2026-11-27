@@ -8,7 +8,7 @@
 //                         the GitHub App; without all four, the stand-in GitHub
 //                         (fake repositories) and the stand-in login
 //   GITHUB_ORG            tinyactors-dev
-//   OPENROUTER_API_KEY    Jev, for duplicates; without it reports that match no
+//   TYPESAFE_API_KEY      Jev, for duplicates; without it reports that match no
 //                         issue exactly are filed as new
 //   FILE_SECRET           signs download links; made and kept in DATA_DIR when absent
 //   TINYACTORS_CLI        the tinyactors command, to summarise attached snapshots
@@ -50,7 +50,7 @@ const blobs = new DiskBlobs({ directory: join(data, 'files'), secret: fileSecret
 const ledger = new Ledger(join(data, 'ledger.sqlite'));
 const support = new Support({
   data, log,
-  processors: { github: github.processor, ledger: ledger.processor, decide: new Jev({ key: env.OPENROUTER_API_KEY }).processor,
+  processors: { github: github.processor, ledger: ledger.processor, decide: new Jev({ key: env.TYPESAFE_API_KEY }).processor,
                 blobs: blobs.processor, scan: new Scanner(blobs, env.TINYACTORS_CLI).processor },
 });
 const content = new Content({
@@ -61,7 +61,7 @@ const gateway = new Gateway({ support, base, github: app ? github : null, blobs,
 const server = await serve({ support, gateway, port, log, clientsPath: join(data, 'clients.sqlite'),
                              standinUsers: app ? null : Object.values(new FakeGitHub().users).map((u) => u.login) });
 log(`tinyactors-support on ${base} (port ${port}): ${app ? 'the GitHub App' : 'the stand-in GitHub and login'}, ` +
-    `${env.OPENROUTER_API_KEY ? 'Jev' : 'no Jev'}, ${content.skills.length} skills, ${content.docs.length} documents, ` +
+    `${env.TYPESAFE_API_KEY ? 'Jev' : 'no Jev'}, ${content.skills.length} skills, ${content.docs.length} documents, ` +
     `${support.restored ? 'restored' : 'a new host'}`);
 
 let stopping = false;

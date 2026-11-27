@@ -32,7 +32,7 @@ Without the GitHub App's four variables (`GITHUB_APP_ID`,
 `GITHUB_APP_CLIENT_ID`, `GITHUB_APP_CLIENT_SECRET`,
 `GITHUB_APP_PRIVATE_KEY`) the server runs on the stand-in GitHub: three
 fake repositories, and a login page where you pick who you are. Without
-`OPENROUTER_API_KEY`, a report that matches no issue exactly is filed as
+`TYPESAFE_API_KEY` (1Password: `console.typesafe.ai API Key`), a report that matches no issue exactly is filed as
 new. `server.mjs` lists every variable.
 
 ## Connecting
