@@ -7,8 +7,10 @@ subset of JavaScript for programs someone else writes, and
 [sxml](https://github.com/tinyactors-dev/sxml), an XML toolchain (XPath,
 XQuery, XSLT, XSD) in portable C.
 
-- **Anyone** can read: `list_skills` and `get_skill` (with `path`, a
-  skill's references; each file is a resource too), the skills
+- **Anyone** can read the skills, through the MCP Skills extension
+  (`skills/list`, `skills/get`, each file a `skill://` resource) or, for
+  hosts without it, the tools `list_skills` and `get_skill` (with `path`, a
+  skill's references): the skills
   `using-tinyactors` (how to build with tinyactors) and
   `reporting-tinyactors-issues`,
   `search_docs` and `get_doc` over the packages' guides, `known_issues`
@@ -75,7 +77,8 @@ with `domain add ta-mcp mcp.tinyactors.dev`, and the VM's proxy is public.
 | `lib/app/` | the issue list app: its source, and `issues.html`, which `tools/build-app.mjs` builds with the design system's tokens |
 | `lib/http.mjs` | MCP over HTTP, the OAuth endpoints, the stand-in login, files |
 | `lib/processors/` | GitHub (the App, and the stand-in), Jev, the ledger, blobs, the scan |
-| `lib/content.mjs`, `skills/` | the skills (each a `SKILL.md` and its `references/`) and the documentation search |
+| `lib/skills.mjs`, `skills/` | the skills (each a `SKILL.md` and its `references/`) as one manifest: digests, sizes, frontmatter, directories |
+| `lib/content.mjs` | the skills for the tools, and the documentation search |
 | `tools/check-skill-samples.mjs` | runs every code sample of the skills (`--python` runs the Python ones too) |
 | `server.mjs` | the entry point and its configuration |
 | `test/` | the scenario, the tools' typed results, the HTTP test, the app in Chromium |

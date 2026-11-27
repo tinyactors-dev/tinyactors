@@ -15,11 +15,13 @@ import { randomBytes } from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
-import { CallToolRequestSchema, ListResourcesRequestSchema, ListToolsRequestSchema, ReadResourceRequestSchema }
+import { CallToolRequestSchema, ErrorCode, ListResourcesRequestSchema, ListToolsRequestSchema, McpError, ReadResourceRequestSchema }
   from '@modelcontextprotocol/sdk/types.js';
+import * as z from 'zod/v4';
 import { INSTRUCTIONS, TOOLS } from './gateway.mjs';
 import { APP_URI, summarize } from './tools.mjs';
 import { APP } from './app/index.mjs';
+import { CACHE_SCOPE, contentOf, EXTENSION, resourceOf, TTL_MS } from './skills.mjs';
 
 const VERSION = '0.1.0';
 
@@ -32,6 +34,32 @@ export async function toolResult(gateway, caller, name, args) {
            ...(answer.error ? { isError: true } : {}) };
 }
 const LIMIT = 1024 * 1024;   // a JSON or form body; uploads stream past it
+
+// The MCP Skills extension (io.modelcontextprotocol/skills, Beta;
+// modelcontextprotocol/ext-skills, specification/beta/skills.mdx). The
+// pinned SDK (1.32.2, protocol revisions up to 2025-11-25) has no types for
+// it, so its three methods are registered as custom request handlers, as
+// the extension's implementations list says servers on older SDKs do, and
+// it is declared in the capabilities initialize returns. A request may
+// carry the 2026-07-28 revision's params._meta or none.
+const params = (shape) => z.looseObject({ _meta: z.any().optional(), ...shape });
+const SkillsListSchema = z.object({ method: z.literal('skills/list'), params: params({ cursor: z.string().optional() }).optional() });
+const SkillsGetSchema = z.object({ method: z.literal('skills/get'), params: params({ uri: z.string() }) });
+const DirectoryReadSchema = z.object({ method: z.literal('resources/directory/read'),
+                                       params: params({ uri: z.string(), cursor: z.string().optional() }) });
+export const CAPABILITIES = { tools: {}, resources: {}, extensions: { [EXTENSION]: { directoryRead: true } } };
+const RESOURCE_NOT_FOUND = -32002;   // resources/read of an unknown URI, in the base revisions the SDK negotiates
+
+// One page of `items` from `cursor` (an opaque offset); entries are never split.
+function page(items, cursor, size) {
+  let start = 0;
+  if (cursor !== undefined) {
+    start = /^[0-9]+$/.test(Buffer.from(cursor, 'base64url').toString()) ? Number(Buffer.from(cursor, 'base64url').toString()) : -1;
+    if (start < 0 || start > items.length) throw new McpError(ErrorCode.InvalidParams, `not a cursor of this listing: ${cursor}`);
+  }
+  const end = Math.min(items.length, start + size);
+  return { items: items.slice(start, end), ...(end < items.length ? { nextCursor: Buffer.from(String(end)).toString('base64url') } : {}) };
+}
 
 // The OAuth clients: registered ones in SQLite, metadata documents fetched and kept a while.
 class Clients {
@@ -113,14 +141,15 @@ function loginPage(state, users) {
 <ul>${links}</ul></body>`;
 }
 
-export function serve({ support, gateway, port = 0, clientsPath = ':memory:', standinUsers = null, log = () => {} }) {
+export function serve({ support, gateway, port = 0, clientsPath = ':memory:', standinUsers = null, log = () => {}, pageSize = 100 }) {
   const clients = new Clients(clientsPath);
   const base = () => gateway.base;
   const challenge = () => `Bearer resource_metadata="${base()}/.well-known/oauth-protected-resource"`;
 
   function mcpServer(caller) {
     const server = new Server({ name: 'tinyactors-support', version: VERSION },
-      { capabilities: { tools: {}, resources: {} }, instructions: INSTRUCTIONS });
+      { capabilities: CAPABILITIES, instructions: INSTRUCTIONS });
+    const { manifest } = gateway.content;
     server.setRequestHandler(ListToolsRequestSchema, async () => ({
       tools: Object.entries(TOOLS).map(([name, t]) => ({ name, description: t.description, inputSchema: t.input,
                                                           outputSchema: t.output, ...(t.meta ? { _meta: t.meta } : {}) })) }));
@@ -131,18 +160,31 @@ export function serve({ support, gateway, port = 0, clientsPath = ':memory:', st
     server.setRequestHandler(ListResourcesRequestSchema, async () => ({
       resources: [
         { uri: APP_URI, name: 'Issues', description: 'The issue list: filter, open, report, triage, close', mimeType: APP.mimeType },
-        ...gateway.content.skills.flatMap((k) => [
-          { uri: `skill://${k.name}`, name: k.name, description: k.description, mimeType: 'text/markdown' },
-          ...k.files.map((f) => ({ uri: `skill://${k.name}/${f.path}`, name: `${k.name}/${f.path}`, mimeType: 'text/markdown' })),
-        ]),
+        ...manifest.skills.flatMap((entry) => entry.resources.map((r) => resourceOf(manifest.files.get(r.uri), entry.frontmatter))),
       ] }));
     server.setRequestHandler(ReadResourceRequestSchema, async (request) => {
       if (request.params.uri === APP_URI)
         return { contents: [{ uri: APP_URI, mimeType: APP.mimeType, text: APP.html, _meta: APP.meta }] };
-      const file = gateway.content.skills.flatMap((k) => [{ uri: `skill://${k.name}`, text: k.text },
-        ...k.files.map((f) => ({ uri: `skill://${k.name}/${f.path}`, text: f.text }))]).find((f) => f.uri === request.params.uri);
-      if (!file) throw new Error(`no resource ${request.params.uri}`);
-      return { contents: [{ uri: request.params.uri, mimeType: 'text/markdown', text: file.text }] };
+      const file = manifest.files.get(request.params.uri);
+      if (!file) throw new McpError(RESOURCE_NOT_FOUND, `Resource not found: ${request.params.uri}`, { uri: request.params.uri });
+      return { contents: [contentOf(file)] };
+    });
+    // The Skills extension: a complete manifest per skill, one skill by its
+    // SKILL.md's URI, and a directory's direct children.
+    server.setRequestHandler(SkillsListSchema, async (request) => {
+      const { items, nextCursor } = page(manifest.skills, request.params?.cursor, pageSize);
+      return { resultType: 'complete', skills: items, ...(nextCursor ? { nextCursor } : {}), ttlMs: TTL_MS, cacheScope: CACHE_SCOPE };
+    });
+    server.setRequestHandler(SkillsGetSchema, async (request) => {
+      const skill = manifest.skills.find((entry) => entry.uri === request.params.uri);
+      if (!skill) throw new McpError(ErrorCode.InvalidParams, `not a skill this server serves: ${request.params.uri}`);
+      return { resultType: 'complete', skill, ttlMs: TTL_MS, cacheScope: CACHE_SCOPE };
+    });
+    server.setRequestHandler(DirectoryReadSchema, async (request) => {
+      const children = manifest.directories.get(request.params.uri);
+      if (!children) throw new McpError(ErrorCode.InvalidParams, `not a directory this server serves: ${request.params.uri}`);
+      const { items, nextCursor } = page(children, request.params.cursor, pageSize);
+      return { resultType: 'complete', resources: items, ...(nextCursor ? { nextCursor } : {}), ttlMs: TTL_MS, cacheScope: CACHE_SCOPE };
     });
     return server;
   }

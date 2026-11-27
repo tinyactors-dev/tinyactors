@@ -1,7 +1,7 @@
-// What anyone may read, without waking an actor: the skills (each a
-// directory with a SKILL.md, its frontmatter's name and description, and
-// the Markdown files beside it, such as references/, by their path) and
-// the documentation, Markdown files searched by their words.
+// What anyone may read, without waking an actor: the skills (the manifest
+// lib/skills.mjs reads once: every file of each skill with its digest and
+// size, and SKILL.md's frontmatter) and the documentation, Markdown files
+// searched by their words.
 //
 // The server reads the skills from skills/ and the docs from the
 // directories it is given: on the VM, the copy the deploy bundles (the
@@ -9,16 +9,7 @@
 
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { join, relative } from 'node:path';
-
-function frontmatter(text) {
-  const match = /^---\n([\s\S]*?)\n---\n/.exec(text);
-  const fields = {};
-  for (const line of (match?.[1] ?? '').split('\n')) {
-    const at = line.indexOf(':');
-    if (at > 0) fields[line.slice(0, at).trim()] = line.slice(at + 1).trim();
-  }
-  return fields;
-}
+import { isText, loadSkills } from './skills.mjs';
 
 function markdownFiles(directory) {
   const found = [];
@@ -35,14 +26,16 @@ const words = (text) => String(text).toLowerCase().replace(/[^a-z0-9]+/g, ' ').s
 export class Content {
   // skills: a directory; docs: [{directory, prefix}], prefix naming them (tinyactors-napi/docs/guide)
   constructor({ skills, docs = [] }) {
-    this.skills = existsSync(skills) ? readdirSync(skills).filter((d) => existsSync(join(skills, d, 'SKILL.md'))).sort().map((d) => {
-      const text = readFileSync(join(skills, d, 'SKILL.md'), 'utf8');
-      const { name = d, description = '' } = frontmatter(text);
-      const files = markdownFiles(join(skills, d)).map((path) => relative(join(skills, d), path))
-        .filter((path) => path !== 'SKILL.md').sort()
-        .map((path) => ({ path, text: readFileSync(join(skills, d, path), 'utf8') }));
-      return { name, description, text, files };
-    }) : [];
+    // The one manifest every path serves skills from (the extension's
+    // methods, resources and the tools), and the tools' view of it.
+    this.manifest = loadSkills(skills);
+    this.skills = this.manifest.skills.map((entry) => {
+      const own = entry.resources.map((r) => this.manifest.files.get(r.uri));
+      const text = (file) => (isText(file) ? file.bytes.toString('utf8') : null);
+      return { name: entry.frontmatter.name, description: entry.frontmatter.description, uri: entry.uri, entry,
+               text: text(own[0]), skillFile: own[0],
+               files: own.slice(1).map((file) => ({ path: file.path, text: text(file), file })) };
+    });
     this.docs = docs.filter((d) => existsSync(d.directory)).flatMap(({ directory, prefix }) => markdownFiles(directory).map((path) => {
       const text = readFileSync(path, 'utf8');
       const title = /^#\s+(.+)$/m.exec(text)?.[1] ?? relative(directory, path);

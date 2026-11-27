@@ -25,6 +25,48 @@ workarounds and files, and hears back when an issue is fixed. The root
 - **The server is transport** (`lib/http.mjs`): MCP over Streamable HTTP,
   stateless; the OAuth authorization server; uploads and signed downloads.
 
+## Skills over MCP
+
+Decided by the maintainer (2026-11-27): implement the MCP Skills extension,
+and keep the tools for hosts without it.
+
+- **The extension** is `io.modelcontextprotocol/skills`, Beta
+  ([specification](https://github.com/modelcontextprotocol/ext-skills/blob/main/specification/beta/skills.mdx),
+  SEP-2640, written against base revision 2026-07-28). The server declares
+  it in `initialize`'s capabilities (`extensions:
+  {"io.modelcontextprotocol/skills": {"directoryRead": true}}`, beside
+  `resources`): the pinned SDK (1.32.2) negotiates revisions up to
+  2025-11-25 and has no `server/discover`, so `initialize` is where a
+  client sees it. The SDK has no types for the extension, so `skills/list`,
+  `skills/get` and `resources/directory/read` are custom request handlers
+  (`lib/http.mjs`), as the extension's implementations list says servers
+  on older SDKs register them; its TypeScript support is in SDK 2.4.0
+  (`ext/skills`), a major version up. A request may carry the 2026-07-28
+  revision's `params._meta` or none.
+- **One manifest** (`lib/skills.mjs`), read once at startup: every file
+  of each skill with its `sha256:` digest and size, SKILL.md's
+  frontmatter, and the directory tree. The methods, `resources/list` and
+  `resources/read`, and the tools `list_skills` and `get_skill` all serve
+  from it, so a digest a host checks is the digest of the bytes every path
+  gives. A skill is `skill://<name>/SKILL.md`; its files
+  `skill://<name>/<path>`; its root and subdirectories are
+  `inode/directory` resources. The frontmatter reader takes flat `key:
+  value` lines and refuses anything else at startup, rather than serve a
+  frontmatter that differs from the file's. Listings and entries carry
+  `ttlMs` (an hour: skills change with a deploy) and `cacheScope:
+  "public"` (no skill depends on who asks).
+- **Hosts:** the [client matrix](https://modelcontextprotocol.io/extensions/client-matrix)
+  (read 2026-11-27) lists the extension in Claude (web), Claude Code,
+  VS Code GitHub Copilot and others, not in Claude Desktop; the tools
+  serve the rest.
+- **Tests:** `test/skills.test.mjs` checks every result against the
+  extension's own JSON Schema (`test/fixtures/ext-skills-beta-schema.json`,
+  `schema/beta/schema.json` at ext-skills `ba23984a`) and the rules a
+  schema cannot: digests and sizes against the bytes `resources/read`
+  gives, frontmatter against the file, names against URIs, atomic pages,
+  `-32602` for what is not a skill or a directory, and the tools agreeing
+  with the methods.
+
 ## MCP tools and the app
 
 The maintainer's rules (2026-11-27), and what they rest on:

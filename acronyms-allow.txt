@@ -114,3 +114,6 @@ enableJsonResponse  tinyactors-support/**/*                             # @model
 # `AjvJsonSchemaValidator`, which the tests use to check output schemas.
 resourceUri            tinyactors-support/**/*                          # MCP Apps tool metadata field
 AjvJsonSchemaValidator tinyactors-support/test/**/*                     # @modelcontextprotocol/sdk validator class
+# The SDK's error class, which carries a JSON-RPC error code (the Skills
+# extension's -32602 for what is not a skill or a directory).
+McpError               tinyactors-support/**/*                          # @modelcontextprotocol/sdk error class

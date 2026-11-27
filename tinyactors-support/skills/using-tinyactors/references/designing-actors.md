@@ -60,12 +60,12 @@ holding references.
 
 ```
 tracker                         one; owns which projects exist (from GitHub's repository list)
-└── project.<repoId>            owns which issues exist, numbers them, finds duplicates
-    └── issue.<repoId>.<n>      one issue's lifecycle
+└── project.<repoID>            owns which issues exist, numbers them, finds duplicates
+    └── issue.<repoID>.<n>      one issue's lifecycle
         └── upload.<...>        one attachment on its way; ends
 auth                            owns logins and users
 ├── login.<state>               one sign-in; ends
-└── user.<githubId>             roles, grants, news
+└── user.<githubID>             roles, grants, news
     └── grant.<id>              one client's tokens
 ```
 

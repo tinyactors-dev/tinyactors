@@ -64,8 +64,8 @@ describe('the server over HTTP', () => {
       assert.equal(tools.find((t) => t.name === name)._meta.ui.resourceUri, 'ui://tinyactors-support/issues');
     const resources = (await rpc('resources/list', {})).body.result.resources;
     const uris = resources.map((r) => r.uri);
-    assert.deepEqual(uris.slice(0, 2), ['ui://tinyactors-support/issues', 'skill://reporting-tinyactors-issues']);
-    assert.ok(uris.includes('skill://using-tinyactors'));
+    assert.deepEqual(uris.slice(0, 2), ['ui://tinyactors-support/issues', 'skill://reporting-tinyactors-issues/SKILL.md']);
+    assert.ok(uris.includes('skill://using-tinyactors/SKILL.md'));
     assert.ok(uris.includes('skill://using-tinyactors/references/designing-actors.md'), 'a skill\'s references are resources');
     const reference = (await rpc('resources/read', { uri: 'skill://using-tinyactors/references/pitfalls.md' })).body.result.contents[0];
     assert.match(reference.text, /^# Pitfalls/);
@@ -73,7 +73,7 @@ describe('the server over HTTP', () => {
     assert.equal(app.mimeType, 'text/html;profile=mcp-app');
     assert.match(app.text, /^<!doctype html>/);
     assert.deepEqual(app._meta.ui, { prefersBorder: true, csp: {} });
-    const skill = (await rpc('resources/read', { uri: 'skill://reporting-tinyactors-issues' })).body.result.contents[0];
+    const skill = (await rpc('resources/read', { uri: 'skill://reporting-tinyactors-issues/SKILL.md' })).body.result.contents[0];
     assert.match(skill.text, /# Reporting tinyactors issues/);
     assert.deepEqual((await call('known_issues', {})).value.issues, []);
   });
