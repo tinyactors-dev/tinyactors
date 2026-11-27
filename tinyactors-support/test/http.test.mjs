@@ -54,13 +54,21 @@ describe('the server over HTTP', () => {
     assert.equal(init.status, 200);
     assert.equal(init.body.result.serverInfo.name, 'tinyactors-support');
     assert.match(init.body.result.instructions, /known_issues first/);
+    assert.match(init.body.result.instructions, /using-tinyactors/);
+    for (const sibling of ['https://github.com/tinyactors-dev/staticjs', 'https://github.com/tinyactors-dev/sxml'])
+      assert.ok(init.body.result.instructions.includes(sibling), `the instructions name ${sibling}`);
     const tools = (await rpc('tools/list', {})).body.result.tools;
     assert.ok(tools.some((t) => t.name === 'report_issue' && t.inputSchema.required.includes('title')));
     assert.ok(tools.every((t) => t.outputSchema?.type === 'object'), 'every tool has an output schema');
     for (const name of ['known_issues', 'get_issue'])
       assert.equal(tools.find((t) => t.name === name)._meta.ui.resourceUri, 'ui://tinyactors-support/issues');
     const resources = (await rpc('resources/list', {})).body.result.resources;
-    assert.deepEqual(resources.map((r) => r.uri), ['ui://tinyactors-support/issues', 'skill://reporting-tinyactors-issues']);
+    const uris = resources.map((r) => r.uri);
+    assert.deepEqual(uris.slice(0, 2), ['ui://tinyactors-support/issues', 'skill://reporting-tinyactors-issues']);
+    assert.ok(uris.includes('skill://using-tinyactors'));
+    assert.ok(uris.includes('skill://using-tinyactors/references/designing-actors.md'), 'a skill\'s references are resources');
+    const reference = (await rpc('resources/read', { uri: 'skill://using-tinyactors/references/pitfalls.md' })).body.result.contents[0];
+    assert.match(reference.text, /^# Pitfalls/);
     const app = (await rpc('resources/read', { uri: 'ui://tinyactors-support/issues' })).body.result.contents[0];
     assert.equal(app.mimeType, 'text/html;profile=mcp-app');
     assert.match(app.text, /^<!doctype html>/);

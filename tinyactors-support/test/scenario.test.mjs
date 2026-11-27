@@ -30,7 +30,7 @@ describe('the support channel', () => {
   });
 
   it('answers anyone: skills, docs, known issues; a report needs a login', async () => {
-    assert.deepEqual((await s.tool(null, 'list_skills')).skills.map((k) => k.name), ['reporting-tinyactors-issues']);
+    assert.deepEqual((await s.tool(null, 'list_skills')).skills.map((k) => k.name), ['reporting-tinyactors-issues', 'using-tinyactors']);
     assert.deepEqual((await s.tool(null, 'search_docs', { query: 'hibernation store' })).hits.map((h) => h.path), ['docs/hibernation.md']);
     assert.deepEqual((await s.tool(null, 'search_docs', { query: 'migrate python' })).hits, []);
     assert.deepEqual(s.gateway.misses, ['migrate python']);

@@ -131,14 +131,18 @@ export function serve({ support, gateway, port = 0, clientsPath = ':memory:', st
     server.setRequestHandler(ListResourcesRequestSchema, async () => ({
       resources: [
         { uri: APP_URI, name: 'Issues', description: 'The issue list: filter, open, report, triage, close', mimeType: APP.mimeType },
-        ...gateway.content.skills.map((k) => ({ uri: `skill://${k.name}`, name: k.name, description: k.description, mimeType: 'text/markdown' })),
+        ...gateway.content.skills.flatMap((k) => [
+          { uri: `skill://${k.name}`, name: k.name, description: k.description, mimeType: 'text/markdown' },
+          ...k.files.map((f) => ({ uri: `skill://${k.name}/${f.path}`, name: `${k.name}/${f.path}`, mimeType: 'text/markdown' })),
+        ]),
       ] }));
     server.setRequestHandler(ReadResourceRequestSchema, async (request) => {
       if (request.params.uri === APP_URI)
         return { contents: [{ uri: APP_URI, mimeType: APP.mimeType, text: APP.html, _meta: APP.meta }] };
-      const skill = gateway.content.skills.find((k) => `skill://${k.name}` === request.params.uri);
-      if (!skill) throw new Error(`no resource ${request.params.uri}`);
-      return { contents: [{ uri: request.params.uri, mimeType: 'text/markdown', text: skill.text }] };
+      const file = gateway.content.skills.flatMap((k) => [{ uri: `skill://${k.name}`, text: k.text },
+        ...k.files.map((f) => ({ uri: `skill://${k.name}/${f.path}`, text: f.text }))]).find((f) => f.uri === request.params.uri);
+      if (!file) throw new Error(`no resource ${request.params.uri}`);
+      return { contents: [{ uri: request.params.uri, mimeType: 'text/markdown', text: file.text }] };
     });
     return server;
   }

@@ -31,6 +31,17 @@ describe('the tools: typed results, short text', () => {
     assert.ok(skills.skills.length > 0);
     assert.equal((await s.tool(null, 'get_skill', { name: skills.skills[0].name })).name, skills.skills[0].name);
     assert.equal((await s.tool(null, 'get_skill', { name: 'nope' })).answer, 'refused');
+    const using = await s.tool(null, 'get_skill', { name: 'using-tinyactors' });
+    assert.equal(using.path, 'SKILL.md');
+    assert.ok(using.files.includes('references/designing-actors.md'), 'get_skill lists the skill\'s files');
+    for (const path of using.files) {
+      const file = await s.tool(null, 'get_skill', { name: 'using-tinyactors', path });
+      assert.equal(file.path, path);
+      assert.match(file.text, /^# /);
+    }
+    const missing = await s.tool(null, 'get_skill', { name: 'using-tinyactors', path: 'references/nope.md' });
+    assert.equal(missing.answer, 'refused');
+    assert.ok(missing.valid.includes('references/pitfalls.md'));
     const hits = (await s.tool(null, 'search_docs', { query: 'actor' })).hits;
     if (hits.length) assert.equal((await s.tool(null, 'get_doc', { path: hits[0].path })).path, hits[0].path);
     assert.equal((await s.tool(null, 'get_doc', { path: 'docs/nope.md' })).answer, 'refused');

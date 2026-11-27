@@ -27,7 +27,9 @@ import { TOOLS } from './tools.mjs';
 export const INSTRUCTIONS = 'This is the support channel of tinyactors (statecharts as actors; @tinyactors/node, ' +
   'the tinyactors Python package, tinyactors-core). When tinyactors gets in your way (wrong or missing docs, an unclear error, ' +
   'a missing or slow task, a surprising API), call known_issues first: it may have a workaround. If it is not there, ' +
-  'report_issue, with the minutes it cost you and the commit you were on. Skills and docs are here too (list_skills, search_docs).';
+  'report_issue, with the minutes it cost you and the commit you were on. Skills and docs are here too (list_skills, search_docs): ' +
+  'the using-tinyactors skill is how to build with it. Sibling projects: staticjs, a pure, total JavaScript subset for code others write ' +
+  '(https://github.com/tinyactors-dev/staticjs), and sxml, an XML toolchain (https://github.com/tinyactors-dev/sxml).';
 
 export class Gateway {
   // support: lib/host.mjs's Support; base: the server's URL; github: a
@@ -170,7 +172,15 @@ export class Gateway {
     switch (name) {
       // reads that wake no actor
       case 'list_skills': return { skills: this.content.skills.map(({ name, description }) => ({ name, description, uri: `skill://${name}` })) };
-      case 'get_skill': return this.content.skills.find((k) => k.name === args.name) ?? { answer: 'refused', reason: `no skill ${args.name}` };
+      case 'get_skill': {
+        const skill = this.content.skills.find((k) => k.name === args.name);
+        if (!skill) return { answer: 'refused', reason: `no skill ${args.name}`, valid: this.content.skills.map((k) => k.name) };
+        const files = skill.files.map((f) => f.path);
+        const path = args.path ?? 'SKILL.md';
+        const file = path === 'SKILL.md' ? skill : skill.files.find((f) => f.path === path);
+        if (!file) return { answer: 'refused', reason: `${skill.name} has no file ${path}`, valid: ['SKILL.md', ...files] };
+        return { name: skill.name, description: skill.description, path, text: file.text, files };
+      }
       case 'search_docs': {
         const hits = this.content.search(String(args.query ?? ''));
         if (hits.length === 0) this.misses.push(String(args.query).toLowerCase().replace(/[^a-z0-9 ]+/g, ' ').trim());

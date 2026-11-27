@@ -63,7 +63,9 @@ const refusal = { reason: text('why it was refused'), valid: array({ type: 'stri
 const OUTPUT = {
   list_skills: output({ skills: array(object({ name: text('the skill'), description: text('what it is for'),
                                                uri: text('its resource') }), 'the skills') }),
-  get_skill: output({ name: text('the skill'), description: text('what it is for'), text: text('its SKILL.md'),
+  get_skill: output({ name: text('the skill'), description: text('what it is for'),
+                      path: text('the file: SKILL.md, or one of files'), text: text('the file, Markdown'),
+                      files: array({ type: 'string' }, 'its other files, by path, for get_skill with path'),
                       ...refusal }, ['refused']),
   search_docs: output({ hits: array(object({ path: text('its path, for get_doc'), title: text('its title'),
                                              score: number('how well it matched'), excerpt: text('where the words are') }),
@@ -132,7 +134,8 @@ export const TOOLS = {
   // anyone
   list_skills: { access: 'anyone', description: 'The skills for working with tinyactors (each also a resource)',
     input: object({}) },
-  get_skill: { access: 'anyone', description: "A skill's SKILL.md", input: object({ name: text('the skill') }, ['name']) },
+  get_skill: { access: 'anyone', description: "A skill's SKILL.md, or with path one of the files it names (references/...)",
+    input: object({ name: text('the skill'), path: text('a file of the skill, as files lists it; SKILL.md when absent') }, ['name']) },
   search_docs: { access: 'anyone', description: 'Search the documentation of tinyactors',
     input: object({ query: text('words to look for') }, ['query']) },
   get_doc: { access: 'anyone', description: 'A document search_docs found, whole', input: object({ path: text('its path, as search_docs gives it') }, ['path']) },

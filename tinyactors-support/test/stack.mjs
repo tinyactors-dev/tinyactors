@@ -33,9 +33,12 @@ export function checked(name, structured) {
   const verdict = schemas[name](structured);
   assert.ok(verdict.valid, `${name}: ${verdict.errorMessage}\n${JSON.stringify(structured)}`);
   const text = summarize(name, structured);
-  assert.ok(!/^\s*[[{]/.test(text) && !/"\w+"\s*:/.test(text), `${name}: JSON in the text: ${text}`);
-  if (!['get_skill', 'get_doc'].includes(name))   // a document is its own text
+  // A document (a skill's file, a guide) is its own text, code samples and all: neither short nor free of
+  // braces. Every other tool's text is a line or two, and its JSON is in the structured content only.
+  if (!(['get_skill', 'get_doc'].includes(name) && !structured.answer)) {
+    assert.ok(!/^\s*[[{]/.test(text) && !/"\w+"\s*:/.test(text), `${name}: JSON in the text: ${text}`);
     assert.ok(text.split('\n').length <= 12 && text.length <= 2000, `${name}: the text is long: ${text}`);
+  }
   (seen[name] ??= new Set()).add(structured.error ? 'error' : structured.answer ?? 'ok');
   return text;
 }

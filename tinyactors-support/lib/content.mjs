@@ -1,5 +1,6 @@
 // What anyone may read, without waking an actor: the skills (each a
-// directory with a SKILL.md, its frontmatter's name and description) and
+// directory with a SKILL.md, its frontmatter's name and description, and
+// the Markdown files beside it, such as references/, by their path) and
 // the documentation, Markdown files searched by their words.
 //
 // The server reads the skills from skills/ and the docs from the
@@ -37,7 +38,10 @@ export class Content {
     this.skills = existsSync(skills) ? readdirSync(skills).filter((d) => existsSync(join(skills, d, 'SKILL.md'))).sort().map((d) => {
       const text = readFileSync(join(skills, d, 'SKILL.md'), 'utf8');
       const { name = d, description = '' } = frontmatter(text);
-      return { name, description, text };
+      const files = markdownFiles(join(skills, d)).map((path) => relative(join(skills, d), path))
+        .filter((path) => path !== 'SKILL.md').sort()
+        .map((path) => ({ path, text: readFileSync(join(skills, d, path), 'utf8') }));
+      return { name, description, text, files };
     }) : [];
     this.docs = docs.filter((d) => existsSync(d.directory)).flatMap(({ directory, prefix }) => markdownFiles(directory).map((path) => {
       const text = readFileSync(path, 'utf8');
