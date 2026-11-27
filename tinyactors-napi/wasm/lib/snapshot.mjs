@@ -85,7 +85,7 @@ export class Snapshot {
 
   stats(segment) {
     const stats = Snapshot.#query(this, QUERY.stats, segment);
-    return { ...stats, now: big(stats.now), nextDeadline: big(stats.nextDeadline) };
+    return { ...stats, now: big(stats.now), nextDeadline: big(stats.nextDeadline), wallNanoseconds: big(stats.wallNanoseconds) };
   }
 
   charts(segment) { return Snapshot.#query(this, QUERY.charts, segment); }

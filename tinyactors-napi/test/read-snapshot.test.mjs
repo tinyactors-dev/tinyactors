@@ -84,6 +84,10 @@ test('the spans the journal kept, read from the snapshot', async () => {
   equal(spans.some((s) => s.name === 'scxml.spawned'), true, 'the spawn');
   equal(spans.filter((s) => s.name.startsWith('scxml.macrostep')).length >= 2, true, 'its macrosteps');
   equal(spans.every((s) => s.start <= s.end), true, 'each span ends after it starts');
+  // on the wall clock the host gave (a SimulatedClock's time), placed by the segment's own clocks
+  const wall = snapshot.stats(0).wallNanoseconds;
+  equal(wall > 0n, true, 'the segment was given a wall clock');
+  equal(spans.every((s) => BigInt(s.start) <= wall + 1_000_000_000n && BigInt(s.end) <= wall + 1_000_000_000n), true, 'no span after the snapshot');
   // what the host exported is named as the Inspector names it: its event from the image, a
   // microstep by its macrostep, its actor by its record while resident, nothing left empty
   equal(spans.filter((s) => s.name === 'scxml.macrostep nudge' || s.name === 'scxml.microstep nudge').length, 2, 'an event of the image');

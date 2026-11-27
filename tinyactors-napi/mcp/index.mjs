@@ -450,7 +450,7 @@ export function createMCP(systems, options = {}) {
       let spans = pack.traces.spans;
       if (session != null) spans = spans.filter((s) => Number(s.attributes?.['scxml.session_id'] ?? -1) === session);
       if (name) spans = spans.filter((s) => s.name.startsWith(name));
-      return ok({ total: spans.length, retained: pack.traces.retained, spans: spans.slice(-limit).map(({ trace, span, parent, name: n, start, end, attributes, events }) => ({ trace, span, parent, name: n, start, end, attributes, events })), note: 'times are the host clock, not wall time; spans a host had exported have no names or values given at run time' });
+      return ok({ total: spans.length, retained: pack.traces.retained, spans: spans.slice(-limit).map(({ trace, span, parent, name: n, start, end, attributes, events }) => ({ trace, span, parent, name: n, start, end, attributes, events })), note: 'times are wall time (nanoseconds since the Unix epoch); spans a host had exported have no names or values given at run time, (unread) for an event the image does not name' });
     });
     tool('rehearse', 'Rehearse a deploy on a copy of a snapshot: restore it with stand-ins for the I/O processors, services and transport, add a draft, migrate a chart to it, then run the copy for advanceMs on a simulated clock. Reports the migration, the states before and after, and what the copy sent and invoked. The live host is not touched.', {
       snapshot: z.string(), draft: z.string(), chart: z.string(), advanceMs: z.number().default(0),

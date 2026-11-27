@@ -1574,9 +1574,10 @@ export interface Snapshot {
   traceKept(segment: number): { records: number; acknowledgedRecords: number; bytes: number; acknowledgedBytes: number; lost: number } | null;
   /**
    * The spans of those records, an ExportTraceServiceRequest ({@link decodeTraces} reads it), or `null`
-   * when the segment does not trace. Times are the host's clock, not wall time; of the records a host
-   * had already exported it leaves out the dynamic strings (names and event names given at run time)
-   * and the values.
+   * when the segment does not trace. Times are wall time, each record's tick placed by the segment's
+   * own `now` and `wallNanoseconds` ({@link stats}); of the records a host had already exported it
+   * reads no dynamic string or value: an event is named from the image (`(unread)` for a name given at
+   * run time), a microstep by its macrostep, an actor by its record while it is resident.
    */
   traces(segment: number): Uint8Array | null;
 }
@@ -1611,6 +1612,8 @@ export interface SnapshotStats {
   timers: number;
   requests: number;
   regionBytes: number;
+  /** The wall clock (Unix epoch nanoseconds) the host gave with `now` at the segment's last advance; 0n: never. */
+  wallNanoseconds: bigint;
 }
 
 /** A chart of a segment's image, as {@link Snapshot.charts} reads it. */

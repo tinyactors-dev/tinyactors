@@ -88,7 +88,7 @@ nothing:
 | `snapshot_actors` | lists the actors by chart, state, status or name, paged |
 | `snapshot_variables` | reads the actors' variables from a copy restored from the snapshot |
 | `snapshot_chart` | shows a chart's states with the count of actors in each, and its transitions and data |
-| `snapshot_traces` | reads the trace history that the snapshot kept: times on the host's clock, and no names or values given at run time in the spans a host had already exported |
+| `snapshot_traces` | reads the trace history that the snapshot kept: times on the wall clock, and in the spans a host had already exported no names or values given at run time (an event the image names keeps its name) |
 | `rehearse` | migrates a copy of the snapshot to a draft and runs the copy on a simulated clock |
 
 A **copy** is a host restored from a snapshot. It has the system, the

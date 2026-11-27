@@ -251,7 +251,7 @@ static ta_status ta_web_query_stats(const ta_web_snapshot_reading *query) {
         {"now", stats.now},       {"ticksPerSecond", stats.ticks_per_second}, {"nextDeadline", stats.next_deadline},
         {"actors", stats.actors}, {"hibernated", stats.hibernated},           {"runnable", stats.runnable},
         {"events", stats.events}, {"timers", stats.timers},                   {"requests", stats.requests},
-        {"regionBytes", stats.region_bytes},
+        {"regionBytes", stats.region_bytes}, {"wallNanoseconds", stats.wall_ns},
     };
     ta_cbor_write_map(writer, sizeof fields / sizeof fields[0]);
     for (uint32_t i = 0; i < sizeof fields / sizeof fields[0]; i++) {

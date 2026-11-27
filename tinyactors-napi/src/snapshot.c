@@ -401,7 +401,7 @@ static napi_value ta_napi_snapshot_timers(napi_env env, napi_callback_info info)
 }
 
 /* stats(segment): {now, ticksPerSecond, nextDeadline, actors, hibernated,
- * runnable, events, timers, requests, regionBytes}. */
+ * runnable, events, timers, requests, regionBytes, wallNanoseconds}. */
 static napi_value ta_napi_snapshot_stats(napi_env env, napi_callback_info info) {
     ta_napi_snapshot_call call = {1, NULL, 0};
     if (!ta_napi_snapshot_enter(env, info, &call)) return NULL;
@@ -420,6 +420,7 @@ static napi_value ta_napi_snapshot_stats(napi_env env, napi_callback_info info) 
     ta_napi_field_number(&fields, "timers", stats.timers);
     ta_napi_field_number(&fields, "requests", stats.requests);
     ta_napi_field_number(&fields, "regionBytes", (double)stats.region_bytes);
+    ta_napi_field_bigint(&fields, "wallNanoseconds", stats.wall_ns);
     return fields.ok ? fields.object : NULL;
 }
 
