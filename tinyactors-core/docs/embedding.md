@@ -456,11 +456,19 @@ tool that shows what every actor was doing at the moment it was taken:
    A chart's states, transitions and data come from the image
    (`ta_image_state_info`, `ta_image_transition`, `ta_image_data`).
 5. `ta_system_trace_kept` gives the records the journal kept, the
-   acknowledged ones and the pending ones. `ta_otlp_history` writes their
-   spans as an ExportTraceServiceRequest, which `ta_otlp_next_span` reads.
-   Its times are the system's clock, not wall time. Of the acknowledged
-   records it leaves out the dynamic strings and the values, which may
-   have been freed.
+   acknowledged ones and the pending ones, and their counts.
+   `ta_host_trace_history` writes their spans as an
+   ExportTraceServiceRequest, which `ta_otlp_next_span` reads.
+   - **Times.** They are the system's clock, not wall time.
+   - **Acknowledged records.** A record the host already exported may
+     have had its dynamic strings and values freed, so it reads none of
+     them:
+     - its event is named from the image's event names, or `(unread)`
+       for a name given at run time;
+     - a microstep is named by its macrostep's event;
+     - its actor is named from the actor's own record while the actor is
+       resident;
+     - an attribute it cannot read is left out.
 
 A region is raw memory of one build: `ta_system_read` refuses another
 layout, so read a snapshot with the release that wrote it. The

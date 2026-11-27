@@ -137,27 +137,6 @@ enum {
  * it). */
 TA_API uint32_t ta_otlp_read(ta_otlp *otlp, const ta_otlp_input *input, uint32_t *cursor);
 
-/* The spans of the records a system's journal keeps (ta_system_trace_kept),
- * for a reader of a snapshot or a live system: an ExportTraceServiceRequest
- * written into `out`, named and attributed as a run's records are. It
- * reads without releasing. Times are the system's clock, not wall time: a
- * record's tick in nanoseconds (kept->ticks_per_second) plus its fuel
- * stamp's distance from the lowest of that tick. Of an acknowledged record
- * it writes no dynamic string and no value (they may have been freed); a
- * span still open at the end ends there, marked `scxml.incomplete`. The
- * encoder it needs is allocated through `allocator` for the call, and
- * freed before it returns. TA_ERROR_NO_MEMORY with out->length the bytes
- * the request needs (a probe with capacity 0 sizes it; the encoding runs
- * again with the room). */
-typedef struct ta_otlp_history_input {
-    uint32_t size;
-    uint32_t source; /* the system's index (a host's segment), as ta_otlp_input's */
-    const ta_trace_kept *kept;
-    const ta_image *image; /* the image the system ran */
-    const ta_allocator *allocator;
-} ta_otlp_history_input;
-TA_API ta_status ta_otlp_history(const ta_otlp_history_input *input, ta_buffer *out);
-
 /* End every open span now, at `wall_ns`, marked `scxml.incomplete`: the
  * encoder or the system is going away. They go into the next request. */
 TA_API void ta_otlp_end_all(ta_otlp *otlp, uint64_t wall_ns);

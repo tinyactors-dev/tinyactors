@@ -6,6 +6,7 @@
  * The choice is made once, at ta_host_create; nothing below asks again. */
 #include "base/memory.h"
 #include "host/host_internal.h"
+#include "otlp/otlp_internal.h"
 
 static const host_encoder encoder_null, encoder_otlp;
 
@@ -301,3 +302,53 @@ ta_status ta_host_logs(ta_host *host, ta_bytes *out) {
     if (host->running) return TA_ERROR_STATE; /* not during a run (host.h) */
     return host->encoder->take(host, TA_HOST_EFFECT_LOGS, out);
 }
+
+/* ---- the history a system's journal keeps (ta_host_trace_history) -------------------------------- */
+
+/* The resident actors' names, by slot, into a block of `allocator`
+ * (*names NULL when there are none). */
+typedef struct history_names {
+    ta_otlp_actor_name *names;
+    uint32_t count;
+    size_t bytes;
+} history_names;
+
+static ta_status history_names_of(const ta_system *system, const ta_allocator *allocator, history_names *out) {
+    uint32_t cursor = 0, handles[64], count = 0;
+    for (uint32_t got; (got = ta_system_actors(system, &cursor, (ta_uint32_array){handles, 64})) != 0;) count += got;
+    out->names = (ta_otlp_actor_name *)0;
+    out->count = 0;
+    out->bytes = sizeof(ta_otlp_actor_name) * count;
+    if (!count) return TA_OK;
+    out->names = (ta_otlp_actor_name *)allocator->alloc(allocator->context, out->bytes, 8);
+    if (!out->names) return TA_ERROR_NO_MEMORY;
+    cursor = 0;
+    for (uint32_t got; (got = ta_system_actors(system, &cursor, (ta_uint32_array){handles, 64})) != 0;)
+        for (uint32_t i = 0; i < got && out->count < count; i++) {
+            ta_actor_info info;
+            info.size = sizeof info;
+            if (ta_actor_info_get(system, handles[i], &info) != TA_OK) continue;
+            ta_otlp_actor_name *name = &out->names[out->count++];
+            name->slot = handles[i] & 0xFFFFFFu;
+            name->pad = 0;
+            name->session = info.serial;
+            name->name = ta_system_actor_name(system, handles[i]);
+        }
+    return TA_OK; /* ta_system_actors walks the slots in order: sorted by slot */
+}
+
+ta_status ta_host_trace_history(const ta_host_trace_history_input *input, ta_buffer *out) {
+    ta_trace_kept kept;
+    kept.size = sizeof kept;
+    ta_status status = ta_system_trace_kept(input->system, &kept);
+    if (status != TA_OK) return status;
+    history_names names;
+    status = history_names_of(input->system, input->allocator, &names);
+    if (status != TA_OK) return status;
+    ta_otlp_history_input history = {sizeof history, input->source, &kept,   input->image,
+                                     input->allocator, names.names,  names.count, 0};
+    status = ta_otlp_history(&history, out);
+    if (names.names) input->allocator->free(input->allocator->context, names.names, names.bytes);
+    return status;
+}
+

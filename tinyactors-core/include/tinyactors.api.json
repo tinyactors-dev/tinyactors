@@ -6638,66 +6638,6 @@
         }
       }
     },
-    "ta_otlp_history_input": {
-      "kind": "struct",
-      "fields": [
-        {
-          "name": "size",
-          "type": "uint32_t"
-        },
-        {
-          "name": "source",
-          "type": "uint32_t"
-        },
-        {
-          "name": "kept",
-          "type": "const ta_trace_kept *"
-        },
-        {
-          "name": "image",
-          "type": "const ta_image *"
-        },
-        {
-          "name": "allocator",
-          "type": "const ta_allocator *"
-        }
-      ],
-      "layout": {
-        "x86_64": {
-          "size": 32,
-          "align": 8,
-          "offsets": {
-            "size": 0,
-            "source": 4,
-            "kept": 8,
-            "image": 16,
-            "allocator": 24
-          }
-        },
-        "aarch64": {
-          "size": 32,
-          "align": 8,
-          "offsets": {
-            "size": 0,
-            "source": 4,
-            "kept": 8,
-            "image": 16,
-            "allocator": 24
-          }
-        },
-        "wasm32": {
-          "size": 20,
-          "align": 4,
-          "offsets": {
-            "size": 0,
-            "source": 4,
-            "kept": 8,
-            "image": 12,
-            "allocator": 16
-          }
-        }
-      }
-    },
     "ta_otlp_integer_attribute": {
       "kind": "struct",
       "fields": [
@@ -8551,6 +8491,66 @@
           "offsets": {
             "pointer": 0,
             "capacity": 4
+          }
+        }
+      }
+    },
+    "ta_host_trace_history_input": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "size",
+          "type": "uint32_t"
+        },
+        {
+          "name": "source",
+          "type": "uint32_t"
+        },
+        {
+          "name": "system",
+          "type": "const ta_system *"
+        },
+        {
+          "name": "image",
+          "type": "const ta_image *"
+        },
+        {
+          "name": "allocator",
+          "type": "const ta_allocator *"
+        }
+      ],
+      "layout": {
+        "x86_64": {
+          "size": 32,
+          "align": 8,
+          "offsets": {
+            "size": 0,
+            "source": 4,
+            "system": 8,
+            "image": 16,
+            "allocator": 24
+          }
+        },
+        "aarch64": {
+          "size": 32,
+          "align": 8,
+          "offsets": {
+            "size": 0,
+            "source": 4,
+            "system": 8,
+            "image": 16,
+            "allocator": 24
+          }
+        },
+        "wasm32": {
+          "size": 20,
+          "align": 4,
+          "offsets": {
+            "size": 0,
+            "source": 4,
+            "system": 8,
+            "image": 12,
+            "allocator": 16
           }
         }
       }
@@ -10495,6 +10495,23 @@
       "implemented": true
     },
     {
+      "name": "ta_host_trace_history",
+      "returns": "ta_status",
+      "params": [
+        {
+          "name": "input",
+          "type": "const ta_host_trace_history_input *"
+        },
+        {
+          "name": "out",
+          "type": "ta_buffer *"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
       "name": "ta_host_traces",
       "returns": "ta_status",
       "params": [
@@ -11088,23 +11105,6 @@
         {
           "name": "wall_ns",
           "type": "uint64_t"
-        }
-      ],
-      "public": true,
-      "static_inline": false,
-      "implemented": true
-    },
-    {
-      "name": "ta_otlp_history",
-      "returns": "ta_status",
-      "params": [
-        {
-          "name": "input",
-          "type": "const ta_otlp_history_input *"
-        },
-        {
-          "name": "out",
-          "type": "ta_buffer *"
         }
       ],
       "public": true,

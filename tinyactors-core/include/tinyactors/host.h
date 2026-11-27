@@ -480,6 +480,30 @@ TA_API uint32_t ta_host_snapshot_segments(ta_bytes snapshot, ta_uint64_array has
  * among them). ta_system_read reads it, with the segment's image
  * (ta_host_snapshot_image). */
 TA_API ta_bytes ta_host_snapshot_region(ta_bytes pack, uint32_t segment);
+/* The spans of the records a system's journal keeps (ta_system_trace_kept),
+ * for a reader of a snapshot (ta_system_read) or of a live system between
+ * its runs: an ExportTraceServiceRequest written into `out`, named and
+ * attributed as ta_host_traces names them, read without releasing any.
+ * Times are the system's clock, not wall time: a record's tick in
+ * nanoseconds plus its fuel stamp's distance from the lowest of that tick.
+ * Of a record already acknowledged (exported) it writes no dynamic string
+ * and no value, which may have been freed: its event is named from the
+ * image's event names ("(unread)" for a name given at run time), a
+ * microstep by its macrostep's event, its actor by the actor's own record
+ * while it is resident, and an attribute it cannot read is left out. A
+ * span still open at the end ends there, marked `scxml.incomplete`. The
+ * encoder and a table of the resident actors' names are allocated through
+ * `allocator` for the call. TA_ERROR_NO_MEMORY with out->length the bytes
+ * the request needs (a probe with capacity 0 sizes it); TA_ERROR_STATE
+ * when the system does not trace. */
+typedef struct ta_host_trace_history_input {
+    uint32_t size;
+    uint32_t source; /* the system's index (a host's segment), which names its scopes */
+    const ta_system *system;
+    const ta_image *image; /* the image it runs */
+    const ta_allocator *allocator;
+} ta_host_trace_history_input;
+TA_API ta_status ta_host_trace_history(const ta_host_trace_history_input *input, ta_buffer *out);
 /* A snapshot to restore and the image of each of its segments: images[i]
  * is the bytes of the image segment i ran (same content hash), or empty if
  * it was retired; the host copies them as ta_host_add_image does, and reads

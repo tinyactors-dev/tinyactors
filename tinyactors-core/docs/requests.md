@@ -466,7 +466,7 @@ These stay C calls:
 - **Calls that need no host:** `ta_host_snapshot_unpack`, `_image`,
   `_segments` and `_region` read a snapshot before a host exists, and
   `ta_system_read` makes a system of a segment's region that the system's
-  readers read, with `ta_otlp_history` for the spans its journal kept
+  readers read, with `ta_host_trace_history` for the spans its journal kept
   ([embedding.md, Reading a snapshot](embedding.md#12--reading-a-snapshot)).
 - **Lookups that spawning and routing use:** `ta_host_chart`,
   `ta_host_locate`, `ta_host_actor_by_name` and `ta_host_resolve`.

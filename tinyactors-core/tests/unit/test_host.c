@@ -1167,6 +1167,7 @@ static void test_snapshot_of_one_image_in_two_segments(void) {
     SC("order", "initial='open'><datamodel><data id='n' expr='0'/></datamodel>"                     \
                 "<state id='open'><onentry><send event='reminder' id='nag' delay='10s'/></onentry>"  \
                 "<transition event='order.pay' cond='n &lt; 3' target='paid'/>"                     \
+                "<transition event='poke'><assign location='n' expr='n + 1'/></transition>"         \
                 "<transition event='*'><assign location='n' expr='n + 1'/></transition></state>"     \
                 "<state id='paid'/>")
 static void snapshot_read(int telemetry) {
@@ -1275,24 +1276,40 @@ static void snapshot_read(int telemetry) {
     else CHECK_EQUAL(kept.acknowledged_records, 0u); /* none taken: no telemetry */
     CHECK_EQUAL(kept.ticks_per_second, 1000u);
     ta_allocator allocator = ta_runtime_malloc();
-    ta_otlp_history_input input = {sizeof input, 0, &kept, &image, &allocator};
+    ta_host_trace_history_input input = {sizeof input, 0, system, &image, &allocator};
     ta_buffer request = {NULL, 0, 0};
-    CHECK_EQUAL(ta_otlp_history(&input, &request), TA_ERROR_NO_MEMORY);
+    CHECK_EQUAL(ta_host_trace_history(&input, &request), TA_ERROR_NO_MEMORY);
     CHECK(request.length > 0);
     request.pointer = malloc(request.length);
     request.capacity = request.length;
-    CHECK_EQUAL(ta_otlp_history(&input, &request), TA_OK);
+    CHECK_EQUAL(ta_host_trace_history(&input, &request), TA_OK);
     ta_otlp_cursor walk;
     memset(&walk, 0, sizeof walk);
     ta_otlp_span span;
-    int spans = 0, macrosteps = 0, spawned = 0;
+    int spans = 0, macrosteps = 0, spawned = 0, poked = 0, named = 0, empty = 0;
     while (ta_otlp_next_span((ta_bytes){request.pointer, request.length}, &walk, &span) == 1) {
         spans++;
         if (span.name.length >= 15 && !memcmp(span.name.pointer, "scxml.macrostep", 15)) macrosteps++;
         if (span.name.length == 13 && !memcmp(span.name.pointer, "scxml.spawned", 13)) spawned++;
+        /* an acknowledged record's event is named from the image, a microstep by its macrostep */
+        if (span.name.length == 20 && !memcmp(span.name.pointer, "scxml.macrostep poke", 20)) poked++;
+        if (span.name.length == 20 && !memcmp(span.name.pointer, "scxml.microstep poke", 20)) poked++;
+        if (span.name.length && span.name.pointer[span.name.length - 1] == ' ') empty++;
+        uint32_t at = 0;
+        ta_otlp_key_value attribute;
+        while (ta_otlp_next_attribute(span.attributes, &at, &attribute) == 1) {
+            if (attribute.key.length == 21 && !memcmp(attribute.key.pointer, "tinyactors.actor.name", 21)) {
+                /* its actor named from its record while resident, never empty */
+                CHECK(attribute.value.bytes.length == 7 && !memcmp(attribute.value.bytes.pointer, "order-1", 7));
+                named++;
+            }
+        }
         CHECK(span.start <= span.end);
     }
     CHECK(spans > 0 && macrosteps >= 2 && spawned == 1);
+    CHECK_EQUAL(poked, 2);
+    CHECK(named > 0);
+    CHECK_EQUAL(empty, 0);
     free(request.pointer);
 
     /* a system to read is never run, and its deinit leaves it */

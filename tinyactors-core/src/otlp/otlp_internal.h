@@ -198,4 +198,37 @@ struct ta_otlp {
  * config with it, so the copy is the effective one. */
 void ta_otlp_config_normalize(const ta_otlp_config *in, ta_otlp_config *config);
 
+/* A resident actor's name, for the records a host already acknowledged:
+ * their dynamic strings may be freed, so an actor still in its system is
+ * named from its record (ta_host_trace_history builds the table). */
+typedef struct ta_otlp_actor_name {
+    uint32_t slot; /* the actor handle's slot: its low 24 bits */
+    uint32_t pad;
+    uint64_t session;
+    ta_string_view name;
+} ta_otlp_actor_name;
+
+/* The spans of the records a system's journal keeps (ta_system_trace_kept),
+ * written as one ExportTraceServiceRequest into `out`, read without
+ * releasing any (ta_host_trace_history, tinyactors/host.h). Times are the
+ * system's clock: a record's tick in nanoseconds plus its fuel stamp's
+ * distance from the lowest of that tick. Of an acknowledged record it
+ * writes no dynamic string and no value: an event is named from the
+ * image's event names, a microstep by its macrostep's event, an actor by
+ * `names` (sorted by slot) while it is resident, and an attribute it
+ * cannot read is left out; a span still open at the end ends there,
+ * marked `scxml.incomplete`. The encoder is allocated through `allocator`
+ * for the call. TA_ERROR_NO_MEMORY with out->length the bytes the request
+ * needs; TA_ERROR_LIMIT for a span larger than the staging. */
+typedef struct ta_otlp_history_input {
+    uint32_t size;
+    uint32_t source; /* the system's index (a host's segment) */
+    const ta_trace_kept *kept;
+    const ta_image *image;
+    const ta_allocator *allocator;
+    const ta_otlp_actor_name *names;
+    uint32_t name_count, pad;
+} ta_otlp_history_input;
+ta_status ta_otlp_history(const ta_otlp_history_input *input, ta_buffer *out);
+
 #endif /* TINYACTORS_OTLP_OTLP_INTERNAL_H */

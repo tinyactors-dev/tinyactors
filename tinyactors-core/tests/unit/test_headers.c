@@ -134,7 +134,7 @@ ABI_CHECK(sizeof(ta_transition_info) == 24, transition_info_size);
 ABI_CHECK(TA_TRANSITION_EXTERNAL == 0 && TA_TRANSITION_INTERNAL == 1 && TA_TRANSITION_INITIAL == 2,
           transition_types);
 ABI_CHECK(offsetof(ta_trace_kept, size) == 0, trace_kept_size_first);
-ABI_CHECK(offsetof(ta_otlp_history_input, size) == 0, otlp_history_input_size_first);
+ABI_CHECK(offsetof(ta_host_trace_history_input, size) == 0, host_trace_history_input_size_first);
 ABI_CHECK(offsetof(ta_actor_timer, due) == 0 && offsetof(ta_actor_timer, event) == 16,
           actor_timer_layout);
 ABI_CHECK(sizeof(ta_actor_queued) == 2 * sizeof(ta_string_view), actor_queued_size);

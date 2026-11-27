@@ -103,8 +103,13 @@ static int otlp_put_key_value_head(ta_otlp *otlp, otlp_out *out, uint32_t field,
     return 1;
 }
 
+/* What an acknowledged record cannot say (its dynamic string may be
+ * freed): an attribute of this value is left out. */
+static const char otlp_unread[] = "";
+
 static void otlp_kv_string(ta_otlp *otlp, otlp_out *out, uint32_t field, ta_string_view key,
                            ta_string_view value) {
+    if (value.pointer == otlp_unread) return;
     if (!otlp_put_key_value_head(otlp, out, field, key, otlp_any_string_size(value.length))) return;
     otlp_put_length(out, F_ANY_STRING, value.length);
     otlp_put_bytes(out, value.pointer, value.length);
@@ -154,6 +159,10 @@ typedef struct otlp_kept {
     uint64_t fuel; /* the lowest fuel stamp of that tick */
     uint64_t time; /* the tick, in nanoseconds */
     int started;
+    const ta_otlp_actor_name *names; /* resident actors, by slot */
+    uint32_t name_count;
+    uint64_t macrostep_session;     /* the last macrostep begun, and its event's name */
+    ta_string_view macrostep_event; /* (an image string, or a pending record's) */
 } otlp_kept;
 
 /* What one record is read with. */
@@ -174,8 +183,28 @@ static ta_string_view otlp_reading_string(const otlp_reading *reading, uint32_t 
     ta_string_view none = {"", 0};
     if (reference == TA_NIL) return none;
     if (reference & TA_TRACE_STRING_DYNAMIC)
-        return otlp_released(reading) ? none : ta_trace_dynamic_string(&reading->input->view, reference);
+        return otlp_released(reading) ? (ta_string_view){otlp_unread, 0}
+                                      : ta_trace_dynamic_string(&reading->input->view, reference);
     return ta_image_string(reading->input->image, reference);
+}
+
+/* An actor's name: its record's string, or, once that may be freed, the
+ * name of the resident actor in the record's slot with its session. */
+static ta_string_view otlp_actor_name(const otlp_reading *reading, const ta_trace_record *record,
+                                      uint32_t reference) {
+    ta_string_view name = otlp_reading_string(reading, reference);
+    const otlp_kept *kept = reading->kept;
+    if (name.pointer != otlp_unread || !kept) return name;
+    uint32_t slot = record->actor & 0xFFFFFFu, low = 0, high = kept->name_count;
+    while (low < high) { /* the table is sorted by slot */
+        uint32_t middle = low + (high - low) / 2u;
+        if (kept->names[middle].slot < slot) low = middle + 1u;
+        else high = middle;
+    }
+    if (low < kept->name_count && kept->names[low].slot == slot &&
+        kept->names[low].session == record->key.session && kept->names[low].name.length)
+        return kept->names[low].name;
+    return name;
 }
 
 static ta_string_view otlp_state_name(const otlp_reading *reading, uint32_t chart, uint32_t state) {
@@ -735,7 +764,7 @@ static void otlp_common_attributes(const otlp_reading *reading, otlp_out *out,
     otlp_kv_int(otlp, out, F_SPAN_ATTRIBUTES, TEXT("scxml.time"), (int64_t)record->now);
     if (actor_name != TA_NIL)
         otlp_kv_string(otlp, out, F_SPAN_ATTRIBUTES, TEXT("tinyactors.actor.name"),
-                       otlp_reading_string(reading, actor_name));
+                       otlp_actor_name(reading, record, actor_name));
     otlp_kv_string(otlp, out, F_SPAN_ATTRIBUTES, TEXT("tinyactors.chart.name"),
                    ta_image_chart_name(reading->input->image, record->chart));
 }
@@ -1203,8 +1232,18 @@ static uint32_t otlp_read_begin(const otlp_reading *reading, otlp_scratch *scrat
     otlp_bytes common = otlp_scratch_close(scratch, &out);
     out = otlp_scratch_part(scratch);
     ta_string_view event = otlp_reading_string(reading, begin->name);
+    if (event.pointer == otlp_unread) { /* a freed string: the image's name of the event, if any */
+        ta_string_view known = ta_image_event_name(reading->input->image, begin->name_id);
+        if (known.length) event = known;
+    }
+    if (reading->kept) {
+        reading->kept->macrostep_session = record->key.session;
+        reading->kept->macrostep_event = begin->name == TA_NIL ? TEXT("") : event;
+    }
     otlp_put_name(&out, TEXT("scxml.macrostep "),
-                  begin->name == TA_NIL ? TEXT("bootstrap") : event);
+                  begin->name == TA_NIL            ? TEXT("bootstrap")
+                  : event.pointer == otlp_unread ? TEXT("(unread)")
+                                                   : event);
     if (begin->name != TA_NIL) {
         otlp_kv_string(otlp, &out, F_SPAN_ATTRIBUTES, TEXT("scxml.event.name"), event);
         otlp_kv_string(otlp, &out, F_SPAN_ATTRIBUTES, TEXT("scxml.event.type"),
@@ -1357,13 +1396,14 @@ static uint32_t otlp_read_microstep(const otlp_reading *reading, otlp_scratch *s
     otlp_target_plan(reading, scratch, record, &target, &needs);
     const uint32_t *list = ta_trace_list(record);
     otlp_out out = otlp_scratch_part(scratch);
-    otlp_put_name(&out, TEXT("scxml.microstep "),
-                  micro->name == TA_NIL ? TEXT("(eventless)")
-                                        : otlp_reading_string(reading, micro->name));
+    ta_string_view event = micro->name == TA_NIL ? TEXT("(eventless)") : otlp_reading_string(reading, micro->name);
+    if (event.pointer == otlp_unread && reading->kept && reading->kept->macrostep_session == record->key.session &&
+        reading->kept->macrostep_event.length)
+        event = reading->kept->macrostep_event; /* a freed string: its macrostep's event */
+    otlp_put_name(&out, TEXT("scxml.microstep "), event.pointer == otlp_unread ? TEXT("(unread)") : event);
     otlp_kv_int(otlp, &out, F_SPAN_ATTRIBUTES, TEXT("scxml.microstep"), record->key.microstep);
     if (micro->name != TA_NIL)
-        otlp_kv_string(otlp, &out, F_SPAN_ATTRIBUTES, TEXT("scxml.event.name"),
-                       otlp_reading_string(reading, micro->name));
+        otlp_kv_string(otlp, &out, F_SPAN_ATTRIBUTES, TEXT("scxml.event.name"), event);
     otlp_kv_transitions(reading, &out, record->chart, list, micro->transition_count);
     list += micro->transition_count;
     otlp_kv_states(reading, &out, F_SPAN_ATTRIBUTES, TEXT("scxml.state.exited"), record->chart,
@@ -2596,7 +2636,12 @@ ta_status ta_otlp_history(const ta_otlp_history_input *input, ta_buffer *out) {
     if (!encoder.block) return TA_ERROR_NO_MEMORY;
     ta_status status = ta_otlp_init((ta_memory){encoder.block, encoder.block_bytes}, &encoder.config,
                                     &encoder.otlp);
-    otlp_kept reading_kept = {kept->acknowledged, 0, 0, kept->ticks_per_second, 0, 0, 0, 0};
+    otlp_kept reading_kept;
+    ta_memset(&reading_kept, 0, sizeof reading_kept);
+    reading_kept.acknowledged = kept->acknowledged;
+    reading_kept.ticks_per_second = kept->ticks_per_second;
+    reading_kept.names = input->names;
+    reading_kept.name_count = input->name_count;
     size_t length = 0;
     const ta_trace_view *views[2] = {&kept->first, &kept->second};
     uint32_t base = 0;

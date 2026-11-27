@@ -309,7 +309,7 @@ Read an effect’s fields with `ta_host_effect_number`, `ta_host_effect_text` an
   the system's and the image's readers one to one, as a snapshot object
   whose segments hold their image and their system. The region's copy is
   memory of the language's own (a byte buffer the object keeps and never
-  hands out), 8-aligned and never moved. `ta_otlp_history` gives the
+  hands out), 8-aligned and never moved. `ta_host_trace_history` gives the
   journal's spans as bytes, decoded as any traces. No host is made.
 
 ## 10 · The control plane: typed methods over posted messages

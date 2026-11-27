@@ -42,7 +42,7 @@ Following [docs/roles.md](../roles.md):
   |---|---|
   | per event, per actor | nothing |
   | memory | a reader holds a copy of one segment's region, in memory its caller gives (in a binding: a `Buffer` or a `bytearray`) |
-  | API | `ta_host_snapshot_region`; `ta_system_read`; three readers made public (`ta_system_actor_name`, `_mailbox`, `_timers`); `ta_system_stats.ticks_per_second`; a chart's transitions (`ta_image_transition_*`); the journal's kept records (`ta_system_trace_kept`) and their spans (`ta_otlp_history`); a row for each in `docs/boundary.md`, and embedding.md section 12 |
+  | API | `ta_host_snapshot_region`; `ta_system_read`; three readers made public (`ta_system_actor_name`, `_mailbox`, `_timers`); `ta_system_stats.ticks_per_second`; a chart's transitions (`ta_image_transition_*`); the journal's kept records (`ta_system_trace_kept`) and their spans (`ta_host_trace_history`); a row for each in `docs/boundary.md`, and embedding.md section 12 |
   | memory per read | a copy of each segment's region read, beside the pack the tool keeps |
   | bindings | each mirrors those calls, plus the existing readers (`ta_system_actors`, `ta_actor_info_get`, `ta_actor_config`, the image's) |
 
@@ -137,8 +137,11 @@ Following [docs/roles.md](../roles.md):
 
    It refuses `TA_ERROR_STATE` when tracing is off. The view lives as the
    system's memory does.
-6. **Their spans, `ta_status ta_otlp_history(const ta_otlp_history_input
-   *input, ta_buffer *out)`,** in the OTLP layer. It writes an
+6. **Their spans, `ta_status ta_host_trace_history(const
+   ta_host_trace_history_input *input, ta_buffer *out)`,** in the host
+   layer, which sees both the system and the OTLP encoder (amended
+   2026-11-27: it was `ta_otlp_history` in the OTLP layer, which cannot
+   see a system, so it could not name an actor from its record). It writes an
    ExportTraceServiceRequest of the kept records into `out`.
    - **Memory.** The encoder is allocated through the input's allocator for
      the call and freed before it returns. It grows as it needs to (open
@@ -154,14 +157,21 @@ Following [docs/roles.md](../roles.md):
      fuel stamp's distance from the lowest of that tick. That is the host's
      clock, not wall time.
    - **Acknowledged records.** Their dynamic strings may have been freed,
-     and their payloads released, so both are left out. Image strings
-     stay, and no value is written.
+     and their payloads released, so neither is read. They are named as
+     the website Inspector names them (amended 2026-11-27, the
+     maintainer: "do what the inspector does"):
+     - an event from the image's event names, `(unread)` for a name given
+       at run time;
+     - a microstep by its macrostep's event;
+     - an actor from its own record while it is resident;
+     - an attribute it cannot read is left out, never written empty.
    - **Spans at the edges.** A span whose beginning the ring dropped is
      left out. One still open at the end ends there, marked
      `scxml.incomplete`.
-   - **Input.** `{size, source, kept, image, allocator}`. The function
-     takes no system, since the OTLP layer depends on trace and image
-     only. `source` is the segment's index, which names its scopes.
+   - **Input.** `{size, source, system, image, allocator}`. `source` is
+     the segment's index, which names its scopes. The host layer reads
+     the kept records and the resident actors' names, and gives them to
+     the OTLP layer's encoder, which stays free of the system.
 7. **The CLI reads through them.** `tinyactors inspect` of a snapshot and
    `tinyactors actors` go through `ta_host_snapshot_region` and
    `ta_system_read`. They no longer restore a host and drop their own
@@ -181,6 +191,9 @@ Following [docs/roles.md](../roles.md):
      language's memory: a byte buffer the object keeps private, 8-aligned
      and never resized, gone with the object. The encoder of `traces()`
      uses the binding's allocator for the call.
+   - **The wasm package** has the same (amended 2026-11-27): its module
+     keeps the pack and the regions in blocks of its allocator, freed when
+     the `Snapshot` is collected.
 9. **The MCP server reads through them,** and its copy of the Inspector's
    decoder goes. `snapshot_variables` and `rehearse` keep a host restored
    from the snapshot.
