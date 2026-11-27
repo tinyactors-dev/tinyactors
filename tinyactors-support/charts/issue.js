@@ -26,7 +26,8 @@ function answer(ev, event, data) { return { to: replyTo(ev), event: event, data:
 function summary(p) {
   return { n: p.n, title: p.title, excerpt: String(p.body || '').slice(0, 280), component: p.component, kind: p.kind,
            state: p.state, count: p.count, minutes: p.minutes, workaround: p.workaround ? p.workaround.text : null,
-           fix: p.fix ? p.fix.sha : null, possibleDuplicateOf: p.possible || null, attachments: p.attachments || 0 };
+           fix: p.fix ? p.fix.sha : null, possibleDuplicateOf: p.possible || null, attachments: p.attachments || 0,
+           filed: p.filed || null, updated: p.updated || null };
 }
 
 // Who may read an issue's attachments, and attach to it: its reporters and its maintainers.

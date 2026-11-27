@@ -157,6 +157,20 @@ describe('the tools: typed results, short text', () => {
     assert.equal((await s.tool(cy, 'report_issue', fresh('test', 'the node tests leak a host'))).answer, 'counted');
   });
 
+  it('gives each issue when it was filed and when it last changed, on the host\'s clock', async () => {
+    const filed = await s.tool(ann, 'report_issue', fresh('lib', 'the convenience layer drops a handler\'s error'));
+    const first = (await s.tool(null, 'get_issue', { id: filed.id }));
+    assert.match(first.filed, /^\d{4}-\d\d-\d\dT/);
+    assert.equal(first.updated, first.filed);
+    await s.advance(600_000);   // ten minutes: an access token lasts an hour
+    assert.equal((await s.tool(bob, 'triage', { id: filed.id, kind: 'api' })).answer, 'triaged');
+    const later = await s.tool(null, 'get_issue', { id: filed.id });
+    assert.equal(later.filed, first.filed, 'filed stays');
+    assert.equal(Date.parse(later.updated) - Date.parse(first.filed), 600_000, 'updated is the triage\'s time');
+    const listed = (await s.tool(null, 'known_issues')).issues.find((i) => i.id === filed.id);
+    assert.deepEqual([listed.filed, listed.updated], [later.filed, later.updated], 'the index has them too');
+  });
+
   it('reached every tool, and the answer kinds the rules name', () => {
     assert.deepEqual(Object.keys(TOOLS).filter((name) => !seen[name] && !['attach_file', 'get_attachment'].includes(name)), []);
     for (const kind of ['filed', 'counted', 'fixed', 'regressed', 'refused', 'failed'])

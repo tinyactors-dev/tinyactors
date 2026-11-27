@@ -57,6 +57,8 @@ const summary = object({
   count: number('how many reports'), minutes: number('the minutes it cost, all reports together'),
   workaround: nullable(text('the workaround')), fix: nullable(text('the fixing commit')),
   possibleDuplicateOf: nullable(reference), attachments: number('how many files'),
+  filed: nullable(text('when it was filed (ISO 8601); null for an issue older than these fields, until its next change')),
+  updated: nullable(text('when it last changed (ISO 8601); null as filed')),
 });
 const refusal = { reason: text('why it was refused'), valid: array({ type: 'string' }, 'what would be accepted') };
 
@@ -88,6 +90,8 @@ const OUTPUT = {
     body: text('its first report'), count: number('how many reports'), minutes: number('the minutes it cost'),
     workaround: nullable(workaround),
     fix: nullable(object({ sha: text('the commit'), url: text('the commit on GitHub'), repoID: number('the GitHub id of the repository the commit is in') })),
+    filed: nullable(text('when it was filed (ISO 8601); null for an issue older than this field, until its next change')),
+    updated: nullable(text('when it last changed (ISO 8601)')),
     occurrences: array(object({ session: nullable(text('the reporter\'s session')), commit: nullable(text('their commit')),
                                 at: nullable(text('when (ISO 8601)')), reporter: nullable(text('their login')) }), 'the last 50 reports (signed in only)'),
     attachments: { anyOf: [number('how many files (for anyone but its reporters and maintainers)'),

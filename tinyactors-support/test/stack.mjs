@@ -61,6 +61,7 @@ export async function stack({ data = mkdtempSync(join(tmpdir(), 'support-')), re
     processors: { github: parts.github.processor, ledger: parts.ledger.processor, decide: parts.jev.processor,
                   blobs: parts.blobs.processor, scan: parts.scanner.processor },
   });
+  parts.ledger.now = () => support.wallNow();   // the ledger's times on the simulated clock
   support.onDone = (_actor, donedata) => ended.push(donedata);
   const content = new Content({ skills: new URL('../skills/', import.meta.url).pathname,
                                 docs: [{ directory: new URL('./fixtures/docs/', import.meta.url).pathname, prefix: 'docs' }] });

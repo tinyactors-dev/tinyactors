@@ -45,6 +45,8 @@
     <data id="uploads" expr="0"/>        <!-- the last upload's number -->
     <data id="purged" expr="false"/>
     <data id="deletion" expr="null"/>    <!-- {sid, to, by, reason}: the delete being written -->
+    <data id="filed" expr="null"/>       <!-- when its first change was written (ISO 8601, the ledger's clock) -->
+    <data id="updated" expr="null"/>     <!-- when its last change was written -->
   </datamodel>
 
   <state id="issue" initial="starting">
@@ -256,7 +258,7 @@
       <send targetexpr="replyTo(_event)" event="issue">
         <content expr="details(_event.data.caller, { id: issueID(slug, n), n: n, title: title, state: state, component: component, kind: kind,
                        body: body, count: count, minutes: minutes, workaround: workaround, reason: reason,
-                       fix: fix, occurrences: occurrences,
+                       fix: fix, occurrences: occurrences, filed: filed, updated: updated,
                        attachments: attachments }, mayRead(_event.data.caller, reporters, repoID))"/>
       </send>
     </transition>
@@ -332,12 +334,22 @@
       <send type="ledger" event="ledger.append"><content expr="record('purged', slug, n, { files: attachments.length })"/></send>
     </transition>
 
-    <!-- the ledger wrote a change: its answer goes now -->
+    <!-- the ledger wrote a change: its answer goes now. The ledger's time is the
+         issue's clock (charts read none): the first write is when it was filed,
+         every write when it was last updated. -->
     <transition event="ledger.written" cond="has(answers, _event.sendid)">
       <send targetexpr="answers[_event.sendid].to" eventexpr="answers[_event.sendid].event">
         <content expr="answers[_event.sendid].data"/>
       </send>
       <assign location="answers" expr="drop(answers, _event.sendid)"/>
+      <assign location="filed" expr="filed || _event.data.at || null"/>
+      <assign location="updated" expr="_event.data.at || updated"/>
+      <raise event="changed"/>
+    </transition>
+    <transition event="ledger.written">
+      <assign location="filed" expr="filed || _event.data.at || null"/>
+      <assign location="updated" expr="_event.data.at || updated"/>
+      <raise event="changed"/>
     </transition>
     <transition event="error.communication" cond="has(answers, _event.sendid)">
       <send targetexpr="answers[_event.sendid].to" event="failed">
@@ -350,7 +362,7 @@
       <send targetexpr="addr('project.' + repoID)" event="issue.changed">
         <content expr="summary({ n: n, title: title, body: body, component: component, kind: kind, state: state, count: count,
                                  minutes: minutes, workaround: workaround, fix: fix, possible: possible,
-                                 attachments: attachments.length })"/>
+                                 attachments: attachments.length, filed: filed, updated: updated })"/>
       </send>
     </transition>
   </state>

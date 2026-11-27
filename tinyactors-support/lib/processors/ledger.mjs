@@ -6,7 +6,9 @@
 import { DatabaseSync } from 'node:sqlite';
 
 export class Ledger {
-  constructor(path = ':memory:') {
+  // `now`: the host's wall clock in milliseconds (a SimulatedClock in tests)
+  constructor(path = ':memory:', { now = Date.now } = {}) {
+    this.now = now;
     this.database = new DatabaseSync(path);
     this.database.exec(`CREATE TABLE IF NOT EXISTS ledger (seq INTEGER PRIMARY KEY, at TEXT NOT NULL,
       kind TEXT NOT NULL, key TEXT NOT NULL, record TEXT NOT NULL)`);
@@ -20,8 +22,9 @@ export class Ledger {
   processor = (event, data) => {
     if (event !== 'ledger.append') return null;
     if (this.failing > 0) { this.failing--; return null; }
-    const { lastInsertRowid } = this.insert.run(new Date().toISOString(), data.kind, data.key, JSON.stringify(data.record ?? null));
-    return { event: 'ledger.written', data: { at: Number(lastInsertRowid) } };
+    const at = new Date(this.now()).toISOString();
+    const { lastInsertRowid } = this.insert.run(at, data.kind, data.key, JSON.stringify(data.record ?? null));
+    return { event: 'ledger.written', data: { seq: Number(lastInsertRowid), at } };
   };
   close() { this.database.close(); }
 }
