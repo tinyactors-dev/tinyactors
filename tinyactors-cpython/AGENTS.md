@@ -489,7 +489,7 @@ Decided by the maintainer (2026-10-13); every item is in
   beside its `ta_image`, both private to the `Snapshot` and never resized.
   Its methods mirror core's readers a segment at a time: `actors`,
   `actor`, `configuration`, `mailbox`, `timers`, `stats`, `charts`,
-  `trace_kept`, `traces` (`ta_otlp_history`, its encoder through the
+  `trace_kept`, `traces` (`ta_host_trace_history`, its encoder through the
   binding's allocator for the call: `ta_python_trace_history` in
   `src/host.c`, the one other place it reaches core). Test:
   `tests/test_read_snapshot.py`.

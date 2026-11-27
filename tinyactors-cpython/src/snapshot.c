@@ -449,10 +449,7 @@ static PyObject *ta_python_snapshot_trace_kept(PyObject *self, PyObject *argumen
 static PyObject *ta_python_snapshot_traces(PyObject *self, PyObject *arguments) {
     ta_python_snapshot_call call = {0, NULL, 0};
     if (ta_python_snapshot_enter(self, arguments, &call) < 0) return NULL;
-    ta_trace_kept kept;
-    kept.size = sizeof kept;
-    if (ta_system_trace_kept(call.segment->system, &kept) != TA_OK) Py_RETURN_NONE;
-    ta_otlp_history_input input = {sizeof input, call.segment->index, &kept, &call.segment->image, NULL};
+    ta_host_trace_history_input input = {sizeof input, call.segment->index, call.segment->system, &call.segment->image, NULL};
     return ta_python_trace_history(&input);
 }
 

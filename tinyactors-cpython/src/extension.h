@@ -90,10 +90,11 @@ PyObject *ta_python_value_read(ta_python_module_state *state, ta_bytes cbor);
 PyObject *ta_python_decode_traces(PyObject *module, PyObject *data);
 /* read_snapshot(data): a Snapshot (snapshot.c), and its type. */
 PyObject *ta_python_read_snapshot(PyObject *module, PyObject *data);
-/* The spans of a journal's kept records (ta_otlp_history) as bytes, the
- * encoder through the binding's allocator for the call (host.c, the only
- * file that reaches it): input->allocator is set there. */
-PyObject *ta_python_trace_history(ta_otlp_history_input *input);
+/* The spans of a journal's kept records (ta_host_trace_history) as bytes,
+ * or None when the system does not trace; the encoder through the
+ * binding's allocator for the call (host.c, the only file that reaches
+ * it): input->allocator is set there. */
+PyObject *ta_python_trace_history(ta_host_trace_history_input *input);
 /* A copy of a value for another actor: mutable containers (list, dict)
  * copied, immutable values shared, anything outside the table refused
  * (TypeError) and nesting past 64 refused (ValueError). */
