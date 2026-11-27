@@ -75,7 +75,8 @@ The maintainer's rules (2026-11-27), and what they rest on:
   `structuredContent` and a line or two of text for people
   (`lib/tools.mjs`, `summarize`): what happened, the identifier, what to
   do next; never JSON. A document (`get_doc`, `get_skill`) is its own
-  text. The MCP specification says a tool that returns structured content
+  text, whole, so a client that reads only the text can read it (the
+  maintainer, 2026-11-27). The MCP specification says a tool that returns structured content
   SHOULD also return its serialized JSON in a text block "for backwards
   compatibility" ([2025-11-25, server/tools, "Structured
   Content"](https://modelcontextprotocol.io/specification/2025-11-25/server/tools#structured-content));
