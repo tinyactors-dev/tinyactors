@@ -313,7 +313,8 @@ static PyObject *ta_python_snapshot_stats(PyObject *self, PyObject *arguments) {
         ta_python_put(result, "events", PyLong_FromUnsignedLong(stats.events)) < 0 ||
         ta_python_put(result, "timers", PyLong_FromUnsignedLong(stats.timers)) < 0 ||
         ta_python_put(result, "requests", PyLong_FromUnsignedLong(stats.requests)) < 0 ||
-        ta_python_put(result, "region_bytes", PyLong_FromUnsignedLongLong(stats.region_bytes)) < 0)
+        ta_python_put(result, "region_bytes", PyLong_FromUnsignedLongLong(stats.region_bytes)) < 0 ||
+        ta_python_put(result, "wall_ns", PyLong_FromUnsignedLongLong(stats.wall_ns)) < 0)
         Py_CLEAR(result);
     return result;
 }

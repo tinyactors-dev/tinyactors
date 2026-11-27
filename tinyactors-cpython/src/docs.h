@@ -202,8 +202,9 @@ static const char ta_python_doc_snapshot_timers[] =
     "ticks_per_second).";
 static const char ta_python_doc_snapshot_stats[] =
     "stats(segment)\n--\n\nThe segment's counters: now, ticks_per_second, next_deadline (2**64-1\n"
-    "for none), actors, hibernated, runnable, events, timers, requests and\n"
-    "region_bytes.";
+    "for none), actors, hibernated, runnable, events, timers, requests,\n"
+    "region_bytes and wall_ns (the wall clock given with now at the\n"
+    "segment's last advance, Unix epoch nanoseconds; 0 for never).";
 static const char ta_python_doc_snapshot_charts[] =
     "charts(segment)\n--\n\nThe charts of the segment's image, each {name, datamodel, states,\n"
     "transitions, data}: states {id, kind, parent} in document order (0 is\n"
@@ -217,8 +218,10 @@ static const char ta_python_doc_snapshot_trace_kept[] =
 static const char ta_python_doc_snapshot_traces[] =
     "traces(segment)\n--\n\nThe spans of those records as an OTLP ExportTraceServiceRequest\n"
     "(decode_traces() reads it), or None when the segment does not trace.\n"
-    "Times are the host's clock, not wall time; of the records a host had\n"
-    "already exported, the names and values given at run time are left out.";
+    "Times are wall time, each record's tick placed by the segment's own\n"
+    "now and wall_ns (stats()); of the records a host had already exported\n"
+    "it reads no name or value given at run time: an event is named from\n"
+    "the image, a microstep by its macrostep, an actor by its record.";
 
 static const char ta_python_doc_compiled[] =
     "The result of compile_charts or compile_system: an image and the\n"

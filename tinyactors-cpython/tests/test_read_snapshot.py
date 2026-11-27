@@ -74,6 +74,9 @@ class ReadSnapshot(unittest.TestCase):
         self.assertIn("scxml.spawned", [span["name"] for span in spans])
         self.assertGreaterEqual(len([s for s in spans if s["name"].startswith("scxml.macrostep")]), 2)
         self.assertTrue(all(span["start"] <= span["end"] for span in spans))
+        wall = snapshot.stats(0)["wall_ns"]  # the wall clock the host gave, placing the spans
+        self.assertGreater(wall, 0)
+        self.assertTrue(all(span["end"] <= wall + 10**9 for span in spans))
         host.__exit__(None, None, None)
         quiet, _, snapshot = shop("python", {"system": {"ticksPerSecond": 1000, "tracing": False}})
         self.assertIsNone(snapshot.trace_kept(0))
