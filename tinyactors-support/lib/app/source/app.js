@@ -301,8 +301,14 @@
   const FIELDS = {
     state: { label: 'State', options: () => STATES.map((s) => [s, STATE_NAMES[s]]) },
     kind: { label: 'Kind', options: () => KINDS.map((k) => [k, k]) },
-    component: { label: 'Component', options: () => [...new Set([...S.issues.map((i) => i.component),
-      ...S.projects.filter((p) => !S.filters.repo.size || S.filters.repo.has(p.repo)).flatMap((p) => p.components)])].sort().map((c) => [c, c]) },
+    // the components of the repositories shown: those a filter picked, else those with issues in the list
+    // (every component of every repository made the menu scroll); a component already picked stays
+    component: { label: 'Component', options: () => {
+      const shown = S.filters.repo.size ? S.filters.repo : new Set(S.issues.map((i) => i.repo));
+      return [...new Set([...S.issues.filter((i) => shown.has(i.repo)).map((i) => i.component),
+        ...S.projects.filter((p) => shown.has(p.repo)).flatMap((p) => p.components), ...S.filters.component])]
+        .sort().map((c) => [c, c]);
+    } },
     repo: { label: 'Repository', options: () => S.projects.map((p) => [p.repo, p.repo]) },
   };
   function chips() {

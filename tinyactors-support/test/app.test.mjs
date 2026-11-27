@@ -137,6 +137,15 @@ describe('the issue list app', { skip: chromium ? false : 'Playwright is not ins
     assert.equal(await app.locator('.row').count(), 9, 'every state');
     await page.keyboard.press('f');
     await app.locator('.menu--filter').waitFor();
+    // the components of the repositories shown: the two with issues, not scxmljs's (no issue there)
+    const components = () => app.locator('.menu--filter fieldset', { hasText: 'Component' }).locator('.option').allTextContents();
+    const listed = (await components()).map((t) => t.trim());
+    assert.ok(listed.includes('tinyactors-core') && listed.includes('examples'), listed.join(' '));
+    assert.ok(!listed.includes('conformance') && !listed.includes('site'), `scxmljs's components are absent: ${listed.join(' ')}`);
+    await app.locator('.menu--filter fieldset', { hasText: 'Repository' }).locator('.option', { hasText: 'tinyactors-dev/scxmljs' }).locator('input').check();
+    const scxmljs = (await components()).map((t) => t.trim());
+    assert.deepEqual(scxmljs, ['conformance', 'examples', 'packages', 'site'], 'a repository picked brings its components, and only them');
+    await app.locator('.menu--filter fieldset', { hasText: 'Repository' }).locator('.option', { hasText: 'tinyactors-dev/scxmljs' }).locator('input').uncheck();
     await app.locator('.menu--filter fieldset', { hasText: 'Component' }).locator('.option', { hasText: /^docs$/ }).locator('input').check();
     await page.keyboard.press('Escape');
     assert.deepEqual((await shown(app)).sort(), [id.fixed, id.mono].sort());

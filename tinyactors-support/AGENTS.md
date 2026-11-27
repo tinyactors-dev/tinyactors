@@ -122,7 +122,11 @@ The maintainer's rules (2026-11-27), and what they rest on:
   Esc, x, ⇧-click, /, f, c, ?); multi-select with bulk triage, close
   and decline; optimistic changes undone on a refusal; each tool's line
   as a toast; full screen only on the expand control
-  (`ui/request-display-mode`). Its colours are the
+  (`ui/request-display-mode`). The default view is the open issues,
+  grouped by state, ordered by cost; the filter menu's components are
+  those of the repositories shown (a repository filter's, else those with
+  issues in the list), not every repository's (the maintainer,
+  2026-11-27). Its colours are the
   tinyactors design system's tokens, light or dark from the host's
   `theme`, `prefers-color-scheme` when the host gives none; the host's
   style variables are not used.
