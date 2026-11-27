@@ -31,7 +31,8 @@
       "tinyactors-wasm": "./wasm/index.mjs",
       "default": "./index.mjs"
     },
-    "./package.json": "./package.json"
+    "./package.json": "./package.json",
+    "./mcp-tools.json": "./mcp-tools.json"
   },
   "files": [
     "index.mjs",
@@ -40,7 +41,8 @@
     "README.md",
     "LICENSE",
     "docs/guide",
-    "docs/values.md"
+    "docs/values.md",
+    "mcp-tools.json"
   ],
   "imports": {
     "#direct": {

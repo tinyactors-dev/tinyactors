@@ -6,7 +6,8 @@ import assert from 'node:assert/strict';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { compileCharts, Host, SimulatedClock } from '@tinyactors/node';
-import { createMCP, tap } from '../index.mjs';
+import catalog from '@tinyactors/node/mcp-tools.json' with { type: 'json' };
+import { argumentsOf, createMCP, tap } from '../index.mjs';
 
 const datamodel = process.env.TA_NAPI_DATAMODEL ?? 'native';
 
@@ -55,6 +56,22 @@ test('the tools an agent sees', async () => {
   assert.deepEqual(names, ['actor', 'ask', 'chart_source', 'compile', 'deploy', 'end_service', 'host_stats', 'logs', 'rehearse', 'send',
     'services', 'snapshot', 'snapshot_actors', 'snapshot_chart', 'snapshot_summary', 'snapshot_traces', 'snapshot_variables', 'systems',
     'terminate', 'trace_unwatch', 'trace_watch', 'traces'].sort());
+  await close();
+});
+
+test('the catalog: every tool has what runs it, and its arguments are checked against its schema', async () => {
+  const kinds = catalog.tools.map((tool) => Object.keys(tool.run)[0]);
+  assert.deepEqual([...new Set(kinds)].sort(), ['binding', 'host', 'snapshot']);
+  const { call, close } = await setup();
+  for (const tool of catalog.tools) {
+    const result = await call(tool.name, {});
+    const message = result.content[0].text;
+    // with no arguments every tool is refused by its schema, never for lack of an implementation
+    if (tool.inputSchema.required?.length) assert.match(message, /needs/, tool.name);
+    assert.doesNotMatch(message, /is not a function|undefined/, tool.name);
+  }
+  assert.throws(() => argumentsOf(catalog.tools.find((t) => t.name === 'deploy'), { system: 'shop', draft: 'd1', chart: 'order', migrate: 'yes' }), /migrate is a boolean/);
+  assert.equal(argumentsOf(catalog.tools.find((t) => t.name === 'snapshot_actors'), { snapshot: 's1' }).limit, 25);
   await close();
 });
 

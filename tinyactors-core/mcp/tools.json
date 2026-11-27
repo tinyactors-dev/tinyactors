@@ -1,0 +1,321 @@
+{
+  "name": "tinyactors",
+  "description": "Inspect a running tinyactors system, send to it, read its spans and logs, take snapshots, and rehearse and deploy chart versions",
+  "tools": [
+    {
+      "name": "systems",
+      "description": "The systems served: each with its charts, and how many actors it holds now.",
+      "inputSchema": { "type": "object", "properties": {} },
+      "annotations": { "readOnlyHint": true },
+      "run": { "binding": "systems" }
+    },
+    {
+      "name": "host_stats",
+      "description": "The host's counters now: actors, hibernated, pools, and per chart its turns, errors and faults.",
+      "inputSchema": {
+        "type": "object",
+        "properties": { "system": { "type": "string" } },
+        "required": ["system"]
+      },
+      "annotations": { "readOnlyHint": true },
+      "run": { "host": "host.stats" }
+    },
+    {
+      "name": "actor",
+      "description": "One actor now: its record (mailbox, delayed sends, invocations), its state and its variables. A hibernated actor has no state or variables here: use a snapshot.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "system": { "type": "string" },
+          "actor": { "type": "string", "description": "a session id or the name it was spawned with" }
+        },
+        "required": ["system", "actor"]
+      },
+      "annotations": { "readOnlyHint": true },
+      "run": { "host": { "get": "actor.get", "state": "actor.state", "context": "actor.context" } }
+    },
+    {
+      "name": "send",
+      "description": "Send an event to an actor. It returns once the event is in the actor's mailbox; read the effect with actor or a snapshot.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "system": { "type": "string" },
+          "actor": { "type": "string", "description": "a session id or the name it was spawned with" },
+          "event": { "type": "string" },
+          "data": { "description": "the event's data, any JSON value" }
+        },
+        "required": ["system", "actor", "event"]
+      },
+      "annotations": { "openWorldHint": true },
+      "run": { "binding": "send" }
+    },
+    {
+      "name": "ask",
+      "description": "Send an event and wait for the actor's reply to _event.origin (a <send targetexpr=\"_event.origin\">).",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "system": { "type": "string" },
+          "actor": { "type": "string", "description": "a session id or the name it was spawned with" },
+          "event": { "type": "string" },
+          "data": { "description": "the event's data, any JSON value" },
+          "timeoutMs": { "type": "number", "default": 2000 }
+        },
+        "required": ["system", "actor", "event"]
+      },
+      "annotations": { "openWorldHint": true },
+      "run": { "binding": "ask" }
+    },
+    {
+      "name": "trace_watch",
+      "description": "Trace matching actors at more detail for a while: rules of {chart, actor (a name, * suffix), event, session, detail: summary|decisions|full, values}. Read the spans with traces.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "system": { "type": "string" },
+          "rules": { "type": "array", "items": { "type": "object" } },
+          "seconds": { "type": "number", "default": 60, "description": "on the host's clock" }
+        },
+        "required": ["system", "rules"]
+      },
+      "annotations": {},
+      "run": { "host": "trace.watch" }
+    },
+    {
+      "name": "trace_unwatch",
+      "description": "End a watch early.",
+      "inputSchema": {
+        "type": "object",
+        "properties": { "system": { "type": "string" }, "id": { "type": "integer" } },
+        "required": ["system", "id"]
+      },
+      "annotations": {},
+      "run": { "host": "trace.unwatch" }
+    },
+    {
+      "name": "traces",
+      "description": "The recent spans the host exported (its telemetry), newest last: filter by session or a span name prefix. Needs telemetry in the host's config.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "system": { "type": "string" },
+          "session": { "type": "integer" },
+          "name": { "type": "string" },
+          "limit": { "type": "integer", "default": 50 }
+        },
+        "required": ["system"]
+      },
+      "annotations": { "readOnlyHint": true },
+      "run": { "binding": "traces" }
+    },
+    {
+      "name": "logs",
+      "description": "The recent <log> lines, newest last, for one session or all.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "system": { "type": "string" },
+          "session": { "type": "integer" },
+          "limit": { "type": "integer", "default": 50 }
+        },
+        "required": ["system"]
+      },
+      "annotations": { "readOnlyHint": true },
+      "run": { "binding": "logs" }
+    },
+    {
+      "name": "services",
+      "description": "The services (external invocations) that run, by invoking session: type, src, invoke id.",
+      "inputSchema": {
+        "type": "object",
+        "properties": { "system": { "type": "string" }, "session": { "type": "integer" } },
+        "required": ["system"]
+      },
+      "annotations": { "readOnlyHint": true },
+      "run": { "binding": "services" }
+    },
+    {
+      "name": "end_service",
+      "description": "End a running service as its service would: done (done.invoke for the actor) or error (error.communication). For a service that will never answer. Destructive.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "system": { "type": "string" },
+          "session": { "type": "integer" },
+          "invokeid": { "type": "string" },
+          "as": { "enum": ["done", "error"] }
+        },
+        "required": ["system", "session", "invokeid", "as"]
+      },
+      "annotations": { "destructiveHint": true },
+      "gate": "allowDeploy",
+      "run": { "binding": "end_service" }
+    },
+    {
+      "name": "chart_source",
+      "description": "The SCXML of the current version of a chart, as the application gave it (an image holds no source).",
+      "inputSchema": {
+        "type": "object",
+        "properties": { "system": { "type": "string" }, "chart": { "type": "string" } },
+        "required": ["system", "chart"]
+      },
+      "annotations": { "readOnlyHint": true },
+      "run": { "binding": "chart_source" }
+    },
+    {
+      "name": "compile",
+      "description": "Compile a draft chart; nothing runs. Returns its diagnostics and a draft id for rehearse and deploy.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "name": { "type": "string", "description": "a file name, such as order.scxml" },
+          "text": { "type": "string" }
+        },
+        "required": ["name", "text"]
+      },
+      "annotations": { "readOnlyHint": true },
+      "run": { "binding": "compile" }
+    },
+    {
+      "name": "deploy",
+      "description": "Add a draft's image to the live host: new spawns run it at once. With migrate, move the running actors of the chart too, and wait for the result. Destructive: rehearse first.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "system": { "type": "string" },
+          "draft": { "type": "string" },
+          "chart": { "type": "string" },
+          "migrate": { "type": "boolean", "default": false },
+          "wake": { "type": "boolean", "default": false },
+          "timeoutMs": { "type": "number", "default": 30000 }
+        },
+        "required": ["system", "draft", "chart"]
+      },
+      "annotations": { "destructiveHint": true },
+      "gate": "allowDeploy",
+      "run": { "binding": "deploy" }
+    },
+    {
+      "name": "terminate",
+      "description": "End an actor. Destructive.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "system": { "type": "string" },
+          "actor": { "type": "string", "description": "a session id or the name it was spawned with" }
+        },
+        "required": ["system", "actor"]
+      },
+      "annotations": { "destructiveHint": true },
+      "gate": "allowTerminate",
+      "run": { "binding": "terminate" }
+    },
+    {
+      "name": "snapshot",
+      "description": "Take a snapshot of a system: every actor, its states, mailbox and delayed sends, the variables, and the trace history, at one moment. The snapshot_* tools and rehearse read it without touching the live host.",
+      "inputSchema": {
+        "type": "object",
+        "properties": { "system": { "type": "string" } },
+        "required": ["system"]
+      },
+      "annotations": { "readOnlyHint": true },
+      "run": { "binding": "snapshot" }
+    },
+    {
+      "name": "snapshot_summary",
+      "description": "What a snapshot holds: its versions (segments) and their charts, per chart how many actors rest in each state, and how much trace history it kept.",
+      "inputSchema": {
+        "type": "object",
+        "properties": { "snapshot": { "type": "string" } },
+        "required": ["snapshot"]
+      },
+      "annotations": { "readOnlyHint": true },
+      "run": { "snapshot": "snapshot.summary" }
+    },
+    {
+      "name": "snapshot_actors",
+      "description": "The actors of a snapshot, filtered by chart, a state they are in (any active state id), status (idle, runnable, hibernated, ...) or name prefix, by session. Paged.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "snapshot": { "type": "string" },
+          "chart": { "type": "string" },
+          "state": { "type": "string" },
+          "status": { "type": "string" },
+          "name": { "type": "string", "description": "a prefix of the name an actor was spawned with" },
+          "offset": { "type": "integer", "default": 0 },
+          "limit": { "type": "integer", "default": 25 }
+        },
+        "required": ["snapshot"]
+      },
+      "annotations": { "readOnlyHint": true },
+      "run": { "snapshot": "snapshot.actors" }
+    },
+    {
+      "name": "snapshot_variables",
+      "description": "The variables of the actors of a snapshot (one session, or those in a chart and state), read from a copy restored from it. A hibernated actor's are in the application's store.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "snapshot": { "type": "string" },
+          "session": { "type": "integer" },
+          "chart": { "type": "string" },
+          "state": { "type": "string" },
+          "limit": { "type": "integer", "default": 50 }
+        },
+        "required": ["snapshot"]
+      },
+      "annotations": { "readOnlyHint": true },
+      "run": { "binding": "snapshot_variables" }
+    },
+    {
+      "name": "snapshot_chart",
+      "description": "A chart as a snapshot holds it: its states with how many actors rest in each, its transitions (events, conditions, targets) and its data.",
+      "inputSchema": {
+        "type": "object",
+        "properties": { "snapshot": { "type": "string" }, "chart": { "type": "string" } },
+        "required": ["snapshot", "chart"]
+      },
+      "annotations": { "readOnlyHint": true },
+      "run": { "snapshot": "snapshot.chart" }
+    },
+    {
+      "name": "snapshot_traces",
+      "description": "The spans of the trace history a snapshot kept (the moments before it was taken), oldest first, the last `limit`: filter by session or a span name prefix. Times are wall time (nanoseconds since the Unix epoch); spans a host had already exported have no names or values given at run time ((unread) for an event the image does not name).",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "snapshot": { "type": "string" },
+          "session": { "type": "integer" },
+          "name": { "type": "string" },
+          "limit": { "type": "integer", "default": 40 }
+        },
+        "required": ["snapshot"]
+      },
+      "annotations": { "readOnlyHint": true },
+      "run": { "snapshot": "snapshot.spans" }
+    },
+    {
+      "name": "rehearse",
+      "description": "Rehearse a deploy on a copy of a snapshot: restore it with stand-ins for the I/O processors, services and transport, add a draft, migrate a chart to it, then run the copy for advanceMs on a simulated clock. Reports the migration, the states before and after, and what the copy sent and invoked. The live host is not touched.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "snapshot": { "type": "string" },
+          "draft": { "type": "string" },
+          "chart": { "type": "string" },
+          "advanceMs": { "type": "number", "default": 0 },
+          "services": {
+            "type": "object",
+            "additionalProperties": { "type": "string" },
+            "description": "how each stand-in service answers, by type: silent (never, the default), done, error (error.communication), or the name of an event it sends back"
+          }
+        },
+        "required": ["snapshot", "draft", "chart"]
+      },
+      "annotations": { "readOnlyHint": true },
+      "run": { "binding": "rehearse" }
+    }
+  ]
+}

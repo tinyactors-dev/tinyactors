@@ -17,8 +17,7 @@
   },
   "files": ["index.mjs", "index.d.ts", "README.md"],
   "dependencies": {
-    "@modelcontextprotocol/sdk": "1.32.2",
-    "zod": "3.25.76"
+    "@modelcontextprotocol/sdk": "1.32.2"
   },
   "peerDependencies": {
     "@tinyactors/node": ">=0.4.0"

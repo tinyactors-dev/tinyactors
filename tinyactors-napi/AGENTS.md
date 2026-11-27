@@ -1067,10 +1067,15 @@ versions (`mcp/README.md`). It is JavaScript over this package's public
 exports and `@modelcontextprotocol/sdk` only, never the addon or
 `lib/direct.mjs`, so it adds nothing to the binding: a tap wraps the
 host's handlers at construction, and live tools are typed methods and
-inputs. Its snapshot tools read a pack with `readSnapshot`, core's readers
-of a snapshot of this build; variables and rehearsals come from a copy
-restored from the snapshot, with stand-ins for its I/O processors,
-services and transport. `mise run test` installs its
+inputs. Its tools are core's catalog (`tinyactors-core/mcp/tools.json`,
+which the build copies beside package.json as `mcp-tools.json`, gitignored,
+and the package ships as `@tinyactors/node/mcp-tools.json`; the pack takes
+it from core, as LICENSE): it lists them, checks their arguments, and
+forwards a `snapshot` tool to `snapshot.request` and a `host` tool to the
+typed method of its request; what it writes itself is the binding
+operations (`tinyactors-core/mcp/README.md`): the tap, copies restored
+from a snapshot with stand-ins for its I/O processors, services and
+transport, compile, deploy, send, ask and terminate. `mise run test` installs its
 dependencies from its lockfile with the pinned pnpm, checks its types
 with tsc and runs its test under node and bun on both datamodels. It is not
 packed or published yet.

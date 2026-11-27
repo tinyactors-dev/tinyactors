@@ -14,6 +14,10 @@ module NodeAPI
   # Core's amalgamation, built from tinyactors-core's sources into this
   # project's own build/ (AGENTS.md, "Tasks").
   CORE_BUILD = BUILD.join('core')
+  # The MCP tool catalog of the core this package builds (tinyactors-core/mcp/tools.json),
+  # copied beside package.json by the build and shipped as @tinyactors/node/mcp-tools.json.
+  MCP_CATALOG = ROOT.join('../tinyactors-core/mcp/tools.json').expand_path
+  MCP_CATALOG_COPY = ROOT.join('mcp-tools.json')
   # The objects the addon links, and the addon itself, which lib/direct.mjs loads.
   OBJECTS = BUILD.join('objects')
   ADDON = BUILD.join('tinyactors.node')

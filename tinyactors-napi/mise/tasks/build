@@ -13,9 +13,12 @@
 # linked with Target#plugin: Node-API's functions stay undefined, for the
 # runtime that loads it to provide (mise/napi.rb, NodeAPI.build_addon).
 
+require 'fileutils'
 require_relative '../napi'
 
 NodeAPI.run('mise', 'run', '//tinyactors-core:amalgamate', '--', '--out', NodeAPI::CORE_BUILD.to_s)
+# the MCP catalog of this core, which the package ships beside package.json (ADR 0021)
+FileUtils.cp(NodeAPI::MCP_CATALOG, NodeAPI::MCP_CATALOG_COPY)
 if NodeAPI.sources.empty?
   puts 'build: no addon yet (src/): core\'s amalgamation only'
 else

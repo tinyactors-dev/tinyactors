@@ -1,4 +1,4 @@
-import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import type { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import type { DecodedSpan, Host, HostOptions, Invocation, MigrationResult } from '@tinyactors/node';
 
 /** What a tap keeps of what the host's handlers saw. */
@@ -51,21 +51,27 @@ export interface Served {
 
 export interface MCP {
   /** A new MCP server over the systems, for one connection; every server shares the snapshots and drafts. */
-  server(): McpServer;
+  server(): Server;
   /** Serves Streamable HTTP at `http://host:port/path`, a server per MCP session. */
   listen(options?: { port?: number; host?: string; path?: string; token?: string }): Promise<Served>;
 }
 
 export function createMCP(systems: Record<string, ServedSystem>, options?: MCPOptions): MCP;
 
-/** A snapshot read with `readSnapshot`: each segment's charts and actors (status, configuration, mailbox,
- * delayed sends), and the spans its journals kept (null when no segment traces). */
-export function snapshotOf(bytes: Uint8Array): {
-  systemID: string;
-  time: bigint;
-  segments: ({ index: number; live: false } | { index: number; live: true; stats: unknown; charts: unknown[]; actors: unknown[] })[];
-  traces: { spans: unknown[]; retained: { records: number; acknowledged: number; bytes: number; lost: number } } | null;
-};
+/** A tool of the catalog (`@tinyactors/node/mcp-tools.json`, core's `tinyactors-core/mcp/tools.json`). */
+export interface CatalogTool {
+  name: string;
+  description: string;
+  inputSchema: { type: 'object'; properties: Record<string, Record<string, unknown>>; required?: string[] };
+  annotations: Record<string, boolean>;
+  /** The server option that must be set for the tool to run. */
+  gate?: 'allowDeploy' | 'allowTerminate';
+  /** A method of core's snapshot reader, core's requests through the typed methods, or the binding's own operation. */
+  run: { snapshot: string } | { host: string | Record<string, string> } | { binding: string };
+}
+
+/** A tool's arguments checked against its schema, its defaults filled in; a TypeError for others. */
+export function argumentsOf(tool: CatalogTool, given?: Record<string, unknown>): Record<string, unknown>;
 
 /** A migration's result for a model: failures grouped by reason, five sessions of each. */
 export function migrationSummary(result: MigrationResult): {

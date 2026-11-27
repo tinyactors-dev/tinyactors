@@ -182,7 +182,7 @@ module NodeAPI
       FileUtils.mkdir_p(dir)
       files.each do |file|
         FileUtils.mkdir_p(dir.join(file).dirname)
-        FileUtils.cp_r(file == 'LICENSE' ? LICENSE : ROOT.join(file), dir.join(file))
+        FileUtils.cp_r({ 'LICENSE' => LICENSE, 'mcp-tools.json' => MCP_CATALOG }.fetch(file) { ROOT.join(file) }, dir.join(file))
       end
       write_version!(dir.join('lib/version.mjs'), version)
       staged = manifest.merge(

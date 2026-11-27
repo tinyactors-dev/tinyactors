@@ -101,6 +101,17 @@ with `done`, fail with `error`, or send an event back:
 hibernated actor stays hibernated in it, and its variables are in your
 store.
 
+## The same server in every language
+
+The tools are not this package's own. Their names, descriptions, schemas
+and rules are core's catalog (`tinyactors-core/mcp/tools.json`), which
+`@tinyactors/node` ships as `@tinyactors/node/mcp-tools.json`, and the
+snapshot tools are core's snapshot reader (`snapshot.request`). What this
+package writes is what only JavaScript can do: the tap, the copies and
+their stand-ins, compile and deploy, send, ask and terminate. A server for
+another language is the same catalog over its own binding
+(`tinyactors-core/mcp/README.md` says what it implements).
+
 ## What an agent can and cannot do
 
 - A snapshot is refused while the host is not quiescent: during a
