@@ -1580,6 +1580,14 @@ export interface Snapshot {
    * run time), a microstep by its macrostep, an actor by its record while it is resident.
    */
   traces(segment: number): Uint8Array | null;
+  /**
+   * Any method of core's snapshot reader (tinyactors-core/docs/snapshot-requests.md), with its params:
+   * the readers a segment at a time (`snapshot.handles`, `snapshot.actor`, ...) and what a tool asks of
+   * the whole snapshot (`snapshot.summary`, `snapshot.actors` filtered and paged, `snapshot.chart` with
+   * the actors in each state, `snapshot.spans` filtered). Its result, as {@link decode} reads values;
+   * its error a {@link TinyactorsError} with core's `code`, `reason` and `path`.
+   */
+  request(method: string, params?: Record<string, unknown>): unknown;
 }
 
 /** An actor as {@link Snapshot.actor} reads it. */

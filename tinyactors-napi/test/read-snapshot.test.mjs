@@ -105,6 +105,24 @@ test('the spans the journal kept, read from the snapshot', async () => {
   host.close();
 });
 
+test('request: core\'s snapshot methods over the whole snapshot, its errors a TinyactorsError', async () => {
+  const { host, actor } = await shop();
+  const snapshot = readSnapshot(host.snapshot());
+  const summary = snapshot.request('snapshot.summary');
+  equal(JSON.stringify(summary.states), '{"order":{"s":1}}', 'actors per resting state');
+  const listed = snapshot.request('snapshot.actors', { state: 's', name: 'order-' });
+  equal(listed.total, 1, 'one actor in s');
+  const [row] = listed.actors;
+  equal(`${row.session} ${row.states} ${row.queued} ${row.delayed[0].sendid} ${row.delayed[0].dueInMs}`, `${actor.id} s order.pay nag 9800`, 'its row');
+  const chart = snapshot.request('snapshot.chart', { chart: 'order' });
+  equal(chart.states.map((s) => `${s.id}:${s.actors}`).join(), 's:1,paid:0', 'actors in each state');
+  const spans = snapshot.request('snapshot.spans', { session: Number(actor.id), name: 'scxml.macrostep', limit: 2 });
+  equal(spans.total >= 2 && spans.spans.length === 2, true, 'the last two of its macrosteps');
+  throws(() => snapshot.request('snapshot.chart', { chart: 'nothing' }), (error) => equal(`${error.reason} ${error.path}`, 'stale params.chart', 'stale'), 'a chart no segment holds');
+  throws(() => snapshot.request('snapshot.nothing'), (error) => equal(error.code, -32601, 'no such method'), 'another method');
+  host.close();
+});
+
 test('readSnapshot refuses what is not a snapshot; a method refuses another segment, handle or object', async () => {
   const { host } = await shop();
   throws(() => readSnapshot(new Uint8Array(64)), (error) => equal(error instanceof InvalidError, true, 'InvalidError'), 'not a snapshot');

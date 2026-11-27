@@ -99,8 +99,7 @@ static const ta_napi_arity ta_napi_host_arities[] = {
 static const ta_napi_arity ta_napi_address_static_arities[] = {{"fromSession", 2}, {"fromName", 2}, {NULL, 0}};
 static const ta_napi_arity ta_napi_clock_arities[] = {{"increment", 1}, {NULL, 0}};
 static const ta_napi_arity ta_napi_snapshot_arities[] = {
-    {"actors", 1}, {"actor", 2}, {"configuration", 2}, {"mailbox", 2}, {"timers", 2},
-    {"stats", 1},  {"charts", 1}, {"traceKept", 1},    {"traces", 1},  {NULL, 0},
+    {"request", 2}, {NULL, 0},
 };
 
 static napi_status ta_napi_module_arities(napi_env env, napi_value exports) {

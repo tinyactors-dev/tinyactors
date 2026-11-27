@@ -1039,19 +1039,23 @@ file.
 
 ## Reading a snapshot
 
-**`readSnapshot(bytes) → Snapshot`** (`src/snapshot.c`) reads a pack of
-this build without a host (`tinyactors-core/docs/embedding.md`, section
-12): the pack copied into a `Buffer`, 8-aligned, and each live segment's
-region read with `ta_system_read` into a second one beside its
-`ta_image`; both kept under the instance's `snapshot` symbol, never handed
-out, and gone with the object (no finalizer, no allocator call). Its
-methods mirror core's readers a segment at a time: `actors`, `actor`,
+**`readSnapshot(bytes) → Snapshot`** reads a pack of this build without
+a host, over core's snapshot reader
+(`tinyactors-core/docs/snapshot-requests.md`). The addon's
+`src/snapshot.c` makes the reader in one `Buffer` of its size
+(`ta_host_snapshot_reader_size`, `_open`: the pack copied and each live
+segment's region read into it), kept under the instance's `snapshot`
+symbol, never handed out, and gone with the object (no finalizer, no
+allocator call); its one method, `request(method, params)`, is
+`ta_host_snapshot_reader_request`, the message, the reply and the
+request's working memory in the environment's arena, a mark per call. The
+wasm package's reader is the same over its module's `wasm/src/snapshot.c`
+(the reader's block from the environment's allocator, freed when the
+reader is collected). The convenience layer's `Snapshot`, shared by both
+packages, mirrors core's readers over `request` (`actors`, `actor`,
 `configuration`, `mailbox`, `timers`, `stats`, `charts`, `traceKept`,
-`traces` (`ta_host_trace_history`, its encoder through the environment's
-allocator for the call). The wasm package has the same, over its module's
-`wasm/src/snapshot.c` (the pack and the regions in blocks of the
-environment's allocator, freed when the `Snapshot` is collected; each
-method one query answered as CBOR). Test: `test/read-snapshot.test.mjs`,
+`traces`), ids and times as bigints, and keeps `request` for the rest
+(the MCP server's snapshot tools). Test: `test/read-snapshot.test.mjs`,
 run against both packages.
 
 ## The MCP server (`mcp/`)

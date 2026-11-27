@@ -56,7 +56,7 @@ import {
   Host as DirectHost,
   InvalidError,
   parseHTTPRequest,
-  readSnapshot,
+  readSnapshot as readSnapshotReader,
   ResolveError,
   Send,
   SimulatedClock,
@@ -77,7 +77,6 @@ export {
   encodeHTTPPost,
   InvalidError,
   parseHTTPRequest,
-  readSnapshot,
   ResolveError,
   SimulatedClock,
   StaleError,
@@ -887,6 +886,93 @@ export function compileDir(dir, options) {
   if (sources.length === 0) throw new InvalidError(`no *.scxml file under ${top}`);
   sources.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
   return compileCharts(sources, { resolver: options?.resolver ?? confined(modules, top) });
+}
+
+// ---- a snapshot, read without a host -----------------------------------------------
+//
+// readSnapshot(bytes) -> Snapshot: core's snapshot reader
+// (tinyactors-core/docs/snapshot-requests.md), which the direct layer makes
+// from a pack's bytes. `request(method, params)` asks it any of its methods;
+// the other methods mirror core's readers a segment at a time over it, with
+// what is an id or a time as a bigint, and an index or a handle the
+// snapshot does not have a RangeError.
+
+const MAKING_SNAPSHOT = Symbol('making a Snapshot');
+const big = (value) => (value === null || value === undefined ? value : BigInt(value));
+
+export class Snapshot {
+  #reader;
+
+  constructor(making, reader) {
+    if (making !== MAKING_SNAPSHOT) throw new TypeError('a Snapshot is made by readSnapshot');
+    this.#reader = reader;
+    for (const key of ['systemID', 'datamodel', 'time', 'segments', 'state']) {
+      Object.defineProperty(this, key, { value: reader[key], enumerable: true });
+    }
+  }
+
+  // One of the reader's methods: its result, or its error as a TinyactorsError.
+  request(method, params) {
+    if (!(#reader in this)) throw new TypeError('not a Snapshot');
+    return this.#reader.request(method, params);
+  }
+
+  // A mirrored reader: a segment's index or an actor's handle it does not
+  // have is a RangeError, a param of another type a TypeError.
+  #mirror(method, params) {
+    try {
+      return this.request(method, params);
+    } catch (error) {
+      if (error instanceof TinyactorsError && (error.reason === 'range' || error.reason === 'stale' || error.reason === 'missing')) {
+        throw new RangeError(error.message, { cause: error });
+      }
+      if (error instanceof TinyactorsError && error.reason === 'type') throw new TypeError(error.message, { cause: error });
+      throw error;
+    }
+  }
+
+  actors(segment) {
+    return this.#mirror('snapshot.handles', { segment });
+  }
+
+  actor(segment, handle) {
+    const actor = this.#mirror('snapshot.actor', { segment, handle });
+    return { ...actor, session: big(actor.session), parent: big(actor.parent) };
+  }
+
+  configuration(segment, handle) {
+    return this.#mirror('snapshot.configuration', { segment, handle });
+  }
+
+  mailbox(segment, handle) {
+    return this.#mirror('snapshot.mailbox', { segment, handle });
+  }
+
+  timers(segment, handle) {
+    return this.#mirror('snapshot.timers', { segment, handle }).map((timer) => ({ ...timer, due: big(timer.due) }));
+  }
+
+  stats(segment) {
+    const stats = this.#mirror('snapshot.stats', { segment });
+    return { ...stats, now: big(stats.now), nextDeadline: big(stats.nextDeadline), wallNanoseconds: big(stats.wallNanoseconds) };
+  }
+
+  charts(segment) {
+    return this.#mirror('snapshot.charts', { segment });
+  }
+
+  traceKept(segment) {
+    return this.#mirror('snapshot.traceKept', { segment });
+  }
+
+  traces(segment) {
+    return this.#mirror('snapshot.traces', { segment });
+  }
+}
+
+/** readSnapshot(bytes): a pack of this build (host.snapshot()'s bytes), read without a host. */
+export function readSnapshot(bytes) {
+  return new Snapshot(MAKING_SNAPSHOT, readSnapshotReader(bytes));
 }
 
 // ---- Address ---------------------------------------------------------------------------
