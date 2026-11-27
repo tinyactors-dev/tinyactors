@@ -3123,11 +3123,19 @@
         {
           "name": "ticks_per_second",
           "type": "uint64_t"
+        },
+        {
+          "name": "now",
+          "type": "uint64_t"
+        },
+        {
+          "name": "wall_ns",
+          "type": "uint64_t"
         }
       ],
       "layout": {
         "x86_64": {
-          "size": 80,
+          "size": 96,
           "align": 8,
           "offsets": {
             "size": 0,
@@ -3137,11 +3145,13 @@
             "records": 56,
             "acknowledged_records": 60,
             "lost": 64,
-            "ticks_per_second": 72
+            "ticks_per_second": 72,
+            "now": 80,
+            "wall_ns": 88
           }
         },
         "aarch64": {
-          "size": 80,
+          "size": 96,
           "align": 8,
           "offsets": {
             "size": 0,
@@ -3151,11 +3161,13 @@
             "records": 56,
             "acknowledged_records": 60,
             "lost": 64,
-            "ticks_per_second": 72
+            "ticks_per_second": 72,
+            "now": 80,
+            "wall_ns": 88
           }
         },
         "wasm32": {
-          "size": 64,
+          "size": 80,
           "align": 8,
           "offsets": {
             "size": 0,
@@ -3165,7 +3177,9 @@
             "records": 40,
             "acknowledged_records": 44,
             "lost": 48,
-            "ticks_per_second": 56
+            "ticks_per_second": 56,
+            "now": 64,
+            "wall_ns": 72
           }
         }
       }
@@ -3364,11 +3378,15 @@
         {
           "name": "ticks_per_second",
           "type": "uint64_t"
+        },
+        {
+          "name": "wall_ns",
+          "type": "uint64_t"
         }
       ],
       "layout": {
         "x86_64": {
-          "size": 264,
+          "size": 272,
           "align": 8,
           "offsets": {
             "size": 0,
@@ -3418,11 +3436,12 @@
             "requests_high_water": 240,
             "slab_pages_high_water": 244,
             "pad2": 248,
-            "ticks_per_second": 256
+            "ticks_per_second": 256,
+            "wall_ns": 264
           }
         },
         "aarch64": {
-          "size": 264,
+          "size": 272,
           "align": 8,
           "offsets": {
             "size": 0,
@@ -3472,11 +3491,12 @@
             "requests_high_water": 240,
             "slab_pages_high_water": 244,
             "pad2": 248,
-            "ticks_per_second": 256
+            "ticks_per_second": 256,
+            "wall_ns": 264
           }
         },
         "wasm32": {
-          "size": 264,
+          "size": 272,
           "align": 8,
           "offsets": {
             "size": 0,
@@ -3526,7 +3546,8 @@
             "requests_high_water": 240,
             "slab_pages_high_water": 244,
             "pad2": 248,
-            "ticks_per_second": 256
+            "ticks_per_second": 256,
+            "wall_ns": 264
           }
         }
       }

@@ -128,6 +128,7 @@ ABI_CHECK(offsetof(ta_system_stats, actors_high_water) > offsetof(ta_system_stat
           system_stats_high_water_last);
 ABI_CHECK(offsetof(ta_system_stats, ticks_per_second) > offsetof(ta_system_stats, slab_pages_high_water),
           system_stats_ticks_per_second_last);
+ABI_CHECK(offsetof(ta_system_stats, wall_ns) > offsetof(ta_system_stats, ticks_per_second), system_stats_wall_ns_last);
 /* what a reader of a snapshot reads (ta_system_read) */
 ABI_CHECK(offsetof(ta_transition_info, size) == 0, transition_info_size_first);
 ABI_CHECK(sizeof(ta_transition_info) == 24, transition_info_size);

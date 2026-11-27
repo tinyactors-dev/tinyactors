@@ -55,6 +55,7 @@ typedef struct ta_system_stats {
     uint32_t workspaces_high_water, requests_high_water, slab_pages_high_water;
     uint32_t pad2;
     uint64_t ticks_per_second; /* the rate of `now`, `next_deadline` and a delayed send's due */
+    uint64_t wall_ns; /* the wall clock (Unix epoch nanoseconds) given with `now` at the last advance; 0: never */
 } ta_system_stats;
 
 /* What one chart's actors did in one system (ta_system_chart_stats_get), or

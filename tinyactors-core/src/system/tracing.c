@@ -100,6 +100,8 @@ ta_status ta_system_trace_kept(const ta_system *system, ta_trace_kept *out) {
     out->acknowledged = system->journal.retained;
     out->lost = system->journal.lost_total;
     out->ticks_per_second = system->config.ticks_per_second;
+    out->now = system->now;
+    out->wall_ns = system->wall_ns;
     uint32_t acknowledged = out->acknowledged;
     count_records(&out->first, &acknowledged, out);
     count_records(&out->second, &acknowledged, out);

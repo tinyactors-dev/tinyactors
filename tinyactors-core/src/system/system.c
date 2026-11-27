@@ -984,6 +984,7 @@ void ta_system_stats_get(const ta_system *system, ta_system_stats *o) {
     z.requests_high_water = system->requests.high_water_mark;
     z.slab_pages_high_water = system->slab.high_water_mark;
     z.ticks_per_second = system->config.ticks_per_second;
+    z.wall_ns = system->wall_ns;
     uint32_t n = o->size && o->size < sizeof z ? o->size : (uint32_t)sizeof z;
     ta_memcpy(o, &z, n);
     o->size = n;

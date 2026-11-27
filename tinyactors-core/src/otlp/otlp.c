@@ -155,6 +155,7 @@ typedef struct otlp_kept {
     uint32_t at;           /* the record read now, from the first record kept */
     uint32_t base;         /* where the view read now starts, from the first record kept */
     uint64_t ticks_per_second;
+    uint64_t clock_now, wall_ns; /* the system's clocks at its last advance */
     uint64_t now;  /* the tick of the records read last */
     uint64_t fuel; /* the lowest fuel stamp of that tick */
     uint64_t time; /* the tick, in nanoseconds */
@@ -1528,6 +1529,22 @@ static uint32_t otlp_read_record(const otlp_reading *reading, const ta_trace_rec
     return otlp_read_event(reading, &scratch, record, time, source);
 }
 
+/* `ticks` of the system's clock in nanoseconds. */
+static uint64_t otlp_ticks_ns(const otlp_kept *kept, uint64_t ticks) {
+    if (!kept->ticks_per_second) return ticks;
+    return otlp_scale(ticks % kept->ticks_per_second, 1000000000u, kept->ticks_per_second) +
+           ticks / kept->ticks_per_second * 1000000000u;
+}
+
+/* A tick on the wall clock: the system's wall time at its last advance,
+ * less how far the tick lies before that advance's; the tick in
+ * nanoseconds when the system was given no wall clock. */
+static uint64_t otlp_kept_wall(const otlp_kept *kept, uint64_t tick) {
+    if (!kept->wall_ns) return otlp_ticks_ns(kept, tick);
+    uint64_t before = tick < kept->clock_now ? otlp_ticks_ns(kept, kept->clock_now - tick) : 0;
+    return before < kept->wall_ns ? kept->wall_ns - before : 0;
+}
+
 /* A kept record's tick: a new one starts at its lowest fuel stamp. */
 static void otlp_kept_tick(otlp_kept *kept, const ta_trace_record *record) {
     uint64_t fuel = record->fuel;
@@ -1542,10 +1559,7 @@ static void otlp_kept_tick(otlp_kept *kept, const ta_trace_record *record) {
     kept->started = 1;
     kept->now = record->now;
     kept->fuel = fuel;
-    kept->time = kept->ticks_per_second ? otlp_scale(record->now % kept->ticks_per_second,
-                                                     1000000000u, kept->ticks_per_second) +
-                                              record->now / kept->ticks_per_second * 1000000000u
-                                        : record->now;
+    kept->time = otlp_kept_wall(kept, record->now);
 }
 
 static uint32_t otlp_read_view(const otlp_reading *reading, uint32_t *cursor) {
@@ -2640,6 +2654,8 @@ ta_status ta_otlp_history(const ta_otlp_history_input *input, ta_buffer *out) {
     ta_memset(&reading_kept, 0, sizeof reading_kept);
     reading_kept.acknowledged = kept->acknowledged;
     reading_kept.ticks_per_second = kept->ticks_per_second;
+    reading_kept.clock_now = kept->now;
+    reading_kept.wall_ns = kept->wall_ns;
     reading_kept.names = input->names;
     reading_kept.name_count = input->name_count;
     size_t length = 0;

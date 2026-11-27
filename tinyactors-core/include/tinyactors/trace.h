@@ -314,8 +314,10 @@ typedef struct ta_trace_view {
  * snapshot), then the pending ones, in at most two views (`second` is empty
  * unless the journal wrapped). The first `acknowledged` bytes, through both
  * views, are the acknowledged records: a dynamic string of one may have
- * been freed, and its payloads released. Their times are the system's
- * clock (`now`, in ticks of `ticks_per_second`) and its fuel stamp. */
+ * been freed, and its payloads released. A record's time is the system's
+ * clock (`now`, in ticks of `ticks_per_second`) and its fuel stamp; `now`
+ * and `wall_ns` are the system's clocks at its last advance, which place
+ * a tick on the wall clock (wall_ns 0: the system was never given one). */
 typedef struct ta_trace_kept {
     uint32_t size;
     uint32_t acknowledged; /* bytes */
@@ -323,6 +325,7 @@ typedef struct ta_trace_kept {
     uint32_t records, acknowledged_records;
     uint64_t lost; /* records the journal could not take, ever */
     uint64_t ticks_per_second;
+    uint64_t now, wall_ns;
 } ta_trace_kept;
 
 /* The size of a kind's body, without the lists that follow it; 0 for an

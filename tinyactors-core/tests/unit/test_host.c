@@ -1170,6 +1170,9 @@ static void test_snapshot_of_one_image_in_two_segments(void) {
                 "<transition event='poke'><assign location='n' expr='n + 1'/></transition>"         \
                 "<transition event='*'><assign location='n' expr='n + 1'/></transition></state>"     \
                 "<state id='paid'/>")
+/* A wall clock for test_snapshot_read: 2023-11-14T22:13:20Z. */
+static const uint64_t snapshot_wall_ns = 1700000000000000000ull;
+
 static void snapshot_read(int telemetry) {
     host_world e;
     world_telemetry = telemetry;
@@ -1189,6 +1192,8 @@ static void snapshot_read(int telemetry) {
     run(&e);
     CHECK_EQUAL(send(&e, session, "order.pay", NULL), TA_OK); /* queued, not run */
     drain(&e);
+    /* the wall clock given with the host's clock: the spans are placed on it */
+    ta_host_advance_time(e.host, (ta_system_time){0, snapshot_wall_ns});
     ta_buffer packed = {NULL, 0, 0};
     ta_datamodel_state none = {{"x", 1}, {NULL, 0}};
     CHECK_EQUAL(ta_host_snapshot_pack(e.host, &none, &packed), TA_ERROR_NO_MEMORY);
@@ -1236,6 +1241,7 @@ static void snapshot_read(int telemetry) {
     stats.size = sizeof stats;
     ta_system_stats_get(system, &stats);
     CHECK_EQUAL(stats.ticks_per_second, 1000u);
+    CHECK_EQUAL(stats.wall_ns, snapshot_wall_ns);
     CHECK(timers[0].due >= stats.now + 10000u); /* 10s ahead, in the system's ticks */
 
     /* the chart's transitions: a cond, a descriptor, a wildcard, targets */
@@ -1305,6 +1311,8 @@ static void snapshot_read(int telemetry) {
             }
         }
         CHECK(span.start <= span.end);
+        /* on the wall clock: the records' tick is the advance's, within a second of fuel */
+        CHECK(span.start >= snapshot_wall_ns && span.end < snapshot_wall_ns + 1000000000ull);
     }
     CHECK(spans > 0 && macrosteps >= 2 && spawned == 1);
     CHECK_EQUAL(poked, 2);

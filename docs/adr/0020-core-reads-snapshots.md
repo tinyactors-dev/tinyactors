@@ -152,10 +152,17 @@ Following [docs/roles.md](../roles.md):
      one request: protobuf concatenates repeated fields.
    - **Names.** Spans are named and attributed as `ta_host_traces` names
      them.
-   - **Times.** A kept record has no wall time. A record's time is its
-     system clock, converted with the system's `ticksPerSecond`, plus its
-     fuel stamp's distance from the lowest of that tick. That is the host's
-     clock, not wall time.
+   - **Times.** A kept record carries its system's tick, not wall time.
+     It is placed on the wall clock by the system's own clocks at its last
+     advance, which every region holds (`now` and `wall_ns`, exposed in
+     `ta_system_stats`): its wall time is that `wall_ns` less how far its
+     tick lies before that `now`, plus its fuel stamp's distance from the
+     lowest of that tick (amended 2026-11-27, the maintainer: "all of the
+     times inside of that system need to be resolved against that"; it
+     was the tick in nanoseconds). The pack's format is unchanged: the
+     pair is the system's, already in its region. It assumes the wall
+     clock did not jump in between; a system never given a wall clock
+     gives its ticks in nanoseconds.
    - **Acknowledged records.** Their dynamic strings may have been freed,
      and their payloads released, so neither is read. They are named as
      the website Inspector names them (amended 2026-11-27, the

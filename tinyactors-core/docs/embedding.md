@@ -459,7 +459,11 @@ tool that shows what every actor was doing at the moment it was taken:
    acknowledged ones and the pending ones, and their counts.
    `ta_host_trace_history` writes their spans as an
    ExportTraceServiceRequest, which `ta_otlp_next_span` reads.
-   - **Times.** They are the system's clock, not wall time.
+   - **Times.** They are wall time: a record's tick placed on the wall
+     clock by the system's own clocks at its last advance (the `now` and
+     `wall_ns` of `ta_system_stats`). That assumes the wall clock did not
+     jump in between; a system never given a wall clock gives its ticks
+     in nanoseconds.
    - **Acknowledged records.** A record the host already exported may
      have had its dynamic strings and values freed, so it reads none of
      them:

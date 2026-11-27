@@ -484,8 +484,12 @@ TA_API ta_bytes ta_host_snapshot_region(ta_bytes pack, uint32_t segment);
  * for a reader of a snapshot (ta_system_read) or of a live system between
  * its runs: an ExportTraceServiceRequest written into `out`, named and
  * attributed as ta_host_traces names them, read without releasing any.
- * Times are the system's clock, not wall time: a record's tick in
- * nanoseconds plus its fuel stamp's distance from the lowest of that tick.
+ * Times are wall time (Unix epoch nanoseconds): a record's tick placed on
+ * the wall clock by the system's own clocks at its last advance (the
+ * `now` and `wall_ns` of ta_system_stats, which a snapshot holds), plus
+ * its fuel stamp's distance from the lowest of that tick. That assumes
+ * the wall clock did not jump between the record and the advance; a
+ * system never given a wall clock gives its ticks in nanoseconds.
  * Of a record already acknowledged (exported) it writes no dynamic string
  * and no value, which may have been freed: its event is named from the
  * image's event names ("(unread)" for a name given at run time), a

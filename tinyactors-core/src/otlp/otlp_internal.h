@@ -210,9 +210,11 @@ typedef struct ta_otlp_actor_name {
 
 /* The spans of the records a system's journal keeps (ta_system_trace_kept),
  * written as one ExportTraceServiceRequest into `out`, read without
- * releasing any (ta_host_trace_history, tinyactors/host.h). Times are the
- * system's clock: a record's tick in nanoseconds plus its fuel stamp's
- * distance from the lowest of that tick. Of an acknowledged record it
+ * releasing any (ta_host_trace_history, tinyactors/host.h). A record's
+ * time is its tick placed on the wall clock by the system's clocks at its
+ * last advance (kept->now, kept->wall_ns), plus its fuel stamp's distance
+ * from the lowest of that tick; without a wall clock, the tick in
+ * nanoseconds. Of an acknowledged record it
  * writes no dynamic string and no value: an event is named from the
  * image's event names, a microstep by its macrostep's event, an actor by
  * `names` (sorted by slot) while it is resident, and an attribute it
