@@ -463,7 +463,9 @@ These stay C calls:
 - **Bytes that the host writes or takes:** `ta_host_traces`, `ta_host_logs`,
   `ta_host_metrics`, hibernate, wake, migrate, snapshot,
   restore and `snapshot_pack`.
-- **Calls that need no host:** `ta_host_snapshot_unpack`, `_image`,
+- **Calls that need no host:** a snapshot reader answers requests about a
+  pack in this envelope, with methods of its own
+  ([snapshot-requests.md](snapshot-requests.md)); `ta_host_snapshot_unpack`, `_image`,
   `_segments` and `_region` read a snapshot before a host exists, and
   `ta_system_read` makes a system of a segment's region that the system's
   readers read, with `ta_host_trace_history` for the spans its journal kept
@@ -486,7 +488,8 @@ binding gets the same answers.
 - bytes the host writes or takes: traces, logs, metrics, hibernation,
   export and snapshot blobs. These are C calls that give a view of the
   host's memory (snapshots: the caller's `ta_buffer`);
-- calls that need no host;
+- calls that need no host: about a snapshot, they are the snapshot
+  reader's ([snapshot-requests.md](snapshot-requests.md));
 - I/O, transport, and policy around I/O (retries, caps, posting);
 - anything a binding can compute from other replies;
 - values specific to a datamodel, other than neutral CBOR values.

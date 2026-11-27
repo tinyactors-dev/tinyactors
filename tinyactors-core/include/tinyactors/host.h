@@ -563,6 +563,46 @@ TA_API ta_status ta_host_snapshot_unpack(ta_bytes pack, ta_host_snapshot_content
 /* Segment i's image in the blob; empty for a retired one. */
 TA_API ta_bytes ta_host_snapshot_image(ta_bytes pack, uint32_t i);
 
+/* ---- a snapshot reader: requests about a pack, with no host ----------------------
+ * A reader is one block of the caller's memory holding a copy of a pack
+ * (ta_host_snapshot_pack's bytes) and each live segment's region read with
+ * ta_system_read. It answers requests about the snapshot: the `snapshot.*`
+ * methods of docs/snapshot-requests.md, in the control plane's envelope
+ * ({"id", "method", "params"} in CBOR; {"id", "result"} or {"id", "error"}
+ * out). Nothing runs and nothing in it changes after open, so a reader
+ * keeps no memory but its block, and the caller frees the block when it is
+ * done (it holds pointers into itself: never move it). It reads packs of
+ * this build only, as a restore does (ta_host_snapshot_unpack). */
+typedef struct ta_host_snapshot_reader ta_host_snapshot_reader;
+/* The bytes a reader of `pack` needs (its block, 8-aligned); 0 when `pack`
+ * is not an 8-aligned pack of this build. */
+TA_API size_t ta_host_snapshot_reader_size(ta_bytes pack);
+typedef struct ta_host_snapshot_reader_input {
+    uint32_t size;
+    uint32_t pad;
+    ta_bytes pack;    /* 8-aligned, read and copied during the call */
+    ta_buffer memory; /* the reader's block: ta_host_snapshot_reader_size bytes, 8-aligned */
+} ta_host_snapshot_reader_input;
+/* A reader of input->pack in input->memory, *out pointing into it.
+ * TA_ERROR_INVALID: not an 8-aligned pack of this build (another format or
+ * layout, or damaged), or memory that is not 8-aligned; TA_ERROR_NO_MEMORY:
+ * the block is smaller than ta_host_snapshot_reader_size. */
+TA_API ta_status ta_host_snapshot_reader_open(const ta_host_snapshot_reader_input *input,
+                                              const ta_host_snapshot_reader **out);
+typedef struct ta_host_snapshot_request {
+    uint32_t size;
+    uint32_t pad;
+    ta_bytes message;              /* read during the call */
+    const ta_allocator *allocator; /* the call's working memory, all of it given back before it returns */
+} ta_host_snapshot_request;
+/* Answers request->message at the call, writing the reply into `reply` (a
+ * JSON-RPC error travels in it; a message without "id", a notification,
+ * writes nothing). TA_ERROR_NO_MEMORY: the reply needs reply->length
+ * bytes and nothing was written (ask again with that room), or the
+ * allocator refused (reply->length 0). TA_ERROR_INVALID: no reader. */
+TA_API ta_status ta_host_snapshot_reader_request(const ta_host_snapshot_reader *reader,
+                                                 const ta_host_snapshot_request *request, ta_buffer *reply);
+
 /* ---- the control plane: posted messages (docs/requests.md) -----------------------
  * A JSON-RPC 2.0 message without "jsonrpc", in CBOR (docs/requests.md),
  * read during the call. A message with an id (or one that cannot be read)

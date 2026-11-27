@@ -17,73 +17,47 @@
 #include "base/format.h"
 #include "base/memory.h"
 #include "host/host_internal.h"
+#include "host/request_internal.h"
 
 #define REQUEST_RULES      32u   /* trace rules a request holds */
 #define REQUEST_ACTORS     512u  /* sessions an "actor.list" reply holds */
 #define WATCH_SECONDS      900u  /* a watch's default length: 15 minutes */
 #define SAMPLE_WHOLE       1000000u
 
-/* Error codes: JSON-RPC's where they fit, the server range for the host's own. */
-enum {
-    REQUEST_PARSE = -32700,   /* not one well-formed CBOR item */
-    REQUEST_INVALID = -32600, /* not a request: its members are wrong */
-    REQUEST_METHOD = -32601,  /* no such method */
-    REQUEST_PARAMS = -32602,  /* a param has the wrong type, is missing, unknown, or out of range */
-    REQUEST_STALE = -32001,   /* the session or watch does not exist (any more) */
-    REQUEST_STATE = -32002,   /* the host cannot do it now */
-    REQUEST_LIMIT = -32003,   /* more than the request or the host holds */
-    REQUEST_MEMORY = -32004,  /* the host's allocator refused */
-    REQUEST_RULE = -32005,    /* the host refused a rule as malformed */
-    REQUEST_BYTES = -32006    /* bytes in params are not what the method reads */
-};
-
-typedef struct request {
-    ta_host *host;
-    ta_cbor_document *document;
-    ta_output out;
-    uint32_t id;   /* the request's "id" token; TA_NIL: none (or not readable) */
-    int replies;   /* 1: a request, whose reply carries "id" (null when unreadable); 0: a config */
-    int notification; /* no "id": applied, nothing written, errors not reported */
-    const char *prefix; /* of a field's path: "params." (a request) or "" (a config) */
-    int refused;   /* an error reply was written */
-    int no_room;   /* the allocator refused room for the reply: nothing applied */
-    char path[96]; /* where the error is, for {"error": {"data": {"path"}}} */
-} request;
-
-static ta_string_view request_text_of(const char *text) {
+ta_string_view request_text_of(const char *text) {
     uint32_t length = 0;
     while (text[length])
         length++;
     return (ta_string_view){text, length};
 }
 
-static int request_text_is(ta_string_view text, const char *name) {
+int request_text_is(ta_string_view text, const char *name) {
     ta_string_view other = request_text_of(name);
     return text.length == other.length && ta_memcmp(text.pointer, other.pointer, text.length) == 0;
 }
 
-static void request_put_key(request *r, const char *key) { cbor_output_text(&r->out, request_text_of(key)); }
+void request_put_key(request *r, const char *key) { cbor_output_text(&r->out, request_text_of(key)); }
 
-static void request_put_int(request *r, int64_t value) {
+void request_put_int(request *r, int64_t value) {
     if (value >= 0) cbor_output_head(&r->out, CBOR_MAJOR_UINT, (uint64_t)value);
     else cbor_output_head(&r->out, CBOR_MAJOR_NEGINT, (uint64_t)(-1 - value));
 }
 
-static void request_put_double(request *r, double value) {
+void request_put_double(request *r, double value) {
     uint64_t bits;
     ta_memcpy(&bits, &value, sizeof bits);
     cbor_output_float(&r->out, bits);
 }
 
-static void request_put_null(request *r) { cbor_output_simple(&r->out, 22); }
-static void request_put_bool(request *r, int value) { cbor_output_simple(&r->out, value ? 21u : 20u); }
+void request_put_null(request *r) { cbor_output_simple(&r->out, 22); }
+void request_put_bool(request *r, int value) { cbor_output_simple(&r->out, value ? 21u : 20u); }
 
 /* ---- the reply's frame ------------------------------------------------------------- */
 
 /* {"id": <the request's>, `key`: ...}: a request's reply has its id first,
  * the same item (null when it could not be read, as JSON-RPC 2.0 has it); a
  * config's error has none. The caller writes the value of `key` next. */
-static void request_open(request *r, const char *key) {
+void request_open(request *r, const char *key) {
     cbor_output_head(&r->out, CBOR_MAJOR_MAP, r->replies ? 2u : 1u);
     if (r->replies) {
         const ta_cbor_token *id = r->id != TA_NIL ? &r->document->tokens[r->id] : (const ta_cbor_token *)0;
@@ -101,7 +75,7 @@ static void request_open(request *r, const char *key) {
 
 /* The reply becomes {"id", "error": {"code", "message", "data": {"reason",
  * "path"}}}; the first one stays. */
-static void request_refuse_with(request *r, int code, const char *reason, const char *message) {
+void request_refuse_with(request *r, int code, const char *reason, const char *message) {
     if (r->refused) return;
     r->refused = 1;
     r->out.length = 0;
@@ -120,7 +94,7 @@ static void request_refuse_with(request *r, int code, const char *reason, const 
 }
 
 /* A refused param or host condition: the code follows from the reason. */
-static void request_refuse(request *r, const char *reason, const char *message) {
+void request_refuse(request *r, const char *reason, const char *message) {
     static const struct {
         const char *reason;
         int code;
@@ -133,7 +107,7 @@ static void request_refuse(request *r, const char *reason, const char *message) 
 }
 
 /* The path of a request member ("method", "params", "id"). */
-static void request_path_member(request *r, const char *member) {
+void request_path_member(request *r, const char *member) {
     ta_text text = ta_text_init(r->path, sizeof r->path - 1);
     ta_text_append(&text, request_text_of(member));
     r->path[text.overflow ? 0 : text.length] = 0;
@@ -141,7 +115,7 @@ static void request_path_member(request *r, const char *member) {
 
 /* The path of a param: `params.field`, or `params.outer[index].field` inside
  * a list; "" for the request as a whole. */
-static void request_path_view(request *r, const char *outer, uint32_t index, ta_string_view field) {
+void request_path_view(request *r, const char *outer, uint32_t index, ta_string_view field) {
     ta_text text = ta_text_init(r->path, sizeof r->path - 1);
     if (outer || field.length) ta_text_append(&text, request_text_of(r->prefix));
     if (outer && index == TA_NIL) { /* a field of the map `outer` */
@@ -157,19 +131,19 @@ static void request_path_view(request *r, const char *outer, uint32_t index, ta_
     r->path[text.overflow ? 0 : text.length] = 0;
 }
 
-static void request_path_set(request *r, const char *outer, uint32_t index, const char *field) {
+void request_path_set(request *r, const char *outer, uint32_t index, const char *field) {
     request_path_view(r, outer, index, request_text_of(field));
 }
 
 /* ---- reading fields ----------------------------------------------------------------- */
 
-static const ta_cbor_token *request_token(const request *r, uint32_t at) {
+const ta_cbor_token *request_token(const request *r, uint32_t at) {
     return &r->document->tokens[at];
 }
 
 /* Every key of the map at `map` is one of `known` (NULL-terminated); no map
  * (TA_NIL: no params) has none. */
-static int request_keys_known(request *r, uint32_t map, const char *outer, uint32_t index,
+int request_keys_known(request *r, uint32_t map, const char *outer, uint32_t index,
                       const char *const *known) {
     if (map == TA_NIL) return 1;
     uint32_t pairs = request_token(r, map)->count, at = map + 1;
@@ -192,17 +166,17 @@ static int request_keys_known(request *r, uint32_t map, const char *outer, uint3
     return 1;
 }
 
-static uint32_t request_member(const request *r, uint32_t map, const char *key) {
+uint32_t request_member(const request *r, uint32_t map, const char *key) {
     return ta_cbor_member(r->document, map, request_text_of(key));
 }
 
-static int request_is_null(const request *r, uint32_t at) {
+int request_is_null(const request *r, uint32_t at) {
     return request_token(r, at)->kind == TA_CBOR_SIMPLE && request_token(r, at)->value == TA_CBOR_NULL;
 }
 
 /* Each reader: 1 with the value (or the default when the field is absent),
  * 0 after refusing the request. */
-static int request_read_uint(request *r, uint32_t at, uint64_t fallback, uint64_t *value) {
+int request_read_uint(request *r, uint32_t at, uint64_t fallback, uint64_t *value) {
     if (at == TA_NIL) {
         *value = fallback;
         return 1;
@@ -215,7 +189,7 @@ static int request_read_uint(request *r, uint32_t at, uint64_t fallback, uint64_
     return 1;
 }
 
-static int request_read_number(request *r, uint32_t at, double fallback, double *value) {
+int request_read_number(request *r, uint32_t at, double fallback, double *value) {
     const ta_cbor_token *t = at == TA_NIL ? NULL : request_token(r, at);
     if (!t) *value = fallback;
     else if (t->kind == TA_CBOR_UINT) *value = (double)t->value;
@@ -228,7 +202,7 @@ static int request_read_number(request *r, uint32_t at, double fallback, double 
     return 1;
 }
 
-static int request_read_bool(request *r, uint32_t at, int fallback, int *value) {
+int request_read_bool(request *r, uint32_t at, int fallback, int *value) {
     const ta_cbor_token *t = at == TA_NIL ? NULL : request_token(r, at);
     if (!t) *value = fallback;
     else if (t->kind == TA_CBOR_SIMPLE && (t->value == TA_CBOR_TRUE || t->value == TA_CBOR_FALSE))
@@ -240,7 +214,7 @@ static int request_read_bool(request *r, uint32_t at, int fallback, int *value) 
     return 1;
 }
 
-static int request_read_text(request *r, uint32_t at, ta_string_view *value) {
+int request_read_text(request *r, uint32_t at, ta_string_view *value) {
     if (at == TA_NIL) {
         *value = (ta_string_view){"", 0};
         return 1;
@@ -890,14 +864,14 @@ static void request_run_actor_send(request *r, uint32_t map) {
 
 /* ---- decoded spans ------------------------------------------------------------------- */
 
-static void request_put_trace_id(request *r, ta_trace_id trace) {
+void request_put_trace_id(request *r, ta_trace_id trace) {
     char text[TA_TRACE_ID_TEXT_LENGTH];
     ta_buffer buffer = {text, sizeof text, 0};
     ta_trace_id_format(trace, &buffer);
     cbor_output_text(&r->out, (ta_string_view){text, (uint32_t)buffer.length});
 }
 
-static void request_put_span_id(request *r, ta_span_id span) {
+void request_put_span_id(request *r, ta_span_id span) {
     char text[16];
     ta_buffer buffer = {text, sizeof text, 0};
     ta_span_id_format(span, &buffer);
@@ -905,7 +879,7 @@ static void request_put_span_id(request *r, ta_span_id span) {
 }
 
 /* A value with no nested lists in it; anything deeper is null. */
-static void request_put_scalar(request *r, const ta_otlp_value *value) {
+void request_put_scalar(request *r, const ta_otlp_value *value) {
     switch (value->kind) {
     case TA_OTLP_VALUE_STRING: cbor_output_text(&r->out, value->bytes); break;
     case TA_OTLP_VALUE_BOOL: request_put_bool(r, value->integer != 0); break;
@@ -919,7 +893,7 @@ static void request_put_scalar(request *r, const ta_otlp_value *value) {
     }
 }
 
-static void request_put_value(request *r, const ta_otlp_value *value) {
+void request_put_value(request *r, const ta_otlp_value *value) {
     uint32_t at = 0, count = 0;
     if (value->kind == TA_OTLP_VALUE_ARRAY) {
         ta_otlp_value item;
@@ -942,7 +916,7 @@ static void request_put_value(request *r, const ta_otlp_value *value) {
     }
 }
 
-static void request_put_attributes(request *r, ta_otlp_fields attributes) {
+void request_put_attributes(request *r, ta_otlp_fields attributes) {
     ta_otlp_key_value pair;
     uint32_t at = 0, count = 0;
     while (ta_otlp_next_attribute(attributes, &at, &pair) == 1)
@@ -954,7 +928,7 @@ static void request_put_attributes(request *r, ta_otlp_fields attributes) {
     }
 }
 
-static void request_put_span(request *r, const ta_otlp_span *span) {
+void request_put_span(request *r, const ta_otlp_span *span) {
     cbor_output_head(&r->out, CBOR_MAJOR_MAP, 11);
     request_put_key(r, "trace");
     request_put_trace_id(r, span->trace);
@@ -1039,11 +1013,6 @@ static void request_run_trace_spans_decode(request *r, uint32_t map) {
 
 /* ---- the entry point ------------------------------------------------------------------ */
 
-typedef struct request_method {
-    const char *name;
-    void (*run)(request *r, uint32_t params); /* params: the map, or TA_NIL for none */
-} request_method;
-
 static void request_run_host_config(request *r, uint32_t map); /* with the config's tables */
 
 static const request_method REQUEST_METHODS[] = {
@@ -1063,7 +1032,7 @@ static const request_method REQUEST_METHODS[] = {
 
 /* The request's members: "id" (uint or text), "method" (text), "params" (a
  * map); the method it names, or NULL after refusing. */
-static const request_method *request_envelope(request *r, uint32_t *params) {
+static const request_method *request_envelope(request *r, request_methods methods, uint32_t *params) {
     static const char *const members[] = {"method", "params", "id", NULL};
     uint32_t id = ta_cbor_member(r->document, 0, request_text_of("id"));
     if (id != TA_NIL) {
@@ -1110,8 +1079,8 @@ static const request_method *request_envelope(request *r, uint32_t *params) {
      * nothing is written, not even an error (JSON-RPC 2.0). */
     r->notification = r->id == TA_NIL;
     ta_string_view name = ta_cbor_string(r->document, method);
-    for (uint32_t i = 0; i < sizeof REQUEST_METHODS / sizeof REQUEST_METHODS[0]; i++)
-        if (request_text_is(name, REQUEST_METHODS[i].name)) return &REQUEST_METHODS[i];
+    for (uint32_t i = 0; i < methods.count; i++)
+        if (request_text_is(name, methods.methods[i].name)) return &methods.methods[i];
     if (!r->notification) request_refuse_with(r, REQUEST_METHOD, "unknown", "no such method");
     return NULL;
 }
@@ -1130,6 +1099,30 @@ static ta_status request_reply(ta_host *host) {
     return TA_OK;
 }
 
+int request_answer(request *r, request_methods methods) {
+    ta_status status = ta_cbor_decode(r->document);
+    if (status == TA_ERROR_NO_MEMORY) {
+        request_refuse_with(r, REQUEST_LIMIT, "limit", "a request has at most 256 items");
+    } else if (status != TA_OK) {
+        request_refuse_with(r, REQUEST_PARSE, "malformed", "the request is not one well-formed CBOR item");
+    } else if (r->document->tokens[0].kind != TA_CBOR_MAP) {
+        request_refuse_with(r, REQUEST_INVALID, "type", "a request is a map");
+    } else {
+        uint32_t params = TA_NIL;
+        const request_method *method = request_envelope(r, methods, &params);
+        if (r->notification) { /* applied; nothing is written, not even an error */
+            r->out = ta_output_over((ta_buffer){0, 0, 0}, NULL);
+            if (method) method->run(r, params);
+            return 1;
+        }
+        if (method) {
+            request_open(r, "result");
+            method->run(r, params);
+        }
+    }
+    return 0;
+}
+
 ta_status ta_host_post(ta_host *host, ta_bytes message) {
     if (host->running) return TA_ERROR_STATE; /* not during a run or a datamodel call (host.h) */
     ta_cbor_token tokens[TA_HOST_REQUEST_TOKENS];
@@ -1142,26 +1135,8 @@ ta_status ta_host_post(ta_host *host, ta_bytes message) {
     r.replies = 1;
     r.prefix = "params.";
     r.out = *host_output(host); /* the host's, grown as the reply needs */
-    ta_status status = ta_cbor_decode(&document);
-    if (status == TA_ERROR_NO_MEMORY) {
-        request_refuse_with(&r, REQUEST_LIMIT, "limit", "a request has at most 256 items");
-    } else if (status != TA_OK) {
-        request_refuse_with(&r, REQUEST_PARSE, "malformed", "the request is not one well-formed CBOR item");
-    } else if (tokens[0].kind != TA_CBOR_MAP) {
-        request_refuse_with(&r, REQUEST_INVALID, "type", "a request is a map");
-    } else {
-        uint32_t params = TA_NIL;
-        const request_method *method = request_envelope(&r, &params);
-        if (r.notification) { /* applied; nothing is written, not even an error */
-            r.out = ta_output_over((ta_buffer){0, 0, 0}, NULL);
-            if (method) method->run(&r, params);
-            return TA_OK;
-        }
-        if (method) {
-            request_open(&r, "result");
-            method->run(&r, params);
-        }
-    }
+    request_methods methods = {REQUEST_METHODS, sizeof REQUEST_METHODS / sizeof REQUEST_METHODS[0]};
+    if (request_answer(&r, methods)) return TA_OK; /* a notification: the host's output untouched */
     host->output = r.out; /* where the reply is, the block grown or not */
     if (r.no_room || !ta_output_fits(&host->output)) return TA_ERROR_NO_MEMORY;
     /* a method that applied reserved room for this; one that only read, or

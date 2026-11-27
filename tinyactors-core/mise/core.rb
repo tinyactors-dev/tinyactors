@@ -85,7 +85,7 @@ module Core
     # Many systems as one (versions, routing, migration jobs, hibernation
     # policy). Freestanding: it allocates only through the ta_allocator its
     # configuration gives it (docs/adr/0005).
-    Layer.new(name: 'host', uses: %w[system otlp], freestanding: true, sources: %w[src/host/host.c src/host/telemetry.c src/host/request.c src/host/definitions.c src/host/session_map.c]),
+    Layer.new(name: 'host', uses: %w[system otlp], freestanding: true, sources: %w[src/host/host.c src/host/telemetry.c src/host/request.c src/host/snapshot_reader.c src/host/definitions.c src/host/session_map.c]),
     Layer.new(name: 'runtime', uses: %w[system compile], sources: %w[src/runtime/runtime.c src/runtime/runtime_hosted.c]),
     # The command line, for the tools: the words read against a program's
     # commands and options, a report written as Markdown, JSON or XML, and

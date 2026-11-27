@@ -8777,6 +8777,116 @@
         }
       }
     },
+    "ta_host_snapshot_reader": {
+      "kind": "opaque",
+      "fields": []
+    },
+    "ta_host_snapshot_reader_input": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "size",
+          "type": "uint32_t"
+        },
+        {
+          "name": "pad",
+          "type": "uint32_t"
+        },
+        {
+          "name": "pack",
+          "type": "ta_bytes"
+        },
+        {
+          "name": "memory",
+          "type": "ta_buffer"
+        }
+      ],
+      "layout": {
+        "x86_64": {
+          "size": 48,
+          "align": 8,
+          "offsets": {
+            "size": 0,
+            "pad": 4,
+            "pack": 8,
+            "memory": 24
+          }
+        },
+        "aarch64": {
+          "size": 48,
+          "align": 8,
+          "offsets": {
+            "size": 0,
+            "pad": 4,
+            "pack": 8,
+            "memory": 24
+          }
+        },
+        "wasm32": {
+          "size": 28,
+          "align": 4,
+          "offsets": {
+            "size": 0,
+            "pad": 4,
+            "pack": 8,
+            "memory": 16
+          }
+        }
+      }
+    },
+    "ta_host_snapshot_request": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "size",
+          "type": "uint32_t"
+        },
+        {
+          "name": "pad",
+          "type": "uint32_t"
+        },
+        {
+          "name": "message",
+          "type": "ta_bytes"
+        },
+        {
+          "name": "allocator",
+          "type": "const ta_allocator *"
+        }
+      ],
+      "layout": {
+        "x86_64": {
+          "size": 32,
+          "align": 8,
+          "offsets": {
+            "size": 0,
+            "pad": 4,
+            "message": 8,
+            "allocator": 24
+          }
+        },
+        "aarch64": {
+          "size": 32,
+          "align": 8,
+          "offsets": {
+            "size": 0,
+            "pad": 4,
+            "message": 8,
+            "allocator": 24
+          }
+        },
+        "wasm32": {
+          "size": 20,
+          "align": 4,
+          "offsets": {
+            "size": 0,
+            "pad": 4,
+            "message": 8,
+            "allocator": 16
+          }
+        }
+      }
+    },
     "ta_http_field": {
       "kind": "struct",
       "fields": [
@@ -10382,6 +10492,57 @@
         {
           "name": "out",
           "type": "ta_buffer *"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "ta_host_snapshot_reader_open",
+      "returns": "ta_status",
+      "params": [
+        {
+          "name": "input",
+          "type": "const ta_host_snapshot_reader_input *"
+        },
+        {
+          "name": "out",
+          "type": "const ta_host_snapshot_reader **"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "ta_host_snapshot_reader_request",
+      "returns": "ta_status",
+      "params": [
+        {
+          "name": "reader",
+          "type": "const ta_host_snapshot_reader *"
+        },
+        {
+          "name": "request",
+          "type": "const ta_host_snapshot_request *"
+        },
+        {
+          "name": "reply",
+          "type": "ta_buffer *"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "ta_host_snapshot_reader_size",
+      "returns": "size_t",
+      "params": [
+        {
+          "name": "pack",
+          "type": "ta_bytes"
         }
       ],
       "public": true,

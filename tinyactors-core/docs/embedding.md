@@ -474,6 +474,14 @@ tool that shows what every actor was doing at the moment it was taken:
        resident;
      - an attribute it cannot read is left out.
 
+6. **Or ask a snapshot reader.** `ta_host_snapshot_reader_size`,
+   `_open` and `_request` do steps 1 to 5 in one block of the caller's
+   memory and answer requests in the control plane's envelope: the readers
+   a segment at a time, and what a tool asks of the whole snapshot (counts
+   of actors per state, actors filtered and paged, a chart with the actors
+   in each state, spans filtered). [snapshot-requests.md](snapshot-requests.md)
+   lists them. A binding wraps these three calls rather than the readers.
+
 A region is raw memory of one build: `ta_system_read` refuses another
 layout, so read a snapshot with the release that wrote it. The
 datamodels' variables are in their state (`contents.state`), which only

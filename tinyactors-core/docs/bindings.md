@@ -304,13 +304,14 @@ Read an effect’s fields with `ta_host_effect_number`, `ta_host_effect_text` an
 - **The CBOR module may be exposed** as the language's own `encode` and `decode` (Python's `tinyactors.encode(value) -> bytes` and `tinyactors.decode(data) -> object`, Node's `encode` and `decode` exports): the same value table and the same streaming calls (`ta_cbor_writer`, `ta_cbor_reader`), not a second codec, each with its row in the mapping table. The binding's suite adapter frames the driver's calls with it and imports no other codec (section 12). The vectors then cross the binding's codec both ways, so the binding's own tests of its value table catch a value mapped wrong the same way in both directions.
 
 - **Reading a snapshot** is a call that needs no host
-  ([embedding.md, Reading a snapshot](embedding.md#12--reading-a-snapshot)): the binding mirrors
-  `ta_host_snapshot_unpack`, `_image` and `_region`, `ta_system_read` and
-  the system's and the image's readers one to one, as a snapshot object
-  whose segments hold their image and their system. The region's copy is
-  memory of the language's own (a byte buffer the object keeps and never
-  hands out), 8-aligned and never moved. `ta_host_trace_history` gives the
-  journal's spans as bytes, decoded as any traces. No host is made.
+  ([embedding.md, Reading a snapshot](embedding.md#12--reading-a-snapshot)): the binding
+  wraps the snapshot reader's three calls (`ta_host_snapshot_reader_size`,
+  `_open`, `_request`) in one object. Its block is memory of the
+  language's own (a byte buffer the object keeps and never hands out),
+  8-aligned and never moved; each method is one request
+  ([snapshot-requests.md](snapshot-requests.md)), its params written with
+  the CBOR module and its reply read with it, the request's allocator the
+  call's arena (section 6). No host is made.
 
 ## 10 · The control plane: typed methods over posted messages
 

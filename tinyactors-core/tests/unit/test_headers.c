@@ -136,6 +136,8 @@ ABI_CHECK(TA_TRANSITION_EXTERNAL == 0 && TA_TRANSITION_INTERNAL == 1 && TA_TRANS
           transition_types);
 ABI_CHECK(offsetof(ta_trace_kept, size) == 0, trace_kept_size_first);
 ABI_CHECK(offsetof(ta_host_trace_history_input, size) == 0, host_trace_history_input_size_first);
+ABI_CHECK(offsetof(ta_host_snapshot_reader_input, size) == 0, host_snapshot_reader_input_size_first);
+ABI_CHECK(offsetof(ta_host_snapshot_request, size) == 0, host_snapshot_request_size_first);
 ABI_CHECK(offsetof(ta_actor_timer, due) == 0 && offsetof(ta_actor_timer, event) == 16,
           actor_timer_layout);
 ABI_CHECK(sizeof(ta_actor_queued) == 2 * sizeof(ta_string_view), actor_queued_size);

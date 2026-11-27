@@ -1173,6 +1173,132 @@ static void test_snapshot_of_one_image_in_two_segments(void) {
 /* A wall clock for test_snapshot_read: 2023-11-14T22:13:20Z. */
 static const uint64_t snapshot_wall_ns = 1700000000000000000ull;
 
+/* A request to a snapshot reader, its reply decoded into `a` (as ask_send
+ * does for ta_host_post); the status of ta_host_snapshot_reader_request. */
+static ta_status reader_ask(const ta_host_snapshot_reader *reader, host_ask *a) {
+    ta_bytes message;
+    if (ta_cbor_writer_bytes(&a->writer, &message) != TA_OK) return TA_ERROR_INVALID;
+    ta_allocator allocator = ta_runtime_malloc();
+    ta_host_snapshot_request request = {sizeof request, 0, message, &allocator};
+    ta_buffer reply = {a->reply, sizeof a->reply, 0};
+    ta_status status = ta_host_snapshot_reader_request(reader, &request, &reply);
+    a->text[0] = 0;
+    if (status != TA_OK) return status;
+    a->answer = (ta_bytes){a->reply, reply.length};
+    a->document = (ta_cbor_document){{a->reply, reply.length}, a->reply_tokens, 4096, 0};
+    if (ta_cbor_decode(&a->document) != TA_OK) return TA_ERROR_INVALID;
+    a->result = ta_cbor_member(&a->document, 0, ta_string("result"));
+    ta_buffer text = {a->text, sizeof a->text - 1, 0};
+    if (ta_cbor_diagnostic(a->answer, &text) != TA_OK) return TA_ERROR_INVALID;
+    a->text[text.length] = 0;
+    return TA_OK;
+}
+
+/* The snapshot through a reader's requests (docs/snapshot-requests.md): the
+ * readers a segment at a time, and what a tool asks of the whole. */
+static void snapshot_reader_checks(ta_bytes bytes, uint64_t session, int telemetry) {
+    static host_ask a;
+    CHECK_EQUAL(ta_host_snapshot_reader_size((ta_bytes){(const unsigned char *)bytes.pointer + 1, bytes.length - 1}), 0u);
+    size_t size = ta_host_snapshot_reader_size(bytes);
+    CHECK(size > bytes.length);
+    void *block = aligned_alloc(8, (size + 7u) / 8u * 8u);
+    const ta_host_snapshot_reader *reader = NULL;
+    ta_host_snapshot_reader_input input = {sizeof input, 0, bytes, {block, size - 8, 0}};
+    CHECK_EQUAL(ta_host_snapshot_reader_open(&input, &reader), TA_ERROR_NO_MEMORY);
+    input.memory.capacity = size;
+    CHECK_EQUAL(ta_host_snapshot_reader_open(&input, &reader), TA_OK);
+
+    ask_begin(&a, "snapshot.header", 0);
+    CHECK_EQUAL(reader_ask(reader, &a), TA_OK);
+    CHECK(strstr(a.text, "\"segments\":1") != NULL);
+    ta_cbor_writer *w = ask_begin(&a, "snapshot.handles", 1);
+    ta_cbor_write_text(w, ta_string("segment"));
+    ta_cbor_write_uint(w, 0);
+    CHECK_EQUAL(reader_ask(reader, &a), TA_OK);
+    CHECK_EQUAL(a.document.tokens[a.result].count, 1u);
+    uint64_t handle = a.document.tokens[a.result + 1].value;
+    w = ask_begin(&a, "snapshot.actor", 2);
+    ta_cbor_write_text(w, ta_string("segment"));
+    ta_cbor_write_uint(w, 0);
+    ta_cbor_write_text(w, ta_string("handle"));
+    ta_cbor_write_uint(w, handle);
+    CHECK_EQUAL(reader_ask(reader, &a), TA_OK);
+    CHECK_EQUAL(ask_uint(&a, 0, "session"), session);
+    CHECK(strstr(a.text, "\"name\":\"order-1\"") && strstr(a.text, "\"status\":\"runnable\""));
+    w = ask_begin(&a, "snapshot.actor", 2); /* a handle no actor has */
+    ta_cbor_write_text(w, ta_string("segment"));
+    ta_cbor_write_uint(w, 0);
+    ta_cbor_write_text(w, ta_string("handle"));
+    ta_cbor_write_uint(w, handle + 100);
+    CHECK_EQUAL(reader_ask(reader, &a), TA_OK);
+    CHECK(a.result == TA_NIL && strstr(a.text, "\"reason\":\"stale\""));
+    w = ask_begin(&a, "snapshot.stats", 1); /* a segment the snapshot does not have */
+    ta_cbor_write_text(w, ta_string("segment"));
+    ta_cbor_write_uint(w, 3);
+    CHECK_EQUAL(reader_ask(reader, &a), TA_OK);
+    CHECK(strstr(a.text, "\"reason\":\"range\"") && strstr(a.text, "\"path\":\"params.segment\""));
+
+    /* the whole snapshot: rest counts, rows with leaf states and delayed sends, a chart's counts */
+    ask_begin(&a, "snapshot.summary", 0);
+    CHECK_EQUAL(reader_ask(reader, &a), TA_OK);
+    CHECK(strstr(a.text, "\"states\":{\"order\":{\"open\":1}}") != NULL);
+    CHECK(strstr(a.text, "\"charts\":[\"order\"],\"actors\":1") != NULL);
+    w = ask_begin(&a, "snapshot.actors", 2);
+    ta_cbor_write_text(w, ta_string("state"));
+    ta_cbor_write_text(w, ta_string("open"));
+    ta_cbor_write_text(w, ta_string("name"));
+    ta_cbor_write_text(w, ta_string("order-"));
+    CHECK_EQUAL(reader_ask(reader, &a), TA_OK);
+    CHECK_EQUAL(ask_uint(&a, 0, "total"), 1u);
+    CHECK(strstr(a.text, "\"states\":[\"open\"],\"mailbox\":1,\"queued\":[\"order.pay\"]") != NULL);
+    CHECK(strstr(a.text, "\"delayed\":[{\"event\":\"reminder\",\"sendid\":\"nag\",\"dueInMs\":10000}]") != NULL);
+    w = ask_begin(&a, "snapshot.actors", 1);
+    ta_cbor_write_text(w, ta_string("state"));
+    ta_cbor_write_text(w, ta_string("paid"));
+    CHECK_EQUAL(reader_ask(reader, &a), TA_OK);
+    CHECK_EQUAL(ask_uint(&a, 0, "total"), 0u);
+    w = ask_begin(&a, "snapshot.actors", 1);
+    ta_cbor_write_text(w, ta_string("limit"));
+    ta_cbor_write_uint(w, 513);
+    CHECK_EQUAL(reader_ask(reader, &a), TA_OK);
+    CHECK(strstr(a.text, "\"reason\":\"range\"") != NULL);
+    w = ask_begin(&a, "snapshot.chart", 1);
+    ta_cbor_write_text(w, ta_string("chart"));
+    ta_cbor_write_text(w, ta_string("order"));
+    CHECK_EQUAL(reader_ask(reader, &a), TA_OK);
+    CHECK(strstr(a.text, "{\"id\":\"open\",\"kind\":\"atomic\",\"parent\":null,\"actors\":1}") != NULL);
+    CHECK(strstr(a.text, "{\"from\":\"open\",\"events\":[\"order.pay\"],\"cond\":\"n < 3\",\"to\":[\"paid\"]}") != NULL);
+    w = ask_begin(&a, "snapshot.spans", 2);
+    ta_cbor_write_text(w, ta_string("session"));
+    ta_cbor_write_uint(w, session);
+    ta_cbor_write_text(w, ta_string("name"));
+    ta_cbor_write_text(w, ta_string("scxml.macrostep"));
+    CHECK_EQUAL(reader_ask(reader, &a), TA_OK);
+    CHECK(ask_uint(&a, 0, "total") >= 2u && ask_uint(&a, 0, "total") != UINT64_MAX);
+    CHECK(strstr(a.text, "\"name\":\"scxml.macrostep poke\"") != NULL);
+    if (telemetry) CHECK(strstr(a.text, "\"acknowledgedRecords\":0") == NULL);
+
+    /* the envelope's errors, and a reply that does not fit */
+    ask_begin(&a, "snapshot.nothing", 0);
+    CHECK_EQUAL(reader_ask(reader, &a), TA_OK);
+    CHECK(strstr(a.text, "\"code\":-32601") != NULL);
+    w = ask_begin(&a, "snapshot.summary", 1);
+    ta_cbor_write_text(w, ta_string("extra"));
+    ta_cbor_write_uint(w, 1);
+    CHECK_EQUAL(reader_ask(reader, &a), TA_OK);
+    CHECK(strstr(a.text, "\"reason\":\"unknown\"") != NULL);
+    ask_begin(&a, "snapshot.summary", 0);
+    ta_bytes message;
+    CHECK_EQUAL(ta_cbor_writer_bytes(&a.writer, &message), TA_OK);
+    ta_allocator allocator = ta_runtime_malloc();
+    ta_host_snapshot_request request = {sizeof request, 0, message, &allocator};
+    unsigned char small[8];
+    ta_buffer reply = {small, sizeof small, 0};
+    CHECK_EQUAL(ta_host_snapshot_reader_request(reader, &request, &reply), TA_ERROR_NO_MEMORY);
+    CHECK(reply.length > sizeof small);
+    free(block);
+}
+
 static void snapshot_read(int telemetry) {
     host_world e;
     world_telemetry = telemetry;
@@ -1319,6 +1445,8 @@ static void snapshot_read(int telemetry) {
     CHECK(named > 0);
     CHECK_EQUAL(empty, 0);
     free(request.pointer);
+
+    snapshot_reader_checks(bytes, session, telemetry);
 
     /* a system to read is never run, and its deinit leaves it */
     ta_run refused = ta_system_run(system, 100);
