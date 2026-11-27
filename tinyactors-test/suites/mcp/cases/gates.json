@@ -1,0 +1,50 @@
+{
+  "name": "gates",
+  "description": "the destructive tools are off unless the server was started with their option",
+  "fixture": "shop",
+  "steps": [
+    {
+      "fixture": "spawn",
+      "params": {
+        "chart": "order",
+        "name": "order-1",
+        "params": {
+          "amount": 10
+        }
+      }
+    },
+    {
+      "fixture": "settle"
+    },
+    {
+      "call": "terminate",
+      "arguments": {
+        "system": "shop",
+        "actor": "order-1"
+      },
+      "isError": true,
+      "error": "terminate is off for this server \\(allowTerminate\\)"
+    },
+    {
+      "call": "deploy",
+      "arguments": {
+        "system": "shop",
+        "draft": "d1",
+        "chart": "order"
+      },
+      "isError": true,
+      "error": "deploy is off for this server \\(allowDeploy\\)"
+    },
+    {
+      "call": "end_service",
+      "arguments": {
+        "system": "shop",
+        "session": 1,
+        "invokeid": "pay",
+        "as": "done"
+      },
+      "isError": true,
+      "error": "allowDeploy"
+    }
+  ]
+}

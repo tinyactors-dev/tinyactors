@@ -1,0 +1,10 @@
+{
+  "name": "tools",
+  "description": "tools/list gives the catalog's tools, each with its description, input schema and annotations as the catalog writes them",
+  "fixture": "shop",
+  "steps": [
+    {
+      "tools": "catalog"
+    }
+  ]
+}

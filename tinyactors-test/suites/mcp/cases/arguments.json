@@ -1,0 +1,91 @@
+{
+  "name": "arguments",
+  "description": "every tool's arguments are checked against its schema: an unknown one, a missing one, a wrong type and a value outside an enum are refused; a default is filled in",
+  "fixture": "shop",
+  "steps": [
+    {
+      "fixture": "spawn",
+      "params": {
+        "chart": "order",
+        "name": "order-1",
+        "params": {
+          "amount": 10
+        }
+      }
+    },
+    {
+      "fixture": "settle"
+    },
+    {
+      "call": "host_stats",
+      "arguments": {
+        "system": "shop",
+        "extra": 1
+      },
+      "isError": true,
+      "error": "takes no argument extra"
+    },
+    {
+      "call": "host_stats",
+      "arguments": {},
+      "isError": true,
+      "error": "needs system"
+    },
+    {
+      "call": "logs",
+      "arguments": {
+        "system": "shop",
+        "limit": "ten"
+      },
+      "isError": true,
+      "error": "limit is a integer"
+    },
+    {
+      "call": "end_service",
+      "arguments": {
+        "system": "shop",
+        "session": 1,
+        "invokeid": "pay",
+        "as": "maybe"
+      },
+      "isError": true,
+      "error": "as is one of done, error"
+    },
+    {
+      "call": "nothing",
+      "isError": true,
+      "error": "no tool nothing"
+    },
+    {
+      "call": "logs",
+      "arguments": {
+        "system": "shop"
+      },
+      "expect": {
+        "total": 1,
+        "logs": [
+          {
+            "label": "order",
+            "text": "paying v1"
+          }
+        ]
+      }
+    },
+    {
+      "call": "systems",
+      "arguments": {
+        "system": "elsewhere"
+      },
+      "isError": true,
+      "error": "takes no argument system"
+    },
+    {
+      "call": "host_stats",
+      "arguments": {
+        "system": "elsewhere"
+      },
+      "isError": true,
+      "error": "no system elsewhere"
+    }
+  ]
+}

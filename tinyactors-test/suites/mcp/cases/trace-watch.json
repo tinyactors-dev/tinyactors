@@ -1,0 +1,56 @@
+{
+  "name": "trace-watch",
+  "description": "trace_watch and trace_unwatch forward to core's requests: a watch's id, and a second unwatch of it refused",
+  "fixture": "shop",
+  "steps": [
+    {
+      "fixture": "spawn",
+      "params": {
+        "chart": "order",
+        "name": "order-1",
+        "params": {
+          "amount": 10
+        }
+      }
+    },
+    {
+      "fixture": "settle"
+    },
+    {
+      "call": "trace_watch",
+      "arguments": {
+        "system": "shop",
+        "rules": [
+          {
+            "chart": "order",
+            "detail": "full"
+          }
+        ],
+        "seconds": 30
+      },
+      "expect": {
+        "id": {
+          "$type": "integer"
+        }
+      },
+      "save": {
+        "watch": "id"
+      }
+    },
+    {
+      "call": "trace_unwatch",
+      "arguments": {
+        "system": "shop",
+        "id": "$watch"
+      }
+    },
+    {
+      "call": "trace_unwatch",
+      "arguments": {
+        "system": "shop",
+        "id": "$watch"
+      },
+      "isError": true
+    }
+  ]
+}

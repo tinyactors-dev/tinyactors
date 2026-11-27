@@ -1,0 +1,244 @@
+{
+  "name": "live",
+  "description": "the live tools: systems, host_stats, an actor by session and by name, send, ask, logs, services and traces, an unknown actor refused",
+  "fixture": "shop",
+  "steps": [
+    {
+      "fixture": "spawn",
+      "params": {
+        "chart": "order",
+        "name": "order-1",
+        "params": {
+          "amount": 40
+        }
+      }
+    },
+    {
+      "fixture": "spawn",
+      "params": {
+        "chart": "order",
+        "name": "order-2",
+        "params": {
+          "amount": 70
+        }
+      }
+    },
+    {
+      "fixture": "settle"
+    },
+    {
+      "call": "systems",
+      "expect": {
+        "items": [
+          {
+            "system": "shop",
+            "charts": [
+              "order"
+            ],
+            "actors": 2,
+            "hibernated": 0,
+            "segments": 1
+          }
+        ]
+      }
+    },
+    {
+      "call": "host_stats",
+      "arguments": {
+        "system": "shop"
+      },
+      "expect": {
+        "host": {
+          "actors": 2
+        },
+        "charts": [
+          {
+            "name": "order",
+            "actors": 2
+          }
+        ]
+      }
+    },
+    {
+      "call": "send",
+      "arguments": {
+        "system": "shop",
+        "actor": "order-1",
+        "event": "ping"
+      },
+      "expect": {
+        "sent": "ping",
+        "to": 1
+      }
+    },
+    {
+      "fixture": "settle"
+    },
+    {
+      "call": "actor",
+      "arguments": {
+        "system": "shop",
+        "actor": "1"
+      },
+      "expect": {
+        "get": {
+          "session": 1,
+          "chart": "order",
+          "invocations": 1
+        },
+        "state": {
+          "value": "paying"
+        },
+        "context": {
+          "variables": {
+            "amount": 40,
+            "tries": 1
+          }
+        }
+      }
+    },
+    {
+      "call": "actor",
+      "arguments": {
+        "system": "shop",
+        "actor": "order-2"
+      },
+      "expect": {
+        "context": {
+          "variables": {
+            "amount": 70,
+            "tries": 0
+          }
+        }
+      }
+    },
+    {
+      "call": "ask",
+      "arguments": {
+        "system": "shop",
+        "actor": "order-1",
+        "event": "question"
+      },
+      "expect": {
+        "reply": "answer",
+        "data": {
+          "tries": 1
+        }
+      }
+    },
+    {
+      "call": "logs",
+      "arguments": {
+        "system": "shop"
+      },
+      "expect": {
+        "total": 2,
+        "logs": [
+          {
+            "session": 1,
+            "label": "order",
+            "text": "paying v1"
+          },
+          {
+            "session": 2,
+            "label": "order",
+            "text": "paying v1"
+          }
+        ]
+      }
+    },
+    {
+      "call": "logs",
+      "arguments": {
+        "system": "shop",
+        "session": 2
+      },
+      "expect": {
+        "total": 1
+      }
+    },
+    {
+      "call": "services",
+      "arguments": {
+        "system": "shop"
+      },
+      "expect": {
+        "items": [
+          {
+            "session": 1,
+            "invokeid": "pay",
+            "type": "payment",
+            "src": "payments:charge"
+          },
+          {
+            "session": 2,
+            "invokeid": "pay",
+            "type": "payment",
+            "src": "payments:charge"
+          }
+        ]
+      }
+    },
+    {
+      "fixture": "advance",
+      "params": {
+        "ms": 200
+      }
+    },
+    {
+      "call": "traces",
+      "arguments": {
+        "system": "shop"
+      },
+      "expect": {
+        "total": {
+          "$gt": 0
+        }
+      }
+    },
+    {
+      "call": "traces",
+      "arguments": {
+        "system": "shop",
+        "session": 1,
+        "name": "scxml.macrostep",
+        "limit": 1
+      },
+      "expect": {
+        "total": {
+          "$gt": 0
+        },
+        "spans": {
+          "$length": 1
+        }
+      }
+    },
+    {
+      "call": "actor",
+      "arguments": {
+        "system": "shop",
+        "actor": "order-9"
+      },
+      "isError": true
+    },
+    {
+      "call": "chart_source",
+      "arguments": {
+        "system": "shop",
+        "chart": "order"
+      },
+      "text": {
+        "$match": "paying v1"
+      }
+    },
+    {
+      "call": "chart_source",
+      "arguments": {
+        "system": "shop",
+        "chart": "nothing"
+      },
+      "isError": true,
+      "error": "no source for chart nothing"
+    }
+  ]
+}

@@ -496,6 +496,20 @@ Decided by the maintainer (2026-10-13); every item is in
   it, in Python's shapes (snake_case keys and names): `actors`, `actor`,
   `configuration`, `mailbox`, `timers`, `stats`, `charts`, `trace_kept`,
   `traces`. Test: `tests/test_read_snapshot.py`.
+- **The MCP server, `tinyactors_mcp`** (`mcp/`, a package of its own,
+  opt-in, with no native code): the same server as Node's `@tinyactors/mcp`
+  (docs/adr/0021 in the repository root), over this module's public API
+  and the MCP SDK (`mcp`, pinned in `mcp/uv.lock`) only. Its tools are
+  core's catalog, which the build embeds (`build/generated/mcp_tools.inc`)
+  and the module's private `_mcp_tools()` returns, so the server and the
+  module come from one release; it forwards a `snapshot` tool to
+  `snapshot.request` and a `host` tool to the typed method of its request,
+  and writes the binding operations (`tinyactors-core/mcp/README.md`): the
+  tap over the host's keywords, copies restored with stand-ins and driven
+  synchronously on a simulated clock, compile, deploy, send, `ask`,
+  terminate. `mise run test` syncs its environment (`uv sync --frozen`),
+  runs `mcp/tests/` and the MCP suite (`tinyactors-test/docs/mcp.md`)
+  against `mcp/tests/fixture.py`. Not packed or published yet.
 - **`log=handler(entry)`** gets this host's `<log>` lines
   (`TA_EFFECT_LOG`) as thin views of `(session, label, text)`, no chart
   (decided 2026-10-13). Without a handler, the lines are discarded.
@@ -1171,6 +1185,8 @@ src/                 extension.h, docs.h (every public docstring: when and how t
                      datamodel/{datamodel.h, datamodel.c, rows.c, expressions.c,
                      support.py (the rewrite, the exceptions, Actor, the stores, Host's
                      config; embedded, not shipped)}
+mcp/                 tinyactors_mcp, opt-in: an MCP server over the module and the MCP SDK (its own
+                     pyproject.toml, uv.lock, README and tests; tests/fixture.py for the MCP suite)
 conform/             the suite's adapter, python -m conform; not in the wheel
 tests/               what the suite cannot see: threads, GC, asyncio, refusals, stale views
 examples/            applications over the package, each with a README and test_*.py (mise run test);

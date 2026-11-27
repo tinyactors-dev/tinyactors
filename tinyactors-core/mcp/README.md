@@ -7,8 +7,11 @@ of its release, so each binding's package ships the catalog of that core
 (Node: `@tinyactors/node/mcp-tools.json`), and a server and the requests it
 forwards come from one release. A change here reruns every binding's tests.
 
-Node's server is `tinyactors-napi/mcp/` (`@tinyactors/mcp`); this page is
-what any other one (Python, Go, Java) implements.
+The servers are Node's (`tinyactors-napi/mcp/`, `@tinyactors/mcp`) and
+Python's (`tinyactors-cpython/mcp/`, `tinyactors_mcp`); this page is what
+each implements, and what another one (Go, Java) would. The MCP suite
+(`tinyactors-test/docs/mcp.md`) holds every one to the same results: a
+new server comes with a fixture program for it.
 
 ## A server is three parts
 
@@ -60,7 +63,7 @@ What the catalog marks `{"binding": ...}`, and what each must do:
 
 | Operation | What it does |
 |---|---|
-| `systems` | each system: its name, its charts (`host.stats`), its actors and hibernated actors, its segments, the host's time in milliseconds |
+| `systems` | each system: its name (`system`), its charts' names (`charts`, `host.stats`), its `actors`, `hibernated` actors and `segments` |
 | `send` | the event to the actor (the binding's send); returns once it is in the mailbox |
 | `ask` | the binding's `ask`: the event, and the actor's reply to `_event.origin`, refused after `timeoutMs` |
 | `traces`, `logs` | what the tap kept: the spans the host exported (decoded) and the `<log>` lines, newest last, filtered by session (and a span name prefix), the last `limit` |

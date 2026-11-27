@@ -1,6 +1,6 @@
 #!/usr/bin/env ruby
 #MISE description="Test tinyactors-cpython: lint (rules, the binding's C, the adapter, the mapping table, the build scripts, acronyms), the build, the interpreters, and the conformance set named by MILESTONE against the adapter on both datamodels"
-#MISE sources=["src/**/*", "conform/**/*", "tests/**/*", "examples/**/*", "tools/**/*", "docs/api-map.md", "sgconfig.yml", "pyproject.toml", "mise/**/*", "mise.toml", "../tinyactors-core/include/**/*", "../tinyactors-core/mcp/**/*", "../tinyactors-core/src/**/*", "../tinyactors-core/third_party/**/*", "../tinyactors-core/mise/**/*", "../tinyactors-core/tools/lint/utils/**/*", "../tinyactors-core/tools/layout/**/*", "../tinyactors-core/docs/requests.md", "../tinyactors-test/suites/**/*", "../tinyactors-test/lib/**/*", "../tinyactors-test/lint/**/*", "../tinyactors-test/mise/**/*", "../tinyactors-test/mise.toml", "../mise/lib/**/*", "../mise/ast-grep/**/*", "../sgconfig.yml", "../acronyms.txt", "../acronyms-allow.txt", "../mise.toml", "../LICENSE"]
+#MISE sources=["src/**/*", "conform/**/*", "tests/**/*", "examples/**/*", "tools/**/*", "docs/api-map.md", "sgconfig.yml", "pyproject.toml", "mcp/pyproject.toml", "mcp/uv.lock", "mcp/tinyactors_mcp/**/*", "mcp/tests/**/*", "../tinyactors-test/docs/mcp.md", "mise/**/*", "mise.toml", "../tinyactors-core/include/**/*", "../tinyactors-core/mcp/**/*", "../tinyactors-core/src/**/*", "../tinyactors-core/third_party/**/*", "../tinyactors-core/mise/**/*", "../tinyactors-core/tools/lint/utils/**/*", "../tinyactors-core/tools/layout/**/*", "../tinyactors-core/docs/requests.md", "../tinyactors-test/suites/**/*", "../tinyactors-test/lib/**/*", "../tinyactors-test/lint/**/*", "../tinyactors-test/mise/**/*", "../tinyactors-test/mise.toml", "../mise/lib/**/*", "../mise/ast-grep/**/*", "../sgconfig.yml", "../acronyms.txt", "../acronyms-allow.txt", "../mise.toml", "../LICENSE"]
 #MISE outputs={auto=true}
 #USAGE flag "--full" help="the hibernation, migration and snapshot gates at 2,000,000 actors, 1000 resident, snapshots of 100,000 resident actors, and 200,000 invoked services"
 # vim:ft=ruby
@@ -56,6 +56,20 @@ else
                   env: { 'PYTHONPATH' => build.directory.to_s })
     end
   end
+end
+
+# tinyactors_mcp (mcp/), the opt-in MCP server over the module: its
+# environment from its lockfile (the MCP SDK, uv sync --frozen), its tests
+# and the MCP suite (tinyactors-test/docs/mcp.md, against
+# mcp/tests/fixture.py), over the abi3 build
+if CPython.extension?
+  mcp = CPython::ROOT.join('mcp')
+  CPython.run(CPython.pinned('uv'), 'sync', '--frozen', '--quiet', '--python', CPython.pinned('python'), '--directory', mcp.to_s)
+  python = mcp.join('.venv/bin/python').to_s
+  env = { 'PYTHONPATH' => [CPython::BUILD.join('abi3'), mcp].join(File::PATH_SEPARATOR) }
+  puts 'test: tinyactors_mcp: mcp/tests/'
+  CPython.run(python, '-m', 'unittest', 'discover', '--start-directory', mcp.join('tests').to_s, env: env)
+  CPython.run('mise', 'run', '//tinyactors-test:mcp', '--', python, mcp.join('tests/fixture.py').to_s, env: env)
 end
 
 gate = CPython::GATE

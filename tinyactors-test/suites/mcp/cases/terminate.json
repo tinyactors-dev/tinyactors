@@ -1,0 +1,56 @@
+{
+  "name": "terminate",
+  "description": "terminate ends an actor when the server allows it",
+  "fixture": "shop",
+  "options": {
+    "allowTerminate": true
+  },
+  "steps": [
+    {
+      "fixture": "spawn",
+      "params": {
+        "chart": "order",
+        "name": "order-1",
+        "params": {
+          "amount": 10
+        }
+      }
+    },
+    {
+      "fixture": "spawn",
+      "params": {
+        "chart": "order",
+        "name": "order-2",
+        "params": {
+          "amount": 20
+        }
+      }
+    },
+    {
+      "fixture": "settle"
+    },
+    {
+      "call": "terminate",
+      "arguments": {
+        "system": "shop",
+        "actor": "order-1"
+      },
+      "expect": {
+        "terminated": 1
+      }
+    },
+    {
+      "fixture": "settle"
+    },
+    {
+      "call": "systems",
+      "expect": {
+        "items": [
+          {
+            "actors": 1
+          }
+        ]
+      }
+    }
+  ]
+}

@@ -1,0 +1,204 @@
+{
+  "name": "deploy",
+  "description": "compile a draft, rehearse its migration on a copy of a snapshot with a stand-in that answers, then deploy it and migrate the live actors, which keep their running service; end a service",
+  "fixture": "shop",
+  "options": {
+    "allowDeploy": true
+  },
+  "steps": [
+    {
+      "fixture": "spawn",
+      "params": {
+        "chart": "order",
+        "name": "order-1",
+        "params": {
+          "amount": 10
+        }
+      }
+    },
+    {
+      "fixture": "spawn",
+      "params": {
+        "chart": "order",
+        "name": "order-2",
+        "params": {
+          "amount": 20
+        }
+      }
+    },
+    {
+      "fixture": "settle"
+    },
+    {
+      "call": "compile",
+      "arguments": {
+        "name": "order.scxml",
+        "text": "<scxml"
+      },
+      "isError": true,
+      "error": "does not compile"
+    },
+    {
+      "call": "compile",
+      "arguments": {
+        "name": "order.scxml",
+        "text": "<scxml xmlns=\"http://www.w3.org/2005/07/scxml\" version=\"1.0\" datamodel=\"ecmascript\" name=\"order\" initial=\"paying\">\n  <datamodel><data id=\"amount\" expr=\"_event.data ? _event.data.amount : 0\"/><data id=\"tries\" expr=\"0\"/></datamodel>\n  <state id=\"paying\">\n    <onentry><log label=\"order\" expr=\"'paying v2'\"/></onentry>\n    <invoke id=\"pay\" type=\"payment\" src=\"payments:charge\"><param name=\"amount\" expr=\"amount\"/></invoke>\n    <transition event=\"payment.ok\" target=\"shipping\"/>\n    <transition event=\"ping\"><assign location=\"tries\" expr=\"tries + 1\"/></transition>\n    <transition event=\"question\"><send targetexpr=\"_event.origin\" event=\"answer\"><param name=\"tries\" expr=\"tries\"/></send></transition>\n  </state>\n  <state id=\"shipping\"/>\n</scxml>\n"
+      },
+      "expect": {
+        "draft": {
+          "$type": "string"
+        },
+        "diagnostics": {
+          "$type": "list"
+        }
+      },
+      "save": {
+        "draft": "draft"
+      }
+    },
+    {
+      "call": "snapshot",
+      "arguments": {
+        "system": "shop"
+      },
+      "save": {
+        "snapshot": "snapshot"
+      }
+    },
+    {
+      "call": "rehearse",
+      "arguments": {
+        "snapshot": "$snapshot",
+        "draft": "$draft",
+        "chart": "order",
+        "services": {
+          "payment": "payment.ok"
+        }
+      },
+      "expect": {
+        "result": {
+          "migrated": 2,
+          "failed": {},
+          "pending": 0
+        },
+        "before": {
+          "paying": 2
+        },
+        "after": {
+          "shipping": 2
+        },
+        "invocations": {
+          "payment (restored)": 2
+        },
+        "errors": []
+      }
+    },
+    {
+      "call": "rehearse",
+      "arguments": {
+        "snapshot": "$snapshot",
+        "draft": "$draft",
+        "chart": "order"
+      },
+      "expect": {
+        "result": {
+          "migrated": 2
+        },
+        "after": {
+          "paying": 2
+        }
+      }
+    },
+    {
+      "call": "rehearse",
+      "arguments": {
+        "snapshot": "$snapshot",
+        "draft": "d99",
+        "chart": "order"
+      },
+      "isError": true,
+      "error": "no draft d99"
+    },
+    {
+      "call": "host_stats",
+      "arguments": {
+        "system": "shop"
+      },
+      "expect": {
+        "host": {
+          "segments": 1
+        }
+      }
+    },
+    {
+      "call": "deploy",
+      "arguments": {
+        "system": "shop",
+        "draft": "$draft",
+        "chart": "order",
+        "migrate": true
+      },
+      "expect": {
+        "segment": 1,
+        "result": {
+          "migrated": 2,
+          "failed": {},
+          "pending": 0
+        }
+      }
+    },
+    {
+      "call": "chart_source",
+      "arguments": {
+        "system": "shop",
+        "chart": "order"
+      },
+      "text": {
+        "$match": "paying v2"
+      }
+    },
+    {
+      "call": "services",
+      "arguments": {
+        "system": "shop"
+      },
+      "expect": {
+        "items": [
+          {
+            "session": 1,
+            "invokeid": "pay"
+          },
+          {
+            "session": 2,
+            "invokeid": "pay"
+          }
+        ]
+      }
+    },
+    {
+      "call": "end_service",
+      "arguments": {
+        "system": "shop",
+        "session": 2,
+        "invokeid": "pay",
+        "as": "done"
+      },
+      "expect": {
+        "ended": "pay",
+        "session": 2,
+        "as": "done"
+      }
+    },
+    {
+      "call": "end_service",
+      "arguments": {
+        "system": "shop",
+        "session": 2,
+        "invokeid": "nothing",
+        "as": "done"
+      },
+      "isError": true,
+      "error": "no running service nothing of session 2"
+    }
+  ]
+}

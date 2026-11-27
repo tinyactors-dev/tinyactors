@@ -1,0 +1,29 @@
+#!/usr/bin/env ruby
+#MISE description="Run the MCP suite against an MCP server implementation: mcp -- <command…> [--case <name>]… [--timeout <s>]"
+# vim:ft=ruby
+
+# The command is every argument that is not an option below: a fixture
+# program of one language's MCP server (docs/mcp.md), started once per
+# case in the directory mise was called from. Exit status 1 when a case
+# fails or no case ran.
+
+require_relative '../../lib/mcp'
+
+arguments = ARGV.dup
+command = []
+only = []
+timeout = 60
+until arguments.empty?
+  argument = arguments.shift
+  case argument
+  when '--case' then only << arguments.shift
+  when '--timeout' then timeout = Float(arguments.shift)
+  when '--' then command.concat(arguments.shift(arguments.length))
+  else command << argument
+  end
+end
+abort 'usage: mise run //tinyactors-test:mcp -- <command…> [--case <name>]… [--timeout <s>]' if command.empty?
+
+Dir.chdir(ENV.fetch('MISE_ORIGINAL_CWD', Dir.pwd)) do
+  exit(MCP.run(command, only: only, timeout: timeout) ? 0 : 1)
+end

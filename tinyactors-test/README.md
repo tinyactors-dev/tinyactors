@@ -13,8 +13,11 @@ it ([ROADMAP.md](../ROADMAP.md), step 8).
 | [`suites/protocol`](suites/protocol/README.md)   | what crosses core's API as CBOR: posted messages, replies and notifications, host configs, neutral values                                                                | the bytes, compared with the expected ones (tag 39999 is a wildcard) |
 | [`suites/scenarios`](suites/scenarios/README.md) | core's conformance scenarios (spawn, send, time, invoke, hibernation, migration, snapshots) as charts that check themselves, with the host operations between runs in `steps.txt` | the outcome the charts log: `pass` or not                            |
 | [`suites/w3c`](suites/w3c/irp/SOURCE)            | the W3C SCXML IRP suite, vendored in `irp/` (its `SOURCE` and `LICENSE`) and converted per datamodel (`skip.txt`, `convert.py`)                                                   | the outcome its charts log, as for scenarios                         |
+| [`suites/mcp`](docs/mcp.md)                      | every language's MCP server: a fixture opened on a new server, its tools called as an agent would (`mise run mcp -- <fixture program>`)                                           | each tool's result, against what the case expects                    |
 
-Nothing compares effects. As in the W3C IRP, a chart checks what happened
+Nothing compares effects. The MCP suite compares results, as the
+protocol vectors compare bytes: a tool's result is the output of an
+interface every language's server must give alike ([docs/mcp.md](docs/mcp.md)). As in the W3C IRP, a chart checks what happened
 and ends in `pass` or `fail`; the implementation runs it with its own loop
 and effect handlers in the environment that [docs/driver.md](docs/driver.md)
 describes, and answers the outcome.

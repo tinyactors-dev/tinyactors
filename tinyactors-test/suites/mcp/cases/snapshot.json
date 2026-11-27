@@ -1,0 +1,320 @@
+{
+  "name": "snapshot",
+  "description": "a snapshot, read with core's snapshot reader: its summary, its actors by state and by name, their variables from a copy, a chart with the actors in each state, its trace history",
+  "fixture": "shop",
+  "steps": [
+    {
+      "fixture": "spawn",
+      "params": {
+        "chart": "order",
+        "name": "order-1",
+        "params": {
+          "amount": 10
+        }
+      }
+    },
+    {
+      "fixture": "spawn",
+      "params": {
+        "chart": "order",
+        "name": "order-2",
+        "params": {
+          "amount": 20
+        }
+      }
+    },
+    {
+      "fixture": "spawn",
+      "params": {
+        "chart": "order",
+        "name": "order-3",
+        "params": {
+          "amount": 30
+        }
+      }
+    },
+    {
+      "fixture": "settle"
+    },
+    {
+      "call": "send",
+      "arguments": {
+        "system": "shop",
+        "actor": "order-2",
+        "event": "ping"
+      }
+    },
+    {
+      "fixture": "advance",
+      "params": {
+        "ms": 200
+      }
+    },
+    {
+      "call": "snapshot",
+      "arguments": {
+        "system": "shop"
+      },
+      "expect": {
+        "system": "shop",
+        "actors": 3,
+        "snapshot": {
+          "$type": "string"
+        }
+      },
+      "save": {
+        "snapshot": "snapshot"
+      }
+    },
+    {
+      "call": "snapshot_summary",
+      "arguments": {
+        "snapshot": "$snapshot"
+      },
+      "expect": {
+        "systemID": "shop",
+        "segments": [
+          {
+            "segment": 0,
+            "live": true,
+            "charts": [
+              "order"
+            ],
+            "actors": 3
+          }
+        ],
+        "states": {
+          "order": {
+            "paying": 3
+          }
+        },
+        "traces": {
+          "records": {
+            "$gt": 0
+          }
+        }
+      }
+    },
+    {
+      "call": "snapshot_actors",
+      "arguments": {
+        "snapshot": "$snapshot",
+        "state": "paying"
+      },
+      "expect": {
+        "total": 3,
+        "offset": 0,
+        "actors": [
+          {
+            "session": 1,
+            "name": "order-1",
+            "chart": "order",
+            "segment": 0,
+            "status": "idle",
+            "states": [
+              "paying"
+            ],
+            "mailbox": 0,
+            "queued": [],
+            "delayed": []
+          },
+          {
+            "session": 2,
+            "name": "order-2"
+          },
+          {
+            "session": 3,
+            "name": "order-3"
+          }
+        ]
+      }
+    },
+    {
+      "call": "snapshot_actors",
+      "arguments": {
+        "snapshot": "$snapshot",
+        "name": "order-3"
+      },
+      "expect": {
+        "total": 1,
+        "actors": [
+          {
+            "session": 3
+          }
+        ]
+      }
+    },
+    {
+      "call": "snapshot_actors",
+      "arguments": {
+        "snapshot": "$snapshot",
+        "offset": 1,
+        "limit": 1
+      },
+      "expect": {
+        "total": 3,
+        "offset": 1,
+        "actors": [
+          {
+            "session": 2
+          }
+        ]
+      }
+    },
+    {
+      "call": "snapshot_variables",
+      "arguments": {
+        "snapshot": "$snapshot",
+        "chart": "order"
+      },
+      "expect": {
+        "actors": [
+          {
+            "session": 1,
+            "variables": {
+              "amount": 10,
+              "tries": 0
+            }
+          },
+          {
+            "session": 2,
+            "variables": {
+              "amount": 20,
+              "tries": 1
+            }
+          },
+          {
+            "session": 3,
+            "variables": {
+              "amount": 30,
+              "tries": 0
+            }
+          }
+        ]
+      }
+    },
+    {
+      "call": "snapshot_variables",
+      "arguments": {
+        "snapshot": "$snapshot",
+        "session": 2
+      },
+      "expect": {
+        "actors": [
+          {
+            "session": 2,
+            "variables": {
+              "tries": 1
+            }
+          }
+        ]
+      }
+    },
+    {
+      "call": "snapshot_chart",
+      "arguments": {
+        "snapshot": "$snapshot",
+        "chart": "order"
+      },
+      "expect": {
+        "segment": 0,
+        "datamodel": "ecmascript",
+        "data": [
+          "amount",
+          "tries"
+        ],
+        "states": [
+          {
+            "id": "paying",
+            "kind": "atomic",
+            "parent": null,
+            "actors": 3
+          },
+          {
+            "id": "paid",
+            "kind": "atomic",
+            "parent": null,
+            "actors": 0
+          }
+        ],
+        "transitions": [
+          {
+            "from": "paying",
+            "events": [
+              "payment.ok"
+            ],
+            "cond": null,
+            "to": [
+              "paid"
+            ]
+          },
+          {
+            "from": "paying",
+            "events": [
+              "ping"
+            ],
+            "cond": null,
+            "to": []
+          },
+          {
+            "from": "paying",
+            "events": [
+              "question"
+            ],
+            "cond": null,
+            "to": []
+          }
+        ]
+      }
+    },
+    {
+      "call": "snapshot_chart",
+      "arguments": {
+        "snapshot": "$snapshot",
+        "chart": "nothing"
+      },
+      "isError": true
+    },
+    {
+      "call": "snapshot_traces",
+      "arguments": {
+        "snapshot": "$snapshot",
+        "session": 2,
+        "name": "scxml.macrostep",
+        "limit": 2
+      },
+      "expect": {
+        "total": {
+          "$gt": 0
+        },
+        "retained": {
+          "records": {
+            "$gt": 0
+          }
+        },
+        "spans": {
+          "$length": 2
+        }
+      }
+    },
+    {
+      "call": "snapshot_summary",
+      "arguments": {
+        "snapshot": "s99"
+      },
+      "isError": true,
+      "error": "no snapshot s99"
+    },
+    {
+      "call": "host_stats",
+      "arguments": {
+        "system": "shop"
+      },
+      "expect": {
+        "host": {
+          "actors": 3
+        }
+      }
+    }
+  ]
+}

@@ -5,10 +5,23 @@
 
 int ta_python_event_init_type(PyObject *module, ta_python_module_state *state);
 
+/* The MCP tool catalog of the core this module was built with
+ * (tinyactors-core/mcp/tools.json, embedded by the build). */
+static const char ta_python_mcp_catalog[] =
+#include "mcp_tools.inc"
+    ;
+
+static PyObject *ta_python_mcp_tools(PyObject *module, PyObject *unused) {
+    (void)module;
+    (void)unused;
+    return PyUnicode_FromString(ta_python_mcp_catalog);
+}
+
 static PyMethodDef ta_python_methods[] = {
     {"encode", ta_python_encode, METH_O, ta_python_doc_encode},
     {"decode", ta_python_decode, METH_O, ta_python_doc_decode},
     {"decode_traces", ta_python_decode_traces, METH_O, ta_python_doc_decode_traces},
+    {"_mcp_tools", ta_python_mcp_tools, METH_NOARGS, ta_python_doc_mcp_tools},
     {"read_snapshot", ta_python_read_snapshot, METH_O, ta_python_doc_read_snapshot},
     {"_binding_memory", ta_python_binding_memory, METH_O, ta_python_doc_binding_memory},
     {"compile_charts", (PyCFunction)(void (*)(void))ta_python_compile_charts, METH_FASTCALL | METH_KEYWORDS,

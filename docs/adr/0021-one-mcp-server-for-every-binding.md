@@ -28,8 +28,6 @@ Following [docs/roles.md](../roles.md):
     every ecosystem has an SDK for it;
   - a Python, Go or Java server: this ADR makes them small, it does not
     write them;
-  - a conformance suite that drives every language's server: the catalog
-    makes one possible, and it comes with the second server.
 - **Who pays:**
 
   | Cost | What |
@@ -125,7 +123,7 @@ Following [docs/roles.md](../roles.md):
    a decision of core's: no code of core reads it. It lives beside core
    because every binding builds the core of its release, and each
    binding's package ships that core's copy (Node: `@tinyactors/node`
-   exports it; Python's module embeds it when its server is built), so a server and its
+   exports it; Python's module embeds it, its private `_mcp_tools()`), so a server and its
    binding's methods come from one release. A change to it reruns every
    binding's tests (their `#MISE sources`).
 4. **A server per language is the catalog, its SDK, and the binding
@@ -137,7 +135,17 @@ Following [docs/roles.md](../roles.md):
    That is most of the lines a second server writes, and none of it can
    leave the language; what leaves is everything about reading a
    snapshot, the tools' names, schemas and descriptions, and their
-   rules. Node's is first.
+   rules. Node's is first, Python's second (2026-11-27, the maintainer:
+   "build out the python version").
+5. **The MCP suite holds them to one behaviour** (2026-11-27, the
+   maintainer: "extend the compliance suite to make sure all MCP server
+   implementations behave the same"): `tinyactors-test/suites/mcp`, run
+   against each server's fixture program (`tinyactors-test/docs/mcp.md`),
+   which speaks MCP's stdio transport plus four `fixture/*` methods (open
+   a host of the fixture, settle, advance its simulated clock, spawn). A
+   case calls the tools as an agent would and matches each result's
+   structured content against what it expects: what every server must
+   give alike, never what a language gives by design.
 
 ## Rejected
 

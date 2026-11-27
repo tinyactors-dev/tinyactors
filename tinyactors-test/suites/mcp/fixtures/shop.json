@@ -1,0 +1,25 @@
+{
+  "description": "a shop: one chart, order, whose actors pay through an invoked service of type payment that never answers",
+  "system": "shop",
+  "config": {
+    "system": {
+      "ticksPerSecond": 1000
+    },
+    "telemetry": {
+      "flushInterval": 100
+    }
+  },
+  "charts": [
+    {
+      "name": "order.scxml",
+      "text": "<scxml xmlns=\"http://www.w3.org/2005/07/scxml\" version=\"1.0\" datamodel=\"ecmascript\" name=\"order\" initial=\"paying\">\n  <datamodel><data id=\"amount\" expr=\"_event.data ? _event.data.amount : 0\"/><data id=\"tries\" expr=\"0\"/></datamodel>\n  <state id=\"paying\">\n    <onentry><log label=\"order\" expr=\"'paying v1'\"/></onentry>\n    <invoke id=\"pay\" type=\"payment\" src=\"payments:charge\"><param name=\"amount\" expr=\"amount\"/></invoke>\n    <transition event=\"payment.ok\" target=\"paid\"/>\n    <transition event=\"ping\"><assign location=\"tries\" expr=\"tries + 1\"/></transition>\n    <transition event=\"question\"><send targetexpr=\"_event.origin\" event=\"answer\"><param name=\"tries\" expr=\"tries\"/></send></transition>\n  </state>\n  <state id=\"paid\"/>\n</scxml>\n"
+    }
+  ],
+  "sources": {
+    "order": "<scxml xmlns=\"http://www.w3.org/2005/07/scxml\" version=\"1.0\" datamodel=\"ecmascript\" name=\"order\" initial=\"paying\">\n  <datamodel><data id=\"amount\" expr=\"_event.data ? _event.data.amount : 0\"/><data id=\"tries\" expr=\"0\"/></datamodel>\n  <state id=\"paying\">\n    <onentry><log label=\"order\" expr=\"'paying v1'\"/></onentry>\n    <invoke id=\"pay\" type=\"payment\" src=\"payments:charge\"><param name=\"amount\" expr=\"amount\"/></invoke>\n    <transition event=\"payment.ok\" target=\"paid\"/>\n    <transition event=\"ping\"><assign location=\"tries\" expr=\"tries + 1\"/></transition>\n    <transition event=\"question\"><send targetexpr=\"_event.origin\" event=\"answer\"><param name=\"tries\" expr=\"tries\"/></send></transition>\n  </state>\n  <state id=\"paid\"/>\n</scxml>\n"
+  },
+  "services": {
+    "payment": "silent"
+  },
+  "options": {}
+}

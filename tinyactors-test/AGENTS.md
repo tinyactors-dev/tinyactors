@@ -10,6 +10,14 @@ Commits on `main`. Commits here use the scope `test`.
   `docs/driver.md`. What a black box cannot show (memory failures, a call
   refused during a run, threads, garbage collection, liveness) stays in
   the tests of the project it belongs to.
+- **The MCP suite compares tool results** (`docs/mcp.md`, `lib/mcp.rb`):
+  every language's MCP server is one interface, so its results are
+  compared as the protocol vectors' bytes are. Its cases expect what every
+  server must give alike, never what one language gives by design (an
+  error's wording, a snapshot's length). A new case passes against every
+  fixture program in `docs/mcp.md`'s table before it is committed; a
+  change to the fixture protocol changes each fixture program in the same
+  commit.
 - **No expected effects.** A scenario's charts check what happened and end
   in `pass` or `fail`, as W3C tests do. Do not add a suite that records an
   implementation's effects and compares them: the bytes the suite compares

@@ -184,13 +184,26 @@ module CPython
   def support_include
     directory = BUILD.join('generated')
     directory.mkpath
-    literal = ROOT.join(SUPPORT).read.each_line.map do |line|
+    literal = c_literal(ROOT.join(SUPPORT).read)
+    include = directory.join('support.inc')
+    include.write(literal) unless include.file? && include.read == literal
+    catalog = c_literal(MCP_CATALOG.read)
+    tools = directory.join('mcp_tools.inc')
+    tools.write(catalog) unless tools.file? && tools.read == catalog
+    directory
+  end
+
+  # The MCP tool catalog of the core this module builds (tinyactors-core/mcp/tools.json,
+  # docs/adr/0021): src/module.c includes it as mcp_tools.inc, and tinyactors._mcp_tools()
+  # returns its text, so a server and the requests it forwards come from one release.
+  MCP_CATALOG = ROOT.join('../tinyactors-core/mcp/tools.json').expand_path
+
+  # A text as one C string literal, a line at a time.
+  def c_literal(text)
+    text.each_line.map do |line|
       escaped = line.chomp.gsub('\\') { '\\\\' }.gsub('"') { '\\"' }
       "\"#{escaped}\\n\"\n"
     end.join
-    include = directory.join('support.inc')
-    include.write(literal) unless include.file? && include.read == literal
-    directory
   end
 
   # A stress tool on both datamodels against the abi3 build: N actors, at
