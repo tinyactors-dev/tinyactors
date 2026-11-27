@@ -1,0 +1,326 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- An issue: its lifecycle and its occurrences.
+
+     open (new -> triaged) -> fixed (settled <-> checking) -> closed,
+     or wontfix, or a duplicate of another. A commit whose trailer says
+     "Fixes-issue: tinyactors:<project>:<n>" fixes it, in any repository; a later report from a commit is checked
+     against the fix with GitHub's compare: a commit that contains the fix
+     means the issue regressed, an older one is told to update. Fixed
+     for 14 days with no new report, it closes itself.
+
+     Every change is written to the ledger before it is answered: the
+     answer waits in answers, keyed by the ledger send's sendid. Each
+     change goes to the project's index, and the reporters' users hear of
+     a fix, a regression or a workaround. It never ends. -->
+<scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0"
+       datamodel="ecmascript" name="issue" initial="issue">
+  <script src="issue.js"/>
+  <datamodel>
+    <data id="repoID"/>  <data id="slug"/>  <data id="n"/>   <!-- given at spawn: answers name the issue by
+                                                               its identifier; the gateway adds the repository's current name -->
+    <data id="report"/>  <data id="asker"/>  <data id="similar"/> <!-- given at spawn: the first report -->
+    <data id="possible"/>                <!-- given at spawn: {n, p}, a duplicate the model was unsure of -->
+    <data id="title"/>  <data id="component"/>  <data id="kind"/>  <data id="body"/>
+    <data id="occurrences" expr="[]"/>   <!-- the last 50: {session, commit, at, reporter} -->
+    <data id="count" expr="0"/>
+    <data id="minutes" expr="0"/>
+    <data id="reporters" expr="[]"/>     <!-- githubIds -->
+    <data id="workaround" expr="null"/>
+    <data id="reason" expr="null"/>
+    <data id="fix" expr="null"/>         <!-- {sha, url, repoID}: the commit, in the repository it is in -->
+    <data id="duplicateOf" expr="null"/>
+    <data id="pending" expr="null"/>     <!-- the report a compare is checking -->
+    <data id="answers" expr="({})"/>     <!-- ledger sendid -> {to, event, data} -->
+    <data id="lsid"/>
+    <data id="item"/>
+    <data id="state" expr="'new'"/>      <!-- the index's name for where it is -->
+    <data id="attachments" expr="[]"/>   <!-- their descriptions and keys in the blob store; never their bytes -->
+    <data id="uploading" expr="({})"/>   <!-- uploadID -> true, while its upload actor runs -->
+    <data id="uploads" expr="0"/>        <!-- the last upload's number -->
+    <data id="purged" expr="false"/>
+  </datamodel>
+
+  <state id="issue" initial="starting">
+    <!-- the first report, written, then answered -->
+    <state id="starting">
+      <onentry>
+        <assign location="title" expr="report.title"/>
+        <assign location="component" expr="report.component"/>
+        <assign location="kind" expr="report.kind"/>
+        <assign location="body" expr="report.body"/>
+        <assign location="occurrences" expr="[occurrence(report)]"/>
+        <assign location="count" expr="1"/>
+        <assign location="minutes" expr="report.minutes"/>
+        <assign location="reporters" expr="report.reporter ? [report.reporter.githubID] : []"/>
+        <send type="ledger" event="ledger.append" idlocation="lsid">
+          <content expr="record('filed', slug, n, report)"/>
+        </send>
+        <assign location="answers" expr="put(answers, lsid, { to: asker, event: 'filed',
+                 data: { id: issueID(slug, n), n: n, similar: similar, possibleDuplicateOf: possible } })"/>
+      </onentry>
+      <transition target="new"/>
+    </state>
+
+    <state id="open" initial="new">
+      <state id="new">
+        <onentry><assign location="state" expr="'new'"/><raise event="changed"/></onentry>
+        <transition event="triage" target="triaged">
+          <assign location="kind" expr="_event.data.kind || kind"/>
+          <assign location="title" expr="_event.data.title || title"/>
+          <send type="ledger" event="ledger.append" idlocation="lsid">
+            <content expr="record('triaged', slug, n, _event.data)"/>
+          </send>
+          <assign location="answers" expr="put(answers, lsid, answer(_event, 'triaged', { id: issueID(slug, n) }))"/>
+        </transition>
+      </state>
+      <state id="triaged"><onentry><assign location="state" expr="'triaged'"/><raise event="changed"/></onentry></state>
+      <state id="regressed"><onentry><assign location="state" expr="'regressed'"/><raise event="changed"/></onentry></state>
+
+      <transition event="report">
+        <assign location="count" expr="count + 1"/>
+        <assign location="minutes" expr="minutes + (_event.data.minutes || 0)"/>
+        <assign location="occurrences" expr="recent(occurrences, occurrence(_event.data))"/>
+        <assign location="reporters" expr="withReporter(reporters, _event.data)"/>
+        <raise event="changed"/>
+        <send type="ledger" event="ledger.append" idlocation="lsid">
+          <content expr="record('counted', slug, n, occurrence(_event.data))"/>
+        </send>
+        <assign location="answers" expr="put(answers, lsid, answer(_event, 'counted',
+                 { id: issueID(slug, n), n: n, count: count, workaround: workaround, matchedBy: _event.data.matchedBy || null }))"/>
+      </transition>
+      <transition event="fixed" target="fixed">
+        <assign location="fix" expr="({ sha: _event.data.sha, url: _event.data.url, repoID: _event.data.repoID })"/>
+        <send type="ledger" event="ledger.append"><content expr="record('fixed', slug, n, fix)"/></send>
+        <foreach array="reporters" item="item">
+          <send targetexpr="addr('user.' + item)" event="user.update">
+            <content expr="({ id: issueID(slug, n), n: n, title: title, state: 'fixed', sha: fix.sha })"/>
+          </send>
+        </foreach>
+      </transition>
+      <transition event="wontfix" target="wontfix">
+        <assign location="reason" expr="_event.data.reason"/>
+        <send type="ledger" event="ledger.append" idlocation="lsid">
+          <content expr="record('wontfix', slug, n, _event.data)"/>
+        </send>
+        <assign location="answers" expr="put(answers, lsid, answer(_event, 'wontfix', { id: issueID(slug, n) }))"/>
+      </transition>
+    </state>
+
+    <state id="fixed" initial="settled">
+      <state id="settled">
+        <onentry>
+          <assign location="state" expr="'fixed'"/><raise event="changed"/>
+          <send event="autoclose" id="autoclose" delay="1209600s"/>
+        </onentry>  <!-- 14 days -->
+        <onexit><cancel sendid="autoclose"/></onexit>
+        <transition event="report" cond="_event.data.commit" target="checking">
+          <assign location="pending" expr="_event.data"/>
+          <assign location="pending" expr="Object.assign({}, pending, { replyTo: replyTo(_event) })"/>
+          <send type="github" event="compare" id="compare">
+            <param name="repoID" expr="fix.repoID"/>
+            <param name="base" expr="fix.sha"/>
+            <param name="head" expr="_event.data.commit"/>
+          </send>
+        </transition>
+        <transition event="report">
+          <send targetexpr="replyTo(_event)" event="fixed">
+            <param name="id" expr="issueID(slug, n)"/><param name="n" expr="n"/>
+            <param name="sha" expr="fix.sha"/><param name="checked" expr="false"/>
+          </send>
+        </transition>
+        <transition event="autoclose" target="closed">
+          <send type="ledger" event="ledger.append"><content expr="record('closed', slug, n, { by: 'autoclose' })"/></send>
+        </transition>
+      </state>
+      <state id="checking">
+        <onentry><send event="compare.timeout" id="compare-timeout" delay="10s"/></onentry>
+        <onexit><cancel sendid="compare-timeout"/></onexit>
+        <!-- the reporter's commit contains the fix: it came back -->
+        <transition event="compared" cond="_event.data.status === 'ahead' || _event.data.status === 'identical'" target="regressed">
+          <assign location="count" expr="count + 1"/>
+          <assign location="minutes" expr="minutes + (pending.minutes || 0)"/>
+          <assign location="occurrences" expr="recent(occurrences, occurrence(pending))"/>
+          <assign location="reporters" expr="withReporter(reporters, pending)"/>
+          <send type="ledger" event="ledger.append" idlocation="lsid">
+            <content expr="record('regressed', slug, n, occurrence(pending))"/>
+          </send>
+          <assign location="answers" expr="put(answers, lsid, { to: pending.replyTo, event: 'regressed',
+                   data: { id: issueID(slug, n), n: n, fix: fix.sha, commit: pending.commit } })"/>
+          <foreach array="reporters" item="item">
+            <send targetexpr="addr('user.' + item)" event="user.update">
+              <content expr="({ id: issueID(slug, n), n: n, title: title, state: 'regressed', sha: pending.commit })"/>
+            </send>
+          </foreach>
+        </transition>
+        <!-- an older commit: the fix is not in it yet -->
+        <transition event="compared" target="settled">
+          <send targetexpr="pending.replyTo" event="fixed">
+            <param name="id" expr="issueID(slug, n)"/><param name="n" expr="n"/>
+            <param name="sha" expr="fix.sha"/><param name="checked" expr="true"/>
+            <param name="advice" expr="'your commit ' + pending.commit + ' predates the fix: update your checkout'"/>
+          </send>
+        </transition>
+        <transition event="compare.timeout github.unavailable error.communication" target="settled">
+          <send targetexpr="pending.replyTo" event="fixed">
+            <param name="id" expr="issueID(slug, n)"/><param name="n" expr="n"/>
+            <param name="sha" expr="fix.sha"/><param name="checked" expr="false"/>
+          </send>
+        </transition>
+      </state>
+      <transition event="fixed">  <!-- a second commit mentioning it: the newest fix counts -->
+        <assign location="fix" expr="({ sha: _event.data.sha, url: _event.data.url, repoID: _event.data.repoID })"/>
+      </transition>
+      <transition event="close" target="closed">
+        <send type="ledger" event="ledger.append" idlocation="lsid">
+          <content expr="record('closed', slug, n, _event.data)"/>
+        </send>
+        <assign location="answers" expr="put(answers, lsid, answer(_event, 'closed', { id: issueID(slug, n) }))"/>
+      </transition>
+    </state>
+
+    <state id="closed">
+      <onentry>
+        <assign location="state" expr="'closed'"/><raise event="changed"/>
+        <send event="purge" id="purge" delay="7776000s"/>   <!-- 90 days: the attachments' bytes go -->
+      </onentry>
+      <onexit><cancel sendid="purge"/></onexit>
+      <transition event="report">
+        <assign location="count" expr="count + 1"/>
+        <send targetexpr="replyTo(_event)" event="counted">
+          <param name="id" expr="issueID(slug, n)"/><param name="n" expr="n"/><param name="count" expr="count"/>
+          <param name="state" expr="'closed'"/><param name="fix" expr="fix"/>
+        </send>
+      </transition>
+    </state>
+    <state id="wontfix">
+      <onentry>
+        <assign location="state" expr="'wontfix'"/><raise event="changed"/>
+        <send event="purge" id="purge" delay="7776000s"/>
+      </onentry>
+      <onexit><cancel sendid="purge"/></onexit>
+      <transition event="report">
+        <assign location="count" expr="count + 1"/>
+        <send targetexpr="replyTo(_event)" event="counted">
+          <param name="id" expr="issueID(slug, n)"/><param name="n" expr="n"/><param name="count" expr="count"/>
+          <param name="state" expr="'wontfix'"/><param name="reason" expr="reason"/>
+        </send>
+      </transition>
+    </state>
+
+    <!-- in every state -->
+    <transition event="workaround">
+      <assign location="workaround" expr="({ text: _event.data.text, by: _event.data.caller.login })"/>
+      <raise event="changed"/>
+      <send type="ledger" event="ledger.append" idlocation="lsid">
+        <content expr="record('workaround', slug, n, workaround)"/>
+      </send>
+      <assign location="answers" expr="put(answers, lsid, answer(_event, 'noted', { id: issueID(slug, n) }))"/>
+      <foreach array="reporters" item="item">
+        <send targetexpr="addr('user.' + item)" event="user.update">
+          <content expr="({ id: issueID(slug, n), n: n, title: title, state: 'workaround', text: workaround.text })"/>
+        </send>
+      </foreach>
+    </transition>
+    <transition event="issue.get">
+      <send targetexpr="replyTo(_event)" event="issue">
+        <content expr="details(_event.data.caller, { id: issueID(slug, n), n: n, title: title, component: component, kind: kind,
+                       body: body, count: count, minutes: minutes, workaround: workaround, reason: reason,
+                       fix: fix, occurrences: occurrences,
+                       attachments: attachments }, mayRead(_event.data.caller, reporters, repoID))"/>
+      </send>
+    </transition>
+    <!-- attachments: a slot for a reporter or a maintainer, the bytes by the gateway, the check by the upload -->
+    <transition event="attach.open" cond="!mayRead(_event.data.caller, reporters, repoID)">
+      <send targetexpr="replyTo(_event)" event="refused">
+        <param name="reason" expr="'only the reporters of ' + issueID(slug, n) + ' and its maintainers may attach to it'"/>
+      </send>
+    </transition>
+    <transition event="attach.open" cond="attachments.length + Object.keys(uploading).length >= 10">
+      <send targetexpr="replyTo(_event)" event="refused"><param name="reason" expr="'an issue holds at most 10 attachments'"/></send>
+    </transition>
+    <transition event="attach.open" cond="_event.data.caller.quota.files &lt;= 0 || _event.data.size > _event.data.caller.quota.bytes">
+      <send targetexpr="replyTo(_event)" event="refused"><param name="reason" expr="'over your quota for today'"/></send>
+    </transition>
+    <transition event="attach.open">
+      <assign location="uploads" expr="uploads + 1"/>
+      <send type="spawn" event="upload" idlocation="lsid">
+        <content expr="({ chart: 'upload', name: 'upload.' + repoID + '.' + n + '.' + uploads,
+                          params: { uploadID: repoID + '.' + n + '.' + uploads, issue: addr('issue.' + repoID + '.' + n),
+                                    issueKey: slug + '/' + n, issueRef: issueID(slug, n), asker: replyTo(_event),
+                                    file: { name: _event.data.name, type: _event.data.type, size: _event.data.size, sha256: _event.data.sha256 },
+                                    uploader: { githubID: _event.data.caller.githubID, login: _event.data.caller.login } } })"/>
+      </send>
+      <assign location="uploading" expr="put(uploading, repoID + '.' + n + '.' + uploads, true)"/>
+      <assign location="answers" expr="put(answers, lsid, answer(_event, 'refused', { reason: 'the upload could not start' }))"/>
+    </transition>
+    <transition event="spawned" cond="has(answers, _event.sendid)">
+      <assign location="answers" expr="drop(answers, _event.sendid)"/>  <!-- the upload answers for itself -->
+    </transition>
+    <transition event="attachment.added">
+      <assign location="attachments" expr="attachments.concat([_event.data])"/>
+      <assign location="uploading" expr="drop(uploading, _event.data.upload)"/>
+      <send type="ledger" event="ledger.append"><content expr="record('attached', slug, n, _event.data)"/></send>
+      <raise event="changed"/>
+      <foreach array="reporters" item="item">
+        <if cond="item !== _event.data.byID">
+          <send targetexpr="addr('user.' + item)" event="user.update">
+            <content expr="({ id: issueID(slug, n), title: title, state: 'attachment', file: _event.data.name, by: _event.data.by })"/>
+          </send>
+        </if>
+      </foreach>
+    </transition>
+    <transition event="upload.ended">
+      <assign location="uploading" expr="drop(uploading, _event.data.uploadID)"/>
+    </transition>
+    <!-- a download: a signed link, for whoever may read them -->
+    <transition event="attachment.get" cond="!mayRead(_event.data.caller, reporters, repoID)">
+      <send targetexpr="replyTo(_event)" event="refused"><param name="reason" expr="'only its reporters and maintainers read its attachments'"/></send>
+    </transition>
+    <transition event="attachment.get" cond="purged || !attachments.some(function (a) { return a.upload === _event.data.upload; })">
+      <send targetexpr="replyTo(_event)" event="refused"><param name="reason" expr="purged ? 'its attachments were deleted 90 days after it closed' : 'no such attachment'"/></send>
+    </transition>
+    <transition event="attachment.get">
+      <send type="blobs" event="blob.sign" idlocation="lsid">
+        <param name="key" expr="attachments.filter(function (a) { return a.upload === _event.data.upload; })[0].key"/>
+      </send>
+      <assign location="answers" expr="put(answers, lsid, answer(_event, 'attachment',
+               attachments.filter(function (a) { return a.upload === _event.data.upload; })[0]))"/>
+    </transition>
+    <transition event="blob.signed" cond="has(answers, _event.sendid)">
+      <send targetexpr="answers[_event.sendid].to" event="attachment">
+        <content expr="Object.assign({}, answers[_event.sendid].data, { url: _event.data.url, expiresIn: _event.data.expiresIn })"/>
+      </send>
+      <assign location="answers" expr="drop(answers, _event.sendid)"/>
+    </transition>
+    <!-- 90 days after closing: the bytes go, the descriptions stay -->
+    <transition event="purge">
+      <foreach array="attachments" item="item">
+        <send type="blobs" event="blob.delete"><param name="key" expr="item.key"/></send>
+      </foreach>
+      <assign location="purged" expr="true"/>
+      <send type="ledger" event="ledger.append"><content expr="record('purged', slug, n, { files: attachments.length })"/></send>
+    </transition>
+
+    <!-- the ledger wrote a change: its answer goes now -->
+    <transition event="ledger.written" cond="has(answers, _event.sendid)">
+      <send targetexpr="answers[_event.sendid].to" eventexpr="answers[_event.sendid].event">
+        <content expr="answers[_event.sendid].data"/>
+      </send>
+      <assign location="answers" expr="drop(answers, _event.sendid)"/>
+    </transition>
+    <transition event="error.communication" cond="has(answers, _event.sendid)">
+      <send targetexpr="answers[_event.sendid].to" event="failed">
+        <param name="reason" expr="'the change could not be written'"/>
+      </send>
+      <assign location="answers" expr="drop(answers, _event.sendid)"/>
+    </transition>
+    <!-- after every change, the project's index follows -->
+    <transition event="changed">
+      <send targetexpr="addr('project.' + repoID)" event="issue.changed">
+        <content expr="summary({ n: n, title: title, body: body, component: component, kind: kind, state: state, count: count,
+                                 minutes: minutes, workaround: workaround, fix: fix, possible: possible,
+                                 attachments: attachments.length })"/>
+      </send>
+    </transition>
+  </state>
+</scxml>

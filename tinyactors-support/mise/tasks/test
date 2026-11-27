@@ -1,0 +1,13 @@
+#!/usr/bin/env ruby
+#MISE description="Test tinyactors-support: the charts compiled with warnings as errors, every behaviour through the gateway on a SimulatedClock with the stand-ins (test/scenario.test.mjs), and the server over HTTP: MCP, OAuth through the stand-in login, a report, an upload and a download (test/http.test.mjs)"
+#MISE sources=["charts/**/*", "lib/**/*", "skills/**/*", "test/**/*", "server.mjs", "package.json", "package-lock.json", "mise.toml", "mise/**/*"]
+#MISE outputs={auto=true}
+# vim:ft=ruby
+
+# The packages come from npm (package-lock.json pins @tinyactors/node and
+# the MCP SDK), as the website's examples do: a change to the working tree
+# of a binding reaches this project when it is released.
+Dir.chdir(File.expand_path('../..', __dir__)) do
+  system('npm', 'ci', '--no-audit', '--no-fund', '--loglevel=error', exception: true) unless File.exist?('node_modules/.package-lock.json')
+  system({ 'NODE_NO_WARNINGS' => '1' }, 'node', '--test', *Dir['test/*.test.mjs'].sort, exception: true)
+end

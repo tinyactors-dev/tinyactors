@@ -1,0 +1,23 @@
+#!/usr/bin/env ruby
+#MISE description="Check the server on ta-mcp from the VM itself: health, the discovery documents, MCP initialize and tools/list, the 401 a report gets without a login, the login redirect; and the GitHub App, read-only (tools/check-github.mjs)"
+# vim:ft=ruby
+
+require_relative '../support'
+
+Support.secrets!
+port = Support::PORT
+script = <<~BASH
+  set -uo pipefail
+  set -a; . #{Support::HOME}/support/env; set +a
+  h='content-type: application/json'; a='accept: application/json, text/event-stream'
+  echo "health: $(curl -fsS localhost:#{port}/healthz)"
+  echo "resource: $(curl -fsS localhost:#{port}/.well-known/oauth-protected-resource)"
+  echo "server: $(curl -fsS localhost:#{port}/.well-known/oauth-authorization-server | head -c 200)..."
+  echo "initialize: $(curl -fsS -X POST localhost:#{port}/mcp -H "$h" -H "$a" -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"smoke","version":"1"}}}' | head -c 160)..."
+  echo "tools: $(curl -fsS -X POST localhost:#{port}/mcp -H "$h" -H "$a" -d '{"jsonrpc":"2.0","id":2,"method":"tools/list"}' | grep -o '"name":"[a-z_]*"' | cut -d'"' -f4 | tr '\\n' ' ')"
+  echo "report without a login: $(curl -s -o /dev/null -w '%{http_code} %header{www-authenticate}' -X POST localhost:#{port}/mcp -H "$h" -H "$a" -d '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"report_issue","arguments":{}}}')"
+  client=$(curl -fsS -X POST localhost:#{port}/register -H "$h" -d '{"client_name":"smoke","redirect_uris":["https://claude.ai/api/mcp/auth_callback"]}' | grep -o '"client_id":"[^"]*"' | cut -d'"' -f4)
+  echo "login redirect: $(curl -s -o /dev/null -w '%{http_code} %{redirect_url}' "localhost:#{port}/authorize?response_type=code&client_id=$client&redirect_uri=https%3A%2F%2Fclaude.ai%2Fapi%2Fmcp%2Fauth_callback&code_challenge=abcdefghijklmnopqrstuvwxyz0123456789ABCDEFG&code_challenge_method=S256&state=s" | sed 's/state=[0-9a-f]*/state=…/')"
+  cd #{Support::HOME}/support/current && /opt/node/bin/node tools/check-github.mjs
+BASH
+puts Support.vm(script, timeout: 120)

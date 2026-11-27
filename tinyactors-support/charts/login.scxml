@@ -1,0 +1,79 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- One login in progress, for an MCP client, through the GitHub App.
+
+     awaiting_github -> verifying -> ensuring -> code_issued -> exchanged,
+     and expired after ten minutes in any state (a minute once the code is
+     issued). It holds the client's redirect URI and PKCE challenge, then
+     the hash of the authorization code the gateway issued; it compares
+     hashes, never secrets. A login ends: its donedata says how. -->
+<scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0"
+       datamodel="ecmascript" name="login" initial="login">
+  <script src="lib.js"/>
+  <datamodel>
+    <data id="state"/>  <data id="client"/>  <data id="asker"/>  <!-- given at spawn -->
+    <data id="codeHash" expr="null"/>
+    <data id="callbackReply" expr="null"/>
+    <data id="who" expr="null"/>     <!-- {githubID, login} -->
+  </datamodel>
+  <state id="login" initial="awaiting_github">
+    <onentry><send event="expire" id="expire" delay="600s"/></onentry>
+    <state id="awaiting_github">
+      <onentry>
+        <send targetexpr="asker" event="login.started"><param name="state" expr="state"/></send>
+      </onentry>
+      <transition event="callback" target="verifying">
+        <assign location="codeHash" expr="_event.data.codeHash"/>
+        <assign location="callbackReply" expr="replyTo(_event)"/>
+        <send type="github" event="user.exchange" id="exchange"><param name="code" expr="_event.data.code"/></send>
+      </transition>
+    </state>
+    <state id="verifying">
+      <transition event="user.identified" target="ensuring">
+        <assign location="who" expr="({ githubID: _event.data.id, login: _event.data.login })"/>
+        <send targetexpr="addr('auth')" event="user.ensure">
+          <param name="githubID" expr="who.githubID"/>
+          <param name="login" expr="who.login"/>
+          <param name="replyTo" expr="addr('login.' + state)"/>
+        </send>
+      </transition>
+      <transition event="github.unavailable error.communication" target="failed">
+        <send targetexpr="callbackReply" event="failed"><param name="reason" expr="'GitHub did not confirm the login'"/></send>
+      </transition>
+    </state>
+    <state id="ensuring">
+      <transition event="user.ready" target="code_issued">
+        <send targetexpr="callbackReply" event="authorized">
+          <param name="redirectURI" expr="client.redirectURI"/>
+          <param name="clientState" expr="client.clientState"/>
+          <param name="login" expr="who.login"/>
+        </send>
+      </transition>
+      <transition event="failed" target="failed">
+        <send targetexpr="callbackReply" event="failed"><param name="reason" expr="_event.data.reason"/></send>
+      </transition>
+    </state>
+    <state id="code_issued">
+      <onentry>
+        <cancel sendid="expire"/>
+        <send event="expire" id="code-expire" delay="60s"/>
+      </onentry>
+      <!-- the client's token request: the code and its PKCE verifier, hashed by the gateway -->
+      <transition event="token" cond="_event.data.codeHash === codeHash &amp;&amp; _event.data.challenge === client.challenge
+                                      &amp;&amp; _event.data.redirectURI === client.redirectURI" target="exchanged">
+        <send targetexpr="addr('user.' + who.githubID)" event="grant.create">
+          <param name="grant" expr="_event.data.grant"/>
+          <param name="clientID" expr="client.clientID"/>
+          <param name="replyTo" expr="replyTo(_event)"/>
+        </send>
+      </transition>
+      <!-- a wrong verifier or code ends the login: a code is tried once -->
+      <transition event="token" target="failed">
+        <send targetexpr="replyTo(_event)" event="refused"><param name="reason" expr="'invalid_grant'"/></send>
+      </transition>
+    </state>
+    <transition event="expire" target="expired"/>
+  </state>
+  <final id="exchanged"><donedata><content expr="({ login: state, outcome: 'exchanged', user: who })"/></donedata></final>
+  <final id="failed"><donedata><content expr="({ login: state, outcome: 'failed' })"/></donedata></final>
+  <final id="expired"><donedata><content expr="({ login: state, outcome: 'expired' })"/></donedata></final>
+</scxml>

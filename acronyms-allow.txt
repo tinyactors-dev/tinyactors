@@ -102,3 +102,9 @@ McpServer                                                                # @mode
 streamableHttp      tinyactors-napi/mcp/**/*                            # @modelcontextprotocol/sdk module path
 sessionId           tinyactors-napi/mcp/**/*                            # @modelcontextprotocol/sdk transport field
 sessionIdGenerator  tinyactors-napi/mcp/**/*                            # @modelcontextprotocol/sdk transport option
+# tinyactors-support serves MCP with the same SDK: its transport's module
+# and options, and the authorization server metadata's field names (RFC 8414,
+# client ID metadata documents) where they are written as JSON keys.
+streamableHttp      tinyactors-support/**/*                             # @modelcontextprotocol/sdk module path
+sessionIdGenerator  tinyactors-support/**/*                             # @modelcontextprotocol/sdk transport option
+enableJsonResponse  tinyactors-support/**/*                             # @modelcontextprotocol/sdk transport option

@@ -1,0 +1,9 @@
+# tinyactors-support: the support channel for agents, served at
+# mcp.tinyactors.dev from the exe VM ta-mcp (AGENTS.md). Tasks are Ruby
+# file tasks in mise/tasks/ (the root AGENTS.md).
+
+[tools]
+# Node.js runs the server and its tests (node:sqlite, node:test), and the
+# VM runs the same major.
+node = "22"
+ruby = "4"

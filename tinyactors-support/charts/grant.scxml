@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- One connected client's grant: grant.<id>, owned by its user.
+
+     The gateway's tokens are "<grant id>.<secret>"; the grant holds the
+     hashes of the access and refresh secrets and when the access token
+     ends (an hour). authorize checks a hash and asks the user who the
+     caller is, for the gateway; refresh rotates both secrets, and a
+     refresh secret used twice revokes the grant. It never ends: revoked
+     is a state, and every request to it is refused. -->
+<scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0"
+       datamodel="ecmascript" name="grant" initial="active">
+  <script src="lib.js"/>
+  <datamodel>
+    <data id="grantID"/>  <data id="githubID"/>  <data id="clientID"/>  <!-- given at spawn -->
+    <data id="accessHash"/>  <data id="refreshHash"/>                   <!-- given at spawn -->
+    <data id="fresh" expr="true"/>   <!-- the access token is under an hour old -->
+  </datamodel>
+  <state id="active">
+    <onentry><send event="access.expired" id="access-expiry" delay="3600s"/></onentry>
+    <transition event="access.expired"><assign location="fresh" expr="false"/></transition>
+    <transition event="authorize" cond="_event.data.accessHash === accessHash &amp;&amp; fresh">
+      <send targetexpr="addr('user.' + githubID)" event="whoami"><content expr="forwarded(_event)"/></send>
+    </transition>
+    <transition event="authorize" cond="_event.data.accessHash === accessHash">
+      <send targetexpr="replyTo(_event)" event="refused"><param name="reason" expr="'token expired'"/></send>
+    </transition>
+    <transition event="authorize">
+      <send targetexpr="replyTo(_event)" event="refused"><param name="reason" expr="'invalid token'"/></send>
+    </transition>
+    <transition event="refresh" cond="_event.data.refreshHash === refreshHash">
+      <assign location="accessHash" expr="_event.data.newAccessHash"/>
+      <assign location="refreshHash" expr="_event.data.newRefreshHash"/>
+      <assign location="fresh" expr="true"/>
+      <cancel sendid="access-expiry"/>
+      <send event="access.expired" id="access-expiry" delay="3600s"/>
+      <send targetexpr="replyTo(_event)" event="refreshed"><param name="grantID" expr="grantID"/></send>
+    </transition>
+    <transition event="refresh" target="revoked">   <!-- a refresh secret used twice: stolen -->
+      <send targetexpr="replyTo(_event)" event="refused"><param name="reason" expr="'invalid_grant'"/></send>
+    </transition>
+    <transition event="revoke" target="revoked"/>
+  </state>
+  <state id="revoked">
+    <transition event="authorize refresh">
+      <send targetexpr="replyTo(_event)" event="refused"><param name="reason" expr="'revoked'"/></send>
+    </transition>
+  </state>
+</scxml>

@@ -1,0 +1,65 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Auth: the owner of logins and users.
+
+     It spawns login.<state> for each login in progress and user.<githubID>
+     the first time a person signs in, through the Spawner, and records its
+     spawns in flight. The gateway sends a login's callback and its token
+     exchange, and every tool call's token, to the login or the grant by
+     name: one that is not there (expired, never made) is the gateway's
+     StaleError, answered 400 or 401. Auth never sees a secret: the gateway
+     makes them and hands actors their hashes. It never ends. -->
+<scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0"
+       datamodel="ecmascript" name="auth" initial="ready">
+  <script src="lib.js"/>
+  <datamodel>
+    <data id="users" expr="({})"/>     <!-- githubID -> true, once spawned -->
+    <data id="creating" expr="({})"/>  <!-- spawn sendid -> {key, replyTo, waiting: [{event, data}]} -->
+    <data id="starting" expr="({})"/>  <!-- 'user.<id>' -> its spawn's sendid -->
+    <data id="sid"/>
+    <data id="item"/>
+  </datamodel>
+  <state id="ready">
+    <transition event="login.start">
+      <send type="spawn" event="login" idlocation="sid">
+        <content expr="({ chart: 'login', name: 'login.' + _event.data.state,
+                          params: { state: _event.data.state, client: _event.data.client, asker: replyTo(_event) } })"/>
+      </send>
+      <assign location="creating" expr="put(creating, sid, { key: 'login.' + _event.data.state, replyTo: replyTo(_event), waiting: [] })"/>
+    </transition>
+
+    <!-- a login knows who signed in: the user's actor, made the first time -->
+    <transition event="user.ensure" cond="has(users, _event.data.githubID)">
+      <send targetexpr="addr('user.' + _event.data.githubID)" event="ensure"><content expr="forwarded(_event)"/></send>
+    </transition>
+    <transition event="user.ensure" cond="has(starting, 'user.' + _event.data.githubID)">
+      <assign location="creating" expr="put(creating, starting['user.' + _event.data.githubID],
+               Object.assign({}, creating[starting['user.' + _event.data.githubID]],
+                 { waiting: push(creating[starting['user.' + _event.data.githubID]].waiting, { event: 'ensure', data: forwarded(_event) }) }))"/>
+    </transition>
+    <transition event="user.ensure">
+      <send type="spawn" event="user" idlocation="sid">
+        <content expr="({ chart: 'user', name: 'user.' + _event.data.githubID,
+                          params: { githubID: _event.data.githubID, login: _event.data.login } })"/>
+      </send>
+      <assign location="creating" expr="put(creating, sid, { key: 'user.' + _event.data.githubID, replyTo: replyTo(_event),
+               waiting: [{ event: 'ensure', data: forwarded(_event) }] })"/>
+      <assign location="starting" expr="put(starting, 'user.' + _event.data.githubID, sid)"/>
+      <assign location="users" expr="put(users, _event.data.githubID, true)"/>
+    </transition>
+
+    <transition event="spawned" cond="has(creating, _event.sendid)">
+      <foreach array="creating[_event.sendid].waiting" item="item">
+        <send targetexpr="addr(creating[_event.sendid].key)" eventexpr="item.event"><content expr="item.data"/></send>
+      </foreach>
+      <assign location="starting" expr="drop(starting, creating[_event.sendid].key)"/>
+      <assign location="creating" expr="drop(creating, _event.sendid)"/>
+    </transition>
+    <transition event="error.communication" cond="has(creating, _event.sendid)">
+      <send targetexpr="creating[_event.sendid].replyTo" event="failed">
+        <param name="reason" expr="'could not start ' + creating[_event.sendid].key"/>
+      </send>
+      <assign location="starting" expr="drop(starting, creating[_event.sendid].key)"/>
+      <assign location="creating" expr="drop(creating, _event.sendid)"/>
+    </transition>
+  </state>
+</scxml>

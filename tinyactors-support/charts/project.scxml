@@ -1,0 +1,269 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- A project: one repository's issues.
+
+     A collection actor: it numbers issues, decides when two reports are
+     the same issue (a fingerprint: the component and the title's
+     words), and spawns issue.<repoID>.<n> through the Spawner. A report
+     for an issue whose spawn is in flight waits in creating. It keeps an
+     index of its issues, so a list wakes no issue.
+
+     A report that matches no issue exactly is asked of the decision
+     model (the decide processor: Jev, a model that picks among options
+     with probabilities): is it one of the open issues it could be, or a
+     new one, and what kind is it? The chart decides what the answer
+     means: a match only when the model is confident (accept), a new
+     issue flagged as a possible duplicate for a maintainer when it is
+     unsure (escalate), and a new issue when the model does not answer.
+     One decision at a time: the reports that need one meanwhile wait in
+     queue, so the second of two reports of a new problem is asked about
+     the issue the first one made.
+
+     Beside the intake, the sync region pulls the repository's top-level
+     directories (its components) and its commits on main: a commit whose
+     trailer says "Fixes-issue: tinyactors:<project>:<n>" fixes that issue,
+     this project's or, through the tracker, another's (the monorepo's
+     commits fix the release repositories' issues). It never ends; an archived
+     repository refuses new reports and still answers reads. -->
+<scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0"
+       datamodel="ecmascript" name="project" initial="running">
+  <script src="project.js"/>
+  <datamodel>
+    <data id="repoID"/>                   <!-- given at spawn -->
+    <data id="name"/>                     <!-- given at spawn: owner/name -->
+    <data id="slug"/>                     <!-- given at spawn: the <project> of its issues' identifiers -->
+    <data id="components" expr="[]"/>
+    <data id="next" expr="1"/>
+    <data id="fingerprints" expr="({})"/> <!-- fingerprint -> n -->
+    <data id="index" expr="({})"/>        <!-- n -> {title, component, kind, state, count, minutes, workaround} -->
+    <data id="creating" expr="({})"/>     <!-- spawn sendid -> {n, replyTo, waiting: [{event, data}]} -->
+    <data id="lastSha" expr="null"/>
+    <data id="sid"/>
+    <data id="item"/>
+    <data id="backoff" expr="'60s'"/>
+    <data id="deciding" expr="null"/>     <!-- {sid, report, candidates} while the model is asked -->
+    <data id="queue" expr="[]"/>          <!-- reports waiting for the decision in flight -->
+    <data id="verdict"/>
+    <data id="dsid"/>
+    <data id="accept" expr="0.85"/>       <!-- tuned on labeled reports: a wrong merge hides an issue -->
+    <data id="escalate" expr="0.25"/>     <!-- below it, the closest candidate is not worth a maintainer's look -->
+  </datamodel>
+
+  <parallel id="running">
+    <state id="intake" initial="open">
+      <state id="open">
+        <transition event="report" cond="!components.includes(_event.data.component)">
+          <send targetexpr="replyTo(_event)" event="refused">
+            <param name="reason" expr="'unknown component ' + _event.data.component"/>
+            <param name="valid" expr="components"/>
+          </send>
+        </transition>
+        <!-- a report naming an issue, or matching one: an occurrence of it -->
+        <transition event="report" cond="target(fingerprints, index, _event) !== null &amp;&amp; inFlight(creating, target(fingerprints, index, _event)) !== null">
+          <assign location="creating" expr="waitFor(creating, inFlight(creating, target(fingerprints, index, _event)), _event)"/>
+        </transition>
+        <transition event="report" cond="target(fingerprints, index, _event) !== null">
+          <send targetexpr="addr('issue.' + repoID + '.' + target(fingerprints, index, _event))" event="report">
+            <content expr="forwarded(_event)"/>
+          </send>
+        </transition>
+        <transition event="report" cond="_event.data.n !== undefined">
+          <send targetexpr="replyTo(_event)" event="refused">
+            <param name="reason" expr="'no issue #' + _event.data.n + ' in ' + name"/>
+          </send>
+        </transition>
+        <!-- no exact match: one decision at a time, the others wait -->
+        <transition event="report" cond="deciding !== null">
+          <assign location="queue" expr="push(queue, forwarded(_event))"/>
+        </transition>
+        <!-- nothing open it could be, and its kind given: a new issue, without asking -->
+        <transition event="report" cond="candidates(index, _event.data).length === 0 &amp;&amp; _event.data.kind">
+          <send target="#_internal" event="file.new">
+            <content expr="({ report: forwarded(_event), kind: _event.data.kind || 'tooling', possible: null })"/>
+          </send>
+        </transition>
+        <transition event="report">
+          <send type="decide" event="decide" idlocation="dsid">
+            <content expr="question(_event.data, candidates(index, _event.data))"/>
+          </send>
+          <assign location="deciding" expr="({ sid: dsid, report: forwarded(_event),
+                   candidates: candidates(index, _event.data).map(function (c) { return c.n; }) })"/>
+          <send event="decide.timeout" id="decide-timeout" delay="5s"/>
+        </transition>
+
+        <!-- the model's answer, and what the chart makes of it -->
+        <transition event="decided" cond="deciding !== null &amp;&amp; _event.sendid === deciding.sid">
+          <cancel sendid="decide-timeout"/>
+          <assign location="verdict" expr="judge(_event.data.answers, deciding, { accept: accept, escalate: escalate, slug: slug })"/>
+          <send type="ledger" event="ledger.append">
+            <content expr="decision(slug, deciding, _event.data, verdict)"/>
+          </send>
+          <if cond="verdict.match !== null">
+            <send target="#_internal" event="file.occurrence">
+              <content expr="Object.assign({}, deciding.report, { n: verdict.match, matchedBy: verdict.matchedBy })"/>
+            </send>
+          <else/>
+            <send target="#_internal" event="file.new">
+              <content expr="({ report: deciding.report, kind: verdict.kind, possible: verdict.possible })"/>
+            </send>
+          </if>
+          <raise event="decision.done"/>
+        </transition>
+        <!-- no answer in time, or none at all: filed as new, never lost -->
+        <transition event="decide.timeout" cond="deciding !== null">
+          <send target="#_internal" event="file.new">
+            <content expr="({ report: deciding.report, kind: deciding.report.kind || 'tooling', possible: null })"/>
+          </send>
+          <raise event="decision.done"/>
+        </transition>
+        <transition event="decide.unavailable error.communication" cond="deciding !== null &amp;&amp; _event.sendid === deciding.sid">
+          <cancel sendid="decide-timeout"/>
+          <send target="#_internal" event="file.new">
+            <content expr="({ report: deciding.report, kind: deciding.report.kind || 'tooling', possible: null })"/>
+          </send>
+          <raise event="decision.done"/>
+        </transition>
+        <transition event="decision.done">
+          <assign location="deciding" expr="null"/>
+          <foreach array="queue" item="item">
+            <send targetexpr="addr('project.' + repoID)" event="report"><content expr="item"/></send>
+          </foreach>
+          <assign location="queue" expr="[]"/>
+        </transition>
+
+        <!-- an occurrence of issue n, as the model matched it -->
+        <transition event="file.occurrence" cond="inFlight(creating, _event.data.n) !== null">
+          <assign location="creating" expr="waitFor(creating, inFlight(creating, _event.data.n), { name: 'report', data: _event.data })"/>
+        </transition>
+        <transition event="file.occurrence">
+          <send targetexpr="addr('issue.' + repoID + '.' + _event.data.n)" event="report">
+            <content expr="_event.data"/>
+          </send>
+        </transition>
+        <!-- a new issue: the fingerprint and the index entry go in with the spawn -->
+        <transition event="file.new">
+          <send type="spawn" event="issue" idlocation="sid">
+            <content expr="({ chart: 'issue', name: 'issue.' + repoID + '.' + next,
+                              params: { repoID: repoID, slug: slug, n: next,
+                                        report: report(_event.data.report, _event.data.kind),
+                                        asker: _event.data.report.replyTo, similar: similar(index, _event.data.report, slug),
+                                        possible: _event.data.possible } })"/>
+          </send>
+          <assign location="creating" expr="put(creating, sid, { n: next, replyTo: _event.data.report.replyTo, waiting: [] })"/>
+          <assign location="fingerprints" expr="put(fingerprints, fingerprint(_event.data.report.component, _event.data.report.title), next)"/>
+          <assign location="index" expr="put(index, next, entry(_event.data.report, _event.data.kind, _event.data.possible))"/>
+          <assign location="next" expr="next + 1"/>
+        </transition>
+        <transition event="project.archived" target="archived"/>
+      </state>
+      <state id="archived">
+        <transition event="report">
+          <send targetexpr="replyTo(_event)" event="refused">
+            <param name="reason" expr="name + ' is archived'"/>
+          </send>
+        </transition>
+      </state>
+
+      <!-- in both states: reads, a maintainer's actions, the issues' news -->
+      <transition event="issues.list">
+        <send targetexpr="replyTo(_event)" event="issues">
+          <param name="repo" expr="name"/>
+          <param name="issues" expr="listing(index, _event.data, slug)"/>
+        </send>
+      </transition>
+      <transition event="triage close wontfix" cond="!maintains(_event.data.caller, repoID)">
+        <send targetexpr="replyTo(_event)" event="refused">
+          <param name="reason" expr="'only a maintainer of ' + name + ' may ' + _event.name"/>
+        </send>
+      </transition>
+      <transition event="issue.get workaround triage close wontfix attach.open attachment.get" cond="!has(index, _event.data.n)">
+        <send targetexpr="replyTo(_event)" event="refused">
+          <param name="reason" expr="'no issue #' + _event.data.n + ' in ' + name"/>
+        </send>
+      </transition>
+      <transition event="issue.get workaround triage close wontfix attach.open attachment.get">
+        <send targetexpr="addr('issue.' + repoID + '.' + _event.data.n)" eventexpr="_event.name">
+          <content expr="forwarded(_event)"/>
+        </send>
+      </transition>
+      <transition event="fixed.mention" cond="has(index, _event.data.n)">
+        <send targetexpr="addr('issue.' + repoID + '.' + _event.data.n)" event="fixed">
+          <param name="sha" expr="_event.data.sha"/>
+          <param name="url" expr="_event.data.url"/>
+          <param name="repoID" expr="_event.data.repoID"/>
+        </send>
+      </transition>
+      <transition event="fixed.mention">
+        <log label="project" expr="'a commit fixes ' + issueID(slug, _event.data.n) + ', which is not filed'"/>
+      </transition>
+      <transition event="issue.changed">
+        <assign location="index" expr="put(index, _event.data.n, _event.data)"/>
+      </transition>
+      <transition event="project.renamed">
+        <assign location="name" expr="_event.data.name"/>
+      </transition>
+
+      <!-- the Spawner's answer: the reports that waited go to the new issue -->
+      <transition event="spawned" cond="has(creating, _event.sendid)">
+        <foreach array="creating[_event.sendid].waiting" item="item">
+          <send targetexpr="addr('issue.' + repoID + '.' + creating[_event.sendid].n)" eventexpr="item.event">
+            <content expr="item.data"/>
+          </send>
+        </foreach>
+        <assign location="creating" expr="drop(creating, _event.sendid)"/>
+      </transition>
+      <transition event="error.communication" cond="has(creating, _event.sendid)">
+        <send targetexpr="creating[_event.sendid].replyTo" event="failed">
+          <param name="reason" expr="'the issue could not be filed'"/>
+        </send>
+        <foreach array="creating[_event.sendid].waiting" item="item">
+          <send targetexpr="item.data.replyTo" event="failed">
+            <param name="reason" expr="'the issue could not be filed'"/>
+          </send>
+        </foreach>
+        <assign location="fingerprints" expr="withoutNumber(fingerprints, creating[_event.sendid].n)"/>
+        <assign location="index" expr="drop(index, creating[_event.sendid].n)"/>
+        <assign location="creating" expr="drop(creating, _event.sendid)"/>
+      </transition>
+    </state>
+
+    <state id="sync" initial="pulling">
+      <transition event="contents">
+        <assign location="components" expr="_event.data.dirs"/>
+      </transition>
+      <state id="pulling">
+        <onentry>
+          <send type="github" event="contents.list" id="contents"><param name="repoID" expr="repoID"/></send>
+          <send type="github" event="commits.since" id="commits">
+            <param name="repoID" expr="repoID"/>
+            <param name="sha" expr="lastSha"/>
+          </send>
+          <send event="sync.timeout" id="sync-timeout" delay="30s"/>
+        </onentry>
+        <onexit><cancel sendid="sync-timeout"/></onexit>
+        <!-- each "Fixes-issue: tinyactors:<project>:<n>" trailer: this project's, or the tracker's to route -->
+        <transition event="commits" target="idle">
+          <foreach array="mentions(_event.data.commits, repoID)" item="item">
+            <if cond="item.slug === slug">
+              <send targetexpr="addr('project.' + repoID)" event="fixed.mention"><content expr="item"/></send>
+            <else/>
+              <send targetexpr="addr('tracker')" event="fixed.mention"><content expr="item"/></send>
+            </if>
+          </foreach>
+          <assign location="lastSha" expr="newest(_event.data.commits, lastSha)"/>
+        </transition>
+        <transition event="github.unavailable" target="waiting">
+          <assign location="backoff" expr="_event.data.retryAfter + 's'"/>
+        </transition>
+        <transition event="sync.timeout" target="waiting"/>
+      </state>
+      <state id="idle">
+        <onentry><send event="sync.tick" id="sync-tick" delay="600s"/></onentry>
+        <transition event="sync.tick" target="pulling"/>
+      </state>
+      <state id="waiting">
+        <onentry><send event="retry" id="sync-retry" delayexpr="backoff"/></onentry>
+        <transition event="retry" target="pulling"/>
+      </state>
+    </state>
+  </parallel>
+</scxml>

@@ -140,6 +140,7 @@ the service account's `OP_SERVICE_ACCOUNT_TOKEN`.
   | `tinyparse`                         | tinyparse                                |
   | `staticjs`                          | staticjs                                 |
   | `website`                           | website (the examples it runs import the npm packages, not the working tree) |
+  | `tinyactors-support`                | tinyactors-support (it imports the npm packages, not the working tree) |
   | root `mise/lib`, `mise.toml`        | all of them                              |
   | docs, READMEs, ADRs only            | none (the acronym check still runs)      |
 

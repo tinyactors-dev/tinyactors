@@ -1,0 +1,102 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- A person who signed in: user.<githubID>.
+
+     Its roles come from GitHub (the repositories it maintains, refreshed
+     every ten minutes through the App's installation), it owns its grants
+     (one per connected client, spawned through the Spawner), and it keeps
+     what changed for it since its last call (unseen): issues it
+     reported that were fixed, regressed or got a workaround. Every tool
+     call asks it who the caller is, through a grant. It never ends. -->
+<scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0"
+       datamodel="ecmascript" name="user" initial="active">
+  <script src="user.js"/>
+  <datamodel>
+    <data id="githubID"/>  <data id="login"/>   <!-- given at spawn -->
+    <data id="maintainerOf" expr="[]"/>          <!-- repoIds, as text -->
+    <data id="grants" expr="({})"/>              <!-- grantID -> clientID -->
+    <data id="creating" expr="({})"/>            <!-- spawn sendid -> {grantID, clientID, replyTo} -->
+    <data id="unseen" expr="[]"/>
+    <data id="blocked" expr="false"/>
+    <data id="used" expr="({ files: 0, bytes: 0 })"/>   <!-- attachments since the last reset -->
+    <data id="quota" expr="({ files: 20, bytes: 200 * 1024 * 1024 })"/>
+    <data id="sid"/>
+    <data id="item"/>
+  </datamodel>
+  <parallel id="active">
+    <state id="roles" initial="refreshing">
+      <state id="refreshing">
+        <onentry>
+          <send type="github" event="permissions" id="permissions"><param name="login" expr="login"/></send>
+        </onentry>
+        <transition event="permissions" target="fresh">
+          <assign location="maintainerOf" expr="_event.data.maintainerOf.map(String)"/>
+        </transition>
+        <transition event="github.unavailable error.communication" target="fresh"/>  <!-- keep the roles it had -->
+      </state>
+      <state id="fresh">
+        <onentry><send event="roles.refresh" id="roles-refresh" delay="600s"/></onentry>
+        <transition event="roles.refresh" target="refreshing"/>
+      </state>
+    </state>
+    <!-- the attachment quota starts again every 24 hours -->
+    <state id="day">
+      <onentry><send event="quota.reset" id="quota-reset" delay="86400s"/></onentry>
+      <transition event="quota.reset" target="day">
+        <assign location="used" expr="({ files: 0, bytes: 0 })"/>
+      </transition>
+    </state>
+    <state id="serving">
+      <transition event="ensure">
+        <send targetexpr="replyTo(_event)" event="user.ready"><param name="githubID" expr="githubID"/></send>
+      </transition>
+      <transition event="whoami" cond="blocked">
+        <send targetexpr="replyTo(_event)" event="refused"><param name="reason" expr="'blocked'"/></send>
+      </transition>
+      <transition event="whoami">
+        <send targetexpr="replyTo(_event)" event="caller">
+          <param name="githubID" expr="githubID"/>
+          <param name="login" expr="login"/>
+          <param name="maintainerOf" expr="maintainerOf"/>
+          <param name="unseen" expr="unseen"/>
+          <param name="quota" expr="left(used, quota)"/>
+        </send>
+        <assign location="unseen" expr="_event.data.peek ? unseen : []"/>  <!-- a peek (an upload's PUT) delivers nothing -->
+      </transition>
+      <transition event="quota.used">
+        <assign location="used" expr="spend(used, _event.data.bytes)"/>
+      </transition>
+      <transition event="user.update">
+        <assign location="unseen" expr="unseen.concat([_event.data]).slice(-20)"/>
+      </transition>
+
+      <transition event="grant.create">
+        <send type="spawn" event="grant" idlocation="sid">
+          <content expr="({ chart: 'grant', name: 'grant.' + _event.data.grant.id,
+                            params: { grantID: _event.data.grant.id, githubID: githubID, clientID: _event.data.clientID,
+                                      accessHash: _event.data.grant.accessHash, refreshHash: _event.data.grant.refreshHash } })"/>
+        </send>
+        <assign location="creating" expr="put(creating, sid, { grantID: _event.data.grant.id, clientID: _event.data.clientID, replyTo: replyTo(_event) })"/>
+      </transition>
+      <transition event="spawned" cond="has(creating, _event.sendid)">
+        <send targetexpr="creating[_event.sendid].replyTo" event="granted">
+          <param name="grantID" expr="creating[_event.sendid].grantID"/>
+          <param name="login" expr="login"/>
+        </send>
+        <assign location="grants" expr="put(grants, creating[_event.sendid].grantID, creating[_event.sendid].clientID)"/>
+        <assign location="creating" expr="drop(creating, _event.sendid)"/>
+      </transition>
+      <transition event="error.communication" cond="has(creating, _event.sendid)">
+        <send targetexpr="creating[_event.sendid].replyTo" event="failed"><param name="reason" expr="'could not make the grant'"/></send>
+        <assign location="creating" expr="drop(creating, _event.sendid)"/>
+      </transition>
+
+      <!-- an operator's: every client of this person is signed out -->
+      <transition event="block">
+        <assign location="blocked" expr="true"/>
+        <foreach array="Object.keys(grants)" item="item">
+          <send targetexpr="addr('grant.' + item)" event="revoke"/>
+        </foreach>
+      </transition>
+    </state>
+  </parallel>
+</scxml>

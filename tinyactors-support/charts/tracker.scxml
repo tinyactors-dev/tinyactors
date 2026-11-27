@@ -1,0 +1,131 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- The tracker: the repository inventory, pulled from GitHub, and the one
+     entry point for requests about issues.
+
+     It reconciles one project actor per repository GitHub lists, as a
+     collection actor: it alone spawns project names, through the Spawner,
+     and records its spawns in flight (creating, keyed by sendid), so a
+     request for a project still starting waits for it. It never ends. -->
+<scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0"
+       datamodel="ecmascript" name="tracker" initial="running">
+  <script src="tracker.js"/>
+  <datamodel>
+    <data id="repos" expr="({})"/>      <!-- repoID -> {name, archived} -->
+    <data id="byName" expr="({})"/>     <!-- every owner/name a repository had, and its slug -> repoID -->
+    <data id="etag" expr="null"/>
+    <data id="creating" expr="({})"/>   <!-- spawn sendid -> {repoID, waiting: [{event, data}]} -->
+    <data id="starting" expr="({})"/>   <!-- repoID -> its spawn's sendid -->
+    <data id="sid"/>
+    <data id="action"/>
+    <data id="item"/>
+    <data id="backoff" expr="'30s'"/>
+    <data id="refresh" expr="'600s'"/>
+  </datamodel>
+
+  <parallel id="running">
+    <state id="inventory" initial="pulling">
+      <state id="pulling">
+        <onentry>
+          <send type="github" event="repos.list" id="pull"><param name="etag" expr="etag"/></send>
+          <send event="pull.timeout" id="pull-timeout" delay="30s"/>
+        </onentry>
+        <onexit><cancel sendid="pull-timeout"/></onexit>
+        <transition event="repos.listed" target="idle">
+          <assign location="etag" expr="_event.data.etag"/>
+          <foreach array="plan(repos, _event.data.repos)" item="action">
+            <if cond="action.kind === 'new'">
+              <send type="spawn" event="project" idlocation="sid">
+                <content expr="({ chart: 'project', name: 'project.' + action.repo.id,
+                                  params: { repoID: action.repo.id, name: action.repo.name, slug: action.slug } })"/>
+              </send>
+              <assign location="creating" expr="put(creating, sid, { repoID: action.repo.id, waiting: [] })"/>
+              <assign location="starting" expr="put(starting, action.repo.id, sid)"/>
+              <log label="tracker" expr="'new repository ' + action.repo.name"/>
+            <elseif cond="action.kind === 'renamed'"/>
+              <send targetexpr="addr('project.' + action.repo.id)" event="project.renamed">
+                <param name="name" expr="action.repo.name"/>
+              </send>
+            <elseif cond="action.kind === 'archived'"/>
+              <send targetexpr="addr('project.' + action.repo.id)" event="project.archived"/>
+              <log label="tracker" expr="'archived ' + action.repo.name"/>
+            </if>
+          </foreach>
+          <assign location="repos" expr="inventory(repos, _event.data.repos, plan(repos, _event.data.repos))"/>
+          <assign location="byName" expr="names(repos)"/>
+        </transition>
+        <transition event="repos.unchanged" target="idle"/>
+        <transition event="github.unavailable" target="waiting">
+          <assign location="backoff" expr="_event.data.retryAfter + 's'"/>
+        </transition>
+        <transition event="pull.timeout" target="waiting"/>
+        <transition event="error.communication" cond="_event.sendid === 'pull'" target="waiting"/>
+      </state>
+      <state id="idle">
+        <onentry><send event="repos.refresh" id="refresh" delayexpr="refresh"/></onentry>
+        <transition event="repos.refresh" target="pulling"/>
+      </state>
+      <state id="waiting">
+        <onentry>
+          <log label="tracker" expr="'GitHub unavailable: retrying in ' + backoff"/>
+          <send event="retry" id="retry" delayexpr="backoff"/>
+        </onentry>
+        <transition event="retry" target="pulling"/>
+      </state>
+    </state>
+
+    <state id="serving">
+      <!-- every request about a repository's issues is routed by repository -->
+      <transition event="report issues.list issue.get workaround triage close wontfix attach.open attachment.get"
+                  cond="refusal(repos, byName, _event) !== null">
+        <send targetexpr="replyTo(_event)" event="refused">
+          <param name="reason" expr="refusal(repos, byName, _event)"/>
+          <param name="valid" expr="validNames(repos)"/>
+        </send>
+      </transition>
+      <transition event="report issues.list issue.get workaround triage close wontfix attach.open attachment.get"
+                  cond="has(starting, byName[_event.data.repo])">
+        <assign location="creating" expr="waitFor(creating, starting[byName[_event.data.repo]], _event)"/>
+      </transition>
+      <transition event="report issues.list issue.get workaround triage close wontfix attach.open attachment.get">
+        <send targetexpr="addr('project.' + byName[_event.data.repo])" eventexpr="_event.name">
+          <content expr="forwarded(_event)"/>
+        </send>
+      </transition>
+      <!-- a commit in one project fixes an issue of another (the monorepo fixes a release repository's) -->
+      <transition event="fixed.mention" cond="has(byName, _event.data.slug)">
+        <send targetexpr="addr('project.' + byName[_event.data.slug])" event="fixed.mention"><content expr="_event.data"/></send>
+      </transition>
+      <transition event="fixed.mention">
+        <log label="tracker" expr="'a commit fixes ' + issueID(_event.data.slug, _event.data.n) + ', which no project has'"/>
+      </transition>
+      <!-- known issues across every repository: asked of each project in turn by the gateway -->
+      <transition event="projects.list">
+        <send targetexpr="replyTo(_event)" event="projects">
+          <param name="projects" expr="projectList(repos)"/>
+        </send>
+      </transition>
+
+      <!-- the Spawner's answer, by the sendid of the spawn -->
+      <transition event="spawned" cond="has(creating, _event.sendid)">
+        <foreach array="creating[_event.sendid].waiting" item="item">
+          <send targetexpr="addr('project.' + creating[_event.sendid].repoID)" eventexpr="item.event">
+            <content expr="item.data"/>
+          </send>
+        </foreach>
+        <assign location="starting" expr="drop(starting, creating[_event.sendid].repoID)"/>
+        <assign location="creating" expr="drop(creating, _event.sendid)"/>
+      </transition>
+      <transition event="error.communication" cond="has(creating, _event.sendid)">
+        <foreach array="creating[_event.sendid].waiting" item="item">
+          <send targetexpr="item.data.replyTo" event="failed">
+            <param name="reason" expr="'the project could not start'"/>
+          </send>
+        </foreach>
+        <assign location="repos" expr="drop(repos, creating[_event.sendid].repoID)"/>
+        <assign location="byName" expr="names(repos)"/>
+        <assign location="starting" expr="drop(starting, creating[_event.sendid].repoID)"/>
+        <assign location="creating" expr="drop(creating, _event.sendid)"/>
+      </transition>
+    </state>
+  </parallel>
+</scxml>

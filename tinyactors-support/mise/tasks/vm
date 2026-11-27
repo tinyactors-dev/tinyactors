@@ -1,0 +1,16 @@
+#!/usr/bin/env ruby
+#MISE description="Make the exe VM ta-mcp (Frankfurt, tag tinyactors), its HTTPS proxy private on port 8000; it says so and stops if the VM is there already"
+# vim:ft=ruby
+
+require_relative '../support'
+
+Support.secrets!
+listed = JSON.parse(Support.exe('ls --json'))
+if listed.fetch('vms', []).any? { |vm| vm['vm_name'] == Support::VM }
+  puts "support: #{Support::VM} is there already"
+  exit 0
+end
+puts Support.exe("new --name=#{Support::VM} --tag=tinyactors --no-email --json " \
+                 "--comment='tinyactors-support: the support channel for agents (mcp.tinyactors.dev)'", timeout: 600)
+puts Support.exe("share port #{Support::VM} #{Support::PORT}")
+puts Support.exe("share set-private #{Support::VM}")

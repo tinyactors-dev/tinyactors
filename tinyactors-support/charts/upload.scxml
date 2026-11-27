@@ -1,0 +1,138 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- One attachment on its way to an issue: upload.<repoID>.<n>.<k>.
+
+     The issue opens it for a signed-in uploader with what the file will be
+     (name, type, size, sha256). It answers with where to PUT the bytes:
+     the gateway's /uploads/<id>, on the host the agent already reaches. An
+     agent cannot pass a file through a tool call, whose arguments are text
+     the model writes, so the bytes go out of band, with curl. The gateway
+     asks it before it streams (only the uploader, once), streams the bytes
+     to the blobs processor and reports what arrived; the scan processor
+     reads the stored file and gives a verdict. Bytes never enter an actor:
+     it holds the file's description and its key in the store.
+
+     opened -> receiving -> scanning -> attached | rejected, and expired
+     after 15 minutes with no upload. It ends: its donedata is the
+     attachment, or why there is none. -->
+<scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0"
+       datamodel="ecmascript" name="upload" initial="upload">
+  <script src="upload.js"/>
+  <datamodel>
+    <data id="uploadID"/>  <data id="issue"/>  <data id="issueKey"/>  <data id="issueRef"/>  <!-- given at spawn -->
+    <data id="file"/>      <data id="uploader"/>  <data id="asker"/>   <!-- given at spawn -->
+    <data id="key" expr="null"/>
+    <data id="scan" expr="null"/>
+    <data id="reason" expr="null"/>
+  </datamodel>
+
+  <state id="upload" initial="checking">
+    <!-- the declared file, against the kinds the tracker takes -->
+    <state id="checking">
+      <transition cond="refusal(file) !== null" target="refused">
+        <send targetexpr="asker" event="refused"><param name="reason" expr="refusal(file)"/></send>
+      </transition>
+      <transition target="opened">
+        <assign location="key" expr="'issues/' + issueKey + '/' + uploadID + '/' + safeName(file.name)"/>
+        <send targetexpr="asker" event="upload.opened">
+          <param name="uploadID" expr="uploadID"/>
+          <param name="path" expr="'/uploads/' + uploadID"/>
+          <param name="method" expr="'PUT'"/>
+          <param name="maxBytes" expr="file.size"/>
+          <param name="expiresIn" expr="900"/>
+        </send>
+      </transition>
+    </state>
+
+    <state id="opened">
+      <onentry><send event="expire" id="expire" delay="900s"/></onentry>
+      <onexit><cancel sendid="expire"/></onexit>
+      <!-- the gateway, before it streams: only the uploader, and only once -->
+      <transition event="upload.begin" cond="_event.data.githubID === uploader.githubID" target="receiving">
+        <send targetexpr="replyTo(_event)" event="upload.go">
+          <param name="key" expr="key"/>
+          <param name="maxBytes" expr="file.size"/>
+        </send>
+      </transition>
+      <transition event="upload.begin">
+        <send targetexpr="replyTo(_event)" event="refused"><param name="reason" expr="'this upload is not yours'"/></send>
+      </transition>
+      <transition event="expire" target="expired"/>
+    </state>
+
+    <state id="receiving">
+      <onentry><send event="expire" id="expire" delay="900s"/></onentry>
+      <onexit><cancel sendid="expire"/></onexit>
+      <transition event="upload.begin">
+        <send targetexpr="replyTo(_event)" event="refused"><param name="reason" expr="'already uploading'"/></send>
+      </transition>
+      <!-- what arrived: the gateway counted and hashed it while it streamed -->
+      <transition event="received" cond="_event.data.size !== file.size || _event.data.sha256 !== file.sha256" target="rejected">
+        <assign location="reason" expr="_event.data.size !== file.size ? 'the size is not the one declared' : 'the sha256 is not the one declared'"/>
+      </transition>
+      <transition event="received" target="scanning"/>
+      <transition event="upload.aborted" target="rejected">
+        <assign location="reason" expr="_event.data.reason"/>
+      </transition>
+      <transition event="expire" target="rejected">
+        <assign location="reason" expr="'the upload did not finish in 15 minutes'"/>
+      </transition>
+    </state>
+
+    <state id="scanning">
+      <onentry>
+        <send type="scan" event="scan" id="scan">
+          <param name="key" expr="key"/>
+          <param name="type" expr="file.type"/>
+          <param name="kind" expr="kindOf(file.type)"/>
+        </send>
+        <send event="scan.timeout" id="scan-timeout" delay="60s"/>
+      </onentry>
+      <onexit><cancel sendid="scan-timeout"/></onexit>
+      <!-- what the bytes are must be what was declared -->
+      <transition event="scanned" cond="_event.data.type !== file.type" target="rejected">
+        <assign location="reason" expr="'declared ' + file.type + ', but the file is ' + _event.data.type"/>
+      </transition>
+      <transition event="scanned" cond="_event.data.verdict === 'refused'" target="rejected">
+        <assign location="reason" expr="_event.data.reason"/>
+      </transition>
+      <transition event="scanned" target="attached">
+        <assign location="scan" expr="_event.data"/>
+        <assign location="key" expr="_event.data.key"/>   <!-- a redacted copy replaces the original -->
+      </transition>
+      <!-- a file that could not be checked is not attached: fail closed -->
+      <transition event="scan.timeout scan.unavailable error.communication" target="rejected">
+        <assign location="reason" expr="'the file could not be checked'"/>
+      </transition>
+    </state>
+  </state>
+
+  <final id="attached">
+    <onentry>
+      <send targetexpr="issue" event="attachment.added"><content expr="attachment(uploadID, file, key, scan, uploader)"/></send>
+      <send targetexpr="addr('user.' + uploader.githubID)" event="quota.used"><param name="bytes" expr="file.size"/></send>
+    </onentry>
+    <donedata><content expr="({ upload: uploadID, outcome: 'attached' })"/></donedata>
+  </final>
+  <final id="rejected">
+    <onentry>
+      <if cond="key !== null">
+        <send type="blobs" event="blob.delete"><param name="key" expr="key"/></send>
+      </if>
+      <send targetexpr="issue" event="upload.ended"><param name="uploadID" expr="uploadID"/></send>
+      <send targetexpr="addr('user.' + uploader.githubID)" event="user.update">
+        <content expr="({ id: issueRef, state: 'attachment rejected',
+                          file: file.name, reason: reason })"/>
+      </send>
+    </onentry>
+    <donedata><content expr="({ upload: uploadID, outcome: 'rejected', reason: reason })"/></donedata>
+  </final>
+  <!-- refused before any byte: the answer said why, nothing to clean -->
+  <final id="refused">
+    <onentry><send targetexpr="issue" event="upload.ended"><param name="uploadID" expr="uploadID"/></send></onentry>
+    <donedata><content expr="({ upload: uploadID, outcome: 'refused', reason: refusal(file) })"/></donedata>
+  </final>
+  <final id="expired">
+    <onentry><send targetexpr="issue" event="upload.ended"><param name="uploadID" expr="uploadID"/></send></onentry>
+    <donedata><content expr="({ upload: uploadID, outcome: 'expired' })"/></donedata>
+  </final>
+</scxml>

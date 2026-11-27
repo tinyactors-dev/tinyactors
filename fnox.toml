@@ -25,6 +25,26 @@ value = "tinyactors.dev Cloudflare API token/credential"
 provider = "op"
 value = "tinyactors-exe-api-key/notesPlain"
 
+# tinyactors-support's GitHub App (tinyactors-support/AGENTS.md): its id,
+# its OAuth client, and its private key (the PEM, in the item's notes).
+# `mise run secrets` in tinyactors-support writes them to the VM's
+# environment; the server runs on its stand-ins without them.
+[secrets.GITHUB_APP_ID]
+provider = "op"
+value = "tinyactors-support GitHub App/app-id"
+
+[secrets.GITHUB_APP_CLIENT_ID]
+provider = "op"
+value = "tinyactors-support GitHub App/client-id"
+
+[secrets.GITHUB_APP_CLIENT_SECRET]
+provider = "op"
+value = "tinyactors-support GitHub App/client-secret"
+
+[secrets.GITHUB_APP_PRIVATE_KEY]
+provider = "op"
+value = "tinyactors-support GitHub App/notesPlain"
+
 # The maintainer's Google AI Studio key, for the copywriter's end-to-end
 # tests and copy evals against Gemini (copywriter/, mise run e2e).
 [secrets.GEMINI_API_KEY]

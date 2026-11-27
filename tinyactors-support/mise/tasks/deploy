@@ -1,0 +1,17 @@
+#!/usr/bin/env ruby
+#MISE description="Deploy tinyactors-support to the exe VM ta-mcp: Node.js 22, its packages, the documentation, the systemd service, a health check"
+# vim:ft=ruby
+
+# The server's files go as one bundle through exe's HTTP API into a release
+# directory of their own; `current` is switched to it and the service
+# restarted, which takes a snapshot at SIGTERM and restores it at start.
+# The five newest releases are kept. The environment is mise run secrets.
+require_relative '../support'
+
+Support.secrets!
+release = Support.release_name
+puts "support: deploying #{release} to #{Support::VM}"
+out = Support.vm(Support.deploy_script(release), timeout: 900)
+puts out
+Support.fail!('the server did not answer its health check') unless out.include?('"ok":true')
+puts "support: #{Support::VM} runs #{release}"

@@ -1,0 +1,13 @@
+{
+  "name": "tinyactors-support",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "mcp.tinyactors.dev: the support channel for agents working with tinyactors. Skills, docs and known issues for anyone; issue reports, workarounds and attachments for anyone signed in with GitHub. Actors on @tinyactors/node, MCP over Streamable HTTP.",
+  "engines": { "node": ">=22.5" },
+  "main": "server.mjs",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "1.32.2",
+    "@tinyactors/node": "0.4.0"
+  }
+}
