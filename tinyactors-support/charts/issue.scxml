@@ -334,6 +334,17 @@
       <send type="ledger" event="ledger.append"><content expr="record('purged', slug, n, { files: attachments.length })"/></send>
     </transition>
 
+    <!-- when it was filed and last changed, for an issue from before it kept them: the
+         times of its first and latest ledger records, sent once at startup
+         (lib/backfill.mjs). Only a missing time is set; no ledger record, no
+         news for its reporters: nothing about the issue changed. -->
+    <transition event="timestamps.backfill" cond="!filed || !updated">
+      <assign location="filed" expr="filed || _event.data.filed || null"/>
+      <assign location="updated" expr="updated || _event.data.updated || null"/>
+      <raise event="changed"/>
+    </transition>
+    <transition event="timestamps.backfill"/>
+
     <!-- the ledger wrote a change: its answer goes now. The ledger's time is the
          issue's clock (charts read none): the first write is when it was filed,
          every write when it was last updated. -->

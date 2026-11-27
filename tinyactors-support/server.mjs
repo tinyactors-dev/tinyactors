@@ -24,6 +24,7 @@ import { DiskBlobs } from './lib/processors/blobs.mjs';
 import { Ledger } from './lib/processors/ledger.mjs';
 import { Scanner } from './lib/processors/scan.mjs';
 import { Jev } from './lib/processors/jev.mjs';
+import { backfillTimestamps } from './lib/backfill.mjs';
 import { GitHubApp } from './lib/processors/github.mjs';
 import { FakeGitHub } from './lib/processors/standins.mjs';
 
@@ -58,6 +59,8 @@ const content = new Content({
   docs: [{ directory: new URL('./content/', import.meta.url).pathname, prefix: 'docs' }],
 });
 const gateway = new Gateway({ support, base, github: app ? github : null, blobs, content });
+const backfilled = await backfillTimestamps({ support, ledger });
+if (backfilled) log(`gave ${backfilled} issues their filed and updated times from the ledger`);
 const server = await serve({ support, gateway, port, log, clientsPath: join(data, 'clients.sqlite'),
                              standinUsers: app ? null : Object.values(new FakeGitHub().users).map((u) => u.login) });
 log(`tinyactors-support on ${base} (port ${port}): ${app ? 'the GitHub App' : 'the stand-in GitHub and login'}, ` +
