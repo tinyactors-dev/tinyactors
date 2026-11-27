@@ -194,7 +194,7 @@ module CPython
   end
 
   # The MCP tool catalog of the core this module builds (tinyactors-core/mcp/tools.json,
-  # docs/adr/0021): src/module.c includes it as mcp_tools.inc, and tinyactors._mcp_tools()
+  # docs/adr/0021): src/module.c includes it as mcp_tools.inc, and tinyactors.mcp_tools()
   # returns its text, so a server and the requests it forwards come from one release.
   MCP_CATALOG = ROOT.join('../tinyactors-core/mcp/tools.json').expand_path
 

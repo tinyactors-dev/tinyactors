@@ -1252,6 +1252,7 @@ how to use it.
 | `Address(text)`, `.system`, `.session`, `.name`, `Address.from_name`, `Address.from_session` | addresses as values, read and written by the core's parser |
 | `encode(value) -> bytes`, `decode(data)` | the value table's CBOR |
 | `decode_traces(data)` | the spans of an OTLP traces request, without a host |
+| `mcp_tools()` | the MCP tool catalog of the core this module was built with, as JSON text: what `tinyactors_mcp` (`mcp/`) serves |
 | `read_snapshot(data)` | a snapshot read by core's readers without a host: its actors, their states, mailboxes and delayed sends, its charts, the spans its journal kept |
 
 ## Building from source

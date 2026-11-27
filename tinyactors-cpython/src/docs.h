@@ -124,13 +124,16 @@ static const char ta_python_doc_encode[] =
     "Part of the wire format (the README's \"Wire format\").";
 
 static const char ta_python_doc_mcp_tools[] =
-    "_mcp_tools()\n"
+    "mcp_tools()\n"
     "--\n"
     "\n"
     "The MCP tool catalog of the core this module was built with, as JSON\n"
-    "text (tinyactors-core/mcp/tools.json), for tinyactors_mcp, which lists\n"
-    "and forwards it: private, so a server and the module it runs over come\n"
-    "from one release.";
+    "text (tinyactors-core/mcp/tools.json): every tool of the MCP server,\n"
+    "its description, input schema, annotations, the option that gates it,\n"
+    "and what runs it. tinyactors_mcp lists and forwards it; read it with\n"
+    "json.loads(tinyactors.mcp_tools()) to serve the same tools another\n"
+    "way, or to check an agent's calls against them. It is the catalog\n"
+    "@tinyactors/node ships as @tinyactors/node/mcp-tools.json.";
 
 static const char ta_python_doc_decode_traces[] =
     "decode_traces(data)\n"

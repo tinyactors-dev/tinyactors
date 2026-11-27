@@ -31,7 +31,7 @@ def post(url, body, token=None):
 
 class Server(unittest.IsolatedAsyncioTestCase):
     def test_the_catalog_is_the_modules(self):
-        self.assertEqual(tinyactors_mcp.CATALOG, json.loads(tinyactors._mcp_tools()))
+        self.assertEqual(tinyactors_mcp.CATALOG, json.loads(tinyactors.mcp_tools()))
         names = {tool["name"] for tool in tinyactors_mcp.CATALOG["tools"]}
         self.assertTrue({"snapshot_summary", "rehearse", "deploy"} <= names)
 

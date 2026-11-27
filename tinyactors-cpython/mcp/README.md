@@ -13,7 +13,8 @@ running [`tinyactors`](../README.md) hosts. An agent connected to it can:
 It is the same server as Node's `@tinyactors/mcp`: the same tools, the same
 arguments and the same results, which the MCP suite checks against both
 (`tinyactors-test/docs/mcp.md`). The tools are core's catalog
-(`tinyactors-core/mcp/tools.json`), which the `tinyactors` module embeds;
+(`tinyactors-core/mcp/tools.json`), which the `tinyactors` module embeds
+and returns as JSON text from `tinyactors.mcp_tools()`;
 this package is Python over that module's public API and the MCP SDK
 (`mcp`), with no native code.
 

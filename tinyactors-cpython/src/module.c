@@ -21,7 +21,7 @@ static PyMethodDef ta_python_methods[] = {
     {"encode", ta_python_encode, METH_O, ta_python_doc_encode},
     {"decode", ta_python_decode, METH_O, ta_python_doc_decode},
     {"decode_traces", ta_python_decode_traces, METH_O, ta_python_doc_decode_traces},
-    {"_mcp_tools", ta_python_mcp_tools, METH_NOARGS, ta_python_doc_mcp_tools},
+    {"mcp_tools", ta_python_mcp_tools, METH_NOARGS, ta_python_doc_mcp_tools},
     {"read_snapshot", ta_python_read_snapshot, METH_O, ta_python_doc_read_snapshot},
     {"_binding_memory", ta_python_binding_memory, METH_O, ta_python_doc_binding_memory},
     {"compile_charts", (PyCFunction)(void (*)(void))ta_python_compile_charts, METH_FASTCALL | METH_KEYWORDS,

@@ -501,8 +501,10 @@ Decided by the maintainer (2026-10-13); every item is in
   (docs/adr/0021 in the repository root), over this module's public API
   and the MCP SDK (`mcp`, pinned in `mcp/uv.lock`) only. Its tools are
   core's catalog, which the build embeds (`build/generated/mcp_tools.inc`)
-  and the module's private `_mcp_tools()` returns, so the server and the
-  module come from one release; it forwards a `snapshot` tool to
+  and the module's public **`tinyactors.mcp_tools()`** returns as JSON
+  text (Node's `@tinyactors/node/mcp-tools.json`), so the server and the
+  module come from one release; it is data, not a core call, so it has no
+  row in `docs/api-map.md`, as Node's export has none; it forwards a `snapshot` tool to
   `snapshot.request` and a `host` tool to the typed method of its request,
   and writes the binding operations (`tinyactors-core/mcp/README.md`): the
   tap over the host's keywords, copies restored with stand-ins and driven

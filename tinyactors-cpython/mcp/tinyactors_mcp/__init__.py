@@ -8,7 +8,7 @@ three parts (docs/adr/0021 in the repository root;
 tinyactors-core/mcp/README.md):
 
 - the catalog, core's tinyactors-core/mcp/tools.json, which the tinyactors
-  module embeds (`tinyactors._mcp_tools()`): every tool's name, description,
+  module embeds (`tinyactors.mcp_tools()`): every tool's name, description,
   input schema, annotations, the option that gates it, and what runs it;
 - the forwarding: a `snapshot` tool is a method of core's snapshot reader
   (`snapshot.request`), a `host` tool core's requests through the typed
@@ -33,7 +33,7 @@ import mcp_types as types
 import tinyactors
 from mcp.server.lowlevel import Server
 
-CATALOG = json.loads(tinyactors._mcp_tools())
+CATALOG = json.loads(tinyactors.mcp_tools())
 """The catalog of the tinyactors module this package runs over."""
 
 __all__ = ["CATALOG", "Tap", "arguments_of", "create_mcp", "migration_summary", "tap"]

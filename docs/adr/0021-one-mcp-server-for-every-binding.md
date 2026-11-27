@@ -123,7 +123,7 @@ Following [docs/roles.md](../roles.md):
    a decision of core's: no code of core reads it. It lives beside core
    because every binding builds the core of its release, and each
    binding's package ships that core's copy (Node: `@tinyactors/node`
-   exports it; Python's module embeds it, its private `_mcp_tools()`), so a server and its
+   exports it; Python's module embeds it, `tinyactors.mcp_tools()`), so a server and its
    binding's methods come from one release. A change to it reruns every
    binding's tests (their `#MISE sources`).
 4. **A server per language is the catalog, its SDK, and the binding
