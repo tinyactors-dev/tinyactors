@@ -497,6 +497,80 @@ static void test_run_transcripts(void) {
     CHECK(cases >= 3);
 }
 
+/* ---- tinyactors run: how many I/O processors -------------------------------------- */
+
+/* A config of `keys` top-level keys (ioProcessors, then system,
+ * migrateQuantum and systemID, as many as it takes), `listed` processors in
+ * its ioProcessors (p0, p1, ...), and `given` more on the command line
+ * (--io-processor q0, ...). */
+typedef struct processor_counts {
+    uint32_t keys, listed, given;
+} processor_counts;
+
+/* Run the server on one such config and ask for host.config: it lists the
+ * config's processors, then the command line's, in order, or, past core's
+ * 16, the server refuses the config at startup (exit 1). Never an error of
+ * the sanitizers. 1 when it is so. */
+static int processor_counts_hold(processor_counts counts) {
+    static const char *const others[] = {"\"system\":{\"ticksPerSecond\":1000}", "\"migrateQuantum\":64",
+                                         "\"systemID\":\"tinyactors-run\""};
+    char config[4096], expected[4096], command[4096];
+    int used = snprintf(config, sizeof config, "{\"ioProcessors\":{");
+    for (uint32_t i = 0; i < counts.listed; i++)
+        used += snprintf(config + used, sizeof config - (size_t)used, "%s\"p%u\":{}", i ? "," : "", i);
+    used += snprintf(config + used, sizeof config - (size_t)used, "}");
+    for (uint32_t i = 0; i + 1 < counts.keys && i < sizeof others / sizeof others[0]; i++)
+        used += snprintf(config + used, sizeof config - (size_t)used, ",%s", others[i]);
+    snprintf(config + used, sizeof config - (size_t)used, "}");
+    CHECK(fixture_write("processors-config.json", config));
+    used = snprintf(command, sizeof command, "run --config processors-config.json");
+    for (uint32_t i = 0; i < counts.given; i++)
+        used += snprintf(command + used, sizeof command - (size_t)used, " --io-processor q%u", i);
+    snprintf(command + used, sizeof command - (size_t)used, " processors.scxml < processors-input");
+    int status = run(command);
+    uint32_t total = counts.listed + counts.given;
+    int held = strstr(text_of("errors"), "Sanitizer") == NULL && strstr(text_of("errors"), "runtime error") == NULL;
+    if (total > 16) {
+        held = held && status == 1 && strstr(text_of("errors"), "at most 16 I/O processors") != NULL;
+    } else {
+        used = snprintf(expected, sizeof expected, "\"ioProcessors\":[");
+        for (uint32_t i = 0; i < total; i++)
+            used += snprintf(expected + used, sizeof expected - (size_t)used, "%s{\"type\":\"%c%u\",\"location\":\"\"}",
+                             i ? "," : "", i < counts.listed ? 'p' : 'q', i < counts.listed ? i : i - counts.listed);
+        snprintf(expected + used, sizeof expected - (size_t)used, "]");
+        held = held && status == 0 && strstr(text_of("output"), expected) != NULL;
+    }
+    if (!held)
+        fprintf(stderr, "  %u top-level keys, %u processors in the config, %u on the command line: exit %d\n%s%s\n",
+                counts.keys, counts.listed, counts.given, status, text_of("output"), text_of("errors"));
+    return held;
+}
+
+/* The server once sized its list of processors from the config's top-level
+ * keys, not from its ioProcessors, and wrote past it when a config had more
+ * processors than keys plus one (tests/run/processors is that case). Every
+ * count where a size taken from the wrong number shows: none, one, the
+ * keys, one and two past them, well past them, and core's limit and one
+ * past it, under configs of one, two and four keys, with none, one and two
+ * processors on the command line. */
+static void test_run_processor_counts(void) {
+    CHECK(fixture_write("processors.scxml",
+                        "<scxml " NS " datamodel='ecmascript' name='ticket' initial='open'><state id='open'/></scxml>\n"));
+    CHECK(fixture_write("processors-input", "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"host.config\"}\n"));
+    static const uint32_t key_counts[] = {1, 2, 4};
+    uint32_t runs = 0;
+    for (size_t k = 0; k < sizeof key_counts / sizeof key_counts[0]; k++) {
+        uint32_t keys = key_counts[k];
+        const uint32_t listed_counts[] = {0, 1, keys, keys + 1, keys + 2, 2 * keys + 3, 15, 16, 17};
+        for (size_t l = 0; l < sizeof listed_counts / sizeof listed_counts[0]; l++)
+            for (uint32_t given = 0; given <= 2; given++) {
+                CHECK(processor_counts_hold((processor_counts){keys, listed_counts[l], given}));
+                runs++;
+            }
+    }
+    CHECK_EQUAL(runs, 81u);
+}
+
 /* A snapshot `tinyactors run` writes is one the commands that read
  * snapshots read: `inspect` restores it and shows the server's label and
  * state, `actors` lists its order with the pending deadline. A server of
@@ -1413,6 +1487,7 @@ int main(void) {
     RUN(test_snapshots_and_blobs);
     RUN(test_run_schema);
     RUN(test_run_transcripts);
+    RUN(test_run_processor_counts);
     RUN(test_run_snapshot_inspected);
     RUN(test_run_telemetry_bytes);
     TEST_MAIN_END();
