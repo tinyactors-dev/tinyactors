@@ -1,7 +1,7 @@
 # tinyactors-support
 
 The support channel of tinyactors for agents: an MCP server at
-`mcp.tinyactors.dev` (for now, privately, `https://ta-mcp.exe.xyz/mcp`).
+`https://mcp.tinyactors.dev/mcp`.
 
 - **Anyone** can read: `list_skills` and the skills as resources,
   `search_docs` and `get_doc` over the packages' guides, `known_issues`
@@ -35,22 +35,20 @@ fake repositories, and a login page where you pick who you are. Without
 `OPENROUTER_API_KEY`, a report that matches no issue exactly is filed as
 new. `server.mjs` lists every variable.
 
-## Trying the private server
-
-Until the domain is added, the server is `https://ta-mcp.exe.xyz`, behind
-exe's private proxy: only someone signed in to exe.dev with access to the
-VM gets through. In a browser, that is your exe login. An MCP client
-needs a token of the VM, sent in exe's header (the proxy strips it, and
-`Authorization` stays the server's own OAuth):
+## Connecting
 
 ```sh
-ssh exe.dev ssh-key generate-api-key --vm=ta-mcp --label=claude-code
-claude mcp add --transport http tinyactors-support https://ta-mcp.exe.xyz/mcp \
-  --header "X-Exedev-Authorization: Bearer <the token>"
+claude mcp add --transport http tinyactors-support https://mcp.tinyactors.dev/mcp
 ```
 
-claude.ai's connectors cannot send that header: they reach the server once
-its proxy is public.
+On claude.ai: Settings → Connectors → Add custom connector, with the URL
+`https://mcp.tinyactors.dev/mcp`. A tool that needs a signed-in caller
+starts the login (OAuth, through the GitHub App) the first time.
+
+The domain is a CNAME to `ta-mcp.exe.xyz` in Cloudflare, **DNS only**
+(exe issues the certificate; a proxied record breaks it), added on exe
+with `domain add ta-mcp mcp.tinyactors.dev`, and the VM's proxy is public.
+`mise run secrets` writes the server's `PUBLIC_URL` (`mise/support.rb`).
 
 ## What is where
 

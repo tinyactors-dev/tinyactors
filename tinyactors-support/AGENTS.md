@@ -1,8 +1,8 @@
 # AGENTS.md: tinyactors-support
 
 The support channel of tinyactors for agents, served at
-`mcp.tinyactors.dev` (while the proxy is private: `ta-mcp.exe.xyz`) from
-the exe VM `ta-mcp`. Anyone reads skills, docs and known issues with their
+`mcp.tinyactors.dev` (a CNAME to `ta-mcp.exe.xyz`, DNS only, exe's
+certificate; the VM's proxy is public) from the exe VM `ta-mcp`. Anyone reads skills, docs and known issues with their
 workarounds; anyone signed in with GitHub reports issues, attaches
 workarounds and files, and hears back when an issue is fixed. The root
 `AGENTS.md` applies too.

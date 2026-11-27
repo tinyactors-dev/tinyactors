@@ -23,7 +23,7 @@ module Support
   PORT = 8000 # exe's proxy forwards to it (the VM's default proxy port)
   # The URL clients reach while the proxy is private; mcp.tinyactors.dev
   # once the domain is added (a later, separate step).
-  PUBLIC_URL = "https://#{VM}.exe.xyz"
+  PUBLIC_URL = "https://mcp.tinyactors.dev" # a CNAME to ta-mcp.exe.xyz, DNS only; exe issues the certificate
   # What the VM runs; node_modules is installed there from the lockfile.
   FILES = %w[server.mjs package.json package-lock.json lib charts skills tools].freeze
   # The documentation the server searches: the packages' guides and READMEs.
