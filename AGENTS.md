@@ -421,6 +421,37 @@ binding calls core, how bytes, values and memory cross, or a binding's
 memory, load `boundary-design` too: it holds the boundary's facts and the
 ideas already rejected, with why.
 
+## When rules pull apart, and what to ask
+
+The maintainer, 2026-11-27, after a round of corrections:
+
+- **Parity between the bindings beats a strict reading of a rule.** When
+  one binding already offers something (Node's
+  `@tinyactors/node/mcp-tools.json`), the others offer it the same way
+  and as publicly; do not hide or reshape it in one binding to satisfy a
+  rule the other binding's version does not meet. When parity and a rule
+  conflict, say so and recommend; do not pick one silently.
+- **No new binding API unless the maintainer asks for it.** When parity
+  between bindings or a feature seems to need a new public item in a
+  binding (a `host.now` in Python), propose it with the alternatives;
+  do not add it, and do not take an existing item away to avoid it.
+- **A change to existing output or API is the maintainer's to decide.**
+  Removing or renaming a field of a result, a tool or a public item, or
+  changing what a call returns, is asked first: a short question with
+  the options and a recommendation, before the change. Never fold such a
+  change into a summary after the fact.
+- **When two of this repository's rules pull in different directions,
+  name the conflict.** Say which rules, what each would have you do, and
+  which you recommend; do not resolve it quietly.
+- **Ask short questions; the maintainer answers them quickly.** Give the
+  options numbered, the recommended one first and marked, each with its
+  cost. A one-word answer ("3", "Yes") is a decision.
+- **For a large ask, settle what "done" means first** when the request
+  leaves it open: published or not, which transports or runtimes, held
+  to which tests or which other implementation's results. Ask in one
+  short question before the work, or state the assumption at the start
+  of the reply so it can be corrected early.
+
 ## Current-state documentation
 
 Evergreen documentation describes the current API, behavior and contracts
