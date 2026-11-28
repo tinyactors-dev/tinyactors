@@ -22,6 +22,7 @@
   const GROUPS = { state: 'State', component: 'Component', kind: 'Kind', none: 'No grouping' };
   const ORDERS = { cost: 'Cost (reports × minutes)', reports: 'Reports', newest: 'Newest', updated: 'Recently updated', title: 'Title' };
   const WIDE = 880;   // px: the peek sits beside the list from here, over it below
+  const PHONE = 600;  // px: below it, the phone layout: one compact header row, two-line rows, the peek a full-width sheet
 
   // --- the host: JSON-RPC over postMessage ---------------------------------
   const pending = new Map();
@@ -69,7 +70,7 @@
     search: '', group: 'state', order: 'cost', collapsed: new Set(),
     selected: new Set(), cursor: null, anchor: null,
     peek: null, detail: null, panel: null,   // panel: null | 'report' | 'decline' | 'delete'
-    menu: null, context: {}, bulk: null,
+    menu: null, context: {}, bulk: null, searching: false,
   };
   const short = (id) => String(id).replace(/^tinyactors:/, '');
   const byID = (id) => S.issues.find((i) => i.id === id);
@@ -83,7 +84,16 @@
     if (theme === 'dark' || theme === 'light') document.documentElement.dataset.theme = theme;
     document.documentElement.dataset.mode = S.context.displayMode ?? 'inline';
     const dimensions = S.context.containerDimensions ?? {};
-    document.documentElement.style.maxHeight = dimensions.maxHeight ? `${dimensions.maxHeight}px` : '';
+    const root = document.documentElement.style;
+    root.maxHeight = dimensions.maxHeight ? `${dimensions.maxHeight}px` : '';
+    // a width bound the host gives is the view's too, whatever width the frame has
+    root.maxWidth = dimensions.maxWidth ? `${dimensions.maxWidth}px` : dimensions.width ? `${dimensions.width}px` : '';
+    // touch: the host's word, else the browser's (a coarse pointer); every control is then a 44 px target
+    const touch = S.context.deviceCapabilities?.touch ?? window.matchMedia?.('(pointer: coarse)').matches ?? false;
+    document.documentElement.dataset.touch = String(!!touch);
+    // the host's safe area (a phone's notch, its own floating controls), as CSS variables
+    const inset = S.context.safeAreaInsets ?? {};
+    for (const side of ['top', 'right', 'bottom', 'left']) root.setProperty(`--safe-${side}`, `${Number(inset[side]) || 0}px`);
   }
   const canExpand = () => (S.context.availableDisplayModes ?? []).includes('fullscreen');
   handlers['ui/notifications/host-context-changed'] = (params) => { applyContext(params); render(); };
@@ -250,6 +260,7 @@
   function render() {
     const wide = window.innerWidth >= WIDE;
     document.documentElement.dataset.layout = wide ? 'wide' : 'narrow';
+    document.documentElement.dataset.size = window.innerWidth < PHONE ? 'phone' : 'regular';
     regions.toolbar ??= toolbar();
     refreshToolbar();
     const list = S.loading ? h('div', { class: 'state-box' }, h('p', {}, 'Reading the issues…'))
@@ -263,7 +274,11 @@
     const keep = focused && regions.toolbar.contains(focused) ? focused : null;
     const onRow = !!focused?.classList?.contains('row');
     regions.toasts ??= h('div', { class: 'toasts', role: 'status', 'aria-live': 'polite' });
-    app.replaceChildren(...[regions.toolbar, body, menuView(), regions.toasts].filter(Boolean));
+    const menu = menuView();
+    app.replaceChildren(...[regions.toolbar, body, menu, regions.toasts].filter(Boolean));
+    // a menu opens just under the header, however many rows the header has
+    if (menu) menu.style.top = `${Math.round(regions.toolbar.offsetTop + regions.toolbar.offsetHeight + 4)}px`;
+    for (const area of app.querySelectorAll('.title-edit')) fitHeight(area);
     if (keep) keep.focus();
     else if (onRow) focusCursor(false);
   }
@@ -273,20 +288,42 @@
       h('span', { class: 'search-glyph', 'aria-hidden': 'true' }, '⌕'),
       h('input', { id: 'search', type: 'search', placeholder: 'Search issues', 'aria-label': 'Search issues', autocomplete: 'off',
         oninput: (e) => { S.search = e.target.value; render(); },
-        onkeydown: (e) => { if (e.key === 'Escape') { e.target.value = ''; S.search = ''; e.target.blur(); render(); }
+        onkeydown: (e) => { if (e.key === 'Escape') { e.target.value = ''; S.search = ''; S.searching = false; e.target.blur(); render(); }
                             if (e.key === 'Enter' || e.key === 'ArrowDown') { e.preventDefault(); e.target.blur(); moveCursor(0); } } }),
       kbd('/'));
+    // On a phone (data-size="phone") the header is one row: the count, a search button that opens the
+    // search as a full-width row under it, Filter, a More menu (Display, Refresh, Full screen, Shortcuts)
+    // and Report as "+"; the controls only a wide header has are .wide-only, the phone's .phone-only.
     return h('header', { class: 'toolbar' },
-      h('span', { class: 'mark' }, 'tinyactors ', h('b', {}, '·'), ' issues'),
+      h('span', { class: 'mark' }, h('span', { class: 'wide-only' }, 'tinyactors ', h('b', {}, '·'), ' '), 'issues'),
       h('span', { class: 'count', id: 'count' }),
       h('span', { class: 'spacer' }),
       search,
-      button('Filter', 'ghost', () => toggleMenu('filter'), { id: 'filter-button', 'aria-haspopup': 'true', 'aria-label': 'Filter', title: 'Filter (f)' }),
-      button('Display', 'ghost', () => toggleMenu('display'), { id: 'display-button', 'aria-haspopup': 'true', title: 'Group and order' }),
-      button('↻', 'ghost', load, { 'aria-label': 'Refresh', title: 'Refresh' }),
-      button('⤢', 'ghost', expand, { id: 'expand', 'aria-label': 'Expand', title: 'Full screen', hidden: true }),
-      button('?', 'ghost', () => toggleMenu('help'), { 'aria-label': 'Keyboard shortcuts', title: 'Keyboard shortcuts (?)' }),
-      button('Report issue', 'primary', () => openReport(), { id: 'report', hidden: true, title: 'Report an issue (c)' }));
+      button(glyph('search'), 'ghost', () => toggleSearch(), { id: 'search-toggle', class: 'btn btn--ghost btn--icon phone-only',
+        'aria-label': 'Search', 'aria-expanded': 'false', 'aria-controls': 'search' }),
+      button([glyph('filter'), h('span', { class: 'label' }, 'Filter')], 'ghost', () => toggleMenu('filter'),
+        { id: 'filter-button', 'aria-haspopup': 'true', 'aria-label': 'Filter', title: 'Filter (f)' }),
+      button('Display', 'ghost', () => toggleMenu('display'), { id: 'display-button', class: 'btn btn--ghost wide-only', 'aria-haspopup': 'true', title: 'Group and order' }),
+      button('↻', 'ghost', load, { class: 'btn btn--ghost btn--icon wide-only', 'aria-label': 'Refresh', title: 'Refresh' }),
+      button('⤢', 'ghost', expand, { id: 'expand', class: 'btn btn--ghost btn--icon wide-only', 'aria-label': 'Expand', title: 'Full screen', hidden: true }),
+      button('?', 'ghost', () => toggleMenu('help'), { class: 'btn btn--ghost btn--icon wide-only', 'aria-label': 'Keyboard shortcuts', title: 'Keyboard shortcuts (?)' }),
+      button('⋯', 'ghost', () => toggleMenu('more'), { id: 'more-button', class: 'btn btn--ghost btn--icon phone-only', 'aria-haspopup': 'true',
+        'aria-label': 'More', title: 'Display, refresh, full screen' }),
+      button([h('span', { class: 'phone-only', 'aria-hidden': 'true' }, '+'), h('span', { class: 'label' }, 'Report issue')], 'primary', () => openReport(),
+        { id: 'report', hidden: true, 'aria-label': 'Report issue', title: 'Report an issue (c)' }));
+  }
+  // small line icons for the compact header (currentColor, so they take the button's colour in either theme)
+  function glyph(name) {
+    const svg = h('svg', { class: 'glyph', viewBox: '0 0 16 16', width: 16, height: 16, 'aria-hidden': 'true' });
+    const stroke = { fill: 'none', stroke: 'currentColor', 'stroke-width': 1.5, 'stroke-linecap': 'round', 'stroke-linejoin': 'round' };
+    if (name === 'search') svg.append(h('circle', { cx: 7, cy: 7, r: 4.5, ...stroke }), h('line', { x1: 10.5, y1: 10.5, x2: 14, y2: 14, ...stroke }));
+    else if (name === 'filter') svg.append(h('path', { d: 'M2.5 3.5 H13.5 L9.25 8.5 V12.5 L6.75 13.5 V8.5 Z', ...stroke }));
+    return svg;
+  }
+  function toggleSearch(open = !S.searching) {
+    S.searching = open;
+    refreshToolbar();
+    if (open) regions.toolbar.querySelector('#search').focus();
   }
   function refreshToolbar() {
     const shown = visible().length;
@@ -295,6 +332,10 @@
     regions.toolbar.querySelector('#expand').hidden = !canExpand() || S.context.displayMode === 'fullscreen';
     regions.toolbar.querySelector('#filter-button').setAttribute('aria-expanded', String(S.menu === 'filter'));
     regions.toolbar.querySelector('#display-button').setAttribute('aria-expanded', String(S.menu === 'display'));
+    regions.toolbar.querySelector('#more-button').setAttribute('aria-expanded', String(S.menu === 'more'));
+    const searching = S.searching || !!S.search.trim();
+    regions.toolbar.classList.toggle('searching', searching);
+    regions.toolbar.querySelector('#search-toggle').setAttribute('aria-expanded', String(searching));
   }
 
   // --- filters: the menu and its chips -------------------------------------------
@@ -354,6 +395,14 @@
       return h('div', { class: 'menu menu--display', role: 'dialog', 'aria-label': 'Display' },
         radios('Group by', GROUPS, S.group, (v) => { S.group = v; }), radios('Order by', ORDERS, S.order, (v) => { S.order = v; }),
         h('div', { class: 'menu-foot' }, button('Done', 'secondary', close)));
+    }
+    if (S.menu === 'more') {
+      const item = (text, go, extra = {}) => h('button', { type: 'button', class: 'option option--button', onclick: go, ...extra }, text);
+      return h('div', { class: 'menu menu--more', role: 'menu', 'aria-label': 'More' },
+        item('Display…', () => toggleMenu('display'), { role: 'menuitem' }),
+        item('Refresh', () => { S.menu = null; load(); }, { role: 'menuitem' }),
+        canExpand() && S.context.displayMode !== 'fullscreen' ? item('Full screen', () => { S.menu = null; expand(); }, { role: 'menuitem' }) : null,
+        S.context.deviceCapabilities?.hover === false ? null : item('Keyboard shortcuts', () => toggleMenu('help'), { role: 'menuitem' }));
     }
     if (S.menu === 'help') {
       const rows = [['j / ↓', 'next issue'], ['k / ↑', 'previous issue'], ['Enter / o', 'open in the side peek'], ['Esc', 'close the peek, a menu, the selection'],
@@ -446,21 +495,28 @@
   function peekView() {
     const i = S.detail?.id === S.peek && !S.detail.missing ? S.detail : null;
     const row = byID(S.peek), ids = walkable().map((x) => x.id), at = ids.indexOf(S.peek);
+    // the identifier shrinks (ellipsis, the whole in its title) and, on a phone, takes a row of its own under
+    // "← Issues", previous and next, so the header never makes the view wider than its frame
+    const back = () => { closePeek(); render(); focusCursor(); };
     const head = h('div', { class: 'peek-head' },
-      row || i ? icon((i ?? row).state) : null,
-      h('code', { class: 'ident', title: S.peek }, S.peek),
-      h('button', { type: 'button', class: 'btn btn--ghost btn--icon', 'aria-label': 'Copy the identifier', title: 'Copy', onclick: () => copy(S.peek) }, '⧉'),
+      button('← Issues', 'ghost', back, { class: 'btn btn--ghost phone-only back', 'aria-label': 'Back to the issues' }),
+      h('span', { class: 'peek-ident' },
+        row || i ? icon((i ?? row).state) : null,
+        h('code', { class: 'ident', title: S.peek }, S.peek),
+        h('button', { type: 'button', class: 'btn btn--ghost btn--icon', 'aria-label': 'Copy the identifier', title: 'Copy', onclick: () => copy(S.peek) }, '⧉')),
       h('span', { class: 'spacer' }),
-      button('↑', 'ghost', () => step(-1), { 'aria-label': 'Previous issue', disabled: at <= 0, title: 'Previous (k)' }),
-      button('↓', 'ghost', () => step(1), { 'aria-label': 'Next issue', disabled: at < 0 || at >= ids.length - 1, title: 'Next (j)' }),
-      button('×', 'ghost', () => { closePeek(); render(); focusCursor(); }, { 'aria-label': 'Close the issue', title: 'Close (Esc)' }));
+      button('↑', 'ghost', () => step(-1), { class: 'btn btn--ghost btn--icon', 'aria-label': 'Previous issue', disabled: at <= 0, title: 'Previous (k)' }),
+      button('↓', 'ghost', () => step(1), { class: 'btn btn--ghost btn--icon', 'aria-label': 'Next issue', disabled: at < 0 || at >= ids.length - 1, title: 'Next (j)' }),
+      button('×', 'ghost', back, { class: 'btn btn--ghost btn--icon wide-only', 'aria-label': 'Close the issue', title: 'Close (Esc)' }));
     if (S.detail?.missing) return h('div', { class: 'peek' }, head, h('p', { class: 'state-box' }, S.detail.missing));
     if (!i) return h('div', { class: 'peek' }, head, h('p', { class: 'state-box' }, 'Reading the issue…'));
     const mine = maintains(i.repo), can = allowed({ ...i, repo: i.repo });
     const editable = mine && i.state === 'new';
     const title = editable
-      ? h('input', { class: 'title-edit', id: 'title-edit', value: i.title, 'aria-label': 'Title',
-          onkeydown: (e) => { if (e.key === 'Enter') { e.preventDefault(); actions.triage(i, { title: e.target.value.trim(), kind: kindValue() }); } } })
+      // a textarea that grows with its text, so a long title wraps instead of being cut (Enter still triages)
+      ? h('textarea', { class: 'title-edit', id: 'title-edit', rows: 1, 'aria-label': 'Title', oninput: (e) => fitHeight(e.target),
+          onkeydown: (e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); actions.triage(i, { title: e.target.value.trim().replace(/\s+/g, ' '), kind: kindValue() }); } } },
+        i.title)
       : h('h2', { class: 'peek-title' }, i.title);
     const kindValue = () => app.querySelector('#kind-edit')?.value ?? i.kind;
     const props = h('dl', { class: 'props' },
@@ -468,7 +524,7 @@
       prop('Kind', editable ? h('select', { id: 'kind-edit', class: 'inline-select', 'aria-label': 'Kind' },
         KINDS.map((k) => h('option', { value: k, selected: k === i.kind }, k))) : h('span', { class: 'mono' }, i.kind)),
       prop('Component', h('span', { class: 'mono' }, i.component)),
-      prop('Repository', h('span', { class: 'mono' }, i.repo)),
+      prop('Repository', h('span', { class: 'mono' }, ...breakAfterSlash(i.repo))),
       prop('Reports', h('span', { class: 'mono' }, String(i.count))),
       prop('Minutes', h('span', { class: 'mono' }, String(i.minutes))),
       i.filed ? prop('Filed', h('time', { datetime: i.filed, title: i.filed }, when(i.filed))) : null,
@@ -481,7 +537,7 @@
     if (editable) actionRow.append(button('Triage', 'primary', () => actions.triage(i, { title: app.querySelector('#title-edit')?.value.trim(), kind: kindValue() })));
     if (can.close) actionRow.append(button('Close', 'primary', () => actions.close(i)));
     if (can.wontfix) actionRow.append(button('Decline…', 'secondary', () => { S.panel = 'decline'; render(); app.querySelector('#decline-reason')?.focus(); }));
-    if (can.remove) actionRow.append(h('span', { class: 'spacer' }), button('Delete…', 'danger', () => { S.panel = 'delete'; render(); app.querySelector('#delete-reason')?.focus(); }));
+    if (can.remove) actionRow.append(h('span', { class: 'spacer before-danger' }), button('Delete…', 'danger', () => { S.panel = 'delete'; render(); app.querySelector('#delete-reason')?.focus(); }));
     const sections = [head, title, props];
     if (actionRow.childNodes.length) sections.push(actionRow);
     if (S.panel === 'decline' && can.wontfix) sections.push(confirmBox('Decline', 'decline-reason', 'Why it will not be fixed: agents read this', 'secondary',
@@ -508,6 +564,11 @@
     return h('div', { class: 'peek' }, sections);
   }
   const prop = (name, value) => [h('dt', {}, name), h('dd', {}, value)];
+  // owner/name may break after its "/", not inside a word
+  // (each part unbreakable, so "tinyactors-dev/tinyactors-napi" never breaks after a hyphen)
+  const breakAfterSlash = (text) => String(text).split('/').flatMap((part, n, all) =>
+    n < all.length - 1 ? [h('span', { class: 'nowrap' }, `${part}/`), h('wbr')] : [h('span', { class: 'nowrap' }, part)]);
+  const fitHeight = (area) => { area.style.height = 'auto'; area.style.height = `${area.scrollHeight + area.offsetHeight - area.clientHeight}px`; };
   function confirmBox(label, id, placeholder, variant, go, warning) {
     const input = h('input', { id, 'aria-label': placeholder, placeholder });
     return h('div', { class: `confirm confirm--${variant}`, role: 'group', 'aria-label': label },
@@ -613,13 +674,13 @@
     else if (key === 'k' || key === 'ArrowUp') { e.preventDefault(); moveCursor(-1); }
     else if ((key === 'Enter' || key === 'o') && S.cursor && !e.target.closest?.('button:not(.row)')) { e.preventDefault(); openPeek(S.cursor); }
     else if (key === 'x' && S.cursor) { e.preventDefault(); select(S.cursor, 'toggle'); focusCursor(false); }
-    else if (key === '/') { e.preventDefault(); regions.toolbar.querySelector('#search').focus(); }
+    else if (key === '/') { e.preventDefault(); toggleSearch(true); }
     else if (key === 'f') { e.preventDefault(); toggleMenu('filter'); }
     else if (key === 'c') { e.preventDefault(); openReport(); }
     else if (key === '?') { e.preventDefault(); toggleMenu('help'); }
   });
   document.addEventListener('click', (e) => {
-    if (S.menu && !e.target.closest('.menu, #filter-button, #display-button, [aria-label="Keyboard shortcuts"]')) { S.menu = null; render(); }
+    if (S.menu && !e.target.closest('.menu, #filter-button, #display-button, #more-button, [aria-label="Keyboard shortcuts"]')) { S.menu = null; render(); }
   });
 
   async function expand() {
@@ -630,10 +691,17 @@
 
   // --- start ------------------------------------------------------------------------
   let lastWidth = window.innerWidth;
+  let lastHeight = 0;
   new ResizeObserver(() => {
-    const height = Math.ceil(document.documentElement.getBoundingClientRect().height);
-    notify('ui/notifications/size-changed', { width: Math.ceil(window.innerWidth), height });
-    if ((window.innerWidth >= WIDE) !== (lastWidth >= WIDE)) { lastWidth = window.innerWidth; render(); }
+    // the height the content needs (max-content, so content taller than the frame is not clamped to it); the
+    // width stays the host's: reporting the frame's own width back could hold a frame wider than its card
+    const html = document.documentElement, before = html.style.height;
+    html.style.height = 'max-content';
+    const height = Math.ceil(html.getBoundingClientRect().height);
+    html.style.height = before;
+    if (height !== lastHeight) { lastHeight = height; notify('ui/notifications/size-changed', { height }); }
+    const crossed = (edge) => (window.innerWidth >= edge) !== (lastWidth >= edge);
+    if (crossed(WIDE) || crossed(PHONE)) { lastWidth = window.innerWidth; render(); }
   }).observe(document.body);
   if (!document.documentElement.dataset.theme && window.matchMedia?.('(prefers-color-scheme: dark)').matches)
     document.documentElement.dataset.theme = 'dark';

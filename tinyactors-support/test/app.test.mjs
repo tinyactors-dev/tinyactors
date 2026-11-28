@@ -24,7 +24,7 @@ const napi = 'tinyactors-dev/tinyactors-napi', mono = 'tinyactors-dev/tinyactors
 const fresh = (repo, component, title, minutes = 12) => ({ repo, component, kind: 'tooling', minutes, title, body: title });
 
 // The host page: an iframe of the app and the host's side of the protocol.
-const HOST = `<!doctype html><html><body style="margin:0">
+const HOST = `<!doctype html><html><head><meta name="viewport" content="width=device-width, initial-scale=1"></head><body style="margin:0">
 <iframe id="app" style="border:0;width:100%;height:100vh"></iframe>
 <script>
   const frame = document.getElementById('app');
@@ -34,7 +34,8 @@ const HOST = `<!doctype html><html><body style="margin:0">
     const m = event.data, reply = (result) => frame.contentWindow.postMessage({ jsonrpc: '2.0', id: m.id, result }, '*');
     if (m.method) window.requests.push(m.method);
     if (m.method === 'ui/initialize') return reply({ protocolVersion: '2026-01-26', hostInfo: { name: 'fake-host', version: '1' },
-      hostCapabilities: { serverTools: {} }, hostContext: { theme: window.theme, displayMode: 'inline', availableDisplayModes: ['inline', 'fullscreen'] } });
+      hostCapabilities: { serverTools: {} }, hostContext: { theme: window.theme, displayMode: 'inline', availableDisplayModes: ['inline', 'fullscreen'],
+        ...window.extraContext } });
     if (m.method === 'ui/notifications/initialized') {
       frame.contentWindow.postMessage({ jsonrpc: '2.0', method: 'ui/notifications/tool-input', params: { arguments: window.toolArguments } }, '*');
       const result = await window.callTool(window.toolName, window.toolArguments);
@@ -81,8 +82,11 @@ describe('the issue list app', { skip: chromium ? false : 'Playwright is not ins
   after(async () => { await browser?.close(); await s?.support.close(); });
 
   // A page with the app under the fake host, for `token`'s user, after `tool` was called with `args`.
-  async function open({ theme = 'light', token = bob, tool = 'known_issues', args = {}, width = 1180, scale = 1 } = {}) {
-    const page = await browser.newPage({ viewport: { width, height: 860 }, deviceScaleFactor: scale, colorScheme: theme });
+  // `phone`: a touch device (isMobile, hasTouch); `context`: more of the host's context (deviceCapabilities, safeAreaInsets)
+  async function open({ theme = 'light', token = bob, tool = 'known_issues', args = {}, width = 1180, height = 860, scale = 1, phone = false, context = {} } = {}) {
+    const page = phone
+      ? await (await browser.newContext({ viewport: { width, height }, deviceScaleFactor: scale, colorScheme: theme, isMobile: true, hasTouch: true })).newPage()
+      : await browser.newPage({ viewport: { width, height }, deviceScaleFactor: scale, colorScheme: theme });
     await page.exposeFunction('callTool', async (name, input) => {
       const caller = token ? await s.gateway.caller(token) : null;
       const result = await toolResult(s.gateway, caller, name, input);
@@ -90,7 +94,8 @@ describe('the issue list app', { skip: chromium ? false : 'Playwright is not ins
       return result;
     });
     await page.setContent(HOST);
-    await page.evaluate(([t, name, input]) => { window.theme = t; window.toolName = name; window.toolArguments = input; }, [theme, tool, args]);
+    await page.evaluate(([t, name, input, extra]) => { window.theme = t; window.toolName = name; window.toolArguments = input; window.extraContext = extra; },
+      [theme, tool, args, context]);
     await page.evaluate((html) => { document.getElementById('app').srcdoc = html; }, APP.html);
     const app = page.frameLocator('#app');
     await app.locator('.row').first().waitFor();
@@ -278,4 +283,95 @@ describe('the issue list app', { skip: chromium ? false : 'Playwright is not ins
     assert.match(await app.locator('.toast').first().textContent(), /^Filed tinyactors:tinyactors-napi:\d+/);
     await page.close();
   });
+
+  // --- a phone ------------------------------------------------------------------------
+  // What a phone in claude.ai showed (2026-11-28): the peek's header (identifier, copy, previous, next,
+  // close) on one unbreakable row made the view 339 px wide in a 320 px frame, so a swipe scrolled the whole
+  // view sideways and cut its edges. Below 600 px the view has a phone layout; on touch every control is 44 px.
+  const overflow = (frame) => frame.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
+  // every visible control smaller than 44 × 44 px (a menu's checkbox counts by its whole option row)
+  const small = (frame) => frame.evaluate(() => [...document.querySelectorAll(
+    'button, a[href], select, input:not([type=checkbox]):not([type=radio]), [role=option], .option')]
+    .filter((e) => e.checkVisibility())
+    .filter((e) => { const r = e.getBoundingClientRect(); return r.width > 0 && (r.width < 43.5 || r.height < 43.5); })
+    .filter((e) => !(e.tagName === 'INPUT' && e.closest('.ta-control')) || e.closest('.ta-control').getBoundingClientRect().height < 43.5)
+    .map((e) => `${e.tagName.toLowerCase()}.${[...e.classList].join('.')} "${(e.getAttribute('aria-label') ?? e.textContent).trim().slice(0, 24)}" `
+      + `${Math.round(e.getBoundingClientRect().width)}×${Math.round(e.getBoundingClientRect().height)}`));
+  // text cut off: an element whose content is wider than its box (the identifier is ellipsized on purpose, its whole in its title)
+  const clipped = (frame, selector) => frame.evaluate((sel) => [...document.querySelectorAll(sel)]
+    .filter((e) => e.checkVisibility() && e.scrollWidth > e.clientWidth + 1).map((e) => e.textContent.trim().slice(0, 40)), selector);
+  const shot = async (page, name) => {
+    if (process.env.SUPPORT_SCREENSHOTS) await page.screenshot({ path: join(process.env.SUPPORT_SCREENSHOTS, `${name}.png`) });
+  };
+
+  for (const width of [320, 360, 390]) {
+    it(`fits a ${width} px phone: one header row, two-line rows, 44 px targets, the peek a sheet, menus within the view`, async () => {
+      // at 320 the host says nothing of touch (the coarse pointer tells), at 360 and 390 it does, with a safe area
+      const context = width === 320 ? {} : { deviceCapabilities: { touch: true, hover: false }, platform: 'mobile', safeAreaInsets: { top: 0, right: 0, bottom: 34, left: 0 } };
+      for (const theme of width === 360 ? ['light', 'dark'] : ['light']) {
+        const { page, app, frame } = await open({ theme, width, height: 740, phone: true, scale: width === 360 ? 2 : 1, context });
+        assert.equal(await app.locator('html').getAttribute('data-size'), 'phone');
+        assert.equal(await app.locator('html').getAttribute('data-touch'), 'true');
+        assert.equal(await overflow(frame), 0, 'the list fits the width');
+        const tops = await app.locator('.toolbar > *').evaluateAll((items) => items.filter((e) => e.checkVisibility())
+          .map((e) => Math.round(e.getBoundingClientRect().top + e.getBoundingClientRect().height / 2)));
+        assert.ok(Math.max(...tops) - Math.min(...tops) <= 2, `the header is one row: ${tops}`);
+        const first = row(app, 'regressed');
+        const [title, tags] = await Promise.all([first.locator('.title').boundingBox(), first.locator('.labels').boundingBox()]);
+        assert.ok(tags && tags.y > title.y + title.height - 2, 'the tags on a second line');
+        assert.deepEqual(await small(frame), [], 'every control in the list is a 44 px target');
+        if (width === 360) await shot(page, `phone-list-${theme}`);
+
+        // the search: a button, then a full-width row under the header
+        await app.getByRole('button', { name: 'Search', exact: true }).tap();
+        const search = app.locator('#search');
+        await search.fill('socket');
+        assert.deepEqual(await shown(app), [id.regressed]);
+        assert.equal(await overflow(frame), 0, 'the search row fits');
+        await search.press('Escape');
+        assert.equal(await app.locator('.search').isVisible(), false, 'Escape closes it');
+
+        // the filter menu, and chips that scroll in their own row
+        await app.getByRole('button', { name: 'Filter', exact: true }).tap();
+        await app.locator('.menu--filter').waitFor();
+        const menu = await app.locator('.menu--filter').boundingBox();
+        assert.ok(menu.x >= 0 && menu.x + menu.width <= width, 'the menu is within the view');
+        assert.equal(await overflow(frame), 0, 'the menu fits the width');
+        assert.deepEqual(await small(frame), [], 'every option is a 44 px target');
+        if (width === 360) await shot(page, `phone-filter-menu-${theme}`);
+        for (const name of ['tooling', 'examples']) await app.locator('.menu--filter .option', { hasText: new RegExp(`^${name}$`) }).first().tap();
+        await app.getByRole('button', { name: 'Done' }).tap();
+        assert.ok(await app.locator('.chip').count() >= 3);
+        assert.equal(await overflow(frame), 0, 'the chips scroll in their row, not the view');
+        await app.getByRole('button', { name: 'Clear', exact: true }).tap();
+
+        // More: the display options and the rest of the wide header
+        await app.getByRole('button', { name: 'More', exact: true }).tap();
+        await app.getByRole('menuitem', { name: 'Display…' }).tap();
+        await app.locator('.menu--display').waitFor();
+        assert.equal(await overflow(frame), 0, 'the display menu fits');
+        await app.getByRole('button', { name: 'Done' }).tap();
+
+        // a tap opens the issue as a sheet; "← Issues" closes it
+        await row(app, 'fresh').tap();
+        await app.locator('.peek .ident', { hasText: id.fresh }).waitFor();
+        await app.locator('.peek .props').waitFor();
+        assert.equal(await app.locator('.pane--list').isVisible(), false, 'the sheet covers the list');
+        assert.equal(await overflow(frame), 0, 'the sheet fits the width');
+        assert.deepEqual(await clipped(frame, '.peek-title, .props dd, .peek .prose, .peek .code, .actions .btn'), [], 'no text cut off');
+        const editable = app.locator('#title-edit');
+        assert.ok(await editable.evaluate((t) => t.scrollHeight <= t.clientHeight + 1 && t.scrollWidth <= t.clientWidth + 1), 'the editable title wraps, whole');
+        assert.ok(await editable.evaluate((t) => t.getBoundingClientRect().height > 40), 'on two lines at least, at this width');
+        const repository = await app.locator('.props dd .nowrap').evaluateAll((parts) => parts.map((p) => p.textContent));
+        assert.deepEqual(repository, ['tinyactors-dev/', 'tinyactors-napi'], 'the repository breaks only after its "/"');
+        assert.deepEqual(await small(frame), [], 'every control in the sheet is a 44 px target');
+        if (width === 360) await shot(page, `phone-peek-${theme}`);
+        await app.getByRole('button', { name: 'Back to the issues' }).tap();
+        assert.equal(await app.locator('.peek').count(), 0);
+        assert.equal(await app.locator('.pane--list').isVisible(), true);
+        await page.context().close();
+      }
+    });
+  }
 });
+
