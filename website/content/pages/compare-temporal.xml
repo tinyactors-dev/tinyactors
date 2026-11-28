@@ -1,0 +1,127 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<page xmlns="https://www.tinyactors.dev/ns/site" id="compare-temporal" path="/compare/temporal/">
+  <title>tinyactors compared with Temporal</title>
+  <description>Where a workflow with retries and timeouts runs, how its tests move time, what a crash keeps, and when Temporal is the better choice.</description>
+  <purpose kind="pitch" for="workflow-tester tech-lead"/>
+
+  <hero>
+    <headline>Retries and timeouts, without a Temporal server</headline>
+    <lede>A payment that retries every 30 seconds runs as a statechart inside your Node.js or Python process. One program checks it over a thousand simulated runs, with no server and no database. Choose Temporal when its service must keep every workflow through a machine's failure.</lede>
+    <actions>
+      <action to="guide-testing">Test a payment's timeouts</action>
+      <action to="compare-temporal" section="choose-temporal">See when Temporal fits</action>
+    </actions>
+  </hero>
+
+  <section id="where-it-runs" answers="workflow-tester.needs-cluster workflow-tester.no-server">
+    <heading>Temporal is a service; tinyactors is a library</heading>
+    <p>A payment that retries three times is a few states of logic. With Temporal, it spans a server, a database and the workers you run. tinyactors keeps it in your process.</p>
+    <claims>
+      <claim>
+        <statement>Temporal runs a server and its database</statement>
+        <p>Its docs define the service as the Temporal Server combined with persistence and visibility stores.</p>
+        <p>In production the store is Cassandra, PostgreSQL or MySQL. SQLite is for development and testing only.</p>
+        <source href="https://docs.temporal.io/temporal-service">Temporal, "Temporal Service"</source>
+        <source href="https://docs.temporal.io/temporal-service/persistence">Temporal, "Persistence"</source>
+      </claim>
+      <claim>
+        <statement>Your workers poll the service for tasks</statement>
+        <p>Worker processes are external to the service, and you operate them. Each one polls a task queue, runs your code and reports the result back.</p>
+        <source href="https://docs.temporal.io/workers">Temporal, "Workers"</source>
+      </claim>
+      <claim>
+        <statement>A tinyactors host lives in your program</statement>
+        <p><code>new Host(charts, options)</code> runs the actors inside the program that imports <code>@tinyactors/node</code> or <code>tinyactors</code>. A chart reaches the world only through handlers you give the host.</p>
+        <source to="home" section="start">Home, "The chart decides, your code acts"</source>
+        <source to="guide-io-processors" section="charts-send-events">I/O processors, "Ask for outside work with a send"</source>
+      </claim>
+    </claims>
+    <p>Temporal Cloud takes the service off your hands: Temporal operates its persistence, replication, upgrades and availability. Your workers still run in your environment (<link href="https://docs.temporal.io/evaluate/cloud">Temporal, "Temporal Cloud"</link>).</p>
+  </section>
+
+  <section id="tests" answers="workflow-tester.simulated-clock workflow-tester.test-timeouts workflow-tester.no-mocks">
+    <heading>Test a thousand payments in one program</heading>
+    <p>A workflow's bugs hide in its timeouts. This chart charges a card, charges again after 30 seconds without an answer and gives up after three charges:</p>
+    <code src="../../examples/simulate/payment.scxml" lines="4-15" language="scxml" file="payment.scxml"/>
+    <p>The test gives the host a stand-in payment service that answers 40% of charges. It moves a simulated clock straight to each timeout, so a run that would wait 90 seconds ends as soon as the chart is done. Then it checks two rules:</p>
+    <example>
+      <code src="../../examples/simulate/simulate.mjs" lines="7-34" language="javascript" file="simulate.mjs"/>
+      <code src="../../examples/simulate/output.txt" language="text" role="output"/>
+    </example>
+    <claims>
+      <claim>
+        <statement>Temporal's tests skip time with a server</statement>
+        <p>Temporal's test framework is an in-memory Temporal Server whose timers fast-forward, except while activities run. The <code>@temporalio/testing</code> package downloads that server.</p>
+        <source href="https://docs.temporal.io/develop/typescript/testing-suite">Temporal, "Testing suite" (TypeScript)</source>
+      </claim>
+    </claims>
+    <p>Here the host and its clock are the whole test. No server starts.</p>
+    <p>The stand-in service is an object, so it answers, fails or stays silent as each case needs (<link to="guide-testing"/>).</p>
+  </section>
+
+  <section id="crash" answers="workflow-tester.crash tech-lead.host-dies tech-lead.failure-semantics">
+    <heading>Temporal keeps history; your program keeps snapshots</heading>
+    <p>A process dies halfway through a payment. What survives depends on who wrote it down.</p>
+    <claims>
+      <claim>
+        <statement>Temporal replays every workflow from its history</statement>
+        <p>The service records each workflow's event history, a complete ordered log that is its source of truth. To continue a workflow, it reruns the code from the beginning against that history.</p>
+        <p>Its docs say workflows keep running for years, even if the underlying infrastructure fails.</p>
+        <source href="https://docs.temporal.io/workflows">Temporal, "Temporal Workflow"</source>
+      </claim>
+      <claim>
+        <statement>A crash keeps what your program saved</statement>
+        <p>tinyactors actors live in your process's memory, so a crash stops them all. What comes back is what your program saved: hibernated actors in its store, and its last snapshot.</p>
+        <p>Inputs after that snapshot return only if your program journaled them and replays them on the restored host.</p>
+        <source to="when-to-use" section="crash">When to use tinyactors, "A crash stops memory and keeps saved state"</source>
+        <source to="guide-snapshots" section="replaying-inputs">Snapshots, "Replay the inputs that came after"</source>
+      </claim>
+    </claims>
+    <p>So if no input may be lost and you'd rather not write that journal, choose Temporal.</p>
+    <p>A snapshot holds only its moment. A snapshot of two million actors takes 165 MB (<link to="guide-snapshots"/>).</p>
+  </section>
+
+  <section id="changes">
+    <heading>Change a workflow that is already running</heading>
+    <p>An order waits a week for delivery. On Tuesday the rules change. The running order must take the new rules without losing its place.</p>
+    <claims>
+      <claim>
+        <statement>Temporal's replay needs deterministic code and patches</statement>
+        <p>Replay reruns workflow code, so given the same input it must make the same API calls in the same order. Adding, removing or reordering one causes a nondeterminism error.</p>
+        <p><code>patched()</code> marks a change in the event history, a branch like a feature flag, so running workflows keep their old path.</p>
+        <source href="https://docs.temporal.io/workflow-definition">Temporal, "Workflow Definition"</source>
+        <source href="https://docs.temporal.io/develop/typescript/versioning">Temporal, "Versioning" (TypeScript)</source>
+      </claim>
+      <claim>
+        <statement>A migration moves running actors to a version</statement>
+        <p>A new chart version is added to the running host, and <code>host.migrate()</code> moves running actors to it. Each keeps its active states, queue and delayed sends, and receives its old variables in an event.</p>
+        <source to="guide-migration" section="moving-running-actors">Migration, "Move the actors and carry their variables"</source>
+      </claim>
+    </claims>
+  </section>
+
+  <section id="choose-tinyactors" answers="workflow-tester.no-server workflow-tester.simulated-clock">
+    <heading>Choose tinyactors for logic inside your program</heading>
+    <list>
+      <item><term>Workflows in a program you already run</term><text>The host is a library, so no server, database or worker fleet runs beside your program.</text></item>
+      <item><term>Tests that reach every timeout</term><text>A simulated clock jumps to each deadline, so one program checks a payment's rules over a thousand runs.</text></item>
+      <item><term>Many workflows, most of them waiting</term><text>Waiting actors hibernate into your store: <link to="guide-hibernation" section="at-scale">two million ran with at most 1000 in memory</link>, the rest in SQLite.</text></item>
+      <item><term>The whole flow written down</term><text>Every state and transition is in one <link to="guide-charts">SCXML chart</link>, which a test, a reviewer or the <link to="cli">command line</link> can read.</text></item>
+    </list>
+  </section>
+
+  <section id="choose-temporal">
+    <heading>Choose Temporal when its service must own durability</heading>
+    <list>
+      <item><term>Durability you don't build</term><text>The service keeps each workflow's event history in its database. Replay restores the state after infrastructure fails.</text></item>
+      <item><term>Work spread across many machines</term><text>Workers on any machine poll task queues. tinyactors leaves <link href="https://github.com/tinyactors-dev/tinyactors/blob/main/README.md#layers-and-responsibilities">placement and failover between hosts</link> to your program.</text></item>
+      <item><term>Retries without writing them</term><text>Temporal <link href="https://docs.temporal.io/encyclopedia/retry-policies">retries a failed activity by default</link>, starting after one second and doubling. In a chart, you write each retry as a transition.</text></item>
+      <item><term>Workflows as ordinary code</term><text>A workflow is code in your language, with no chart format to learn (<link href="https://docs.temporal.io/workflow-definition">Temporal, "Workflow Definition"</link>).</text></item>
+    </list>
+    <actions>
+      <action to="guide-testing">Test a payment's timeouts</action>
+      <action to="when-to-use">See when to use tinyactors</action>
+      <action to="guide-snapshots">Read what a snapshot keeps</action>
+    </actions>
+  </section>
+</page>

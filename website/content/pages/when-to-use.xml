@@ -87,6 +87,7 @@
         <statement>Temporal runs a server; tinyactors runs in-process</statement>
         <p>Self-hosted Temporal runs Temporal Server and persistence stores on Docker, Kubernetes or by hand.</p>
         <p>Your program creates a tinyactors host object directly for tests and runtime, handling journaling and <link to="guide-other-systems">cross-host transport</link>.</p>
+        <p><link to="compare-temporal">tinyactors compared with Temporal</link> sets the two side by side: tests, crashes and running changes.</p>
         <source href="https://docs.temporal.io/temporal-service">Temporal, "Temporal Service"</source>
         <source href="https://docs.temporal.io/self-hosted-guide">Temporal, "Self-hosted Temporal Service guide"</source>
       </claim>
