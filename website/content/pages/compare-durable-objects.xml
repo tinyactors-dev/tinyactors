@@ -1,0 +1,159 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<page xmlns="https://www.tinyactors.dev/ns/site" id="compare-durable-objects" path="/compare/durable-objects/">
+  <title>tinyactors compared with Durable Objects</title>
+  <description>Where a stateful session runs, what an idle one keeps, how its tests move time, what a deploy does to it, and when Cloudflare Durable Objects are the better choice.</description>
+  <purpose kind="pitch" for="agent-platform tech-lead"/>
+
+  <hero>
+    <headline>Stateful sessions in the backend you already run</headline>
+    <lede>A Durable Object gives each agent session its own state and one order of events, on Cloudflare's network. tinyactors runs that session as a statechart inside your own process. Choose Durable Objects when sessions must be reachable from anywhere in the world.</lede>
+    <actions>
+      <action to="compare-durable-objects" section="deploy">Upgrade running sessions</action>
+      <action to="compare-durable-objects" section="choose-durable-objects">See Durable Objects' strengths</action>
+    </actions>
+  </hero>
+
+  <section id="where-it-runs" answers="agent-platform.in-backend agent-platform.another-runtime">
+    <heading>Cloudflare runs the object; you run the host</heading>
+    <p>Your backend already runs somewhere you chose. A session's logic in a Durable Object runs on Cloudflare's network instead, wherever the rest of your backend lives.</p>
+    <claims>
+      <claim>
+        <statement>A Durable Object is a Worker with storage</statement>
+        <p>Cloudflare defines it as a special kind of Worker that combines compute with storage. It is placed close to where it is first requested.</p>
+        <p>Each object has a globally unique name, so a request reaches that one object from anywhere in the world.</p>
+        <source href="https://developers.cloudflare.com/durable-objects/">Cloudflare, "Durable Objects"</source>
+        <source href="https://developers.cloudflare.com/durable-objects/concepts/what-are-durable-objects/">Cloudflare, "What are Durable Objects?"</source>
+      </claim>
+      <claim>
+        <statement>A tinyactors host lives in your program</statement>
+        <p><code>new Host(charts, options)</code> runs the actors inside the Node.js, Bun, Python or browser process that imports the package.</p>
+        <p>A chart reaches the model's API, your database or a socket only through handlers you give the host.</p>
+        <source to="home" section="start">Home, "The chart decides, your code acts"</source>
+        <source to="guide-io-processors" section="charts-send-events">I/O processors, "Ask for outside work with a send"</source>
+      </claim>
+    </claims>
+    <p>The cost is on your side. Your program decides where each host runs and carries a message to another host's actor (<link to="guide-other-systems"/>). On Cloudflare, that's the platform's work.</p>
+  </section>
+
+  <section id="state" answers="agent-platform.idle-sessions agent-platform.memory">
+    <heading>Idle sessions wait in your database</heading>
+    <p>Most sessions sit idle between a user's messages. Their state must survive until the next one, without holding memory meanwhile.</p>
+    <claims>
+      <claim>
+        <statement>An idle object discards its memory</statement>
+        <p>After 10 seconds without work an object can hibernate, and its in-memory state is discarded. Cloudflare says to persist anything important to the object's storage.</p>
+        <p>That storage is SQLite, up to 10 GB per object on the paid plan.</p>
+        <source href="https://developers.cloudflare.com/durable-objects/concepts/durable-object-lifecycle/">Cloudflare, "Durable Object lifecycle"</source>
+        <source href="https://developers.cloudflare.com/durable-objects/reference/in-memory-state/">Cloudflare, "In-memory state in a Durable Object"</source>
+        <source href="https://developers.cloudflare.com/durable-objects/platform/limits/">Cloudflare, "Limits"</source>
+      </claim>
+      <claim>
+        <statement>An idle actor goes to your store whole</statement>
+        <p>Give the host a store and a bound, and it writes the actors past the bound into the store: variables, active states and all. The next event wakes one.</p>
+        <p>Two million actors ran with at most 1000 in memory and the rest in SQLite.</p>
+        <source to="guide-hibernation" section="a-store-and-a-bound">Hibernation, "Cap how many actors stay in memory"</source>
+        <source to="guide-hibernation" section="at-scale">Hibernation, "Run two million actors with 1000 in memory"</source>
+      </claim>
+    </claims>
+    <p>An actor in memory takes about 530 bytes of a Node.js process holding a million, measured with a counter chart of one variable (<link to="guide-capacity" section="what-an-actor-costs"/>).</p>
+  </section>
+
+  <section id="tests">
+    <heading>Test a thousand timeouts in one program</heading>
+    <p>A session's bugs hide in what happens when an answer is late. This payment charges a card, charges again after 30 seconds without an answer and gives up after three charges:</p>
+    <code src="../../examples/late-answers/payment.scxml" lines="4-16" language="scxml" file="payment.scxml"/>
+    <p>The test's stand-in provider answers at once, 45 seconds late or never. A simulated clock jumps to each timeout, so a thousand payments run in one Node.js process:</p>
+    <example>
+      <code src="../../examples/late-answers/simulate.mjs" language="javascript" file="simulate.mjs"/>
+      <code src="../../examples/late-answers/output.txt" language="text" role="output"/>
+    </example>
+    <claims>
+      <claim>
+        <statement>Durable Objects' tests run in the Workers runtime</statement>
+        <p>Cloudflare's Vitest integration runs tests inside the Workers runtime, with the objects' bindings and storage.</p>
+        <p><code>runDurableObjectAlarm()</code> fires a scheduled alarm at once instead of waiting for its timer.</p>
+        <source href="https://developers.cloudflare.com/durable-objects/examples/testing-with-durable-objects/">Cloudflare, "Testing Durable Objects"</source>
+      </claim>
+      <claim>
+        <statement>A simulated clock moves when tests move it</statement>
+        <p>The test above is a host, a clock and a stand-in object. Every timer of every actor waits for <code>clock.increment()</code>.</p>
+        <source to="guide-testing" section="three-tools">Testing, "Replace the chart's services and its clock"</source>
+      </claim>
+    </claims>
+  </section>
+
+  <section id="deploy" answers="agent-platform.idle-sessions">
+    <heading>Ship new rules to running sessions</heading>
+    <p>You deploy a turn limit while thousands of sessions are mid-conversation. Each one must keep the turns it already counted.</p>
+    <claims>
+      <claim>
+        <statement>A deploy resets an active object</statement>
+        <p>By default an active object keeps its old code until it hibernates, or for up to 300 seconds. Then it resets and adopts the new code.</p>
+        <p>Hibernation discards in-memory state, so what carries over is what the object stored.</p>
+        <source href="https://developers.cloudflare.com/durable-objects/deployments/durable-objects-code-updates/">Cloudflare, "Durable Objects code updates"</source>
+        <source href="https://developers.cloudflare.com/durable-objects/concepts/durable-object-lifecycle/">Cloudflare, "Durable Object lifecycle"</source>
+      </claim>
+      <claim>
+        <statement>A migration moves running actors to a version</statement>
+        <p><code>host.addImage()</code> adds the new chart to the running host, and <code>host.migrate()</code> moves actors to it.</p>
+        <p>Each keeps its active states, queue and delayed sends. The new chart reads the old variables from one event.</p>
+        <source to="guide-migration" section="moving-running-actors">Migration, "Move the actors and carry their variables"</source>
+      </claim>
+    </claims>
+    <p>Ten thousand agent sessions answer three prompts each, with at most 100 in memory. Version 2 adds a limit of three turns, and one migration moves every session, hibernated ones included:</p>
+    <program>
+      <in package="node">
+        <code src="../../examples/session-upgrade/main.mjs" language="javascript" file="main.mjs"/>
+        <code src="../../examples/session-upgrade/session-v1.scxml" language="scxml" file="session-v1.scxml"/>
+        <code src="../../examples/session-upgrade/session-v2.scxml" language="scxml" file="session-v2.scxml"/>
+      </in>
+      <code src="../../examples/session-upgrade/output.txt" language="text" role="output"/>
+    </program>
+    <p>Every session kept its count through the move. So each one ended at the limit instead of asking the model again.</p>
+  </section>
+
+  <section id="crash" answers="tech-lead.host-dies">
+    <heading>A crash keeps what was written down</heading>
+    <p>A machine dies halfway through a session. Both answers start from storage; they differ in who owns it.</p>
+    <claims>
+      <claim>
+        <statement>An object's writes are stored all or none</statement>
+        <p>If a machine fails, either all of a write's changes reached disk or none did.</p>
+        <p>Point-in-time recovery restores an object's database to any moment of the past 30 days.</p>
+        <source href="https://developers.cloudflare.com/durable-objects/api/sqlite-storage-api/">Cloudflare, "SQLite-backed Durable Object Storage"</source>
+      </claim>
+      <claim>
+        <statement>A crash keeps what your program saved</statement>
+        <p>Actors live in your process's memory, so a crash stops them all. Hibernated actors in your store and the last snapshot come back.</p>
+        <p>Inputs after that snapshot return when your program journaled them.</p>
+        <source to="when-to-use" section="crash">When to use tinyactors, "A crash stops memory and keeps saved state"</source>
+        <source to="guide-journal">Journal and replay</source>
+      </claim>
+    </claims>
+  </section>
+
+  <section id="choose-tinyactors" answers="agent-platform.compare">
+    <heading>Choose tinyactors for sessions inside your backend</heading>
+    <list>
+      <item><term>A backend on the cloud you chose</term><text>The host is a library in your Node.js, Bun or Python process, so the sessions deploy with the code that calls them.</text></item>
+      <item><term>Deploys that keep each session's place</term><text>A <link to="guide-migration">migration</link> moves running sessions to new rules with their states, queues and timers.</text></item>
+      <item><term>Tests that reach every timeout</term><text>A simulated clock jumps to each deadline, so one program checks a thousand sessions.</text></item>
+      <item><term>Logic an agent can write and you can read</term><text>Each session is one <link to="guide-charts">SCXML chart</link>, and an uploaded chart runs in <link to="guide-quickjs">the QuickJS sandbox</link>.</text></item>
+    </list>
+  </section>
+
+  <section id="choose-durable-objects" answers="agent-platform.compare">
+    <heading>Choose Durable Objects for sessions reached from anywhere</heading>
+    <list>
+      <item><term>Clients all over the world</term><text>Each object has a globally unique name and is placed near its first request. tinyactors leaves <link href="https://github.com/tinyactors-dev/tinyactors/blob/main/README.md#layers-and-responsibilities">placement and failover between hosts</link> to your program.</text></item>
+      <item><term>Storage you don't operate</term><text>Each object has its own SQLite database, <link href="https://developers.cloudflare.com/durable-objects/api/sqlite-storage-api/">restorable to any point of the past 30 days</link>.</text></item>
+      <item><term>Connections that outlive memory</term><text><link href="https://developers.cloudflare.com/durable-objects/best-practices/websockets/">WebSocket Hibernation</link> keeps clients connected while the object is out of memory, and duration charges stop meanwhile.</text></item>
+      <item><term>An application already on Workers</term><text>A Durable Object is a Worker, so it shares the platform, bindings and deploys of the rest of the application.</text></item>
+    </list>
+    <actions>
+      <action to="guide-hibernation">Hibernate idle sessions</action>
+      <action to="guide-migration">Upgrade running actors</action>
+      <action to="when-to-use">See when to use tinyactors</action>
+    </actions>
+  </section>
+</page>

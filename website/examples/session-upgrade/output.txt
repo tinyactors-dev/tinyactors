@@ -1,0 +1,3 @@
+version 1: 30000 completions, 9900 sessions in the store
+migration: 10000 sessions moved, 0 failed
+version 2: 0 completions, 10000 sessions ended at the limit of 3 turns

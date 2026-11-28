@@ -89,3 +89,6 @@
 /recipes/
 /docs/agents/
 /docs/statecharts/
+/compare/durable-objects/
+/compare/rivet/
+/compare/xstate/

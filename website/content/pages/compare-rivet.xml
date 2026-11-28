@@ -1,0 +1,158 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<page xmlns="https://www.tinyactors.dev/ns/site" id="compare-rivet" path="/compare/rivet/">
+  <title>tinyactors compared with Rivet</title>
+  <description>Who places an actor, what a sleeping one keeps, how its tests move time, what a deploy does to running actors, and when Rivet Actors are the better choice.</description>
+  <purpose kind="pitch" for="agent-platform tech-lead"/>
+
+  <hero>
+    <headline>Actors in your backend, with no control plane</headline>
+    <lede>Rivet runs one actor per agent session in your Node.js or Bun backend, placed by Rivet Cloud or a control plane you deploy. tinyactors runs each session as a statechart in your process, with nothing beside it. Choose Rivet when actors must move between machines on their own.</lede>
+    <actions>
+      <action to="compare-rivet" section="deploy">Upgrade running sessions</action>
+      <action to="compare-rivet" section="choose-rivet">See when Rivet fits</action>
+    </actions>
+  </hero>
+
+  <section id="where-it-runs" answers="agent-platform.in-backend agent-platform.another-runtime">
+    <heading>Rivet places actors; your program places hosts</heading>
+    <p>Both run your actors in your backend's process. The difference is what runs beside it. And who decides where an actor lives.</p>
+    <claims>
+      <claim>
+        <statement>Rivet's control plane places each actor</statement>
+        <p>Rivet calls its actors isolated, durable processes that run in your backend. You deploy the control plane yourself, or use Rivet Cloud.</p>
+        <p>The platform may move an actor to another node, for example when its node stops during a deploy.</p>
+        <source href="https://rivet.dev/docs/actors">Rivet, "Actors"</source>
+        <source href="https://rivet.dev/actors/docs/lifecycle/">Rivet, "Lifecycle"</source>
+      </claim>
+      <claim>
+        <statement>A tinyactors actor stays in its host</statement>
+        <p><code>new Host(charts, options)</code> runs the actors inside the process that imports the package. An actor stays in the host that spawned it.</p>
+        <p>A chart reaches the model's API or your database only through handlers you give the host.</p>
+        <source to="home" section="start">Home, "The chart decides, your code acts"</source>
+        <source to="guide-other-systems" section="systems">Other systems, "Give each host a system name"</source>
+      </claim>
+    </claims>
+    <p>There's nothing to operate. There's also nothing that moves an actor for you: which host runs where, and how a message reaches another host, is your program's code.</p>
+  </section>
+
+  <section id="state" answers="agent-platform.idle-sessions agent-platform.memory">
+    <heading>A sleeping actor keeps what was stored</heading>
+    <p>Most sessions sit idle between a user's messages. Their state must survive until the next one, without holding memory meanwhile.</p>
+    <claims>
+      <claim>
+        <statement>A Rivet actor keeps its SQLite database</statement>
+        <p>After 30 seconds without activity an actor sleeps, and the next request wakes it. Its <code>c.vars</code> are never saved.</p>
+        <p>What must survive goes in <code>c.db</code>, a SQLite database per actor whose every committed write is replicated before it's acknowledged.</p>
+        <source href="https://rivet.dev/actors/docs/lifecycle/">Rivet, "Lifecycle"</source>
+        <source href="https://rivet.dev/actors/docs/state/">Rivet, "State"</source>
+      </claim>
+      <claim>
+        <statement>A hibernated actor goes to your store whole</statement>
+        <p>Give the host a store and a bound, and it writes the actors past the bound into the store: variables, active states and all. The next event wakes one.</p>
+        <p>A blob wakes only in the host that made it, or in one restored from that host's snapshot.</p>
+        <source to="guide-hibernation" section="a-store-and-a-bound">Hibernation, "Cap how many actors stay in memory"</source>
+        <source to="guide-hibernation" section="what-a-blob-holds">Hibernation, "Wake each blob where it was made"</source>
+      </claim>
+    </claims>
+    <p>Two million actors ran with at most 1000 in memory and the rest in SQLite (<link to="guide-hibernation" section="at-scale"/>). An actor's data your business must keep belongs in your own database, as with any process.</p>
+  </section>
+
+  <section id="tests">
+    <heading>Test a thousand timeouts in one program</heading>
+    <p>A session's bugs hide in what happens when an answer is late. This payment charges a card, charges again after 30 seconds without an answer and gives up after three charges:</p>
+    <code src="../../examples/late-answers/payment.scxml" lines="4-16" language="scxml" file="payment.scxml"/>
+    <p>The test's stand-in provider answers at once, 45 seconds late or never. A simulated clock jumps to each timeout, so a thousand payments run in one Node.js process:</p>
+    <example>
+      <code src="../../examples/late-answers/simulate.mjs" language="javascript" file="simulate.mjs"/>
+      <code src="../../examples/late-answers/output.txt" language="text" role="output"/>
+    </example>
+    <claims>
+      <claim>
+        <statement>Rivet's tests wait for real schedules</statement>
+        <p><code>setupTest</code> starts your registry in test mode. Rivet's docs say Vitest's fake timers don't advance RivetKit's scheduler.</p>
+        <p>They recommend a short schedule and polling the result with <code>expect.poll</code>.</p>
+        <source href="https://rivet.dev/actors/docs/testing/">Rivet, "Testing"</source>
+      </claim>
+      <claim>
+        <statement>A simulated clock moves when tests move it</statement>
+        <p>The test above is a host, a clock and a stand-in object. Every timer of every actor waits for <code>clock.increment()</code>.</p>
+        <source to="guide-testing" section="three-tools">Testing, "Replace the chart's services and its clock"</source>
+      </claim>
+    </claims>
+  </section>
+
+  <section id="deploy" answers="agent-platform.idle-sessions">
+    <heading>Ship new rules to running sessions</heading>
+    <p>You deploy a turn limit while thousands of sessions are mid-conversation. Each one must keep the turns it already counted.</p>
+    <claims>
+      <claim>
+        <statement>A Rivet deploy stops actors on old nodes</statement>
+        <p>Each deploy sets a version that only increases. Once a newer node connects, the old deploy gets no new actors.</p>
+        <p>With draining on, old actors stop as in a node shutdown, each with up to 15 seconds to save its state. Each deploy must read the state the last one wrote.</p>
+        <source href="https://rivet.dev/actors/docs/versions/">Rivet, "Versions and Upgrades"</source>
+      </claim>
+      <claim>
+        <statement>A migration moves running actors to a version</statement>
+        <p><code>host.addImage()</code> adds the new chart to the running host, and <code>host.migrate()</code> moves actors to it.</p>
+        <p>Each keeps its active states, queue and delayed sends. The new chart reads the old variables from one event.</p>
+        <source to="guide-migration" section="moving-running-actors">Migration, "Move the actors and carry their variables"</source>
+      </claim>
+    </claims>
+    <p>Ten thousand agent sessions answer three prompts each, with at most 100 in memory. Version 2 adds a limit of three turns, and one migration moves every session, hibernated ones included:</p>
+    <program>
+      <in package="node">
+        <code src="../../examples/session-upgrade/main.mjs" language="javascript" file="main.mjs"/>
+        <code src="../../examples/session-upgrade/session-v1.scxml" language="scxml" file="session-v1.scxml"/>
+        <code src="../../examples/session-upgrade/session-v2.scxml" language="scxml" file="session-v2.scxml"/>
+      </in>
+      <code src="../../examples/session-upgrade/output.txt" language="text" role="output"/>
+    </program>
+    <p>No process restarted. Every session kept its count, so each one ended at the limit instead of asking the model again.</p>
+  </section>
+
+  <section id="crash" answers="tech-lead.host-dies">
+    <heading>A crash keeps what was written down</heading>
+    <p>A machine dies halfway through a session. What comes back is what reached storage, and Rivet operates more of that storage for you.</p>
+    <claims>
+      <claim>
+        <statement>Rivet keeps the database, not the memory</statement>
+        <p>The database survives the actor moving to another node. The sleep hook may not run in a crash, and a snapshot to SQLite on an interval loses what came after it.</p>
+        <p>A <code>run</code> workflow resumes from its last completed step after a crash.</p>
+        <source href="https://rivet.dev/actors/docs/state/">Rivet, "State"</source>
+        <source href="https://rivet.dev/actors/docs/lifecycle/">Rivet, "Lifecycle"</source>
+      </claim>
+      <claim>
+        <statement>A crash keeps what your program saved</statement>
+        <p>Actors live in your process's memory, so a crash stops them all. Hibernated actors in your store and the last snapshot come back.</p>
+        <p>Inputs after that snapshot return when your program journaled them.</p>
+        <source to="when-to-use" section="crash">When to use tinyactors, "A crash stops memory and keeps saved state"</source>
+        <source to="guide-journal">Journal and replay</source>
+      </claim>
+    </claims>
+  </section>
+
+  <section id="choose-tinyactors" answers="agent-platform.compare">
+    <heading>Choose tinyactors for one process you understand</heading>
+    <list>
+      <item><term>Nothing to operate beside your backend</term><text>The host is a library in your Node.js, Bun or Python process, so tests and production create it the same way.</text></item>
+      <item><term>Deploys that keep each session's place</term><text>A <link to="guide-migration">migration</link> moves running sessions to new rules with their states, queues and timers.</text></item>
+      <item><term>Tests that reach every timeout</term><text>A simulated clock jumps to each deadline, so one program checks a thousand sessions.</text></item>
+      <item><term>Logic an agent can write and you can read</term><text>Each session is one <link to="guide-charts">SCXML chart</link>, and an uploaded chart runs in <link to="guide-quickjs">the QuickJS sandbox</link>.</text></item>
+    </list>
+  </section>
+
+  <section id="choose-rivet" answers="agent-platform.compare">
+    <heading>Choose Rivet when actors must move between machines</heading>
+    <list>
+      <item><term>Placement and failover you don't write</term><text>The control plane places each actor and moves it when its node stops. tinyactors leaves <link href="https://github.com/tinyactors-dev/tinyactors/blob/main/README.md#layers-and-responsibilities">placement and failover between hosts</link> to your program.</text></item>
+      <item><term>A replicated database per actor</term><text>Each actor's SQLite writes are <link href="https://rivet.dev/actors/docs/state/">replicated before they're acknowledged</link>, and the database follows the actor to another node.</text></item>
+      <item><term>A managed service</term><text><link href="https://rivet.dev/">Rivet Cloud</link> runs the control plane on AWS and Google Cloud, or in your own VPC on AWS, Google Cloud or Azure.</text></item>
+      <item><term>Actors as ordinary code</term><text>A Rivet actor is a set of actions in TypeScript or Rust (<link href="https://rivet.dev/docs/actors">Rivet, "Actors"</link>), with no chart format to learn.</text></item>
+    </list>
+    <actions>
+      <action to="guide-hibernation">Hibernate idle sessions</action>
+      <action to="guide-migration">Upgrade running actors</action>
+      <action to="when-to-use">See when to use tinyactors</action>
+    </actions>
+  </section>
+</page>

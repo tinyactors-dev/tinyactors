@@ -183,6 +183,9 @@
     <page src="pages/statecharts.xml"/>
     <page src="pages/when-to-use.xml"/>
     <page src="pages/compare-temporal.xml"/>
+    <page src="pages/compare-durable-objects.xml"/>
+    <page src="pages/compare-rivet.xml"/>
+    <page src="pages/compare-xstate.xml"/>
     <page src="pages/architecture.xml"/>
     <page src="pages/inspector.xml"/>
     <page src="pages/about.xml"/>

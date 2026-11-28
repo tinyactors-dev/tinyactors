@@ -1,0 +1,180 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<page xmlns="https://www.tinyactors.dev/ns/site" id="compare-xstate" path="/compare/xstate/">
+  <title>tinyactors compared with XState</title>
+  <description>Where a statechart runs, what format it is written in, what keeps a population of actors, how a running actor takes new logic, and when XState is the better choice.</description>
+  <purpose kind="pitch" for="agent-platform workflow-tester tech-lead"/>
+
+  <hero>
+    <headline>Statecharts for a whole population of actors</headline>
+    <lede>XState gives you a machine and an actor in JavaScript, and leaves storing them to your code. tinyactors runs W3C SCXML charts as actors that hibernate, move to new versions and snapshot, in Node.js, Python, C and browsers. Choose XState for state in a JavaScript user interface.</lede>
+    <actions>
+      <action to="compare-xstate" section="changes">Upgrade running sessions</action>
+      <action to="compare-xstate" section="choose-xstate">See when XState fits</action>
+    </actions>
+  </hero>
+
+  <section id="format" answers="agent-platform.why-scxml tech-lead.lock-in">
+    <heading>XState machines are JavaScript; SCXML is a standard</heading>
+    <p>Both describe behavior as states, events and transitions, so a reviewer, a test or an agent can read the whole flow. The difference is the material.</p>
+    <claims>
+      <claim>
+        <statement>XState machines are JavaScript objects</statement>
+        <p>Stately calls XState a state management and orchestration solution for JavaScript and TypeScript apps. A machine is made with <code>createMachine</code>.</p>
+        <p>XState v6, in beta, reads SCXML through an experimental <code>@xstate/scxml</code>. Its tests are "regression coverage, not a claim of full SCXML conformance".</p>
+        <source href="https://stately.ai/docs/xstate">Stately, "XState"</source>
+        <source href="https://stately.ai/docs/actors">Stately, "Actors"</source>
+        <source href="https://stately.ai/docs/xstate/v6/scxml">Stately, "SCXML" (XState v6)</source>
+      </claim>
+      <claim>
+        <statement>tinyactors runs SCXML documents themselves</statement>
+        <p>Each chart is a W3C SCXML document, and the C core passes all 191 automatic tests of the W3C conformance suite.</p>
+        <p>Every package runs the same suite, so a chart means the same thing in each language.</p>
+        <source to="performance" section="correctness">Memory, capacity and performance, "Correct by the standard"</source>
+        <source href="https://www.w3.org/TR/scxml/">W3C, "State Chart XML (SCXML)"</source>
+      </claim>
+    </claims>
+    <p>A document is data, so tools other than your program read it. The <link to="cli">command line</link> checks, lints and diffs a chart in CI, and draws it.</p>
+  </section>
+
+  <section id="where-it-runs" answers="tech-lead.same-everywhere">
+    <heading>One chart in four languages</heading>
+    <p>XState runs, in Stately's words, "in the frontend, backend, or wherever JavaScript runs" (<link href="https://stately.ai/docs/xstate">Stately, "XState"</link>). tinyactors runs one C core behind each package.</p>
+    <p>This order retries a failed charge on its own. The same <code>order.scxml</code> runs in Node.js, a browser, Python and C, and each prints the same lines:</p>
+    <program>
+      <in package="node">
+        <code src="../../examples/order/main.mjs" language="javascript" file="main.mjs"/>
+        <code src="../../examples/order/order.scxml" language="scxml" file="order.scxml"/>
+      </in>
+      <in package="wasm">
+        <code src="../../examples/order/browser.mjs" language="javascript" file="browser.mjs"/>
+        <code src="../../examples/order/order.scxml" language="scxml" file="order.scxml"/>
+      </in>
+      <in package="python">
+        <code src="../../examples/order/main.py" language="python" file="main.py"/>
+        <code src="../../examples/order/order.scxml" language="scxml" file="order.scxml"/>
+      </in>
+      <in package="c">
+        <code src="../../examples/order/main.c" language="c" file="main.c"/>
+        <code src="../../examples/order/host.h" language="c" file="host.h"/>
+        <code src="../../examples/order/host.c" language="c" file="host.c"/>
+        <code src="../../examples/order/order.scxml" language="scxml" file="order.scxml"/>
+      </in>
+      <code src="../../examples/order/output.txt" language="text" role="output"/>
+    </program>
+  </section>
+
+  <section id="state" answers="agent-platform.idle-sessions agent-platform.memory">
+    <heading>XState persists one actor; the host, thousands</heading>
+    <p>Ten thousand chat sessions, most of them idle, must survive until their users return. Something must pick which stay in memory.</p>
+    <claims>
+      <claim>
+        <statement>XState hands you a snapshot to store</statement>
+        <p><code>actor.getPersistedSnapshot()</code> returns an actor's state, with its children, and <code>createActor(logic, {snapshot})</code> restores it.</p>
+        <p>Storing it is your application's work, in localStorage or a database, and it must be JSON-serializable.</p>
+        <source href="https://stately.ai/docs/persistence">Stately, "Persistence"</source>
+      </claim>
+      <claim>
+        <statement>The host hibernates the actors past a bound</statement>
+        <p>Give the host a store and a bound, and it writes the coldest actors into the store, then wakes each one at its next event.</p>
+        <p>Two million actors ran with at most 1000 in memory. One snapshot of two million takes 165 MB.</p>
+        <source to="guide-hibernation" section="at-scale">Hibernation, "Run two million actors with 1000 in memory"</source>
+        <source to="guide-snapshots">Snapshots, "Copy a running application, and run the copy"</source>
+      </claim>
+    </claims>
+    <p>An actor in memory takes about 530 bytes of a Node.js process holding a million, measured with a counter chart of one variable (<link to="guide-capacity" section="what-an-actor-costs"/>).</p>
+  </section>
+
+  <section id="tests" answers="workflow-tester.simulated-clock workflow-tester.no-mocks">
+    <heading>Both test the chart without the world</heading>
+    <p>XState is stronger in one place. It generates test paths from a machine, where tinyactors leaves generated runs to your test.</p>
+    <claims>
+      <claim>
+        <statement>XState mocks effects and generates paths</statement>
+        <p>Stately's docs say to mock a machine's effects, through <code>setup()</code>, to keep tests deterministic.</p>
+        <p><code>getShortestPaths</code> returns a path to every reachable state, and Stately Studio generates tests from them for Playwright and Vitest.</p>
+        <source href="https://stately.ai/docs/testing">Stately, "Testing"</source>
+        <source href="https://stately.ai/docs/graph">Stately, "Graph and paths"</source>
+      </claim>
+      <claim>
+        <statement>A tinyactors chart's effects are events</statement>
+        <p>A chart reaches the world only through sends to objects you give the host, so a test gives it stand-ins. A simulated clock jumps to each timeout.</p>
+        <p>Properties over generated runs are a pattern your test writes, not a library call.</p>
+        <source to="guide-testing" section="three-tools">Testing, "Replace the chart's services and its clock"</source>
+        <source to="property-testing">Property testing</source>
+      </claim>
+    </claims>
+  </section>
+
+  <section id="crash" answers="tech-lead.host-dies">
+    <heading>A crash keeps what was written down</heading>
+    <p>A process dies with sessions in flight. Neither library writes anything down on its own; the difference is how much your program has to write.</p>
+    <claims>
+      <claim>
+        <statement>XState restores state, not the actions</statement>
+        <p>A restored actor does not run again the actions it already executed. For those, Stately's docs recommend event sourcing.</p>
+        <source href="https://stately.ai/docs/persistence">Stately, "Persistence"</source>
+      </claim>
+      <claim>
+        <statement>A crash keeps what your program saved</statement>
+        <p>Hibernated actors in your store and the last snapshot come back, with each actor's queued events and pending timers.</p>
+        <p>Inputs after that snapshot return when your program journaled them: replaying a journal is one loop.</p>
+        <source to="when-to-use" section="crash">When to use tinyactors, "A crash stops memory and keeps saved state"</source>
+        <source to="guide-journal">Journal and replay</source>
+      </claim>
+    </claims>
+  </section>
+
+  <section id="changes">
+    <heading>Ship new rules to running sessions</heading>
+    <p>You add a turn limit while thousands of sessions are mid-conversation. Each one must keep the turns it already counted.</p>
+    <claims>
+      <claim>
+        <statement>XState's restored state may not fit new logic</statement>
+        <p>Stately's docs warn that if the machine changes, a restored state may be incompatible with the new logic.</p>
+        <source href="https://stately.ai/docs/persistence">Stately, "Persistence"</source>
+      </claim>
+      <claim>
+        <statement>A migration moves running actors to a version</statement>
+        <p><code>host.addImage()</code> adds the new chart to the running host, and <code>host.migrate()</code> moves actors to it.</p>
+        <p>Each keeps its active states, queue and delayed sends. The new chart reads the old variables from one event.</p>
+        <source to="guide-migration" section="moving-running-actors">Migration, "Move the actors and carry their variables"</source>
+      </claim>
+    </claims>
+    <p>Ten thousand agent sessions answer three prompts each, with at most 100 in memory. Version 2 adds a limit of three turns, and one migration moves every session, hibernated ones included:</p>
+    <program>
+      <in package="node">
+        <code src="../../examples/session-upgrade/main.mjs" language="javascript" file="main.mjs"/>
+        <code src="../../examples/session-upgrade/session-v1.scxml" language="scxml" file="session-v1.scxml"/>
+        <code src="../../examples/session-upgrade/session-v2.scxml" language="scxml" file="session-v2.scxml"/>
+      </in>
+      <code src="../../examples/session-upgrade/output.txt" language="text" role="output"/>
+    </program>
+    <p>Version 2 read <code>turns</code> from the upgrade event. So every session ended at the limit instead of asking the model again.</p>
+  </section>
+
+  <section id="choose-tinyactors" answers="agent-platform.why-scxml agent-platform.compare">
+    <heading>Choose tinyactors for actors on a server</heading>
+    <list>
+      <item><term>Many long-lived actors, most of them waiting</term><text>The host <link to="guide-hibernation">hibernates</link> them into your store, <link to="guide-migration">migrates</link> them and <link to="guide-snapshots">snapshots</link> them all.</text></item>
+      <item><term>One chart in every language</term><text>One C core runs the same chart in Node.js, Python, C and <link to="guide-browser">browsers</link>.</text></item>
+      <item><term>A standard format</term><text>A W3C SCXML document, checked by the core against the W3C suite, outlives any one library.</text></item>
+      <item><term>Charts you did not write</term><text>An uploaded chart runs in <link to="guide-quickjs">the QuickJS sandbox</link>, where a runaway loop ends in an error.</text></item>
+    </list>
+  </section>
+
+  <section id="choose-xstate" answers="agent-platform.why-scxml">
+    <heading>Choose XState for logic in a JavaScript app</heading>
+    <list>
+      <item><term>State in a React component</term><text><link href="https://stately.ai/docs/xstate-react"><code>@xstate/react</code></link> gives hooks such as <code>useMachine</code>, which runs an actor for the component's lifetime.</text></item>
+      <item><term>A visual editor</term><text><link href="https://stately.ai/docs/studio">Stately Studio</link> models machines visually, simulates them and exports the code into your codebase.</text></item>
+      <item><term>Test paths from the machine</term><text>The graph utilities and Studio <link href="https://stately.ai/docs/graph">generate test paths</link> from a machine; in tinyactors a generated run is code you write.</text></item>
+      <item><term>Actors that aren't machines</term><text>XState's actors can be <link href="https://stately.ai/docs/actors">promises, callbacks or observables</link> too. A tinyactors actor always runs a chart.</text></item>
+      <item><term>A released major version</term><text>XState v5 is current, and v6 is <link href="https://stately.ai/docs/xstate/v6/scxml">in beta</link>. tinyactors is at 0.x and makes <link href="https://github.com/tinyactors-dev/tinyactors/blob/main/README.md#status">frequent breaking changes</link>.</text></item>
+    </list>
+    <actions>
+      <action to="guide-charts" section="first-chart">Write a first chart</action>
+      <action to="guide-migration">Upgrade running actors</action>
+      <action to="when-to-use">See when to use tinyactors</action>
+    </actions>
+  </section>
+</page>

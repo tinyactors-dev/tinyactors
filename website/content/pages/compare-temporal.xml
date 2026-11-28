@@ -37,6 +37,7 @@
       </claim>
     </claims>
     <p>Temporal Cloud takes the service off your hands: Temporal operates its persistence, replication, upgrades and availability. Your workers still run in your environment (<link href="https://docs.temporal.io/evaluate/cloud">Temporal, "Temporal Cloud"</link>).</p>
+    <p>Durable Objects and Rivet run actors as a platform too: see <link to="compare-durable-objects"/> and <link to="compare-rivet"/>.</p>
   </section>
 
   <section id="tests" answers="workflow-tester.simulated-clock workflow-tester.test-timeouts workflow-tester.no-mocks">

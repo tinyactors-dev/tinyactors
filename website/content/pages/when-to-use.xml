@@ -95,18 +95,21 @@
         <statement>Durable Objects place Workers; tinyactors uses your process</statement>
         <p>Cloudflare describes a Durable Object as a Worker that combines compute with storage, placed near its first request.</p>
         <p>A tinyactors actor runs inside any server or browser tab your program operates, with storage under your control.</p>
+        <p><link to="compare-durable-objects">tinyactors compared with Durable Objects</link> sets the two side by side: idle sessions, tests and deploys.</p>
         <source href="https://developers.cloudflare.com/durable-objects/">Cloudflare, "Durable Objects"</source>
       </claim>
       <claim>
         <statement>Rivet places durable processes; tinyactors pins to hosts</statement>
         <p>Rivet describes its actors as durable processes in your backend, placed by Rivet Cloud or your control plane.</p>
         <p>A tinyactors actor stays in the host that spawned it, and your program routes across hosts.</p>
+        <p><link to="compare-rivet">tinyactors compared with Rivet</link> sets the two side by side: placement, sleeping actors and deploys.</p>
         <source href="https://rivet.dev/docs/actors">Rivet, "Actors"</source>
       </claim>
       <claim>
         <statement>XState takes SCXML inspiration; tinyactors runs SCXML</statement>
         <p>XState's README says it is inspired by the SCXML specification.</p>
         <p>tinyactors runs SCXML documents themselves, the same chart in every language, and the C core passes 191 W3C tests.</p>
+        <p><link to="compare-xstate">tinyactors compared with XState</link> sets the two side by side: the format, populations and running changes.</p>
         <source href="https://github.com/statelyai/xstate">XState, <code>README.md</code></source>
         <source to="performance" section="correctness">Memory, capacity and performance, "Correct by the standard"</source>
       </claim>

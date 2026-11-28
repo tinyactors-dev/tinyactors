@@ -1,0 +1,26 @@
+<scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0"
+       datamodel="ecmascript" name="session" initial="waiting">
+  <datamodel><data id="turns" expr="0"/></datamodel>
+
+  <!-- Version 2 adds a plan limit: after three turns the session ends
+       instead of asking the model. A moved session takes its turns from
+       version 1. -->
+  <state id="waiting">
+    <transition event="error.platform.upgrade">
+      <assign location="turns" expr="_event.data.turns"/>
+    </transition>
+    <transition event="prompt" cond="turns &gt;= 3" target="limited"/>
+    <transition event="prompt" target="thinking"/>
+  </state>
+  <state id="thinking">
+    <onentry>
+      <send type="model" event="complete"><param name="text" expr="_event.data.text"/></send>
+    </onentry>
+    <transition event="reply" target="waiting">
+      <assign location="turns" expr="turns + 1"/>
+    </transition>
+  </state>
+  <final id="limited">
+    <donedata><param name="turns" expr="turns"/></donedata>
+  </final>
+</scxml>

@@ -1,0 +1,10 @@
+{
+  "name": "tinyactors-website-example-session-upgrade",
+  "private": true,
+  "type": "module",
+  "main": "main.mjs",
+  "description": "The comparisons' deploy: ten thousand agent sessions, at most 100 in memory and the rest in a store, moved to a chart version with a turn limit while they run, each keeping the turns it counted. test/examples runs it and compares what it prints with output.txt.",
+  "dependencies": {
+    "@tinyactors/node": "0.4.0"
+  }
+}
