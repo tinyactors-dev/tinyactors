@@ -1,3 +1,3 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<!-- A passage is the deep-dive or tutorial voice, not a pitch's. expect: cvc-assertion: element 'Q{https://www.tinyactors.dev/ns/site}page' breaks the assertion '(: a passage is the deep-dive or the tutorial voice -->
+<!-- A passage is the explanation or tutorial voice, not a pitch's. expect: cvc-assertion: element 'Q{https://www.tinyactors.dev/ns/site}page' breaks the assertion '(: a passage is the explanation or the tutorial voice -->
 <page xmlns="https://www.tinyactors.dev/ns/site" id="t" path="/t/"><title>T</title><description>A test page.</description><purpose kind="pitch" for="a"/><hero><headline>T</headline><lede>Lede.</lede></hero><section id="s"><heading>S</heading><passage>Text.</passage></section></page>

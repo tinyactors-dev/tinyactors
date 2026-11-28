@@ -34,21 +34,32 @@ rules.
   with a stable id; the build publishes each whole as `/voices/<id>.xml`
   and every page's head links its own (README.md, "Audiences and page
   kinds: the convention"), so the copywriter and agents read the rules
-  from the page. Change a rule there, not here. Three voices:
-  - **Short and literal** (`literal`: pitch, how-to and reference
-    pages). The schema refuses a heading or a paragraph outside its
-    limits (the types `title` and `paragraph`), and any text that says
-    "formal verification".
-  - **Deep dive** (`deep-dive`: explanation pages; the maintainer,
-    2026-11-25: the Architecture page "should read like a book or a
-    technical deep dive"), written for the tech lead who must understand
-    the design before depending on it: `<passage>` blocks (the schema's
-    `passage` type), each section opened by a `<problem>`, never a
-    rhetorical question (the maintainer, 2026-11-25).
-  - **Tutorial** (`tutorial`: tutorial pages; the maintainer,
-    2026-11-26: the CLI tutorial's sentences were "a bit too short"):
-    `<passage>` blocks of two or three longer sentences, each step saying
-    what you do, what you will see and why.
+  from the page. Change a rule there, not here. The developer voice (the
+  maintainer, 2026-11-28, replacing "short and literal", "deep dive" and
+  the first tutorial voice): one voice per kind of page, measured against
+  rivet.dev, stately.ai and effect.website in the `developer-voice` skill
+  (`.agents/skills/developer-voice`), which holds the evidence, the
+  registers and rewrites of our own copy.
+  - **Reference** (`reference`) holds the rules every voice keeps:
+    headings of 1 to 8 words with no period, sentences of at most 30
+    words that vary in length, a number with its conditions, a negative
+    only against the reader's current tool or belief, no rhetorical
+    question. The schema refuses a heading or a paragraph outside its
+    limits (the types `title` and `paragraph`: one to three sentences of
+    at most 30 words), and any text that says "formal verification".
+  - **Pitch** (`pitch`): a problem the reader has had before the answer,
+    the enemy named (logic spread across services with no owner), proof
+    under every claim, comparisons that give both sides real entries.
+  - **How-to** (`how-to`): the reader's situation first, one line under
+    the code for each part that matters, one example carried through.
+  - **Tutorial** (`tutorial`): `<passage>` blocks of two or three
+    sentences; each step opens with the problem the last one left, and
+    after its output says what to look for.
+  - **Explanation** (`explanation`; the maintainer, 2026-11-25: the
+    Architecture page "should read like a book or a technical deep
+    dive"): `<passage>` blocks (the schema's `passage` type), each
+    section opened by a `<problem>`, never a rhetorical question; "we"
+    for what the maintainers decided or measured.
 - **Copy never names its audience** (the maintainer, 2026-11-25). The
   roles a page is written for (the tech lead, the operator, the workflow
   developer, the agent-platform engineer) are the writer's target and the
@@ -60,11 +71,11 @@ rules.
   that a page is generated, captured or checked: no "this page is made
   from the command's help", "examples run at build time" or "from the
   help of version X". State what the thing does for them.
-- **Every sentence says something.** Use the `copywriting` skill
-  (`.agents/skills/copywriting`) before writing or changing copy: a
-  headline states a benefit, a heading its finding, a lede the page's
-  strongest facts (never a list of what is coming), and a sentence before
-  a block what the block shows.
+- **Every sentence says something.** Follow the `copywriting` skill
+  (`.agents/skills/copywriting`) before writing or changing copy: it is
+  the process, from the audience and the message to a review as a fresh
+  reader in a browser, and it loads `developer-voice` for how the page
+  sounds.
 - **No eyebrows.** Nothing sits above a heading: the schema has no
   element for it, and `test/invalid/eyebrow.xml` keeps it that way.
 - **Same thing, different words: tabs.** Content that says one thing for
@@ -178,7 +189,7 @@ The wording of each point is the content's (`content/site.xml`,
   its examples run on `examples/cli/` (README.md, "The CLI section"):
   never write a command's usage, options or examples in `content/`. The
   hand-written pages follow Diátaxis: `/cli/` explains when to use the
-  command (the deep-dive voice), the tutorial teaches by doing, the
+  command (the explanation voice), the tutorial teaches by doing, the
   how-to pages reach a goal. A command line they show with its output is
   a transcript or a walkthrough step that `mise run test` runs. Move
   the pin (`mise.toml`) when tinyactors-core releases, and rerun `mise run

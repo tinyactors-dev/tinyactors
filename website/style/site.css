@@ -248,7 +248,7 @@ summary.changelog__title { cursor: pointer; }
   border-left: 3px solid var(--accent); background: var(--accent-subtle);
   font: var(--fw-regular) var(--fs-18)/var(--lh-prose) var(--font-serif); font-style: italic; color: var(--fg-1);
 }
-/* The deep-dive voice: consecutive passages read as one text, a book's paragraphs. */
+/* The explanation voice: consecutive passages read as one text, a book's paragraphs. */
 .section__body > .passage + .passage { margin-top: calc(-1 * var(--space-3)); }
 .prose { font: var(--type-prose); color: var(--fg-1); }
 

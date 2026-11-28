@@ -113,7 +113,12 @@ module Website
   # sitemap.xml, each page's Markdown, llms.txt and llms-full.txt from the
   # Addresses that moved (2026-11-26: the CLI section by kind of page), each
   # to where its page is now, permanently: a link someone kept still lands.
+  # The voices replaced on 2026-11-28 by one voice per kind of page: a link
+  # to an old voice file lands on its successor or, for the voice that
+  # covered three kinds, on the index.
   MOVED = {
+    '/voices/literal.xml' => '/voices/index.xml',
+    '/voices/deep-dive.xml' => '/voices/explanation.xml',
     '/cli/ci/' => '/cli/guides/ci/',
     '/cli/protocol/' => '/cli/guides/scripting/',
     '/cli/snapshots/' => '/cli/guides/snapshots/',

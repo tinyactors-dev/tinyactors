@@ -100,7 +100,7 @@
   </xs:simpleType>
 
   <xs:simpleType name="id">
-    <xs:annotation><xs:documentation>Lowercase words joined by hyphens: "tutorial", "deep-dive".</xs:documentation></xs:annotation>
+    <xs:annotation><xs:documentation>Lowercase words joined by hyphens: "tutorial", "how-to".</xs:documentation></xs:annotation>
     <xs:restriction base="xs:token">
       <xs:pattern value="[a-z][a-z0-9]*(-[a-z0-9]+)*"/>
     </xs:restriction>

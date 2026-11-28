@@ -1,9 +1,9 @@
 # Our pages, before and after
 
-Each "before" is copy from www.tinyactors.dev on 28 Nov 2026. Each
-"after" uses only facts that page, or a page it links, already states.
-Where an "after" breaks a current rule in `content/site.xml`, the
-break is named: those rewrites wait for the maintainer.
+Each "before" is copy from www.tinyactors.dev on 28 Nov 2026, written
+in the old voice. Each "after" is in the developer voice and uses only
+facts that page, or a page it links, already states. The moves named
+are SKILL.md's.
 
 Read the copywriting skill's `references/patterns.md` for the
 substance of each element. These pairs are about sound.
@@ -45,8 +45,8 @@ Before:
 The problem is stated in the abstract ("an application handling order
 workflows"), in two long sentences of equal weight.
 
-After (moves 2, 3, 4; uses negatives, which copywriting failure 6
-forbids today):
+After (moves 2, 3, 4; the negatives name what the reader's engine does,
+which `reference/negatives` allows):
 
 > Most workflow engines want your I/O. They open their own connections,
 > run their own timers and keep your state on their own servers. The

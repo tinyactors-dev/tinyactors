@@ -530,7 +530,7 @@
     <p class="problem"><xsl:apply-templates/></p>
   </xsl:template>
 
-  <!-- A passage: the deep-dive voice's paragraph, set for reading at length. -->
+  <!-- A passage: the explanation voice's paragraph, set for reading at length. -->
   <xsl:template match="s:section/s:passage">
     <p class="prose passage"><xsl:apply-templates/></p>
   </xsl:template>

@@ -1,6 +1,6 @@
 ---
 name: developer-voice
-description: How www.tinyactors.dev should sound, extracted from rivet.dev, stately.ai and effect.website and measured against our own pages. Use when writing or revising any page's prose, when a page reads flat, dense or like a specification, when choosing how a pitch, guide, tutorial, concept essay, comparison, FAQ or release post should sound, and before changing the voices in content/site.xml. The copywriting skill decides what a sentence says; this skill decides how it sounds. references/ holds annotated excerpts from each site, the measurements and rewrites of our own pages.
+description: How www.tinyactors.dev sounds and why, the evidence behind the voices in content/site.xml, extracted from rivet.dev, stately.ai and effect.website and measured against our own pages. Use when writing or revising any page's prose, when a page reads flat, dense or like a specification, when choosing how a pitch, guide, tutorial, explanation, comparison, FAQ or release post should sound, and before changing a voice's rules in content/site.xml. The copywriting skill decides what a sentence says; this skill decides how it sounds. references/ holds annotated excerpts from each site, the measurements and rewrites of our own pages.
 ---
 
 # The developer voice
@@ -11,18 +11,20 @@ code before the concept. They say plainly what the thing costs and when
 to use something else. They have an opinion about what makes software
 hard, and they say it.
 
-This skill is about how a page sounds. What a sentence must say, and
-whether it is true, is the `copywriting` skill's job (`../copywriting`).
-Run both.
+This skill is about how a page sounds. The `copywriting` skill
+(`../copywriting`) is the process a page goes through, from its audience
+to a review as a fresh reader; its step 3 loads this skill.
 
-## Status: a proposal until the maintainer adopts it
+## Status: the site's voice
 
-`content/site.xml`'s `<voices>` are the site's rules, and
-`website/AGENTS.md` says to change a rule there. Several moves below
-contradict those rules (listed in "Conflicts with the current voices").
-Until the maintainer changes `site.xml`, **site.xml wins** where the two
-disagree, and this skill is evidence for the change. Use the moves that
-do not conflict now.
+The maintainer adopted it on 2026-11-28, replacing "short and literal",
+"deep dive" and the first tutorial voice. Its rules live in
+`content/site.xml` (`<voices>`), one voice per kind of page: `reference`
+holds the rules every voice keeps, and `pitch`, `how-to`, `tutorial` and
+`explanation` extend it. The build publishes each as `/voices/<id>.xml`.
+A rule changes there; this skill holds the evidence and the reasoning
+behind the rules. Pages written before 2026-11-28 follow the old voice
+until they are rewritten: `references/rewrites.md` shows how.
 
 ## What we measured
 
@@ -43,11 +45,11 @@ script (`scripts/measure.py`), which runs on our built pages too.
 | questions | 3.1% | 0.2% | 4.5% | 0.2% |
 | sentences with a number | 11% | 7% | 6% | **18%** |
 
-Our sentences are not too long. They are **all the same length**. The
-21-word cap pushes every sentence to 13 to 20 words, so the prose has no
+Our sentences were not too long. They were **all the same length**. The
+old 21-word cap pushed every sentence to 13 to 20 words, so the prose had no
 rhythm: no short sentence that lands a point, no long one that carries
 a cause to its effect. With no contractions, no "we" and no questions,
-the result reads like a specification. Our numbers are our strength:
+the result read like a specification. Our numbers are our strength:
 nearly one sentence in five carries one, more than any of the three.
 
 ## The moves
@@ -159,25 +161,21 @@ Each site has weaker, older pages. The newer ones are tighter.
   light switch. Our examples are things people build (root `AGENTS.md`).
 - Personality in reference or how-to pages.
 
-## Conflicts with the current voices
+## What changed from the old voices
 
-The repository's rules ask that a conflict be named, not resolved
-quietly. Each row is a rule in `content/site.xml` (or the copywriting
-skill), what the evidence says, and the recommended change. The
-maintainer decides.
-
-| Current rule | What the three sites do | Recommendation |
+| Old rule | New rule | Why |
 |---|---|---|
-| `literal/paragraphs`: at most 21 words a sentence, one or two sentences | a third under 8 words, 5 to 13% over 25; no fixed cap | Replace the cap with a range and a spread: most sentences under 20, a third under 8, a few up to 30 |
-| copywriting failure 6, "What it is not": avoid negatives | contrast carries their positioning ("without the lock-in", "does not reduce the complexity", "not architectures you rebuild") | Allow a negative that names the reader's current tool or belief; that is how an enemy is named |
-| `literal/plain`: no metaphors | used sparingly and concretely ("They're like mini-servers", "Like AWS Lambda, but with memory") | Allow one concrete analogy per page, to a thing the reader runs; keep the ban on decorative metaphor |
-| `tutorial/reader` and `deep-dive/paragraphs`: no questions | rare but present (3 to 4.5% on Rivet and Effect), as the reader's own question | Allow a question that quotes the reader (an objection, a FAQ heading); keep the ban on rhetorical questions |
-| no rule, and in practice no "we", no contractions | "we" for decisions, mistakes and measurements; contractions in prose that talks | Add a rule per register (table above) |
+| at most 21 words a sentence, one or two a paragraph | at most 30 words, one to three a paragraph; vary the length, about a third under 8 words (`reference/rhythm`, `reference/paragraphs`; the schema's `paragraph` type) | the three sites have no fixed cap and a wider spread; ours was the flattest |
+| copywriting failure 6: avoid negatives | a negative may name the reader's current tool or belief (`reference/negatives`) | contrast is how the three sites name an enemy |
+| no metaphors | at most one concrete analogy per pitch page (`pitch/analogy`) | "Like AWS Lambda, but with memory" works because the reader runs Lambda |
+| no questions | no rhetorical questions; a question may quote the reader (`reference/questions`) | objections and FAQ headings are the reader's own words |
+| no rule on "we" and contractions, and in practice none | contractions in pitch, how-to, tutorial and explanation; "we" only in explanation, for the maintainers' decisions (`*/address`) | a person speaks in those registers; reference stays plain |
+| no rule | open with the reader's problem (`pitch/problem`, `how-to/problem`, `tutorial/step`); name the enemy (`pitch/enemy`); numbers with their conditions (`reference/numbers`); comparisons with both sides (`pitch/compare`); what to look for in the output (`tutorial/output`) | moves 1, 2, 5, 6, 7 |
 
-The rules that stay: headings without a period, actions as a verb and an
-object, exact SCXML terms, lowercase tinyactors, no serial comma, never
-"formal verification", every claim with its source, never naming the
-reader's role, never explaining how the site is made.
+Unchanged: headings without a period, actions as a verb and an object,
+exact SCXML terms, lowercase tinyactors, no serial comma, never "formal
+verification", every claim with its source, never naming the reader's
+role, never explaining how the site is made.
 
 ## Checklist for a page
 

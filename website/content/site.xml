@@ -62,44 +62,71 @@
   <!-- How the site writes: one voice for each kind of page (`kinds`).
        A voice that extends another keeps its rules and replaces those of
        the same id. Published as /voices/<id>.xml, which each page's head
-       links (README.md, "Audiences, voices and page kinds"). -->
+       links (README.md, "Audiences, voices and page kinds").
+       The maintainer, 2026-11-28: the developer voice replaces "short and
+       literal", measured against rivet.dev, stately.ai and effect.website
+       (.agents/skills/developer-voice). Reference holds the rules every
+       voice keeps; the others extend it. -->
   <voices>
-    <!-- The maintainer, 2026-11-21: headings with no period. -->
-    <voice id="literal" kinds="pitch how-to reference">
-      <name>Short and literal</name>
-      <description>The site's voice: short, literal sentences, each followed by its proof, for readers who decide, look up or reach a goal.</description>
-      <rule id="headings">Headlines, headings and claims' statements are 1 to 8 words, sentence case, with no period at the end ("Build a team chat").</rule>
+    <voice id="reference" kinds="reference">
+      <name>Reference</name>
+      <description>The developer voice at its plainest, and the rules every other voice keeps: facts a reader looks up, said once, with the product as the subject.</description>
+      <rule id="headings">Headlines, headings and claims' statements are 1 to 8 words, sentence case, with no period at the end ("Build a team chat"); a question keeps its question mark.</rule>
       <rule id="findings">A headline states a benefit, a heading its finding, and a sentence before a block what the block shows.</rule>
       <rule id="lede">A lede states the page's strongest facts, never a list of what is coming.</rule>
-      <rule id="paragraphs">A paragraph is one or two sentences of at most 21 words each, with the product or the reader's code as the subject.</rule>
-      <rule id="proof">Each section is one line of prose and then the proof: code, output, a claim with its source.</rule>
-      <rule id="plain">No metaphors, no adjectives that do not measure something, no hype words, no emoji. Never write "formal verification".</rule>
+      <rule id="rhythm">Sentences are at most 30 words and vary in length: most under 20, about a third under 8, so a short sentence lands each point.</rule>
+      <rule id="paragraphs">A paragraph is one to three sentences; reference prose is one or two before each table, list or block, saying what it holds.</rule>
+      <rule id="cause">Join a cause to its effect in one sentence with "so", "because" or "which is why", rather than two sentences side by side.</rule>
+      <rule id="numbers">A number says what was measured, on what and with what, and which way the setup leans; a measured number replaces any adjective.</rule>
+      <rule id="plain">No adjective that does not measure something, no hype words, no emoji. Never write "formal verification".</rule>
+      <rule id="negatives">A negative names the reader's current tool or belief ("never opens a socket", "no server to operate"); never deny what nobody assumed.</rule>
+      <rule id="address">The reader is "you". No "we" and no contractions in reference.</rule>
+      <rule id="questions">No rhetorical questions. A question only quotes the reader: an objection, or a heading of frequently asked questions.</rule>
       <rule id="actions">Actions are a verb and an object, 2 to 4 words.</rule>
       <rule id="terms">Name SCXML and actor terms exactly (state, event, transition, actor, host). The product name is lowercase: tinyactors.</rule>
       <rule id="commas">No serial comma: "states, events and transitions".</rule>
+      <rule id="examples">Examples are things people build: an order, a payment, a subscription, a chat session; never a door, a light switch or a traffic light.</rule>
       <rule id="facts">Never add a claim, number, name or capability that the page or its sources do not state.</rule>
       <rule id="audience">Never name the reader's role ("as a tech lead", "for operators"); write for them by choosing what to explain.</rule>
       <rule id="site">Never explain how the site is made (that a page is generated, captured or checked); say what the thing does for the reader.</rule>
     </voice>
-    <!-- The maintainer, 2026-11-25: the Architecture page "should read like
-         a book or a technical deep dive"; problems, never rhetorical
-         questions. -->
-    <voice id="deep-dive" kinds="explanation" extends="literal">
-      <name>Deep dive</name>
-      <description>A technical deep dive a reader follows from start to end, like a chapter of a book, to understand a design before depending on it.</description>
-      <rule id="lede">The lede sets the context a newcomer lacks: what the thing is, what problem the page explains, and what the reader can judge after it.</rule>
-      <rule id="paragraphs">The prose is passages of up to five sentences, each at most 32 words, with no questions.</rule>
-      <rule id="proof">Each section opens with a problem, the concrete situation it solves with its stakes, never a rhetorical question; passages build the idea, then a figure, a table or a claim with its source proves it.</rule>
-      <rule id="order">Terms are introduced before they are used, and each section ends where the next one's question starts.</rule>
+    <voice id="pitch" kinds="pitch" extends="reference">
+      <name>Pitch</name>
+      <description>A peer with an opinion about what makes software hard, showing a reader who is deciding what tinyactors does about it, with proof under every claim.</description>
+      <rule id="address">The reader is "you"; contractions are fine. No "we": the product is the subject.</rule>
+      <rule id="problem">Open with a problem the reader has had, in their code or their words, before the answer: the tangle first, then the chart that removes it.</rule>
+      <rule id="enemy">Name what makes the reader's software hard (logic spread across services, queues and callbacks with no owner) and say when distribution is worth its cost.</rule>
+      <rule id="proof">Each section is a few sentences and then the proof: code that ran, its output, or a claim with its source.</rule>
+      <rule id="analogy">At most one concrete analogy per page, to something the reader runs ("like SQLite"); no decorative metaphors.</rule>
+      <rule id="compare">A comparison gives both sides real entries: what to choose tinyactors for, then what to choose the other for, each a verdict and one line of reason.</rule>
     </voice>
-    <!-- The maintainer, 2026-11-26: the CLI tutorial's sentences were "a
-         bit too short". -->
-    <voice id="tutorial" kinds="tutorial" extends="literal">
+    <voice id="how-to" kinds="how-to" extends="reference">
+      <name>How-to</name>
+      <description>A colleague's runbook: the situation the reader is in, the steps that get them out, and what each line of code does.</description>
+      <rule id="address">The reader is "you"; contractions are fine. No "we".</rule>
+      <rule id="problem">Each section opens with the situation it solves, in the reader's terms, before the mechanism: "Most actors are waiting" before hibernation.</rule>
+      <rule id="lines">Under a block of code, one line for each part that matters, joining it to its effect ("…, so the room has one order without locks").</rule>
+      <rule id="example">Carry one example, one order or one chat, through every section of a guide.</rule>
+      <rule id="production">After an example, say in plain instructions what a production version adds: a store, a limit, an error path.</rule>
+    </voice>
+    <voice id="tutorial" kinds="tutorial" extends="reference">
       <name>Tutorial</name>
-      <description>A learner reads each step while doing it: what to do, what they will see and why it matters for what they are building.</description>
+      <description>Someone at the learner's side: each step says what to do, what they will see and why it matters for what they are building.</description>
+      <rule id="address">The reader is "you"; contractions are fine. No "we".</rule>
       <rule id="paragraphs">A step's prose is passages of two or three sentences, up to 32 words each, varying in length; a one-line instruction stays a short paragraph.</rule>
-      <rule id="proof">A step says what you do, what you will see and why it matters, joining cause and result in one sentence ("because", "so", "which"), then shows the command and its output.</rule>
-      <rule id="reader">The reader is "you". No questions, and no fact that the step's own output does not show.</rule>
+      <rule id="step">A step opens with the problem the previous step left, says what you do, then shows the command or code and its output.</rule>
+      <rule id="output">After the output, one sentence names what to look for in it and the one surprise it shows; no fact the step's own output does not show.</rule>
+      <rule id="example">One thing is built across all the steps, and each step adds one idea to it.</rule>
+    </voice>
+    <voice id="explanation" kinds="explanation" extends="reference">
+      <name>Explanation</name>
+      <description>A chapter of a book that argues: a reader follows it from start to end to understand a design, and its costs, before depending on it.</description>
+      <rule id="address">The reader is "you"; "we" is the maintainers, for what they decided, measured or got wrong. Contractions are fine.</rule>
+      <rule id="lede">The lede sets the context a newcomer lacks: what the thing is, what problem the page explains, and what the reader can judge after it.</rule>
+      <rule id="paragraphs">The prose is passages of up to five sentences, each at most 32 words, varying in length.</rule>
+      <rule id="proof">Each section opens with a problem, the concrete situation it solves with its stakes, never a question; passages build the idea, then a figure, a table or a claim with its source proves it.</rule>
+      <rule id="history">Tell how the reader's system got where it is as a sequence of reasonable steps, then what it costs; say what the design does not fix.</rule>
+      <rule id="order">Terms are introduced before they are used, and each section ends where the next one's question starts.</rule>
     </voice>
   </voices>
 
