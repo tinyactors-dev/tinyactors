@@ -22,6 +22,14 @@ rules.
 - **Code on a page is code that ran.** A program a page shows lives under
   `examples/<name>/`, with a `package.json` whose `main` is the program, a
   `package-lock.json`, and `output.txt`. `mise run test` runs it.
+- **A chart lives in its own `.scxml` file** (the maintainer, 2026-11-28),
+  beside the program that reads it, never in a string inside the
+  program: the reader copies it whole, the page draws its diagram and an
+  editor highlights it. A program that needs a chart is a `<program>` over
+  `examples/<name>/`, one `in` per package with the program and the
+  chart, so the reader's language picks the tab. The guides' older
+  `<example>` programs with a chart in a string move to files when they
+  are next changed.
 - **A live example's logic is tested in Node.js.** A `<live>` block runs
   an export of a module in the reader's browser on `@tinyactors/wasm`.
   Keep what it computes in a module that the example's `main.mjs` runs too

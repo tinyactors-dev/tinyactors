@@ -1,0 +1,4 @@
+live: "paid" after 2 attempts, pen, notebook
+replay: "paid" after 2 attempts, pen, notebook
+restored: "paid" after 2 attempts, pen, notebook
+5 inputs journaled; charges: 20, 20

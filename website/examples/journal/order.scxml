@@ -1,0 +1,27 @@
+<scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0"
+       datamodel="ecmascript" name="order" initial="cart">
+  <datamodel>
+    <data id="items" expr="[]"/>
+    <data id="attempts" expr="0"/>
+  </datamodel>
+  <state id="cart">
+    <transition event="add">
+      <assign location="items" expr="items.concat([_event.data.sku])"/>
+    </transition>
+    <transition event="checkout" target="paying"/>
+  </state>
+  <state id="paying">
+    <onentry>
+      <assign location="attempts" expr="attempts + 1"/>
+      <send type="payments" event="charge">
+        <param name="amount" expr="items.length * 10"/>
+      </send>
+      <send event="timeout" delay="30s"/>
+    </onentry>
+    <transition event="paid" target="paid"/>
+    <transition event="timeout" cond="attempts &lt; 3" target="paying"/>
+    <transition event="timeout" target="failed"/>
+  </state>
+  <state id="paid"/>
+  <state id="failed"/>
+</scxml>

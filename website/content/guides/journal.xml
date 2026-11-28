@@ -19,108 +19,17 @@
     <heading>Record every input, then apply it</heading>
     <p>An order takes two items and checks out. The payment service never answers the first charge, so the chart charges again 30 seconds later, and the provider's webhook then says paid.</p>
     <p>Every input goes through one function, <code>record()</code>, which writes the host's time and the input, then applies it. The replay applies the same lines to a new host:</p>
-    <example>
-      <code language="javascript" file="journal.mjs"><![CDATA[
-import { compileCharts, Host, SimulatedClock } from '@tinyactors/node';
-
-const compiled = compileCharts([{ name: 'order.scxml', text: `
-<scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0"
-       datamodel="ecmascript" name="order" initial="cart">
-  <datamodel>
-    <data id="items" expr="[]"/>
-    <data id="attempts" expr="0"/>
-  </datamodel>
-  <state id="cart">
-    <transition event="add">
-      <assign location="items" expr="items.concat([_event.data.sku])"/>
-    </transition>
-    <transition event="checkout" target="paying"/>
-  </state>
-  <state id="paying">
-    <onentry>
-      <assign location="attempts" expr="attempts + 1"/>
-      <send type="payments" event="charge">
-        <param name="amount" expr="items.length * 10"/>
-      </send>
-      <send event="timeout" delay="30s"/>
-    </onentry>
-    <transition event="paid" target="paid"/>
-    <transition event="timeout" cond="attempts &lt; 3" target="paying"/>
-    <transition event="timeout" target="failed"/>
-  </state>
-  <state id="paid"/>
-  <state id="failed"/>
-</scxml>` }]);
-
-// Every input goes through record(): the host's time, then the input.
-const journal = [];
-function apply(host, entry) {
-  if (entry.spawn) host.spawn(entry.spawn, { name: entry.name });
-  else host.send(entry.send);
-}
-function record(host, entry) {
-  const line = JSON.stringify({ at: host.now(), ...entry });
-  journal.push(line); // in production: append to a file or a table first
-  apply(host, JSON.parse(line));
-}
-
-const order = { target: 'tinyactors://shop/@order-1' };
-const clock = new SimulatedClock();
-const charged = [];
-const live = new Host(compiled, {
-  system: 'shop',
-  clock,
-  ioProcessors: { payments: { receive: (send) => charged.push(send.data.amount) } },
-});
-
-record(live, { spawn: 'order', name: 'order-1' });
-record(live, { send: { ...order, event: 'add', data: { sku: 'pen' } } });
-record(live, { send: { ...order, event: 'add', data: { sku: 'notebook' } } });
-record(live, { send: { ...order, event: 'checkout' } });
-await live.idle();
-clock.increment(30_000); // no answer: the chart charges again
-await live.idle();
-clock.increment(5_000);
-record(live, { send: { ...order, event: 'paid' } }); // the provider's webhook
-await live.idle();
-
-const replayClock = new SimulatedClock();
-const replay = new Host(compiled, {
-  system: 'shop',
-  clock: replayClock,
-  ioProcessors: { payments: { receive: () => {} } }, // charges nobody
-});
-for (const line of journal) {
-  const entry = JSON.parse(line);
-  replayClock.increment(entry.at - replay.now());
-  await replay.idle();
-  apply(replay, entry);
-  await replay.idle();
-}
-
-// Go on from the replay on the runtime's clock, with the real processor.
-const restored = Host.restore(replay.snapshot(), compiled, {
-  system: 'shop',
-  ioProcessors: { payments: { receive: (send) => charged.push(send.data.amount) } },
-});
-
-for (const [name, host] of [['live', live], ['replay', replay], ['restored', restored]]) {
-  const actor = host.actor('order-1');
-  const { value } = await actor.state();
-  const { variables } = await actor.context();
-  console.log(`${name}: ${JSON.stringify(value)} after ${variables.attempts} attempts, ${variables.items.join(', ')}`);
-}
-console.log(`${journal.length} inputs journaled; charges: ${charged.join(', ')}`);
-for (const host of [live, replay, restored]) host.close();
-compiled.close();
-]]></code>
-      <code language="text" role="output">
-live: "paid" after 2 attempts, pen, notebook
-replay: "paid" after 2 attempts, pen, notebook
-restored: "paid" after 2 attempts, pen, notebook
-5 inputs journaled; charges: 20, 20
-</code>
-    </example>
+    <program>
+      <in package="node">
+        <code src="../../examples/journal/main.mjs" language="javascript" file="main.mjs"/>
+        <code src="../../examples/journal/order.scxml" language="scxml" file="order.scxml"/>
+      </in>
+      <in package="wasm">
+        <code src="../../examples/journal/browser.mjs" language="javascript" file="browser.mjs"/>
+        <code src="../../examples/journal/order.scxml" language="scxml" file="order.scxml"/>
+      </in>
+      <code src="../../examples/journal/output.txt" language="text" role="output"/>
+    </program>
     <p>Five inputs rebuilt the order. The live host charged twice, because the chart retried after its timeout; the replay charged nothing. What each part does:</p>
     <list>
       <item><term><code>record()</code></term><text>writes <code>host.now()</code> and the input as one JSON line, and only then applies it, so the journal never misses an input the host saw. In production, make the write durable before applying (an fsync, a committed transaction). A crash between the write and the apply replays an input the host never saw. A sender that never heard back may send it again, so give such inputs a <code>sendid</code> the chart checks.</text></item>

@@ -1,0 +1,11 @@
+{
+  "name": "tinyactors-website-example-journal",
+  "private": true,
+  "type": "module",
+  "main": "main.mjs",
+  "description": "The journal guide's program: an order whose inputs are journaled, replayed on a SimulatedClock with processors that do nothing, and restored on the runtime's clock. browser.mjs is the same program in a browser, on @tinyactors/wasm; main.py is the same program in Python; it joins the test (a pyproject.toml beside it) once the tinyactors package on PyPI has host.now(). mise run test runs main.mjs and browser.mjs and compares what it prints with output.txt.",
+  "dependencies": {
+    "@tinyactors/node": "0.4.0",
+    "@tinyactors/wasm": "0.4.0"
+  }
+}

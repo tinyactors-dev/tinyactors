@@ -82,6 +82,12 @@ names what the reader will see and states no recorded numbers. When a
 measurement is redone, change the copy that quotes it. Code a page shows
 is code that ran (`website/AGENTS.md`, "Content first").
 
+A program that runs a chart keeps the chart in its own `.scxml` file and
+is a `<program>` over `examples/<name>/`, with one `in` per package it
+runs in (`node`, `wasm`, `python`, `c`): the reader's language picks the
+tab, and `mise run test` runs each version against one `output.txt`.
+Never put a chart in a string.
+
 Code a page excerpts with `<code src lines>` shows every name it uses
 (or the lines that define them) and the line that prints its output;
 otherwise show the whole file. A reader who meets an undefined name, or
