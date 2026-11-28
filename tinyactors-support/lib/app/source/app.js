@@ -71,6 +71,9 @@
     selected: new Set(), cursor: null, anchor: null,
     peek: null, detail: null, panel: null,   // panel: null | 'report' | 'decline' | 'delete'
     menu: null, context: {}, bulk: null, searching: false,
+    message: null,        // the one message line: {text, tone, form}: form, the panel an error came from
+    filterField: null, filterQuery: '',   // the phone's filter menu: the property shown, and its search
+    selecting: false,     // the phone's select mode (More → Select issues): a tap selects instead of opening
   };
   const short = (id) => String(id).replace(/^tinyactors:/, '');
   const byID = (id) => S.issues.find((i) => i.id === id);
@@ -122,9 +125,10 @@
     render();
     if (S.peek) openPeek(S.peek, { quiet: true });
   }
-  async function openPeek(id, { quiet = false } = {}) {
+  async function openPeek(id, { quiet = false, keepMessage = quiet } = {}) {
     S.peek = id; S.cursor = id;
     if (!quiet) S.panel = null;
+    if (!keepMessage) acted();
     if (S.detail?.id !== id) S.detail = null;
     render();
     const { data, text, refused } = await call('get_issue', { id });
@@ -132,6 +136,14 @@
     if (refused || data.answer !== 'issue') { toast(text, 'error'); S.detail = { id, missing: text }; render(); return; }
     S.detail = data;
     merge(data);
+    render();
+  }
+  // the issue as the server has it now, into its row (and the peek, when it shows it); one deleted meanwhile leaves the list
+  async function reread(id) {
+    if (S.peek === id) { await openPeek(id, { quiet: true }); return; }
+    const fresh = await call('get_issue', { id });
+    if (!fresh.refused && fresh.data.answer === 'issue') merge(fresh.data);
+    else if (/deleted/.test(fresh.text)) { const at = S.issues.findIndex((i) => i.id === id); if (at >= 0) S.issues.splice(at, 1); S.selected.delete(id); }
     render();
   }
   // what get_issue says, into the list's row of the issue
@@ -145,6 +157,7 @@
 
   // --- changing: optimistic, undone on a refusal, each outcome a toast ----------
   async function mutate(id, tool, args, patch, { quiet = false } = {}) {
+    if (!quiet) acted();
     const row = byID(id), before = row ? { ...row } : null, index = S.issues.indexOf(row);
     if (row && patch === 'remove') S.issues.splice(index, 1);
     else if (row && patch) Object.assign(row, patch);
@@ -156,6 +169,9 @@
       else if (row && before) Object.assign(row, before);
       if (!quiet) toast(text, 'error');
       render();
+      // the refusal says the app's copy was out of date (changed elsewhere meanwhile): undoing the change only
+      // brings back that stale copy, so read the issue again and show what the server has now
+      await reread(id);
       return { ok: false, text };
     }
     if (!quiet) toast(text);
@@ -175,6 +191,7 @@
     triage: i.state === 'new', close: i.state === 'fixed', wontfix: OPEN.includes(i.state), remove: true } : {};
 
   async function bulk(kind, reason) {
+    acted();
     const targets = [...S.selected].map(byID).filter((i) => i && allowed(i)[kind]);
     const skipped = S.selected.size - targets.length;
     const names = { triage: 'Triaging', close: 'Closing', wontfix: 'Declining' };
@@ -187,7 +204,7 @@
         : await mutate(i.id, 'triage', { kind: i.kind }, { state: 'triaged' }, { quiet: true });
       if (outcome.ok) done++; else refusals.push(`${short(i.id)}: ${outcome.text}`);
     }
-    S.bulk = null; S.selected.clear(); S.panel = null;
+    S.bulk = null; S.selected.clear(); S.panel = null; S.selecting = false;
     const past = { triage: 'Triaged', close: 'Closed', wontfix: 'Declined' }[kind];
     const lines = [`${past} ${done} of ${targets.length}.` + (skipped ? ` ${skipped} not in a state for it.` : ''), ...refusals];
     toast(lines.join('\n'), refusals.length ? 'error' : '');
@@ -253,6 +270,23 @@
     else svg.append(ring(), h('line', { x1: 3.4, y1: 10.6, x2: 10.6, y2: 3.4, stroke: 'currentColor', 'stroke-width': 1.5 }));
     return svg;
   }
+  // A component and a kind can share a word ("docs"): a component is a folder, a monospace tag with a folder
+  // glyph and a border; a kind is a sans pill on a tinted surface with its own glyph. Neither is told by colour alone.
+  function kindGlyph(kind) {
+    const svg = h('svg', { class: 'kind-glyph', viewBox: '0 0 12 12', width: 11, height: 11, 'aria-hidden': 'true' });
+    const stroke = { fill: 'none', stroke: 'currentColor', 'stroke-width': 1.2, 'stroke-linecap': 'round', 'stroke-linejoin': 'round' };
+    if (kind === 'docs') svg.append(h('path', { d: 'M3 1.5 H7.5 L9.5 3.5 V10.5 H3 Z M4.5 6 H8 M4.5 8 H8', ...stroke }));
+    else if (kind === 'error') svg.append(h('path', { d: 'M6 1.5 L10.8 10 H1.2 Z M6 5 V7', ...stroke }), h('circle', { cx: 6, cy: 8.6, r: 0.6, fill: 'currentColor' }));
+    else if (kind === 'tooling') svg.append(h('path', { d: 'M2 3.5 H10 M2 8.5 H10', ...stroke }), h('circle', { cx: 4.5, cy: 3.5, r: 1.3, fill: 'var(--surface-2)', stroke: 'currentColor', 'stroke-width': 1.2 }),
+      h('circle', { cx: 7.5, cy: 8.5, r: 1.3, fill: 'var(--surface-2)', stroke: 'currentColor', 'stroke-width': 1.2 }));
+    else if (kind === 'api') svg.append(h('path', { d: 'M4.5 1.8 Q3 1.8 3 3.3 V4.8 Q3 6 2 6 Q3 6 3 7.2 V8.7 Q3 10.2 4.5 10.2 M7.5 1.8 Q9 1.8 9 3.3 V4.8 Q9 6 10 6 Q9 6 9 7.2 V8.7 Q9 10.2 7.5 10.2', ...stroke }));
+    else svg.append(h('path', { d: 'M1.8 3.5 L6 1.5 L10.2 3.5 V8.5 L6 10.5 L1.8 8.5 Z M1.8 3.5 L6 5.5 L10.2 3.5 M6 5.5 V10.5', ...stroke }));
+    return svg;
+  }
+  const kindTag = (kind) => h('span', { class: 'kind', dataset: { kind }, title: `Kind: ${kind}` }, kindGlyph(kind), kind);
+  const componentTag = (component) => h('span', { class: 'tag tag--component', title: `Component: ${component}` },
+    h('svg', { class: 'folder-glyph', viewBox: '0 0 12 12', width: 10, height: 10, 'aria-hidden': 'true' },
+      h('path', { d: 'M1.5 3 H4.5 L5.5 4 H10.5 V9.5 H1.5 Z', fill: 'none', stroke: 'currentColor', 'stroke-width': 1.1, 'stroke-linejoin': 'round' })), component);
   const stateLabel = (state) => h('span', { class: 'state-label', dataset: { state } }, icon(state), STATE_NAMES[state] ?? state);
 
   const app = document.getElementById('app');
@@ -273,7 +307,9 @@
     const focused = document.activeElement;
     const keep = focused && regions.toolbar.contains(focused) ? focused : null;
     const onRow = !!focused?.classList?.contains('row');
-    regions.toasts ??= h('div', { class: 'toasts', role: 'status', 'aria-live': 'polite' });
+    // an error from a form goes when the form does (closed, cancelled or sent)
+    if (S.message?.form && S.panel !== S.message.form) { clearTimeout(messageTimer); S.message = null; }
+    drawMessage();
     const menu = menuView();
     app.replaceChildren(...[regions.toolbar, regions.toasts, body, menu].filter(Boolean));
     // the chips' row scrolls sideways on a phone: a fade at its edge says so, when there is more
@@ -374,10 +410,51 @@
   const chip = (text, remove) => h('span', { class: 'chip' }, text,
     h('button', { type: 'button', class: 'chip-x', 'aria-label': `Remove filter: ${text}`, onclick: remove }, '×'));
 
-  function toggleMenu(name) { S.menu = S.menu === name ? null : name; render(); if (S.menu) app.querySelector('.menu [tabindex="0"], .menu input, .menu button')?.focus(); }
+  // The phone's filter menu, in two levels: the properties with what each is set to, then one property's values
+  // (with a search past MANY values). One long panel of every value scrolled a checked value out of view on a phone.
+  // The desktop keeps the one panel: it has the height, and every value one click away.
+  const MANY = 8;
+  function summary(field) {
+    const f = S.filters;
+    if (!f[field].size) return 'Any';
+    if (field === 'state' && f.state.size === OPEN.length && OPEN.every((x) => f.state.has(x))) return 'Open';
+    return [...f[field]].map((v) => field === 'state' ? STATE_NAMES[v] : v).join(', ');
+  }
+  function phoneFilterMenu(close) {
+    const f = S.filters, foot = h('div', { class: 'menu-foot' }, button('Done', 'secondary', close));
+    if (!S.filterField) {
+      const properties = Object.entries(FIELDS).map(([field, { label }]) => h('button', { type: 'button', class: 'option option--button property',
+        'aria-label': `${label}: ${summary(field)}`, onclick: () => { S.filterField = field; S.filterQuery = ''; render();
+          app.querySelector('.menu .property-back')?.focus(); } },
+        h('span', { class: 'property-name' }, label), h('span', { class: 'property-value' }, summary(field)), h('span', { class: 'chevron', 'aria-hidden': 'true' }, '›')));
+      const toggle = (key, text) => h('label', { class: 'option' },
+        h('input', { type: 'checkbox', checked: f[key], onchange: (e) => { f[key] = e.target.checked; render(); } }), h('span', {}, text));
+      return h('div', { class: 'menu menu--filter menu--levels', role: 'dialog', 'aria-label': 'Filter' },
+        h('div', { class: 'properties' }, properties), h('div', { class: 'menu-section' }, toggle('workaround', 'Has a workaround'), toggle('duplicate', 'Possible duplicate')), foot);
+    }
+    const field = S.filterField, { label, options } = FIELDS[field], all = options();
+    const words = S.filterQuery.trim().toLowerCase();
+    const shownOptions = words ? all.filter(([, text]) => text.toLowerCase().includes(words)) : all;
+    const search = all.length > MANY ? h('label', { class: 'ta-control values-search' },
+      h('input', { type: 'search', id: 'filter-values-search', placeholder: `Search ${label.toLowerCase()}`, 'aria-label': `Search ${label.toLowerCase()}`,
+        value: S.filterQuery, autocomplete: 'off', oninput: (e) => { S.filterQuery = e.target.value; render(); const input = app.querySelector('#filter-values-search');
+          input?.focus(); input?.setSelectionRange(S.filterQuery.length, S.filterQuery.length); } })) : null;
+    return h('div', { class: 'menu menu--filter menu--levels', role: 'dialog', 'aria-label': `Filter: ${label}` },
+      h('div', { class: 'level-head' }, button('← Filter', 'ghost', () => { S.filterField = null; S.filterQuery = ''; render(); },
+        { class: 'btn btn--ghost property-back', 'aria-label': 'Back to the filter\'s properties' }), h('span', { class: 'level-title' }, label),
+        f[field].size ? button('Clear', 'ghost', () => { f[field].clear(); render(); }, { 'aria-label': `Clear ${label.toLowerCase()}` }) : null),
+      search,
+      h('div', { class: 'menu-section' }, shownOptions.length ? shownOptions.map(([value, text]) => h('label', { class: 'option' },
+        h('input', { type: 'checkbox', checked: f[field].has(value), onchange: (e) => {
+          if (e.target.checked) f[field].add(value); else f[field].delete(value); render(); } }),
+        field === 'state' ? icon(value) : null, h('span', {}, text))) : h('p', { class: 'none' }, 'No value matches.')),
+      foot);
+  }
+  function toggleMenu(name) { S.menu = S.menu === name ? null : name; S.filterField = null; S.filterQuery = ''; if (S.menu) acted(); render(); if (S.menu) app.querySelector('.menu [tabindex="0"], .menu input, .menu button')?.focus(); }
   function menuView() {
     if (!S.menu) return null;
     const close = () => { S.menu = null; render(); };
+    if (S.menu === 'filter' && window.innerWidth < PHONE) return phoneFilterMenu(close);
     if (S.menu === 'filter') {
       const f = S.filters;
       const sections = Object.entries(FIELDS).map(([field, { label, options }]) => h('fieldset', { class: 'menu-section' },
@@ -403,6 +480,8 @@
       const item = (text, go, extra = {}) => h('button', { type: 'button', class: 'option option--button', onclick: go, ...extra }, text);
       return h('div', { class: 'menu menu--more', role: 'menu', 'aria-label': 'More' },
         item('Display…', () => toggleMenu('display'), { role: 'menuitem' }),
+        S.projects.some((p) => maintains(p.repo)) ? item(S.selecting ? 'Stop selecting' : 'Select issues…', () => { S.menu = null; S.selecting = !S.selecting;
+          if (!S.selecting) S.selected.clear(); render(); }, { role: 'menuitem' }) : null,
         item('Refresh', () => { S.menu = null; load(); }, { role: 'menuitem' }),
         canExpand() && S.context.displayMode !== 'fullscreen' ? item('Full screen', () => { S.menu = null; expand(); }, { role: 'menuitem' }) : null,
         S.context.deviceCapabilities?.hover === false ? null : item('Keyboard shortcuts', () => toggleMenu('help'), { role: 'menuitem' }));
@@ -423,7 +502,7 @@
       S.me ? button('Report the first', 'secondary', () => openReport()) : null);
     const list = visible();
     if (list.length === 0) return h('div', { class: 'state-box' }, h('p', {}, 'No issues match the filters.'));
-    return h('div', { class: 'list', role: 'listbox', 'aria-label': 'Issues', 'aria-multiselectable': 'true' },
+    return h('div', { class: `list${S.selecting ? ' selecting' : ''}`, role: 'listbox', 'aria-label': 'Issues', 'aria-multiselectable': 'true' },
       groups(list).map((g) => {
         const key = `${S.group}:${g.key}`, collapsed = S.collapsed.has(key);
         return h('div', { class: 'group', role: 'group', 'aria-label': g.label ?? 'Issues' },
@@ -449,7 +528,7 @@
       icon(i.state),
       h('span', { class: 'id' }, short(i.id)),
       h('span', { class: 'title' }, i.title),
-      h('span', { class: 'labels' }, h('span', { class: 'tag' }, i.component), h('span', { class: 'tag tag--kind' }, i.kind)),
+      h('span', { class: 'labels' }, componentTag(i.component), kindTag(i.kind)),
       quick.length ? h('span', { class: 'quick' }, quick) : null,
       h('span', { class: 'meta' },
         i.workaround ? h('span', { class: 'has-workaround', title: `Workaround: ${i.workaround}`, 'aria-label': 'has a workaround' }, '⚑') : null,
@@ -459,11 +538,13 @@
           i.minutes ? `${i.count}× · ${i.minutes}m` : `${i.count}×`)));
   }
   function rowClick(event, i) {
+    if (S.selecting) { select(i.id, 'toggle'); return; }
     if (event.shiftKey) { select(i.id, 'range'); return; }
     if (event.metaKey || event.ctrlKey) { select(i.id, 'toggle'); return; }
     openPeek(i.id);
   }
   function select(id, how) {
+    acted();
     if (how === 'range' && S.anchor) {
       const ids = walkable().map((i) => i.id), a = ids.indexOf(S.anchor), b = ids.indexOf(id);
       if (a >= 0 && b >= 0) for (const x of ids.slice(Math.min(a, b), Math.max(a, b) + 1)) S.selected.add(x);
@@ -473,7 +554,11 @@
     render();
   }
   function bulkBar() {
-    if (!S.selected.size) return null;
+    if (!S.selected.size && !S.selecting) return null;
+    // the phone's select mode: the bar says how to select, and Done leaves the mode
+    if (!S.selected.size) return h('div', { class: 'bulk', role: 'toolbar', 'aria-label': 'Selected issues' },
+      h('span', { class: 'bulk-count' }, 'Tap issues to select them'), h('span', { class: 'spacer' }),
+      button('Done', 'ghost', () => { S.selecting = false; render(); }, { 'aria-label': 'Stop selecting' }));
     const targets = [...S.selected].map(byID).filter(Boolean);
     const count = (kind) => targets.filter((i) => allowed(i)[kind]).length;
     const label = (text, kind) => `${text}${count(kind) ? ` (${count(kind)})` : ''}`;
@@ -490,12 +575,13 @@
           button('Decline', 'danger', () => reason.value.trim() ? bulk('wontfix', reason.value.trim()) : toast('A decline needs a reason agents will read.', 'error')));
       }
     }
-    bar.append(h('span', { class: 'spacer' }), button('Clear', 'ghost', () => { S.selected.clear(); S.panel = null; render(); }));
+    bar.append(h('span', { class: 'spacer' }), button(S.selecting ? 'Done' : 'Clear', 'ghost', () => { S.selected.clear(); S.panel = null; S.selecting = false; render(); },
+      S.selecting ? { 'aria-label': 'Stop selecting' } : {}));
     return bar;
   }
 
   // --- the side peek ----------------------------------------------------------------
-  function closePeek() { S.peek = null; S.detail = null; S.panel = null; }
+  function closePeek() { S.peek = null; S.detail = null; S.panel = null; acted(); }
   function peekView() {
     const i = S.detail?.id === S.peek && !S.detail.missing ? S.detail : null;
     const row = byID(S.peek), ids = walkable().map((x) => x.id), at = ids.indexOf(S.peek);
@@ -525,12 +611,12 @@
     const kindValue = () => app.querySelector('#kind-edit')?.value ?? i.kind;
     const props = h('dl', { class: 'props' },
       prop('State', stateLabel(i.state)),
-      prop('Kind', editable ? h('select', { id: 'kind-edit', class: 'inline-select', 'aria-label': 'Kind' },
-        KINDS.map((k) => h('option', { value: k, selected: k === i.kind }, k))) : h('span', { class: 'mono' }, i.kind)),
-      prop('Component', h('span', { class: 'mono' }, i.component)),
+      prop('Kind', editable ? h('span', { class: 'chooser chooser--inline' }, h('select', { id: 'kind-edit', class: 'inline-select', 'aria-label': 'Kind' },
+        KINDS.map((k) => h('option', { value: k, selected: k === i.kind }, k))), h('span', { class: 'caret-down', 'aria-hidden': 'true' }, '▾')) : kindTag(i.kind)),
+      prop('Component', componentTag(i.component)),
       prop('Repository', h('span', { class: 'mono' }, ...breakAfterSlash(i.repo))),
       prop('Reports', h('span', { class: 'mono' }, String(i.count))),
-      prop('Minutes', h('span', { class: 'mono' }, String(i.minutes))),
+      prop('Minutes', h('span', { class: 'mono' }, i.minutes ? String(i.minutes) : '—')),
       i.filed ? prop('Filed', h('time', { datetime: i.filed, title: i.filed }, when(i.filed))) : null,
       i.updated ? prop('Updated', h('time', { datetime: i.updated, title: i.updated }, when(i.updated))) : null,
       i.fix ? prop('Fix', h('a', { href: i.fix.url, target: '_blank', rel: 'noopener' }, i.fix.sha.slice(0, 10))) : null,
@@ -602,7 +688,9 @@
   }
 
   // --- reporting --------------------------------------------------------------------
-  function openReport() { if (!S.me) return; S.panel = 'report'; S.menu = null; render(); app.querySelector('#report-title')?.focus(); }
+  // a select that looks like one: the control with a caret, so it does not read as a text field
+  const chooser = (select) => h('span', { class: 'ta-control chooser' }, select, h('span', { class: 'caret-down', 'aria-hidden': 'true' }, '▾'));
+  function openReport() { if (!S.me) return; S.menu = null; acted(); S.panel = 'report'; render(); app.querySelector('#report-title')?.focus(); }
   function reportForm() {
     const chosen = project([...S.filters.repo][0]) ?? S.projects.find((p) => !p.archived);
     const field = (label, control) => h('label', { class: 'field' }, h('span', { class: 'label' }, label), control);
@@ -613,7 +701,9 @@
       (chosen?.components ?? []).map((c) => h('option', { value: c, selected: S.filters.component.has(c) }, c)));
     const title = h('input', { id: 'report-title', name: 'title', required: true, 'aria-label': 'What went wrong, in a line', placeholder: 'What went wrong, in a line' });
     const body = h('textarea', { class: 'area', name: 'body', 'aria-label': 'What happened', placeholder: 'What you did, what happened, what you expected' });
-    const kind = h('select', { name: 'kind', 'aria-label': 'Kind' }, h('option', { value: '' }, 'unsure'), KINDS.map((k) => h('option', { value: k }, k)));
+    // no kind sent: the tracker's model classifies the report
+    const kind = h('select', { name: 'kind', 'aria-label': 'Kind' }, h('option', { value: '', selected: true }, 'Let the tracker decide'),
+      KINDS.map((k) => h('option', { value: k }, k)));
     const minutes = h('input', { name: 'minutes', inputmode: 'numeric', 'aria-label': 'Minutes it cost', placeholder: 'Minutes' });
     const form = h('form', { class: 'peek', onsubmit: async (e) => {
       e.preventDefault();
@@ -626,28 +716,46 @@
       if (refused) return;
       S.panel = null;
       await load();
-      if (data.id) openPeek(data.id);
+      if (data.id) openPeek(data.id, { keepMessage: true });
     } },
       h('div', { class: 'peek-head' }, h('h2', { class: 'peek-title' }, 'Report an issue'), h('span', { class: 'spacer' }),
         button('×', 'ghost', () => { S.panel = null; render(); }, { 'aria-label': 'Cancel the report' })),
-      h('div', { class: 'grid2' }, field('Repository', h('span', { class: 'ta-control' }, repo)), field('Component', h('span', { class: 'ta-control' }, component))),
+      h('div', { class: 'grid2' }, field('Repository', chooser(repo)), field('Component', chooser(component))),
       field('Title', h('span', { class: 'ta-control' }, title)),
       field('What happened', body),
-      h('div', { class: 'grid2' }, field('Kind', h('span', { class: 'ta-control' }, kind)), field('Minutes it cost', h('span', { class: 'ta-control' }, minutes))),
+      h('div', { class: 'grid2' }, field('Kind', chooser(kind)), field('Minutes it cost', h('span', { class: 'ta-control' }, minutes))),
       h('div', { class: 'actions' }, h('button', { class: 'btn btn--primary', type: 'submit' }, 'Report')));
     return form;
   }
 
-  // --- toasts -----------------------------------------------------------------------
-  // One message at a time, in the flow under the header: a toast fixed to the frame's bottom covered the
-  // controls under it, and in a host that makes the frame as tall as its content it lands out of sight. It
-  // stays until the next message or its ×: a timer taking it away would move the content under a finger.
+  // --- the message line ------------------------------------------------------------
+  // One message at a time, in the flow under the header (a toast fixed to the frame's bottom covered the
+  // controls under it, and in a frame as tall as its content it landed out of sight). A message is about the
+  // last thing done, so it goes when the next thing starts: a success or a note on the user's next action
+  // (opening another issue, a menu, the report form, a new change, a selection) or after SUCCESS_MS; an error
+  // stays until its ×, the next message, or a new action, except while the form it came from is still open
+  // (a refused report stays beside the report form until the form is sent again or closed).
+  const SUCCESS_MS = 4000;
+  let messageTimer = null;
   function toast(text, tone = '') {
     if (!text) return;
+    clearTimeout(messageTimer);
+    S.message = { text, tone, form: tone === 'error' ? S.panel : null };
+    if (tone !== 'error') messageTimer = setTimeout(() => { if (S.message?.text === text) dismiss(); }, SUCCESS_MS);
+    drawMessage();
+  }
+  function dismiss() { clearTimeout(messageTimer); S.message = null; drawMessage(); }
+  // a new action starts: the message about the last one goes, but an error stays while its form is open
+  function acted() {
+    if (!S.message) return;
+    if (S.message.tone === 'error' && S.message.form && S.panel === S.message.form) return;
+    dismiss();
+  }
+  function drawMessage() {
     regions.toasts ??= h('div', { class: 'toasts', role: 'status', 'aria-live': 'polite' });
-    regions.toasts.replaceChildren(h('div', { class: 'toast', dataset: { tone } }, text),
-      h('button', { type: 'button', class: 'btn btn--ghost btn--icon toast-x', 'aria-label': 'Dismiss the message',
-        onclick: () => regions.toasts.replaceChildren() }, '×'));
+    if (!S.message) { regions.toasts.replaceChildren(); return; }
+    regions.toasts.replaceChildren(h('div', { class: 'toast', dataset: { tone: S.message.tone } }, S.message.text),
+      h('button', { type: 'button', class: 'btn btn--ghost btn--icon toast-x', 'aria-label': 'Dismiss the message', onclick: dismiss }, '×'));
   }
 
   // --- the keyboard -------------------------------------------------------------------
@@ -671,7 +779,7 @@
       if (typing) return;
       if (S.panel) { S.panel = null; render(); return; }
       if (S.peek) { closePeek(); render(); focusCursor(); return; }
-      if (S.selected.size) { S.selected.clear(); render(); }
+      if (S.selected.size || S.selecting) { S.selected.clear(); S.selecting = false; render(); }
       return;
     }
     if (typing || e.metaKey || e.ctrlKey || e.altKey) return;
@@ -686,7 +794,9 @@
     else if (key === '?') { e.preventDefault(); toggleMenu('help'); }
   });
   document.addEventListener('click', (e) => {
-    if (S.menu && !e.target.closest('.menu, #filter-button, #display-button, #more-button, [aria-label="Keyboard shortcuts"]')) { S.menu = null; render(); }
+    // the path as it was when the click began: a menu that re-drew itself under the click has detached its target
+    const inside = e.composedPath().some((n) => n.matches?.('.menu, #filter-button, #display-button, #more-button, [aria-label="Keyboard shortcuts"]'));
+    if (S.menu && !inside) { S.menu = null; render(); }
   });
 
   async function expand() {

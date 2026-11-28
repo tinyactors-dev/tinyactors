@@ -120,8 +120,17 @@ The maintainer's rules (2026-11-27), and what they rest on:
   chips; ids without the leading `tinyactors:`; a side peek beside the
   list when it is wide, over it when narrow; the keyboard (j/k, Enter,
   Esc, x, ⇧-click, /, f, c, ?); multi-select with bulk triage, close
-  and decline; optimistic changes undone on a refusal; each tool's line
-  as a toast; full screen only on the expand control
+  and decline (on a phone, a select mode from More, where a tap selects);
+  optimistic changes, and on a refusal the issue read again
+  (`get_issue`) so the view shows the server's state, not its own stale
+  copy; one message line under the header, about the last thing done:
+  the next action takes a success or a note away, or 4 s do, and an
+  error stays until its × or a new action, except while the form it
+  came from is open; a kind told from a component (a sans pill with
+  its glyph, against a monospace folder tag); on a phone, the filter
+  menu in two levels (the properties, then one's values, searchable
+  past eight), while a desktop keeps the one panel (the maintainer's
+  review of the recorded frames, 2026-11-28); full screen only on the expand control
   (`ui/request-display-mode`). The default view is the open issues,
   grouped by state, ordered by cost; the filter menu's components are
   those of the repositories shown (a repository filter's, else those with

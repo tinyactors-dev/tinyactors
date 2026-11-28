@@ -83,10 +83,11 @@ describe('the issue list app', { skip: chromium ? false : 'Playwright is not ins
 
   // A page with the app under the fake host, for `token`'s user, after `tool` was called with `args`.
   // `phone`: a touch device (isMobile, hasTouch); `context`: more of the host's context (deviceCapabilities, safeAreaInsets)
-  async function open({ theme = 'light', token = bob, tool = 'known_issues', args = {}, width = 1180, height = 860, scale = 1, phone = false, context = {} } = {}) {
+  async function open({ theme = 'light', token = bob, tool = 'known_issues', args = {}, width = 1180, height = 860, scale = 1, phone = false, context = {}, clock = false } = {}) {
     const page = phone
       ? await (await browser.newContext({ viewport: { width, height }, deviceScaleFactor: scale, colorScheme: theme, isMobile: true, hasTouch: true })).newPage()
       : await browser.newPage({ viewport: { width, height }, deviceScaleFactor: scale, colorScheme: theme });
+    if (clock) await page.clock.install();   // the message line's timer, moved on by hand
     await page.exposeFunction('callTool', async (name, input) => {
       const caller = token ? await s.gateway.caller(token) : null;
       const result = await toolResult(s.gateway, caller, name, input);
@@ -242,15 +243,86 @@ describe('the issue list app', { skip: chromium ? false : 'Playwright is not ins
     await page.close();
   });
 
-  it('undoes an optimistic change the server refuses', async () => {
+  it('after a refused change, shows the issue as the server has it, with the refusal', async () => {
     const { page, app } = await open();
-    await s.tool(bob, 'triage', { id: id.mono2 });   // triaged elsewhere: the app still shows it new
+    await s.tool(bob, 'triage', { id: id.mono2, kind: 'docs' });   // triaged elsewhere: the app still shows it new
+    assert.equal(await row(app, 'mono2').locator('.status').getAttribute('data-state'), 'new', 'the app\'s copy is out of date');
     await row(app, 'mono2').hover();
     await row(app, 'mono2').getByRole('button', { name: /^Triage/ }).click();
     await app.locator('.toast[data-tone="error"]').waitFor();
-    assert.match(await toast(app).textContent(), /only a new issue is triaged/);
-    assert.equal(await row(app, 'mono2').locator('.status').getAttribute('data-state'), 'new', 'rolled back');
+    // the video review (2026-11-28): undoing the change put the stale "new" back; the app now reads the issue again
+    await row(app, 'mono2').locator('.status[data-state="triaged"]').waitFor();
+    assert.equal(await row(app, 'mono2').locator('.kind').getAttribute('data-kind'), 'docs', 'the server\'s kind too');
+    assert.match(await toast(app).textContent(), /only a new issue is triaged/, 'the refusal stays');
+    const names = await page.evaluate(() => window.calls.map((c) => c.name));
+    assert.deepEqual(names.slice(-2), ['triage', 'get_issue'], 'the refusal, then the issue read again');
     await page.close();
+  });
+
+  it('a message is about the last thing done: the next action takes it, a success goes by itself, a refused form keeps its own', async () => {
+    const { page, app } = await open({ clock: true });
+    await row(app, 'fresh').click();
+    await app.locator('.peek .props').waitFor();
+    await app.getByRole('button', { name: 'Copy the identifier' }).click();
+    await app.locator('.toast', { hasText: /Copied|copying/ }).waitFor();
+    await row(app, 'triaged').click();   // another issue: the message about the copy goes
+    await app.locator('.peek .ident', { hasText: id.triaged }).waitFor();
+    assert.equal(await app.locator('.toast').count(), 0, 'opening another issue takes the message away');
+    await app.getByRole('textbox', { name: 'Workaround' }).fill('restore, then advance the clock by the snapshot age');
+    await app.getByRole('button', { name: 'Attach workaround' }).click();
+    await app.locator('.toast', { hasText: /^Workaround noted/ }).waitFor();
+    // a success goes by itself after four seconds
+    await page.clock.fastForward(3_000);
+    assert.equal(await app.locator('.toast').count(), 1, 'still there at three seconds');
+    await page.clock.fastForward(1_500);
+    await app.locator('.toast').waitFor({ state: 'detached' });
+    await row(app, 'fresh').click();
+    await app.getByRole('button', { name: 'Copy the identifier' }).click();
+    await app.locator('.toast').waitFor();
+    await app.getByRole('button', { name: 'Report issue' }).click();   // the report form: the message goes
+    assert.equal(await app.locator('.toast').count(), 0, 'opening the report form takes the message away');
+    // a refused report stays beside its form, through a menu, until the form goes
+    await app.getByLabel('Component').evaluate((select) => { select.add(new Option('benches', 'benches', true, true)); });
+    await app.getByLabel('What went wrong, in a line').fill('the benches are slow');
+    await app.getByRole('button', { name: 'Report', exact: true }).click();
+    await app.locator('.toast[data-tone="error"]', { hasText: /unknown component benches/ }).waitFor();
+    await app.getByRole('button', { name: 'Filter', exact: true }).click();
+    await app.locator('.menu--filter').waitFor();
+    assert.equal(await app.locator('.toast[data-tone="error"]').count(), 1, 'the refusal stays while its form is open');
+    await page.keyboard.press('Escape');
+    await app.getByRole('button', { name: 'Cancel the report' }).click();
+    assert.equal(await app.locator('.toast').count(), 0, 'and goes with the form');
+    await page.close();
+  });
+
+  it('tells a kind from a component, in the list and in the peek, in both themes', async () => {
+    for (const theme of ['light', 'dark']) {
+      const { page, app } = await open({ theme });
+      await app.locator('.chip-x').first().click();
+      const fixed = row(app, 'fixed');   // component docs, kind tooling
+      const [component, kind] = [fixed.locator('.tag--component'), fixed.locator('.kind')];
+      assert.equal(await component.textContent(), 'docs');
+      assert.equal(await kind.textContent(), 'tooling');
+      const style = (l) => l.evaluate((e) => { const c = getComputedStyle(e); return { font: c.fontFamily, border: c.borderTopColor, background: c.backgroundColor, radius: c.borderTopLeftRadius }; });
+      const [a, b] = await Promise.all([style(component), style(kind)]);
+      assert.notEqual(a.font, b.font, 'a component is monospace, a kind is not');
+      assert.notEqual(a.background, b.background, 'a kind sits on a tinted pill');
+      assert.notEqual(a.radius, b.radius, 'a pill, not a tag');
+      assert.equal(await component.locator('.folder-glyph').count(), 1, 'a component has the folder glyph');
+      assert.equal(await kind.locator('.kind-glyph').count(), 1, 'a kind has its own glyph');
+      // its text is legible on its pill: WCAG contrast of at least 4.5
+      const ratio = await kind.evaluate((e) => {
+        const rgb = (c) => c.match(/[\d.]+/g).slice(0, 3).map(Number);
+        const lum = ([r, g, b]) => { const f = (v) => { v /= 255; return v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4; }; return 0.2126 * f(r) + 0.7152 * f(g) + 0.0722 * f(b); };
+        const c = getComputedStyle(e), [l1, l2] = [lum(rgb(c.color)), lum(rgb(c.backgroundColor))].sort((x, y) => y - x);
+        return (l1 + 0.05) / (l2 + 0.05);
+      });
+      assert.ok(ratio >= 4.5, `${theme}: a kind's contrast is ${ratio.toFixed(2)}`);
+      await row(app, 'triaged').click();   // not editable: kind and component as in the list
+      await app.locator('.props .kind').waitFor();
+      assert.equal(await app.locator('.props .tag--component').count(), 1);
+      await page.close();
+    }
   });
 
   it('opens the issue get_issue was called for, and deletes after a confirmation', async () => {
@@ -280,12 +352,22 @@ describe('the issue list app', { skip: chromium ? false : 'Playwright is not ins
     assert.equal(await app.locator('.pane--list').isHidden(), true, 'narrow: the peek is over the list');
     await page.keyboard.press('Escape');
     await page.keyboard.press('c');
+    // the kind: a choice, "Let the tracker decide" first and chosen, not a field reading "unsure"
+    const kinds = await app.getByLabel('Kind').evaluate((select) => [...select.options].map((o) => [o.value, o.textContent]));
+    assert.deepEqual(kinds, [['', 'Let the tracker decide'], ...['docs', 'error', 'tooling', 'api', 'environment'].map((k) => [k, k])]);
+    assert.equal(await app.getByLabel('Kind').inputValue(), '');
+    assert.equal(await app.locator('.chooser', { has: app.getByLabel('Kind') }).locator('.caret-down').count(), 1, 'it reads as a choice');
     await app.getByLabel('Repository').selectOption(napi);
     await app.getByLabel('Component').selectOption('lib');
     await app.getByLabel('What went wrong, in a line').fill('lib exports nothing for bun');
     await app.getByRole('button', { name: 'Report', exact: true }).click();
     await app.locator('.peek-title', { hasText: 'lib exports nothing for bun' }).waitFor();
     assert.match(await app.locator('.toast').first().textContent(), /^Filed tinyactors:tinyactors-napi:\d+/);
+    const sent = (await page.evaluate(() => window.calls)).filter((c) => c.name === 'report_issue').at(-1).arguments;
+    assert.equal('kind' in sent, false, 'the tracker decides: no kind sent');
+    // no minutes given: the peek says none, not "0"
+    const minutes = app.locator('.props dt', { hasText: 'Minutes' }).locator('xpath=following-sibling::dd[1]');
+    assert.equal(await minutes.textContent(), '—');
     await page.close();
   });
 
@@ -336,17 +418,37 @@ describe('the issue list app', { skip: chromium ? false : 'Playwright is not ins
         await search.press('Escape');
         assert.equal(await app.locator('.search').isVisible(), false, 'Escape closes it');
 
-        // the filter menu, and chips that scroll in their own row
+        // the filter menu in two levels: the properties with what each is set to, then one property's values
         await app.getByRole('button', { name: 'Filter', exact: true }).tap();
         await app.locator('.menu--filter').waitFor();
-        const menu = await app.locator('.menu--filter').boundingBox();
-        assert.ok(menu.x >= 0 && menu.x + menu.width <= width, 'the menu is within the view');
-        assert.equal(await overflow(frame), 0, 'the menu fits the width');
-        const done = await app.locator('.menu--filter').getByRole('button', { name: 'Done' }).boundingBox();
-        assert.ok(done.y + done.height <= menu.y + menu.height + 1, 'the menu\'s Done is in reach, not below its fold');
-        assert.deepEqual(await small(frame), [], 'every option is a 44 px target');
+        const fits = async () => {
+          const menu = await app.locator('.menu--filter').boundingBox();
+          assert.ok(menu.x >= 0 && menu.x + menu.width <= width, 'the menu is within the view');
+          assert.equal(await overflow(frame), 0, 'the menu fits the width');
+          const done = await app.locator('.menu--filter').getByRole('button', { name: 'Done' }).boundingBox();
+          assert.ok(done.y + done.height <= menu.y + menu.height + 1, 'the menu\'s Done is in reach, not below its fold');
+          assert.ok(menu.height <= 740 * 0.72, `the menu is short: ${menu.height}`);
+          assert.deepEqual(await small(frame), [], 'every option is a 44 px target');
+        };
+        await fits();
+        const properties = () => app.locator('.menu--filter .property').evaluateAll((items) => items.map((p) => [
+          p.querySelector('.property-name').textContent, p.querySelector('.property-value').textContent]));
+        assert.deepEqual(await properties(), [['State', 'Open'], ['Kind', 'Any'], ['Component', 'Any'], ['Repository', 'Any']]);
         if (width === 360) await shot(page, `phone-filter-menu-${theme}`);
-        for (const name of ['tooling', 'examples']) await app.locator('.menu--filter .option', { hasText: new RegExp(`^${name}$`) }).first().tap();
+        await app.locator('.menu--filter .property', { hasText: 'Kind' }).tap();
+        await app.locator('.menu--filter .option', { hasText: /^tooling$/ }).tap();
+        await fits();
+        await app.getByRole('button', { name: 'Back to the filter\'s properties' }).tap();
+        assert.deepEqual((await properties())[1], ['Kind', 'tooling'], 'the property says what it is set to');
+        // past eight values, a search over them
+        await app.locator('.menu--filter .property', { hasText: 'Component' }).tap();
+        assert.ok(await app.locator('.menu--filter .option').count() > 8);
+        await app.locator('#filter-values-search').fill('exam');
+        assert.deepEqual(await app.locator('.menu--filter .option').allTextContents(), ['examples']);
+        await app.locator('.menu--filter .option', { hasText: /^examples$/ }).tap();
+        if (width === 360) await shot(page, `phone-filter-values-${theme}`);
+        await fits();
+        await app.getByRole('button', { name: 'Back to the filter\'s properties' }).tap();
         await app.getByRole('button', { name: 'Done' }).tap();
         assert.ok(await app.locator('.chip').count() >= 3);
         assert.equal(await overflow(frame), 0, 'the chips scroll in their row, not the view');
@@ -380,5 +482,38 @@ describe('the issue list app', { skip: chromium ? false : 'Playwright is not ins
       }
     });
   }
+
+  it('on a phone: a change the server refuses from the sheet shows the server\'s state; select mode selects with taps', async () => {
+    const extra = (await s.tool(ann, 'report_issue', fresh(napi, 'src', 'the scale gate needs a fixed seed', 4))).id;
+    const context = { deviceCapabilities: { touch: true, hover: false }, platform: 'mobile' };
+    const { page, app, frame } = await open({ width: 360, height: 740, phone: true, context });
+    await app.locator(`.row[data-id="${extra}"]`).tap();
+    await app.getByRole('button', { name: 'Triage', exact: true }).waitFor();
+    await s.tool(bob, 'triage', { id: extra, kind: 'api' });   // triaged elsewhere while the sheet shows it new
+    await app.getByRole('button', { name: 'Triage', exact: true }).tap();
+    await app.locator('.toast[data-tone="error"]', { hasText: /only a new issue is triaged/ }).waitFor();
+    await app.locator('.peek .state-label[data-state="triaged"]').waitFor();
+    assert.equal(await app.locator('.props .kind').getAttribute('data-kind'), 'api', 'the server\'s kind');
+    await app.getByRole('button', { name: 'Back to the issues' }).tap();
+    assert.equal(await app.locator('.toast').count(), 0, 'going back is a new action: the message goes');
+    // select mode: More → Select issues; a tap selects; the bar's buttons are 44 px; Done leaves it
+    await app.getByRole('button', { name: 'More', exact: true }).tap();
+    await app.getByRole('menuitem', { name: 'Select issues…' }).tap();
+    await app.locator('.bulk', { hasText: 'Tap issues to select them' }).waitFor();
+    await app.locator(`.row[data-id="${extra}"]`).tap();
+    await row(app, 'regressed').tap();
+    await app.locator('.bulk-count', { hasText: '2 selected' }).waitFor();
+    assert.equal(await app.locator('.peek').count(), 0, 'a tap selects, it does not open');
+    assert.equal(await app.locator(`.row[data-id="${extra}"] .pick`).isVisible(), true, 'the checkbox shows');
+    assert.equal(await overflow(frame), 0);
+    assert.deepEqual(await small(frame), [], 'the bar\'s buttons are 44 px targets');
+    await app.getByRole('button', { name: /^Decline/ }).tap();
+    await app.getByLabel('Why they will not be fixed').fill('a test of the select mode');
+    await app.getByRole('button', { name: 'Decline', exact: true }).tap();
+    await app.locator('.toast', { hasText: /^Declined 2 of 2\./ }).waitFor();
+    assert.equal(await app.locator('.list.selecting').count(), 0, 'done: the mode ends');
+    await s.tool(bob, 'delete_issue', { id: extra, reason: 'a test issue' });
+    await page.context().close();
+  });
 });
 
