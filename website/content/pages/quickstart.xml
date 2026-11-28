@@ -1,0 +1,74 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<page xmlns="https://www.tinyactors.dev/ns/site" id="docs-quickstart" path="/docs/quickstart/">
+  <title>Quickstart · tinyactors</title>
+  <description>Install tinyactors in Node.js, Python, a browser or C, and run an order actor that retries its payment on its own, in five minutes.</description>
+  <purpose kind="how-to" for="agent-platform workflow-tester"/>
+  <hero>
+    <headline>Run your first actor in five minutes</headline>
+    <lede>Install one package and run one program. An order actor fills its cart, charges the card and retries on its own when the payment service is down.</lede>
+    <install>
+      <command package="node" guide="https://github.com/tinyactors-dev/tinyactors-napi#readme">npm install @tinyactors/node</command>
+      <command package="python" guide="https://github.com/tinyactors-dev/tinyactors-cpython#readme">pip install tinyactors</command>
+      <command package="wasm" guide="https://www.tinyactors.dev/guides/browser/">npm install @tinyactors/wasm</command>
+      <command package="c" guide="https://github.com/tinyactors-dev/tinyactors/blob/main/tinyactors-core/docs/embedding.md">curl -L https://github.com/tinyactors-dev/tinyactors-core/releases/download/v{version}/tinyactors-{version}-src.tar.gz | tar xz</command>
+    </install>
+  </hero>
+
+  <section id="run">
+    <heading>Write a chart and run it</heading>
+    <p>Save the chart as <code>order.scxml</code> and the program beside it, then run the program. The tabs follow the package you picked above.</p>
+    <program>
+      <in package="node">
+        <code src="../../examples/order/main.mjs" language="javascript" file="main.mjs"/>
+        <code src="../../examples/order/order.scxml" language="scxml" file="order.scxml"/>
+      </in>
+      <in package="wasm">
+        <code src="../../examples/order/browser.mjs" language="javascript" file="browser.mjs"/>
+        <code src="../../examples/order/order.scxml" language="scxml" file="order.scxml"/>
+      </in>
+      <in package="python">
+        <code src="../../examples/order/main.py" language="python" file="main.py"/>
+        <code src="../../examples/order/order.scxml" language="scxml" file="order.scxml"/>
+      </in>
+      <in package="c">
+        <code src="../../examples/order/main.c" language="c" file="main.c"/>
+        <code src="../../examples/order/host.h" language="c" file="host.h"/>
+        <code src="../../examples/order/host.c" language="c" file="host.c"/>
+        <code src="../../examples/order/order.scxml" language="scxml" file="order.scxml"/>
+      </in>
+      <diagram chart="order.scxml">
+        <event name="add" data='{"item": "notebook", "price": 30}'>Add a notebook</event>
+        <event name="add" data='{"item": "pen", "price": 12}'>Add a pen</event>
+        <event name="declined" data='{"reason": "the card was declined"}'/>
+      </diagram>
+      <code src="../../examples/order/output.txt" language="text" role="output"/>
+    </program>
+    <p>The first charge fails, so the chart waits a second and charges again. Your program never wrote that retry: it lives in the chart's <code>retrying</code> state.</p>
+  </section>
+
+  <section id="what-happened">
+    <heading>The chart decides, your program acts</heading>
+    <list>
+      <item><term>The host</term><text>runs the actors inside your process. There is no server to start, and the program ends when its work is done.</text></item>
+      <item><term>The chart</term><text>holds every state the order can be in and the events that move it. Press the buttons under the diagram to drive it yourself.</text></item>
+      <item><term>The I/O processor</term><text>is the <code>payments</code> object your program gives the host. The chart sends it <code>charge</code> and never calls a network itself, so a test can answer instead of a real service.</text></item>
+    </list>
+  </section>
+
+  <section id="agents">
+    <heading>Let your coding agent read the docs</heading>
+    <p>Add the tinyactors support server to your agent, and it can search these docs, load the skill for building with tinyactors and report what got in its way. In Claude Code:</p>
+    <code language="shell">claude mcp add --transport http tinyactors-support https://mcp.tinyactors.dev/mcp</code>
+    <p><link to="docs-agents">Build with a coding agent</link> covers the other agents and what the server offers.</p>
+  </section>
+
+  <section id="next">
+    <heading>Go further</heading>
+    <list>
+      <item><term><link to="docs-statecharts">Statecharts and actors in ten minutes</link></term><text>the ideas behind the chart above, with an order you can drive.</text></item>
+      <item><term><link to="chat">Build a team chat</link></term><text>a tutorial of nine steps, from one room to direct messages, each a program that runs.</text></item>
+      <item><term><link to="guide-testing">Test your charts</link></term><text>a week of timeouts in milliseconds on a simulated clock.</text></item>
+      <item><term><link to="guides">All guides</link></term><text>hibernation, migration, snapshots, journals and the rest, each with a program that runs.</text></item>
+    </list>
+  </section>
+</page>

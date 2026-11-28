@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <site xmlns="https://www.tinyactors.dev/ns/site" origin="https://www.tinyactors.dev">
   <name>tinyactors</name>
-  <tagline>Like SQLite, but for actors: statecharts that run in your process.</tagline>
+  <tagline>Statechart actors inside your own process: logic you can reason about, inspect and check, with no infrastructure to adopt.</tagline>
 
   <!-- Who reads the site (2026-11-23, from how rivet.dev, temporal.io and
        sqlite.org write for their readers). Pages name them in their
@@ -131,12 +131,20 @@
     </voice>
   </voices>
 
+  <!-- The maintainer, 2026-11-28, from the content audit: Docs, Guides,
+       CLI, Recipes, Compare, the demo and the source; the pitch pages
+       (testing, telemetry, performance, the inspector) are reached from the
+       home page and /docs/, not the header. -->
   <nav>
-    <link to="chat">Tutorial</link>
-    <link to="property-testing">Testing</link>
-    <link to="telemetry">Telemetry</link>
-    <link to="performance">Performance</link>
-    <link to="anthill">Anthill</link>
+    <group label="Docs">
+      <link to="docs">Overview</link>
+      <link to="docs-quickstart">Quickstart</link>
+      <link to="docs-statecharts">Statecharts in ten minutes</link>
+      <link to="chat">Tutorial: a team chat</link>
+      <link to="docs-agents">With a coding agent</link>
+      <link to="architecture">Architecture</link>
+      <link to="changelog">Changelog</link>
+    </group>
     <group label="Guides">
       <link to="guides">All guides</link>
       <link to="guide-charts">Writing charts</link>
@@ -165,16 +173,22 @@
       <link to="cli-cheatsheet">Cheat sheet</link>
       <link to="cli-why">CLI and libraries</link>
     </group>
-    <link to="changelog">Changelog</link>
-    <link to="when-to-use">When to use</link>
-    <link to="architecture">Architecture</link>
-    <link to="inspector">Inspector</link>
-    <link to="about">About</link>
+    <link to="recipes">Recipes</link>
+    <group label="Compare">
+      <link to="when-to-use">When to use</link>
+      <link to="compare-temporal">Temporal</link>
+      <link to="compare-durable-objects">Durable Objects</link>
+      <link to="compare-rivet">Rivet</link>
+      <link to="compare-xstate">XState</link>
+    </group>
+    <link to="anthill">Demo</link>
     <link href="https://github.com/tinyactors-dev/tinyactors">GitHub</link>
   </nav>
 
   <pages>
     <page src="pages/home.xml"/>
+    <page src="pages/docs.xml"/>
+    <page src="pages/quickstart.xml"/>
     <page src="pages/chat.xml"/>
     <page src="pages/property-testing.xml"/>
     <page src="pages/telemetry.xml"/>

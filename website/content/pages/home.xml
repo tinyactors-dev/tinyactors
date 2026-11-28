@@ -1,12 +1,12 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <page xmlns="https://www.tinyactors.dev/ns/site" id="home" path="/">
   <title>tinyactors: like SQLite, but for actors</title>
-  <description>tinyactors runs millions of statecharts inside your program, in Node.js, Python, a browser or C: composable state machines that describe a reactive system formally.</description>
+  <description>tinyactors runs each entity as a statechart actor inside your own Node.js, Python, browser or C process: one place to look, small enough to inspect, and checkable by a computer.</description>
   <purpose kind="pitch" for="agent-platform tech-lead workflow-tester" answers="agent-platform.in-backend"/>
 
   <hero>
-    <headline>Like SQLite, but for <em>actors</em></headline>
-    <lede>tinyactors runs millions of actors inside your Node.js, Python, browser or C process, with no separate server. Each actor runs a composable statechart of states, events and transitions.</lede>
+    <headline>Stateful systems you can <em>reason about</em></headline>
+    <lede>An order's logic ends up spread over a queue, a worker, a cron job and three status columns, and nobody owns it. tinyactors puts it in one statechart, run by an actor inside your own process. Like SQLite, but for actors.</lede>
     <install>
       <command package="node" guide="https://github.com/tinyactors-dev/tinyactors-napi#readme">npm install @tinyactors/node</command>
       <command package="python" guide="https://github.com/tinyactors-dev/tinyactors-cpython#readme">pip install tinyactors</command>
@@ -14,9 +14,8 @@
       <command package="c" guide="https://github.com/tinyactors-dev/tinyactors/blob/main/tinyactors-core/docs/embedding.md">curl -L https://github.com/tinyactors-dev/tinyactors-core/releases/download/v{version}/tinyactors-{version}-src.tar.gz | tar xz</command>
     </install>
     <actions>
-      <action to="anthill">See the demo</action>
-      <action to="guide-charts" section="first-chart">Write your first chart</action>
-      <action to="home" section="actors">Learn more</action>
+      <action to="docs-quickstart">Run your first actor</action>
+      <action to="docs-agents">Build with a coding agent</action>
     </actions>
   </hero>
 
@@ -52,28 +51,31 @@
     </program>
   </section>
 
-  <section id="actors" answers="workflow-tester.written-flow">
-    <heading>Deterministic behaviors</heading>
-    <p>A statechart is a composable state machine of states, events and transitions. Because it isolates effects as events, your code can simulate runs in tests.</p>
-    <p>A tinyactors actor runs a chart instead of arbitrary code, so your code can simulate and test its events.</p>
-    <p>tinyactors runs the same chart in simulation and inside your Node.js, Python, browser or C process. Your code steps timeouts on a simulated clock to test each change in milliseconds.</p>
-  </section>
-
-  <section id="agents" answers="agent-platform.agent-charts">
-    <heading>Local reasoning for agents</heading>
-    <p>tinyactors puts all of an actor's states and transitions in one readable, inspectable chart. Your code connects through events, so <link to="docs-agents">an agent writes an actor</link> from events entering and leaving, not the full system.</p>
-    <p>Every effect leaves the chart as an event your code performs, so a review of an agent's change reads one file. Your code can read any running actor's state and data.</p>
-  </section>
-
-  <section id="process" answers="agent-platform.in-backend agent-platform.another-runtime agent-platform.memory workflow-tester.no-server workflow-tester.needs-cluster tech-lead.same-everywhere">
-    <heading>Run millions of actors in your process</heading>
+  <section id="process" answers="agent-platform.in-backend agent-platform.another-runtime workflow-tester.no-server workflow-tester.needs-cluster tech-lead.same-everywhere">
+    <heading>One process you can reason about</heading>
+    <p>A web server, a queue, a worker and a cron job each hold part of an order. To know what it does next, you read all four.</p>
+    <p>A tinyactors host runs inside your program. There's no server to operate, each actor handles one event at a time, and its whole behavior is one chart.</p>
     <list>
-      <item><term>No server required</term><text>tinyactors is a library running your program, so you stay in control, and can use actors to model server and client logic.</text></item>
-      <item><term>One implementation</term><text>tinyactors wraps one C core in every language package, and <link to="performance" section="correctness">every package runs the W3C SCXML tests</link>.</text></item>
-      <item><term>Small enough for every part of a system</term><text>Actor instances cost <link to="performance" section="actors">around half a kilobyte of RAM</link>, making them small enough for you to model in-flight API request, WebSocket connection, and domain objects as an actor in tests and production.</text></item>
+      <item><term>Your language</term><text>Node.js and Bun, Python, the browser and C, each a package over the same C core.</text></item>
+      <item><term>The same answers everywhere</term><text>One core behind every package, and <link to="performance" section="correctness">every package runs the W3C SCXML tests</link>.</text></item>
+      <item><term>Honest about one machine</term><text>A crash stops every actor in the process. <link to="when-to-use" section="crash">When to use tinyactors</link> says what comes back and when to choose something else.</text></item>
     </list>
-    <p>Tinyactors implements virtual actors, allowing you to store idle actors in a store of your choice.  Storing actor state in the database you are already using gives you durability across process restarts.</p>
-    <p><link to="when-to-use">When to use tinyactors</link> compares it with Temporal, Durable Objects, Rivet and XState, and lists its limits.</p>
+  </section>
+
+  <section id="inspect" answers="agent-platform.memory">
+    <heading>Small enough to see every actor</heading>
+    <p>An actor takes <link to="performance" section="actors">about half a kilobyte</link>, so a request, a connection or an order can each be one. Millions fit in one process, and your code can look at any of them.</p>
+    <list>
+      <item><term><link to="guide-inspection">Read any actor</link></term><text>its states, its variables, its queue and its pending timers, while it runs.</text></item>
+      <item><term><link to="guide-snapshots">Copy the whole process</link></term><text>two million actors, 1000 of them in memory, make a 165 MB snapshot that another process restores.</text></item>
+      <item><term><link to="anthill">Watch a million of them</link></term><text>two colonies of ants in your browser tab, every ant and queen an actor.</text></item>
+    </list>
+  </section>
+
+  <section id="actors" answers="workflow-tester.written-flow">
+    <heading>Behavior a computer can check</heading>
+    <p>An Erlang or Akka actor runs any code you give it. A tinyactors actor runs a W3C SCXML chart, with every state and transition written down.</p>
+    <p>The same chart runs in your process and in a simulation, where a simulated clock runs its timeouts in milliseconds (<link to="guide-testing">testing your charts</link>).</p>
   </section>
 
   <section id="verify">
@@ -89,6 +91,33 @@
     <p>With <code>attempts &lt; 4</code> in the chart, the loop stops at seed 10: it charged the card four times.</p>
   </section>
 
+  <section id="agents" answers="agent-platform.agent-charts">
+    <heading>Local reasoning for agents</heading>
+    <p>An agent <link to="docs-agents">writes an actor</link> from the events entering and leaving it, not from the whole system. Every effect leaves the chart as an event your code performs, so reviewing its change means reading one file.</p>
+    <p>In CI, <code>tinyactors check</code>, <code>lint</code> and <code>diff</code> catch a misspelt event and show what behavior a change moved (<link to="cli-ci">CI checks</link>).</p>
+  </section>
+
+  <section id="io" answers="tech-lead.lock-in">
+    <heading>Your infrastructure, not ours</heading>
+    <p>Hosted actor platforms decide where your code runs, where its state lives and what each step costs. tinyactors decides none of that: your program already did.</p>
+    <list>
+      <item><term><link to="guide-io-processors">Effects are events</link></term><text>A chart asks for outside work by sending an event to an object of yours, which answers with another. Tests answer instead of a real service.</text></item>
+      <item><term><link to="guide-hibernation">Idle actors in your database</link></term><text>Waiting actors leave memory for the store you already run: two million ran with at most 1000 in memory.</text></item>
+      <item><term><link to="guide-journal">A journal if you want one</link></term><text>Record every input, and one loop rebuilds every actor after a crash.</text></item>
+      <item><term><link to="guide-other-systems">Other machines over your wire</link></term><text>An actor sends to an actor in another process by its address, over the transport you choose.</text></item>
+    </list>
+  </section>
+
+  <section id="production" answers="tech-lead.failure-semantics">
+    <heading>Change behavior while it runs</heading>
+    <p>An order lives for days, and your rules change in the middle. Add the chart's new version to the running process: new orders start on it, and running ones keep the state they reached.</p>
+    <list>
+      <item><term><link to="guide-migration">Migration</link></term><text>moves each running actor to the new version at a stable point, with its states, queue and timers.</text></item>
+      <item><term><link to="guide-snapshots">Snapshots</link></term><text>let you rehearse the change on a copy of the live process before you make it.</text></item>
+      <item><term><link to="guide-telemetry">Telemetry</link></term><text>traces every step of every actor as OpenTelemetry, turned on with an option.</text></item>
+    </list>
+  </section>
+
   <section id="build" answers="agent-platform.idle-sessions">
     <heading>Conquer complexity</heading>
     <p>A team chat's hard state is who is in each room and who is online. The five-step tutorial puts each part of that state in an actor:</p>
@@ -102,13 +131,25 @@
     </actions>
   </section>
 
-  <section id="production" answers="tech-lead.failure-semantics">
-    <heading>Run actors in production</heading>
-    <p>An actor in production stands for an entity, such as an account, and lives as long as it does. So you change and watch actors that are already running.</p>
+  <section id="compare" answers="agent-platform.compare">
+    <heading>When to choose something else</heading>
+    <p>When your application must run on many machines at once, with placement and failover handled for you, the infrastructure is the product. Then a platform built for that fits better.</p>
     <list>
-      <item><term><link to="guide-migration">Migration</link></term><text>When your rules change, the accounts already running still follow the old ones. Add the chart's new version, and a migration moves each running actor to it, keeping the state it reached.</text></item>
-      <item><term><link to="guide-snapshots">Snapshots</link></term><text>A snapshot copies every actor of a running process, and <code>Host.restore</code> runs it in this process or another. Two million actors, 1000 of them in memory, make a 165 MB snapshot.</text></item>
-      <item><term><link to="guide-telemetry">Telemetry</link></term><text>tinyactors traces every step of every actor as OpenTelemetry. You turn it on with an option, not with code.</text></item>
+      <item><term><link to="compare-durable-objects">Cloudflare Durable Objects</link></term><text>for an application already on Cloudflare Workers that needs Cloudflare's network.</text></item>
+      <item><term><link to="compare-rivet">Rivet</link></term><text>for actors a control plane places and moves across machines for you.</text></item>
+      <item><term><link to="compare-temporal">Temporal</link></term><text>when a service must keep every workflow through a machine's failure.</text></item>
+      <item><term><link to="compare-xstate">XState</link></term><text>for interface logic in React, Vue or Svelte, edited in Stately's visual editor.</text></item>
+    </list>
+  </section>
+
+  <section id="questions" answers="agent-platform.why-scxml agent-platform.production tech-lead.single-point">
+    <heading>Questions people ask</heading>
+    <list>
+      <item><term>Is one process a single point of failure?</term><text>Yes: a crash stops every actor in it. What comes back is what your program saved: hibernated actors in your store, the last snapshot and a <link to="guide-journal">journal</link> if you keep one.</text></item>
+      <item><term>Why SCXML and not XState?</term><text>SCXML is a W3C standard, so a chart isn't tied to one library or language. The same chart runs in Node.js, Python, a browser and C (<link to="compare-xstate">tinyactors compared with XState</link>).</text></item>
+      <item><term>Do I have to write XML?</term><text>A chart is an SCXML document, and the expressions in it are JavaScript. The <link to="cli">tinyactors command</link> draws it, checks it and runs it before your program does.</text></item>
+      <item><term>Is anyone running this in production?</term><text>tinyactors is at version 0.x and still changes its API in minor releases. What backs it: the W3C SCXML suite in every package, and programs that take two million actors through hibernation, migration and snapshots (<link to="performance">performance</link>).</text></item>
+      <item><term>Will an agent write good charts?</term><text>An agent writes one chart from the events it takes and sends, and the command line catches mistakes such as a misspelt event in CI (<link to="docs-agents">build with a coding agent</link>).</text></item>
     </list>
   </section>
 </page>

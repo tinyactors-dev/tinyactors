@@ -125,6 +125,7 @@
     <problem>One chart is one entity. A real system has many actors that send each other events, go idle and come back.</problem>
     <passage>The chat tutorial builds a team chat from actors like this order, one step at a time, with rooms, presence and idle users saved to a store. Writing charts covers the rest of SCXML as tinyactors runs it: scripts, sends between actors and charts that start other charts.</passage>
     <actions>
+      <action to="docs-quickstart">Run it in five minutes</action>
       <action to="chat">Build a team chat</action>
       <action to="guide-charts" section="first-chart">Write your first chart</action>
     </actions>

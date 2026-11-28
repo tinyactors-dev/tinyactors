@@ -1,0 +1,73 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<page xmlns="https://www.tinyactors.dev/ns/site" id="docs" path="/docs/">
+  <title>Documentation · tinyactors</title>
+  <description>Everything about tinyactors in one place: the quickstart, the ideas behind statecharts and actors, the guides, the command line, the reference and the design.</description>
+  <purpose kind="reference" for="agent-platform workflow-tester tech-lead"/>
+  <hero>
+    <headline>Learn tinyactors, then look things up</headline>
+    <lede>Start with one program that runs in five minutes. Then read the ideas, follow a guide for each task, and look up the rest.</lede>
+  </hero>
+
+  <section id="start">
+    <heading>Start here</heading>
+    <list>
+      <item><term><link to="docs-quickstart">Quickstart</link></term><text>Install one package and run an order actor that retries its payment on its own, in Node.js, Python, a browser or C.</text></item>
+      <item><term><link to="docs-statecharts">Statecharts and actors in ten minutes</link></term><text>States, events, transitions, timers and actors, with an order you can drive in the page.</text></item>
+      <item><term><link to="chat">Build a team chat</link></term><text>A tutorial of nine steps, from one room to direct messages, each a program that runs.</text></item>
+      <item><term><link to="docs-agents">Build with a coding agent</link></term><text>Give your agent the docs and the skill, and check what it writes in CI.</text></item>
+    </list>
+  </section>
+
+  <section id="guides">
+    <heading>Guides for each task</heading>
+    <list>
+      <item><term><link to="guides">All guides</link></term><text>Writing and testing charts, connecting actors to your code, running a host in production and in the browser.</text></item>
+      <item><term><link to="guide-testing">Test your charts</link></term><text>A payment that retries every 30 seconds runs all its attempts in a test that takes milliseconds.</text></item>
+      <item><term><link to="guide-hibernation">Keep waiting actors out of memory</link></term><text>Two million actors ran with at most 1000 in memory and the rest in a database.</text></item>
+      <item><term><link to="guide-migration">Change the chart of running actors</link></term><text>Add a new version to the running process, and move each actor to it with the state it reached.</text></item>
+      <item><term><link to="guide-journal">Journal and replay</link></term><text>Record every input, and one loop rebuilds every actor after a crash.</text></item>
+      <item><term><link to="recipes">Recipes</link></term><text>Example applications named after what people build: order fulfillment, billing, a job scheduler, an HTTP gateway and more.</text></item>
+    </list>
+  </section>
+
+  <section id="cli">
+    <heading>Check and run charts from the command line</heading>
+    <list>
+      <item><term><link to="cli">The tinyactors command</link></term><text>Compile, check, compare, draw and run charts, and read snapshots offline.</text></item>
+      <item><term><link to="cli-tutorial">Tutorial</link></term><text>From a draft chart with a misspelt event to a deploy you can compare.</text></item>
+      <item><term><link to="cli-ci">CI checks</link></term><text>Fail a build when a chart has an error or its behavior changed.</text></item>
+    </list>
+  </section>
+
+  <section id="reference">
+    <heading>Look things up</heading>
+    <list>
+      <item><term><link to="cli-commands">Command reference</link></term><text>Every command of the tinyactors command, with its options and examples.</text></item>
+      <item><term><link href="https://github.com/tinyactors-dev/tinyactors-napi#readme">@tinyactors/node</link></term><text>The Node.js and Bun package's API, in its README.</text></item>
+      <item><term><link href="https://github.com/tinyactors-dev/tinyactors-cpython#readme">tinyactors for Python</link></term><text>The Python package's API, in its README.</text></item>
+      <item><term><link href="https://github.com/tinyactors-dev/tinyactors/blob/main/tinyactors-core/docs/embedding.md">The C library</link></term><text>How to embed the core in C: the loop, lifetimes and memory.</text></item>
+      <item><term><link to="changelog">Changelog</link></term><text>What changed in each release of each package.</text></item>
+      <item><term><link to="performance">Memory, capacity and performance</link></term><text>What an actor costs, and the programs that measured it.</text></item>
+    </list>
+  </section>
+
+  <section id="explanation">
+    <heading>Understand the design</heading>
+    <list>
+      <item><term><link to="when-to-use">When to use tinyactors</link></term><text>What it fits, its limits, what a crash keeps, and how it compares with Temporal, Durable Objects, Rivet and XState.</text></item>
+      <item><term><link to="architecture">Architecture</link></term><text>How a host runs actors in your process, from the effects loop to the bytes of a snapshot.</text></item>
+      <item><term><link to="cli-why">The command line and the libraries</link></term><text>When to reach for the command, and when for a library in your program.</text></item>
+      <item><term><link to="about">Why tinyactors exists</link></term><text>Who makes it, and why.</text></item>
+    </list>
+  </section>
+
+  <section id="demos">
+    <heading>See it run</heading>
+    <list>
+      <item><term><link to="anthill">A million ants</link></term><text>Two colonies in your browser, every ant an actor.</text></item>
+      <item><term><link to="property-testing">Property testing</link></term><text>A thousand generated runs of a payment, checked against rules in the page.</text></item>
+      <item><term><link to="telemetry">Telemetry</link></term><text>Every step of every actor as an OpenTelemetry span.</text></item>
+      <item><term><link to="inspector">Snapshot inspector</link></term><text>Open a snapshot and read every actor in it.</text></item>
+    </list>
+  </section>
+</page>

@@ -92,3 +92,5 @@
 /compare/durable-objects/
 /compare/rivet/
 /compare/xstate/
+/docs/
+/docs/quickstart/

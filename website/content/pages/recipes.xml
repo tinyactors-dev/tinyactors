@@ -1,12 +1,12 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <page xmlns="https://www.tinyactors.dev/ns/site" id="recipes" path="/recipes/">
   <title>Recipes · tinyactors</title>
-  <description>Eleven applications built with tinyactors, from a shop's orders to a game server that survives being killed, each with its problem, the features it uses and its source.</description>
+  <description>Ten applications built with tinyactors, from a shop's orders to a game server that survives being killed, each with its problem, the features it uses and its source.</description>
   <purpose kind="reference" for="agent-platform workflow-tester tech-lead"/>
 
   <hero>
     <headline>Start from an application like yours</headline>
-    <lede>Eleven applications, from a shop's orders to a game server that comes back after <code>SIGKILL</code>. Each one's test plays the cases that make it hard, under Node.js and under Bun.</lede>
+    <lede>Ten applications, from a shop's orders to a game server that comes back after <code>SIGKILL</code>. Each one's test plays the cases that make it hard, under Node.js and under Bun.</lede>
     <actions>
       <action href="https://github.com/tinyactors-dev/tinyactors/tree/main/tinyactors-napi/examples">Read the source</action>
       <action to="guides">Browse the guides</action>
@@ -50,10 +50,9 @@
   </section>
 
   <section id="realtime">
-    <heading>Turn timers and safety rules as states</heading>
+    <heading>Turn timers that survive a crash</heading>
     <list>
       <item><term><link href="https://github.com/tinyactors-dev/tinyactors/tree/main/tinyactors-napi/examples/turn-game">A game server that survives being killed</link></term><text>A match's turn timers must come back from a crash with the time they had left. The server takes <link to="guide-snapshots">a snapshot</link> of the whole host every second, <link to="guide-journal">journals</link> each client input, and after <code>SIGKILL</code> restores and replays the journal, or drops it. Its matchmaking service <link to="guide-snapshots" section="restarting-services">starts again</link> from the lobby's waiting list.</text></item>
-      <item><term><link href="https://github.com/tinyactors-dev/tinyactors/tree/main/tinyactors-napi/examples/elevator-control">A bank of elevators and its dispatcher</link></term><text>A car must never move with its doors open, and maintenance must resume it exactly where it was. Each car is a parallel chart of motion, doors and load, guarded by <code>In()</code>, with a deep history for maintenance. Its <link to="property-testing">generated scenarios</link> check the rules on every step, and found two mistakes in the charts' first version.</text></item>
     </list>
   </section>
 
