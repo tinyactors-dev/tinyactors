@@ -27,12 +27,17 @@ and audiences"). Decide both before writing a word.
 - **Kind:** `pitch` (deciding whether to adopt), `tutorial` (learning by
   doing), `how-to` (reaching a goal), `reference` (looking up facts),
   `explanation` (understanding why). A page does one. When a second need
-  pulls at it, link the page that answers it, or write that page.
+  pulls at it, link the page that answers it, or write that page. A
+  comparison with another product (`/compare/<rival>/`) is a `pitch`:
+  the reader is deciding.
 - **Audience:** the main one first, from `content/site.xml`'s
   `<audiences>`. Read the audience's `knows`, `want`, `task` and
   `objection` lines: they say what the reader brings, what to explain
   and what to leave out. `build/needs.json` lists the needs no section
-  answers yet; a new page should take some off it.
+  answers yet; a new page should take some off it. When the page answers
+  a need no audience lists (a comparison with a rival the audience
+  names, a question readers ask), add that need to the audience in
+  `site.xml` with a new id, and mark the section that answers it.
 - Write for the role by choosing what to explain. Never name it on the
   page.
 
@@ -66,13 +71,21 @@ step 6 reads them again.
 
 ## 4. The facts
 
-A number or a claim in copy comes from the repository: a transcluded
-table, a measurement in an example's README, a guide, a test, or a live
-chart on the page itself. Find it before writing it, and link it as the
+A number or a claim about tinyactors comes from the repository: a
+transcluded table, a measurement in an example's README, a guide, a
+test, or a live chart on the page itself. A claim about another product
+comes from that product's own documentation, fetched and read, and is
+written as a `<claim>` whose `<source href>` links the page it came
+from; never from memory, a blog post or a competitor's comparison. Find it before writing it, and link it as the
 claim's source. Where the page measures live (the anthill), the copy
 names what the reader will see and states no recorded numbers. When a
 measurement is redone, change the copy that quotes it. Code a page shows
 is code that ran (`website/AGENTS.md`, "Content first").
+
+Code a page excerpts with `<code src lines>` shows every name it uses
+(or the lines that define them) and the line that prints its output;
+otherwise show the whole file. A reader who meets an undefined name, or
+an output no line prints, stops trusting the example.
 
 Do not claim a feature that does not exist. Keep the pitch's words:
 properties and generated runs, never formal verification.
@@ -87,6 +100,12 @@ can open.
 - **A pitch** leads with the reader's problem and the claim that
   answers it, then one section per thing the reader must believe, each
   with its proof, then the next step.
+- **A comparison** opens with the reader's problem in the other
+  product's terms, then a section for each difference the reader will
+  doubt (where it runs, how it is tested, what a crash keeps, how it
+  changes), each with a claim for both sides and its proof, then two
+  lists: what to choose tinyactors for, and when to choose the other.
+  The other side's list has real reasons, taken from its own docs.
 - **A demo page** leads with the experience: the hero invites the reader
   to watch or try ("Watch a million ants forage and fight."), the demo
   follows at once, then how it works, piece by piece, then what it costs
@@ -161,7 +180,7 @@ The schema refuses a final period.
 ```sh
 cd website
 sxml xpath --context-item=content/pages/anthill.xml \
-  'for $e in //*:headline | //*:lede | //*:heading | //*:p | //*:passage | //*:problem | //*:statement | //*:item/*:text | //*:caption | //*:description
+  'for $e in //*:headline | //*:lede | //*:heading | //*:p | //*:passage | //*:problem | //*:statement | //*:item/*:term | //*:item/*:text | //*:caption | //*:description
    return local-name($e) || ": " || normalize-space($e)'
 ```
 
@@ -190,10 +209,16 @@ Then, for each line:
    block against the block.
 5. Read the page's order against "How a page is ordered".
 
-Measure the rhythm of the whole page once:
-`../developer-voice/scripts/measure.py` on its built `index.md`. A spread
-under 7 means sentences of one length; rewrite until short ones land the
-points.
+Measure the rhythm of the whole page once, after `mise run build`:
+
+```sh
+python3 .agents/skills/developer-voice/scripts/measure.py page=build/site/<path>/index.md
+```
+
+Each argument is `LABEL=PATH`; a directory path measures every page in
+it. A spread under 5 means sentences of one length: rewrite until short
+ones land the points, and aim for 6 or more. Claims and list items are
+not counted, so a page of claims measures its prose only.
 
 ## 7. The review as a fresh reader
 
@@ -219,8 +244,10 @@ Take screenshots with Playwright when the review is to be shown
 (`deviceScaleFactor: 2`).
 
 **A fresh agent as the reader.** Give a new agent, with none of your
-context, only the page's URL (or its `index.md`) and the audience's
-description from `site.xml` (`description`, `knows`), and ask:
+context, only the page's built Markdown (`build/site/<path>/index.md`
+after `mise run build`; a page not yet deployed has no URL it can
+reach) and the audience's description from `site.xml` (`description`,
+`knows`). Tell it to read nothing else and open no link, and ask:
 
 1. What does this page say, in one sentence?
 2. What would you do next, and why?
@@ -229,7 +256,12 @@ description from `site.xml` (`description`, `knows`), and ask:
 
 Compare its first answer with the message from step 2. A different
 sentence means the page says something else; fix the page, not the
-agent's answer.
+agent's answer. The `Kind:`, `For:` and `Voice:` lines at the top of
+`index.md` are for agents; tell the reader to skip them.
+
+If you cannot start an agent, do not answer the questions yourself: you
+know too much. Say in your report that the fresh reader is still to do,
+and hand it to whoever can start one.
 
 ## 8. Shipping
 

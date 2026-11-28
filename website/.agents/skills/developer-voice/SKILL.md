@@ -182,8 +182,10 @@ role, never explaining how the site is made.
 1. Does the page open with a problem the reader has had, in code or in
    their words?
 2. Read the sentences aloud. Is there a short one that lands each point?
-   Run `scripts/measure.py` on the page: a spread under 7 means the
-   rhythm is flat.
+   Run `scripts/measure.py page=build/site/<path>/index.md`: a spread
+   under 5 means the rhythm is flat; aim for 6 or more. (The three sites
+   measure 7 to 10 on whole pages with sentences up to 40 words; our cap
+   is 30.)
 3. Does every comparison give the other side real entries?
 4. Does every number say under what conditions, and which way it leans?
 5. Does a tutorial step say what you will see?
