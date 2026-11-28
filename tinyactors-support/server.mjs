@@ -3,7 +3,10 @@
 //
 //   PORT                  8000 (exe's proxy forwards to it)
 //   PUBLIC_URL            the URL clients reach, https://mcp.tinyactors.dev
-//   DATA_DIR              the snapshot, the store, the ledger, the clients, the files
+//   DATA_DIR              the snapshot, the store, the catalog (catalog.sqlite: every
+//                         issue and its ledger), the clients, the files
+//   REBUILD               1: start the actors from the catalog, the snapshot and the
+//                         store set aside (`mise run rebuild`); people sign in again
 //   GITHUB_APP_ID, GITHUB_APP_CLIENT_ID, GITHUB_APP_CLIENT_SECRET, GITHUB_APP_PRIVATE_KEY
 //                         the GitHub App; without all four, the stand-in GitHub
 //                         (fake repositories) and the stand-in login
@@ -21,10 +24,10 @@ import { Gateway } from './lib/gateway.mjs';
 import { Content } from './lib/content.mjs';
 import { serve } from './lib/http.mjs';
 import { DiskBlobs } from './lib/processors/blobs.mjs';
-import { Ledger } from './lib/processors/ledger.mjs';
+import { Catalog } from './lib/processors/catalog.mjs';
 import { Scanner } from './lib/processors/scan.mjs';
 import { Jev } from './lib/processors/jev.mjs';
-import { backfillTimestamps } from './lib/backfill.mjs';
+import { migrateToCatalog } from './lib/migrate.mjs';
 import { GitHubApp } from './lib/processors/github.mjs';
 import { FakeGitHub } from './lib/processors/standins.mjs';
 
@@ -48,24 +51,29 @@ const github = app
                     privateKey: env.GITHUB_APP_PRIVATE_KEY.replace(/\\n/g, '\n'), org: env.GITHUB_ORG ?? 'tinyactors-dev', base })
   : new FakeGitHub();
 const blobs = new DiskBlobs({ directory: join(data, 'files'), secret: fileSecret(), base });
-const ledger = new Ledger(join(data, 'ledger.sqlite'));
+const catalog = new Catalog(join(data, 'catalog.sqlite'));
 const support = new Support({
-  data, log,
-  processors: { github: github.processor, ledger: ledger.processor, decide: new Jev({ key: env.TYPESAFE_API_KEY }).processor,
+  data, log, rebuild: env.REBUILD === '1',
+  processors: { github: github.processor, catalog: catalog.processor, decide: new Jev({ key: env.TYPESAFE_API_KEY }).processor,
                 blobs: blobs.processor, scan: new Scanner(blobs, env.TINYACTORS_CLI).processor },
 });
 const content = new Content({
   skills: new URL('./skills/', import.meta.url).pathname,
   docs: [{ directory: new URL('./content/', import.meta.url).pathname, prefix: 'docs' }],
 });
-const gateway = new Gateway({ support, base, github: app ? github : null, blobs, content });
-const backfilled = await backfillTimestamps({ support, ledger });
-if (backfilled) log(`gave ${backfilled} issues their filed and updated times from the ledger`);
+const gateway = new Gateway({ support, base, github: app ? github : null, blobs, content, catalog });
+// the first start with a catalog: the old actors read before they move to the new charts
+await migrateToCatalog({ support, catalog, data, log });
+support.upgrade();
+// the repositories' names, for the reads, as the tracker has them now
+const { data: listed } = await support.request('tracker', 'projects.list', {});
+if (listed?.projects) catalog.projects(listed.projects);
 const server = await serve({ support, gateway, port, log, clientsPath: join(data, 'clients.sqlite'),
                              standinUsers: app ? null : Object.values(new FakeGitHub().users).map((u) => u.login) });
 log(`tinyactors-support on ${base} (port ${port}): ${app ? 'the GitHub App' : 'the stand-in GitHub and login'}, ` +
     `${env.TYPESAFE_API_KEY ? 'Jev' : 'no Jev'}, ${content.skills.length} skills, ${content.docs.length} documents, ` +
-    `${support.restored ? 'restored' : 'a new host'}`);
+    `${support.restored ? 'restored' : env.REBUILD === '1' ? 'rebuilt from the catalog' : 'a new host'}, ` +
+    `${catalog.issueCount()} issues in the catalog`);
 
 let stopping = false;
 async function stop(signal) {
@@ -74,7 +82,7 @@ async function stop(signal) {
   log(`${signal}: stopping`);
   server.close();
   await support.close();
-  ledger.close();
+  catalog.close();
   log('stopped: the snapshot is on disk');
   process.exit(0);
 }

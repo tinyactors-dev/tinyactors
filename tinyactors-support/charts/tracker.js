@@ -52,7 +52,7 @@ function validNames(repos) {
 
 function projectList(repos) {
   return Object.keys(repos).map(function (id) {
-    return { repoID: id, name: repos[id].name, slug: repos[id].slug, archived: repos[id].archived };
+    return { repoID: id, name: repos[id].name, slug: repos[id].slug, archived: repos[id].archived, names: repos[id].names };
   });
 }
 

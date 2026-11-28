@@ -1,10 +1,15 @@
 // The host: the charts on @tinyactors/node, the I/O processors, the store
 // of hibernated actors and the snapshots that carry it all over a restart.
 //
-// Durability is the snapshot and the store together (the ledger is the
-// journal). A blob is deleted only once a snapshot that no longer needs it
-// is on disk (DeferredStore), and a snapshot is taken shortly after each
-// change and at shutdown, so a crash loses at most the last seconds.
+// The actors' durability is the snapshot and the store together. A blob is
+// deleted only once a snapshot that no longer needs it is on disk
+// (DeferredStore), and a snapshot is taken shortly after each change and
+// at shutdown, so a crash loses at most the last seconds of the actors'
+// state. The issues themselves are the catalog's (catalog.sqlite), written
+// before each answer: without a snapshot (`rebuild`: lost, or unreadable)
+// the host starts empty and the tracker and the projects spawn every
+// project and issue again from it; logins, users and grants are not in
+// it, so people sign in again.
 
 import { existsSync, readFileSync, renameSync, writeFileSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
@@ -26,14 +31,23 @@ class DeferredStore {
 }
 
 export class Support {
-  // processors: {github, ledger, decide, blobs, scan}, each `(event, data) => answer`
+  // processors: {github, catalog, decide, blobs, scan}, each `(event, data) => answer`
   // data: a directory for the snapshot and the store, or null (in memory, tests)
-  constructor({ processors, data = null, clock, resident = 1000, log = () => {}, snapshotDelay = 2000 }) {
+  // rebuild: start from the catalog, the snapshot and the store set aside
+  // (renamed with the time: never deleted)
+  constructor({ processors, data = null, clock, resident = 1000, log = () => {}, snapshotDelay = 2000, rebuild = false }) {
     this.log = log;
     this.data = data;
     this.snapshotDelay = snapshotDelay;
     this.clock = clock;
     if (data) mkdirSync(data, { recursive: true });
+    if (data && rebuild) {
+      const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+      for (const file of ['host.snapshot', 'store.sqlite', 'store.sqlite-wal', 'store.sqlite-shm']) {
+        if (existsSync(join(data, file))) renameSync(join(data, file), join(data, `${file}.before-rebuild-${stamp}`));
+      }
+      log(`rebuild: the snapshot and the store set aside (.before-rebuild-${stamp}); the actors start from the catalog`);
+    }
     this.store = new DeferredStore(new SQLiteStore(data ? join(data, 'store.sqlite') : ':memory:'));
     this.compiled = compile();
     const options = {
@@ -41,6 +55,8 @@ export class Support {
       ioProcessors: {
         spawn: new Spawner(),
         ...Object.fromEntries(Object.entries(processors).map(([type, handle]) => [type, processor(handle)])),
+        // the catalog's name before it was one: for actors on charts of before
+        ...(processors.catalog && !processors.ledger ? { ledger: processor(processors.catalog) } : {}),
       },
       log: (entry) => log(`[${entry.label || 'chart'}] ${entry.text}`),
       onDone: (actor, donedata) => this.onDone?.(actor, donedata),
@@ -52,8 +68,6 @@ export class Support {
       this.host = Host.restore(readFileSync(snapshotPath), this.compiled, options);
       this.restored = true;
       log(`restored from ${snapshotPath}`);
-      // charts deployed since the snapshot are a new version: move every actor to it
-      try { this.host.migrate({ wake: true }); } catch (error) { log(`no migration: ${error.message}`); }
     } else {
       this.host = new Host(this.compiled, options);
       this.host.spawn('tracker', { name: 'tracker' });
@@ -66,6 +80,13 @@ export class Support {
     // a change too: a snapshot every five minutes covers it.
     this.periodic = snapshotPath ? setInterval(() => this.changed(), 300_000) : null;
     this.periodic?.unref?.();
+  }
+
+  // Charts deployed since the snapshot are a new version: every actor moves
+  // to it. A step of its own, so the server can read the old actors first.
+  upgrade() {
+    if (!this.restored) return;
+    try { this.host.migrate({ wake: true }); } catch (error) { this.log(`no migration: ${error.message}`); }
   }
 
   now() { return this.host.now(); }

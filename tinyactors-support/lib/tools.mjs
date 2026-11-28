@@ -83,7 +83,7 @@ const OUTPUT = {
                                                    archived: boolean('archived on GitHub: no new reports'),
                                                    components: array({ type: 'string' }, 'its top-level directories') }),
                                           'every repository the tracker knows') }),
-  known_issues: output({ issues: array(summary, 'the issues, costliest first (reports times minutes)') }),
+  known_issues: output({ issues: array(summary, 'the issues, costliest first (reports times minutes), or best match first for a query') }),
   get_issue: output({
     id: issueID, repo: text('owner/name'), n: number('its number'), title: text('its title'),
     state: { type: 'string', enum: STATES }, component: text('its top-level directory'), kind: { type: 'string', enum: KINDS },
@@ -152,7 +152,8 @@ export const TOOLS = {
   known_issues: { access: 'anyone', meta: app,
     description: 'The open issues, costliest first, with their workarounds: look here before you report. Shows the issue list where the host renders apps.',
     input: object({ repo: text('owner/name, or a project\'s slug; all when absent'), component: text('a top-level directory'),
-      state: { type: 'string', enum: ['open', 'all', ...STATES], description: 'open (new, triaged, regressed; the default), all, or one state' } }) },
+      state: { type: 'string', enum: ['open', 'all', ...STATES], description: 'open (new, triaged, regressed; the default), all, or one state' },
+      query: text('words to search titles, reports and workarounds for (full text, stemmed); the best matches first') }) },
   get_issue: { access: 'anyone', meta: app, description: 'One issue: its state, workaround, fix and attachments',
     input: object({ id: issueID }, ['id']) },
   // signed in

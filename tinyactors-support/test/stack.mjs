@@ -12,7 +12,7 @@ import { Support } from '../lib/host.mjs';
 import { Gateway } from '../lib/gateway.mjs';
 import { Content } from '../lib/content.mjs';
 import { MemoryBlobs } from '../lib/processors/blobs.mjs';
-import { Ledger } from '../lib/processors/ledger.mjs';
+import { Catalog } from '../lib/processors/catalog.mjs';
 import { Scanner } from '../lib/processors/scan.mjs';
 import { FakeGitHub, FakeJev } from '../lib/processors/standins.mjs';
 import { AjvJsonSchemaValidator } from '@modelcontextprotocol/sdk/validation/ajv';
@@ -48,24 +48,25 @@ const CLI = new URL('../../tinyactors-core/build/dev/bin/tinyactors', import.met
 
 export function sha(bytes) { return createHash('sha256').update(bytes).digest('hex'); }
 
-export async function stack({ data = mkdtempSync(join(tmpdir(), 'support-')), resident = 6, shared = null } = {}) {
+export async function stack({ data = mkdtempSync(join(tmpdir(), 'support-')), resident = 6, shared = null, rebuild = false } = {}) {
   const parts = shared ?? {
-    github: new FakeGitHub(), jev: new FakeJev(), ledger: new Ledger(),
+    github: new FakeGitHub(), jev: new FakeJev(), catalog: new Catalog(),
     blobs: new MemoryBlobs({ secret: 'test', base: BASE }),
   };
   parts.scanner ??= new Scanner(parts.blobs, existsSync(CLI) ? CLI : undefined);
   const clock = new SimulatedClock(), ended = [], faults = [];
   const support = new Support({
-    data, clock, resident, snapshotDelay: 1e9,
+    data, clock, resident, snapshotDelay: 1e9, rebuild,
     log: (line) => { if (/faulted|failed/.test(line)) faults.push(line); },
-    processors: { github: parts.github.processor, ledger: parts.ledger.processor, decide: parts.jev.processor,
+    processors: { github: parts.github.processor, catalog: parts.catalog.processor, decide: parts.jev.processor,
                   blobs: parts.blobs.processor, scan: parts.scanner.processor },
   });
-  parts.ledger.now = () => support.wallNow();   // the ledger's times on the simulated clock
+  parts.catalog.now = () => support.wallNow();   // the catalog's times on the simulated clock
+  support.upgrade();
   support.onDone = (_actor, donedata) => ended.push(donedata);
   const content = new Content({ skills: new URL('../skills/', import.meta.url).pathname,
                                 docs: [{ directory: new URL('./fixtures/docs/', import.meta.url).pathname, prefix: 'docs' }] });
-  const gateway = new Gateway({ support, base: BASE, blobs: parts.blobs, content });
+  const gateway = new Gateway({ support, base: BASE, blobs: parts.blobs, content, catalog: parts.catalog });
   const idle = () => support.host.idle();
   await idle();
 

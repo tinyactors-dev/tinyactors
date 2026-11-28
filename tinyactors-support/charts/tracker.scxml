@@ -5,7 +5,10 @@
      It reconciles one project actor per repository GitHub lists, as a
      collection actor: it alone spawns project names, through the Spawner,
      and records its spawns in flight (creating, keyed by sendid), so a
-     request for a project still starting waits for it. It never ends. -->
+     request for a project still starting waits for it. The catalog keeps
+     its inventory (each pull's is written there): spawned with none (a
+     rebuild from the catalog after a lost snapshot), it loads it first and
+     spawns its projects again, under the slugs they had. It never ends. -->
 <scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0"
        datamodel="ecmascript" name="tracker" initial="running">
   <script src="tracker.js"/>
@@ -23,7 +26,23 @@
   </datamodel>
 
   <parallel id="running">
-    <state id="inventory" initial="pulling">
+    <state id="inventory" initial="loading">
+      <state id="loading">
+        <onentry><send type="catalog" event="catalog.inventory" id="inventory"/></onentry>
+        <transition event="inventory" target="pulling">
+          <assign location="repos" expr="_event.data.repos"/>
+          <assign location="byName" expr="names(repos)"/>
+          <foreach array="Object.keys(repos)" item="item">
+            <send type="spawn" event="project" idlocation="sid">
+              <content expr="({ chart: 'project', name: 'project.' + item,
+                                params: { repoID: Number(item), name: repos[item].name, slug: repos[item].slug } })"/>
+            </send>
+            <assign location="creating" expr="put(creating, sid, { repoID: item, waiting: [] })"/>
+            <assign location="starting" expr="put(starting, item, sid)"/>
+          </foreach>
+        </transition>
+        <transition event="error.communication" cond="_event.sendid === 'inventory'" target="pulling"/>
+      </state>
       <state id="pulling">
         <onentry>
           <send type="github" event="repos.list" id="pull"><param name="etag" expr="etag"/></send>
@@ -52,6 +71,7 @@
           </foreach>
           <assign location="repos" expr="inventory(repos, _event.data.repos, plan(repos, _event.data.repos))"/>
           <assign location="byName" expr="names(repos)"/>
+          <send type="catalog" event="catalog.projects"><param name="projects" expr="projectList(repos)"/></send>
         </transition>
         <transition event="repos.unchanged" target="idle"/>
         <transition event="github.unavailable" target="waiting">
@@ -75,18 +95,18 @@
 
     <state id="serving">
       <!-- every request about a repository's issues is routed by repository -->
-      <transition event="report issues.list issue.get workaround triage close wontfix attach.open attachment.get project.get issue.delete"
+      <transition event="report workaround triage close wontfix attach.open attachment.get project.get issue.delete"
                   cond="refusal(repos, byName, _event) !== null">
         <send targetexpr="replyTo(_event)" event="refused">
           <param name="reason" expr="refusal(repos, byName, _event)"/>
           <param name="valid" expr="validNames(repos)"/>
         </send>
       </transition>
-      <transition event="report issues.list issue.get workaround triage close wontfix attach.open attachment.get project.get issue.delete"
+      <transition event="report workaround triage close wontfix attach.open attachment.get project.get issue.delete"
                   cond="has(starting, byName[_event.data.repo])">
         <assign location="creating" expr="waitFor(creating, starting[byName[_event.data.repo]], _event)"/>
       </transition>
-      <transition event="report issues.list issue.get workaround triage close wontfix attach.open attachment.get project.get issue.delete">
+      <transition event="report workaround triage close wontfix attach.open attachment.get project.get issue.delete">
         <send targetexpr="addr('project.' + byName[_event.data.repo])" eventexpr="_event.name">
           <content expr="forwarded(_event)"/>
         </send>

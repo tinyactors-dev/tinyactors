@@ -1,0 +1,20 @@
+#!/usr/bin/env ruby
+#MISE description="Start the actors on ta-mcp again from the catalog, for a lost or unreadable snapshot: the service stopped, the snapshot and the store set aside (renamed with the time, never deleted), the service started (a host with no snapshot spawns the tracker, its projects and their issues from catalog.sqlite); logins, users and grants are not in the catalog, so people sign in again"
+# vim:ft=ruby
+
+require_relative '../support'
+
+Support.secrets!
+data = "#{Support::HOME}/support/data"
+puts Support.vm(<<~BASH, timeout: 120)
+  set -euo pipefail
+  test -f #{data}/catalog.sqlite || { echo "rebuild: no catalog in #{data}: nothing to rebuild from"; exit 1; }
+  sudo systemctl stop tinyactors-support
+  stamp=$(date -u +%Y%m%dT%H%M%SZ)
+  for f in host.snapshot store.sqlite store.sqlite-wal store.sqlite-shm; do
+    if test -f #{data}/$f; then mv #{data}/$f #{data}/$f.before-rebuild-$stamp; echo "set aside: $f.before-rebuild-$stamp"; fi
+  done
+  sudo systemctl start tinyactors-support
+  for i in $(seq 1 40); do curl -fsS localhost:#{Support::PORT}/healthz >/dev/null && break; sleep 0.5; done
+  sudo journalctl -u tinyactors-support -n 4 --no-pager -o cat
+BASH

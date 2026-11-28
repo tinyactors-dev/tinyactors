@@ -76,11 +76,37 @@ with `domain add ta-mcp mcp.tinyactors.dev`, and the VM's proxy is public.
 | `lib/tools.mjs` | the tools: input and output schemas, and the line of text for each result |
 | `lib/app/` | the issue list app: its source, and `issues.html`, which `tools/build-app.mjs` builds with the design system's tokens |
 | `lib/http.mjs` | MCP over HTTP, the OAuth endpoints, the stand-in login, files |
-| `lib/processors/` | GitHub (the App, and the stand-in), Jev, the ledger, blobs, the scan |
+| `lib/processors/` | GitHub (the App, and the stand-in), Jev, the catalog, blobs, the scan |
+| `lib/processors/catalog.mjs` | the catalog (`catalog.sqlite`): every issue in full, its reports and files, full text search, and the ledger it is a projection of |
+| `lib/migrate.mjs` | the one-time move from the ledger of before to the catalog |
 | `lib/skills.mjs`, `skills/` | the skills (each a `SKILL.md` and its `references/`) as one manifest: digests, sizes, frontmatter, directories |
 | `lib/content.mjs` | the skills for the tools, and the documentation search |
 | `tools/check-skill-samples.mjs` | runs every code sample of the skills (`--python` runs the Python ones too) |
 | `server.mjs` | the entry point and its configuration |
-| `test/` | the scenario, the tools' typed results, the HTTP test, the app in Chromium |
+| `test/` | the scenario, the tools' typed results, the catalog and its recovery, the HTTP test, the app in Chromium |
 | `tools/check-github.mjs` | the read-only checks of the GitHub App, run on the VM |
 | `mise/` | the VM, its secrets, the deploy, the smoke test |
+
+## Where the issues are, and recovery
+
+Every issue is in the catalog, `DATA_DIR/catalog.sqlite`: its title, body,
+reports, workaround, fix and files, with the ledger of every change, both
+written in one transaction before the change is answered. Readers
+(`known_issues`, with `query` for full text search, `get_issue`, the app)
+read it and wake no actor. The actors keep what their decisions need (an
+issue its state, title, reporters, fix and files' keys; a project its
+issues' states and fingerprints), in the snapshot (`host.snapshot`) and
+the store of hibernated actors (`store.sqlite`).
+
+- **The snapshot is lost or unreadable:** `mise run rebuild` stops the
+  service, sets the snapshot and the store aside (renamed, never deleted)
+  and starts it with `REBUILD=1`: the tracker, its projects and their
+  issues are spawned again from the catalog, under their identifiers,
+  numbers going on. Logins, users and grants are not in the catalog:
+  people sign in again. Timers start again from the rebuild (a fixed
+  issue's fortnight before it closes, a closed one's 90 days before its
+  files go).
+- **The catalog's rows are wrong or from an older schema:** they are a
+  projection of its ledger; `Catalog#rebuild()` replays the ledger into
+  them.
+- **The catalog is lost:** the backups (below) have it.

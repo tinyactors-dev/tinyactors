@@ -63,7 +63,7 @@ describe('the tools: typed results, short text', () => {
     assert.match(checked('report_issue', counted), /^Counted on tinyactors:tinyactors-napi:1 \(2 reports\)/);
     const refused = await s.tool(ann, 'report_issue', { ...report, component: 'benches' });
     assert.match(checked('report_issue', refused), /^Refused: unknown component benches \(valid: .*examples/);
-    s.ledger.failing = 1;   // the ledger refuses the filing of the next new issue
+    s.catalog.failing = 1;   // the ledger refuses the filing of the next new issue
     const failed = await s.tool(ann, 'report_issue', { repo: napi, component: 'docs', kind: 'docs', title: 'quantum widgets render backwards',
                                                          body: 'zzz' });
     assert.equal(failed.answer, 'failed');
@@ -102,17 +102,17 @@ describe('the tools: typed results, short text', () => {
     assert.equal(put.status, 201);
     const keys = () => [...s.blobs.objects.keys()].filter((k) => k.includes(`/${spam.split(':')[2]}/`));
     assert.equal(keys().length, 1);
-    const before = s.ledger.records.length;
+    const before = s.catalog.records.length;
     assert.equal((await s.tool(ann, 'delete_issue', { id: spam })).answer, 'refused');   // not a maintainer
     const deleted = await s.tool(bob, 'delete_issue', { id: spam, reason: 'spam' });
     assert.equal(deleted.answer, 'deleted');
     assert.equal(checked('delete_issue', deleted), `Deleted ${spam}.`);
     assert.equal(keys().length, 0, 'its files are deleted at once');
     assert.ok(s.ended.some((d) => d?.deleted === spam), 'its actor ended');
-    const record = s.ledger.records.at(-1);
+    const record = s.catalog.records.at(-1);
     assert.deepEqual([record.kind, record.key, record.record.by, record.record.reason, record.record.title],
                      ['deleted', spam, 'bob', 'spam', 'buy cheap watches here']);
-    assert.ok(s.ledger.records.length > before && s.ledger.records.some((r) => r.key === spam && r.kind === 'filed'),
+    assert.ok(s.catalog.records.length > before && s.catalog.records.some((r) => r.key === spam && r.kind === 'filed'),
               'the earlier records stay');
     assert.match((await s.tool(null, 'get_issue', { id: spam })).reason, /was deleted/);
     assert.ok(!(await s.tool(null, 'known_issues', { state: 'all' })).issues.some((i) => i.id === spam));
@@ -130,10 +130,19 @@ describe('the tools: typed results, short text', () => {
     // a delete while the issue's spawn is in flight is refused, and the report that made it is filed
     const next = Number((await s.tool(null, 'known_issues', { state: 'all' })).issues.map((i) => Number(i.n))
       .reduce((a, b) => Math.max(a, b), 0)) + 1;   // the newest issue's number, plus one (deleted ones are older)
-    const [filed, early] = await Promise.all([
-      s.support.request('tracker', 'report', { ...fresh('lib', 'lib exports nothing for bun'), caller: cyCaller }),
-      s.support.request('tracker', 'issue.delete', { repo: napi, n: next, caller: bobCaller }),
-    ]);
+    // the delete goes to the project just after the catalog answers it the report's candidates
+    // (a few microtasks on: the answer is given once the processor's promise settles), so it
+    // comes while the new issue's spawn is in flight
+    const candidates = s.catalog.candidates.bind(s.catalog);
+    let early;
+    s.catalog.candidates = (query) => {
+      s.catalog.candidates = candidates;
+      early = Promise.resolve().then().then().then(() =>
+        s.support.request(`project.${query.repoID}`, 'issue.delete', { repo: napi, n: next, caller: bobCaller }));
+      return candidates(query);
+    };
+    const filed = await s.support.request('tracker', 'report', { ...fresh('lib', 'lib exports nothing for bun'), caller: cyCaller });
+    early = await early;
     assert.equal(filed.event, 'filed');
     assert.equal(filed.data.id, id(next));
     assert.equal(early.event, 'refused');
@@ -150,7 +159,7 @@ describe('the tools: typed results, short text', () => {
     assert.notEqual(paraphrase.data.id, target);
     // a delete the ledger refuses is failed, and the issue is back where it was
     const kept = await s.tool(ann, 'report_issue', fresh('test', 'the node tests leak a host'));
-    s.ledger.failing = 1;
+    s.catalog.failing = 1;
     assert.equal((await s.tool(bob, 'delete_issue', { id: kept.id })).answer, 'failed');
     assert.equal((await s.tool(null, 'get_issue', { id: kept.id })).state, 'new');
     assert.ok((await s.tool(null, 'known_issues')).issues.some((i) => i.id === kept.id));

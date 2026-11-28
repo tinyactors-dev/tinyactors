@@ -4,13 +4,23 @@
      A collection actor: it numbers issues, decides when two reports are
      the same issue (a fingerprint: the component and the title's
      words), and spawns issue.<repoID>.<n> through the Spawner. A report
-     for an issue whose spawn is in flight waits in creating. It keeps an
-     index of its issues, so a list wakes no issue.
+     for an issue whose spawn is in flight waits in creating. It keeps only
+     what routing needs: each issue's state and fingerprint; the issues
+     themselves are the catalog's, which readers read.
+
+     Spawned with no issues (a new repository, or a rebuild from the
+     catalog after a lost snapshot), it first loads what the catalog has
+     of its repository: its next number, its issues' fingerprints and
+     states, and each issue's subset, with which it spawns their actors
+     again. A rebuilt issue's timers (the autoclose, the purge) start
+     again from the rebuild.
 
      A report that matches no issue exactly is asked of the decision
      model (the decide processor: Jev, a model that picks among options
-     with probabilities): is it one of the open issues it could be, or a
-     new one, and what kind is it? The chart decides what the answer
+     with probabilities): is it one of the open issues it could be (the
+     catalog's full text search finds them: the closest twenty by bm25,
+     and the issues filed since the catalog last answered), or a new one,
+     and what kind is it? The chart decides what the answer
      means: a match only when the model is confident (accept), a new
      issue flagged as a possible duplicate for a maintainer when it is
      unsure (escalate), and a new issue when the model does not answer.
@@ -36,13 +46,14 @@
     <data id="deleted" expr="({})"/>     <!-- n -> true: deleted issues, so a read says so -->
     <data id="deleting" expr="({})"/>    <!-- n -> {entry, fingerprint}: out of the index while its delete is written -->
     <data id="fingerprints" expr="({})"/> <!-- fingerprint -> n -->
-    <data id="index" expr="({})"/>        <!-- n -> {title, component, kind, state, count, minutes, workaround} -->
+    <data id="index" expr="({})"/>        <!-- n -> {state}: the issues it routes to -->
+    <data id="fresh" expr="[]"/>          <!-- the last issues it filed, {n, title, component, kind, excerpt}: candidates the catalog may not have yet -->
     <data id="creating" expr="({})"/>     <!-- spawn sendid -> {n, replyTo, waiting: [{event, data}]} -->
     <data id="lastSha" expr="null"/>
     <data id="sid"/>
     <data id="item"/>
     <data id="backoff" expr="'60s'"/>
-    <data id="deciding" expr="null"/>     <!-- {sid, report, candidates} while the model is asked -->
+    <data id="deciding" expr="null"/>     <!-- {stage, sid, report, candidates, similar}: the catalog, then the model, asked -->
     <data id="queue" expr="[]"/>          <!-- reports waiting for the decision in flight -->
     <data id="verdict"/>
     <data id="dsid"/>
@@ -51,7 +62,40 @@
   </datamodel>
 
   <parallel id="running">
-    <state id="intake" initial="open">
+    <state id="intake" initial="loading">
+      <!-- what the catalog has of this repository; the reports that come meanwhile wait -->
+      <state id="loading">
+        <onentry>
+          <send type="catalog" event="catalog.project" id="load"><param name="repoID" expr="repoID"/></send>
+        </onentry>
+        <transition event="project.loaded" target="open">
+          <assign location="next" expr="_event.data.next"/>
+          <foreach array="_event.data.issues" item="item">
+            <if cond="item.deleted">
+              <assign location="deleted" expr="put(deleted, item.n, true)"/>
+            <else/>
+              <assign location="index" expr="put(index, item.n, { state: item.state })"/>
+              <assign location="fingerprints" expr="put(fingerprints, fingerprint(item.component, item.title), item.n)"/>
+              <send type="spawn" event="issue" idlocation="sid">
+                <content expr="({ chart: 'issue', name: 'issue.' + repoID + '.' + item.n,
+                                  params: { repoID: repoID, slug: slug, n: item.n, restored: item } })"/>
+              </send>
+              <assign location="creating" expr="put(creating, sid, { n: item.n, replyTo: null, waiting: [] })"/>
+            </if>
+          </foreach>
+          <foreach array="queue" item="item">
+            <send targetexpr="addr('project.' + repoID)" event="report"><content expr="item"/></send>
+          </foreach>
+          <assign location="queue" expr="[]"/>
+        </transition>
+        <transition event="error.communication" cond="_event.sendid === 'load'">
+          <send event="load.retry" id="load-retry" delay="5s"/>
+        </transition>
+        <transition event="load.retry" target="loading"/>
+        <transition event="report">
+          <assign location="queue" expr="push(queue, forwarded(_event))"/>
+        </transition>
+      </state>
       <state id="open">
         <transition event="report" cond="!components.includes(_event.data.component)">
           <send targetexpr="replyTo(_event)" event="refused">
@@ -77,26 +121,46 @@
         <transition event="report" cond="deciding !== null">
           <assign location="queue" expr="push(queue, forwarded(_event))"/>
         </transition>
-        <!-- nothing open it could be, and its kind given: a new issue, without asking -->
-        <transition event="report" cond="candidates(index, _event.data).length === 0 &amp;&amp; _event.data.kind">
-          <send target="#_internal" event="file.new">
-            <content expr="({ report: forwarded(_event), kind: _event.data.kind || 'tooling', possible: null })"/>
-          </send>
-        </transition>
+        <!-- the open issues it could be: the catalog's full text search, then the model -->
         <transition event="report">
-          <send type="decide" event="decide" idlocation="dsid">
-            <content expr="question(_event.data, candidates(index, _event.data))"/>
+          <send type="catalog" event="catalog.candidates" idlocation="dsid">
+            <param name="repoID" expr="repoID"/>
+            <param name="component" expr="_event.data.component"/>
+            <param name="title" expr="_event.data.title"/>
+            <param name="body" expr="_event.data.body || ''"/>
           </send>
-          <assign location="deciding" expr="({ sid: dsid, report: forwarded(_event),
-                   candidates: candidates(index, _event.data).map(function (c) { return c.n; }) })"/>
+          <assign location="deciding" expr="({ stage: 'candidates', sid: dsid, report: forwarded(_event) })"/>
+        </transition>
+        <!-- nothing open it could be, and its kind given: a new issue, without asking -->
+        <transition event="candidates" cond="deciding !== null &amp;&amp; _event.sendid === deciding.sid &amp;&amp;
+                    pool(_event.data.issues, fresh, index, deciding.report).length === 0 &amp;&amp; deciding.report.kind">
+          <send target="#_internal" event="file.new">
+            <content expr="({ report: deciding.report, kind: deciding.report.kind, possible: null, similar: [] })"/>
+          </send>
+          <raise event="decision.done"/>
+        </transition>
+        <transition event="candidates" cond="deciding !== null &amp;&amp; _event.sendid === deciding.sid">
+          <assign location="verdict" expr="pool(_event.data.issues, fresh, index, deciding.report)"/>
+          <send type="decide" event="decide" idlocation="dsid">
+            <content expr="question(deciding.report, verdict)"/>
+          </send>
+          <assign location="deciding" expr="({ stage: 'model', sid: dsid, report: deciding.report,
+                   candidates: verdict.map(function (c) { return c.n; }), similar: similar(verdict, deciding.report, slug) })"/>
           <send event="decide.timeout" id="decide-timeout" delay="5s"/>
+        </transition>
+        <!-- the catalog did not answer: a new issue, never lost -->
+        <transition event="error.communication" cond="deciding !== null &amp;&amp; deciding.stage === 'candidates' &amp;&amp; _event.sendid === deciding.sid">
+          <send target="#_internal" event="file.new">
+            <content expr="({ report: deciding.report, kind: deciding.report.kind || 'tooling', possible: null, similar: [] })"/>
+          </send>
+          <raise event="decision.done"/>
         </transition>
 
         <!-- the model's answer, and what the chart makes of it -->
-        <transition event="decided" cond="deciding !== null &amp;&amp; _event.sendid === deciding.sid">
+        <transition event="decided" cond="deciding !== null &amp;&amp; deciding.stage === 'model' &amp;&amp; _event.sendid === deciding.sid">
           <cancel sendid="decide-timeout"/>
           <assign location="verdict" expr="judge(_event.data.answers, deciding, { accept: accept, escalate: escalate, slug: slug })"/>
-          <send type="ledger" event="ledger.append">
+          <send type="catalog" event="ledger.append">
             <content expr="decision(slug, deciding, _event.data, verdict)"/>
           </send>
           <if cond="verdict.match !== null">
@@ -105,22 +169,22 @@
             </send>
           <else/>
             <send target="#_internal" event="file.new">
-              <content expr="({ report: deciding.report, kind: verdict.kind, possible: verdict.possible })"/>
+              <content expr="({ report: deciding.report, kind: verdict.kind, possible: verdict.possible, similar: deciding.similar })"/>
             </send>
           </if>
           <raise event="decision.done"/>
         </transition>
         <!-- no answer in time, or none at all: filed as new, never lost -->
-        <transition event="decide.timeout" cond="deciding !== null">
+        <transition event="decide.timeout" cond="deciding !== null &amp;&amp; deciding.stage === 'model'">
           <send target="#_internal" event="file.new">
-            <content expr="({ report: deciding.report, kind: deciding.report.kind || 'tooling', possible: null })"/>
+            <content expr="({ report: deciding.report, kind: deciding.report.kind || 'tooling', possible: null, similar: deciding.similar })"/>
           </send>
           <raise event="decision.done"/>
         </transition>
-        <transition event="decide.unavailable error.communication" cond="deciding !== null &amp;&amp; _event.sendid === deciding.sid">
+        <transition event="decide.unavailable error.communication" cond="deciding !== null &amp;&amp; deciding.stage === 'model' &amp;&amp; _event.sendid === deciding.sid">
           <cancel sendid="decide-timeout"/>
           <send target="#_internal" event="file.new">
-            <content expr="({ report: deciding.report, kind: deciding.report.kind || 'tooling', possible: null })"/>
+            <content expr="({ report: deciding.report, kind: deciding.report.kind || 'tooling', possible: null, similar: deciding.similar })"/>
           </send>
           <raise event="decision.done"/>
         </transition>
@@ -136,7 +200,7 @@
         <!-- the model matched an issue that was deleted meanwhile: the report is a new issue, not lost -->
         <transition event="file.occurrence" cond="!has(index, _event.data.n) &amp;&amp; inFlight(creating, _event.data.n) === null">
           <send target="#_internal" event="file.new">
-            <content expr="({ report: _event.data, kind: _event.data.kind || 'tooling', possible: null })"/>
+            <content expr="({ report: _event.data, kind: _event.data.kind || 'tooling', possible: null, similar: [] })"/>
           </send>
         </transition>
         <transition event="file.occurrence" cond="inFlight(creating, _event.data.n) !== null">
@@ -153,12 +217,13 @@
             <content expr="({ chart: 'issue', name: 'issue.' + repoID + '.' + next,
                               params: { repoID: repoID, slug: slug, n: next,
                                         report: report(_event.data.report, _event.data.kind),
-                                        asker: _event.data.report.replyTo, similar: similar(index, _event.data.report, slug),
+                                        asker: _event.data.report.replyTo, similar: _event.data.similar,
                                         possible: _event.data.possible } })"/>
           </send>
           <assign location="creating" expr="put(creating, sid, { n: next, replyTo: _event.data.report.replyTo, waiting: [] })"/>
           <assign location="fingerprints" expr="put(fingerprints, fingerprint(_event.data.report.component, _event.data.report.title), next)"/>
-          <assign location="index" expr="put(index, next, entry(_event.data.report, _event.data.kind, _event.data.possible))"/>
+          <assign location="index" expr="put(index, next, { state: 'new' })"/>
+          <assign location="fresh" expr="recent(fresh, next, _event.data.report, _event.data.kind)"/>
           <assign location="next" expr="next + 1"/>
         </transition>
         <transition event="project.archived" target="archived"/>
@@ -179,12 +244,6 @@
           <param name="slug" expr="slug"/>
           <param name="components" expr="components"/>
           <param name="archived" expr="In('archived')"/>
-        </send>
-      </transition>
-      <transition event="issues.list">
-        <send targetexpr="replyTo(_event)" event="issues">
-          <param name="repo" expr="name"/>
-          <param name="issues" expr="listing(index, _event.data, slug)"/>
         </send>
       </transition>
       <transition event="triage close wontfix issue.delete" cond="!maintains(_event.data.caller, repoID)">
@@ -218,12 +277,12 @@
         </if>
         <assign location="deleting" expr="drop(deleting, _event.data.n)"/>
       </transition>
-      <transition event="issue.get workaround triage close wontfix attach.open attachment.get issue.delete" cond="!has(index, _event.data.n)">
+      <transition event="workaround triage close wontfix attach.open attachment.get issue.delete" cond="!has(index, _event.data.n)">
         <send targetexpr="replyTo(_event)" event="refused">
           <param name="reason" expr="gone(deleted, deleting, slug, _event.data.n, name)"/>
         </send>
       </transition>
-      <transition event="issue.get workaround triage close wontfix attach.open attachment.get">
+      <transition event="workaround triage close wontfix attach.open attachment.get">
         <send targetexpr="addr('issue.' + repoID + '.' + _event.data.n)" eventexpr="_event.name">
           <content expr="forwarded(_event)"/>
         </send>
@@ -240,13 +299,13 @@
       </transition>
       <transition event="issue.changed" cond="has(deleting, _event.data.n) || has(deleted, _event.data.n)"/>
       <transition event="issue.changed">
-        <assign location="index" expr="put(index, _event.data.n, _event.data)"/>
+        <assign location="index" expr="put(index, _event.data.n, { state: _event.data.state })"/>
       </transition>
       <transition event="project.renamed">
         <assign location="name" expr="_event.data.name"/>
       </transition>
 
-      <!-- the Spawner's answer: the reports that waited go to the new issue -->
+      <!-- the Spawner's answer: the reports that waited go to the new issue (none waits for a rebuilt one) -->
       <transition event="spawned" cond="has(creating, _event.sendid)">
         <foreach array="creating[_event.sendid].waiting" item="item">
           <send targetexpr="addr('issue.' + repoID + '.' + creating[_event.sendid].n)" eventexpr="item.event">
@@ -256,9 +315,13 @@
         <assign location="creating" expr="drop(creating, _event.sendid)"/>
       </transition>
       <transition event="error.communication" cond="has(creating, _event.sendid)">
-        <send targetexpr="creating[_event.sendid].replyTo" event="failed">
-          <param name="reason" expr="'the issue could not be filed'"/>
-        </send>
+        <if cond="creating[_event.sendid].replyTo">
+          <send targetexpr="creating[_event.sendid].replyTo" event="failed">
+            <param name="reason" expr="'the issue could not be filed'"/>
+          </send>
+        <else/>
+          <log label="project" expr="'could not spawn ' + issueID(slug, creating[_event.sendid].n) + ' again'"/>
+        </if>
         <foreach array="creating[_event.sendid].waiting" item="item">
           <send targetexpr="item.data.replyTo" event="failed">
             <param name="reason" expr="'the issue could not be filed'"/>

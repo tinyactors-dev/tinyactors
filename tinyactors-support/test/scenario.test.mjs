@@ -237,14 +237,14 @@ describe('the support channel', () => {
   });
 
   it('comes back from its snapshot and store after a restart, tokens and all', async () => {
-    const { github, jev, ledger, blobs, scanner } = s;
+    const { github, jev, catalog, blobs, scanner } = s;
     await s.support.close();
-    s = await stack({ data: s.data, shared: { github, jev, ledger, blobs, scanner } });
+    s = await stack({ data: s.data, shared: { github, jev, catalog, blobs, scanner } });
     assert.ok(s.support.restored);
     const filed = await s.tool(ann, 'report_issue', { ...report, title: 'the examples task is slow', minutes: 4 });
     assert.equal(filed.answer, 'filed');
     assert.equal((await s.tool(null, 'get_issue', { id: issue1 })).attachments, 4);
-    assert.ok(ledger.records.some((r) => r.kind === 'filed' && r.key === filed.id));
+    assert.ok(catalog.records.some((r) => r.kind === 'filed' && r.key === filed.id));
     assert.deepEqual(s.faults, []);
   });
 });

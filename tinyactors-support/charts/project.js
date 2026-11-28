@@ -33,28 +33,31 @@ function report(d, kind) {
            reporter: d.caller ? { githubID: d.caller.githubID, login: d.caller.login } : null };
 }
 
-function entry(d, kind, possible) {
-  return { n: null, title: d.title, excerpt: excerpt(d.body), component: d.component, kind: kind, state: 'new',
-           count: 1, minutes: d.minutes || 0, workaround: null, fix: null, possibleDuplicateOf: possible };
+// The last ten issues filed, for the candidates of the reports that come
+// before the catalog has them (its write is the issue's, a moment later).
+function recent(list, n, d, kind) {
+  return list.concat([{ n: n, title: d.title, component: d.component, kind: kind, state: 'new', excerpt: excerpt(d.body) }]).slice(-10);
 }
 
 function excerpt(body) { return String(body || '').slice(0, 280); }
 
 // --- the decision model ------------------------------------------------------
 
-// The open issues a report could be: the same component's, and any other
-// sharing two words with it; the closest twenty, so the question stays small.
-function candidates(index, d) {
-  var mine = words(d.title + ' ' + (d.body || ''));
-  return Object.keys(index).map(function (n) { return Object.assign({ n: Number(n) }, index[n]); })
-    .filter(function (p) { return ['closed', 'wontfix'].indexOf(p.state) < 0; })
-    .map(function (p) {
-      var theirs = words(p.title + ' ' + (p.excerpt || ''));
-      return { p: p, shared: mine.filter(function (w) { return theirs.indexOf(w) >= 0; }).length };
-    })
-    .filter(function (c) { return c.p.component === d.component || c.shared >= 2; })
-    .sort(function (a, b) { return b.shared - a.shared || a.p.n - b.p.n; })
-    .slice(0, 20).map(function (c) { return c.p; });
+// The open issues a report could be: the catalog's (full text search,
+// best first) and the ones filed since that it may not have, of the same
+// component or sharing two words; the closest twenty, so the question
+// stays small. An issue routed away meanwhile (deleted) is left out.
+function pool(found, fresh, index, d) {
+  var mine = words(d.title + ' ' + (d.body || '')), seen = {}, out = [];
+  found.concat(fresh.filter(function (p) {
+    var theirs = words(p.title + ' ' + (p.excerpt || ''));
+    return p.component === d.component || mine.filter(function (w) { return theirs.indexOf(w) >= 0; }).length >= 2;
+  })).forEach(function (p) {
+    if (seen[p.n] || !has(index, p.n) || ['closed', 'wontfix', 'fixed'].indexOf(index[p.n].state) >= 0) return;
+    seen[p.n] = true;
+    out.push(p);
+  });
+  return out.slice(0, 20);
 }
 
 // The kinds of issue the model picks from (a function: a top-level var
@@ -116,24 +119,12 @@ function decision(slug, deciding, result, verdict) {
            record: { model: result.model, candidates: deciding.candidates, answers: result.answers, verdict: verdict } };
 }
 
-// Open issues of the same component whose titles share words with the report's.
-function similar(index, d, slug) {
+// The candidates of the same component whose titles share two words with the report's.
+function similar(list, d, slug) {
   var mine = words(d.title);
-  return Object.keys(index).filter(function (n) {
-    var p = index[n];
-    if (p.component !== d.component || p.state === 'closed') return false;
-    return words(p.title).filter(function (w) { return mine.indexOf(w) >= 0; }).length >= 2;
-  }).map(function (n) { return { id: issueID(slug, n), n: Number(n), title: index[n].title }; });
-}
-
-// The index as a list, filtered, the costliest first (count times minutes lost).
-function listing(index, d, slug) {
-  return Object.keys(index).map(function (n) { return Object.assign({ id: issueID(slug, n), n: Number(n) }, index[n]); })
-    .filter(function (p) {
-      return (!d.state || p.state === d.state) && (!d.component || p.component === d.component) &&
-             (!d.open || ['new', 'triaged', 'regressed'].indexOf(p.state) >= 0);
-    })
-    .sort(function (a, b) { return b.count * b.minutes - a.count * a.minutes || a.n - b.n; });
+  return list.filter(function (p) {
+    return p.component === d.component && words(p.title).filter(function (w) { return mine.indexOf(w) >= 0; }).length >= 2;
+  }).map(function (p) { return { id: issueID(slug, p.n), n: p.n, title: p.title }; });
 }
 
 function maintains(caller, repoID) {

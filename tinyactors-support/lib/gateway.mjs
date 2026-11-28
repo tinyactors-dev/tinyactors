@@ -10,6 +10,11 @@
 //   stand-in login: pick who you are, for a private server only).
 // - PUT /uploads/<id>: an attachment's bytes, out of band.
 //
+// Reads of issues (known_issues, get_issue) come from the catalog
+// (lib/processors/catalog.mjs), which wakes no actor; what an answer says
+// of an issue beyond its actor's subset (a workaround, a file's
+// description) is the catalog's too.
+//
 // It makes every secret (codes, tokens) and hands actors only their
 // hashes. A tool call's caller is the user actor's answer, through the
 // token's grant; the gateway adds it to the request, and charts trust it.
@@ -33,9 +38,10 @@ export const INSTRUCTIONS = 'This is the support channel of tinyactors (statecha
 
 export class Gateway {
   // support: lib/host.mjs's Support; base: the server's URL; github: a
-  // GitHubApp or null (the stand-in login); blobs; content: lib/content.mjs
-  constructor({ support, base, github = null, blobs, content }) {
-    Object.assign(this, { support, base, github, blobs, content });
+  // GitHubApp or null (the stand-in login); blobs; content: lib/content.mjs;
+  // catalog: lib/processors/catalog.mjs's Catalog
+  constructor({ support, base, github = null, blobs, content, catalog }) {
+    Object.assign(this, { support, base, github, blobs, content, catalog });
     this.misses = [];
   }
 
@@ -148,14 +154,9 @@ export class Gateway {
     }
     const result = await this.#tool(name, args, caller);
     const answered = caller && caller.unseen?.length ? { ...result, sinceYourLastVisit: caller.unseen } : result;
-    return { result: this.#named(answered, await this.#repositories()) };
-  }
-
-  // What each project's slug is called now: an issue's identifier never
-  // changes, its repository's name may (the tracker keeps every name).
-  async #repositories() {
-    const { data } = await this.support.request('tracker', 'projects.list', {});
-    return Object.fromEntries((data?.projects ?? []).map((p) => [p.slug, p.name]));
+    // what each project's slug is called now: an issue's identifier never
+    // changes, its repository's name may (the catalog keeps every name)
+    return { result: this.#named(answered, this.catalog.names()) };
   }
 
   #named(value, names) {
@@ -200,17 +201,15 @@ export class Gateway {
         return { projects: answers.filter((a) => a.event === 'project')
           .map(({ data: p }) => ({ repoID: p.repoID, repo: p.repo, slug: p.slug, archived: !!p.archived, components: p.components ?? [] })) };
       }
-      case 'known_issues': {
-        const { data } = await s.request('tracker', 'projects.list', {});
-        const all = args.state === 'all';
-        const repos = (data?.projects ?? []).filter((p) => (all || !p.archived) && (!args.repo || p.name === args.repo || p.slug === args.repo));
-        const filter = all ? {} : !args.state || args.state === 'open' ? { open: true } : { state: args.state };
-        const lists = await Promise.all(repos.map((p) => s.request('tracker', 'issues.list', { repo: p.name, ...filter, component: args.component })));
-        return { issues: lists.flatMap((a) => a.event === 'issues' ? a.data.issues.map((i) => ({ repo: a.data.repo, ...i })) : []) };
-      }
-      case 'get_issue': return this.#answer(await s.request('tracker', 'issue.get', { ...args, caller }));
+      // reads of the catalog: no actor is woken
+      case 'known_issues':
+        return { issues: this.catalog.list({ repo: args.repo, component: args.component, state: args.state ?? 'open', query: args.query }) };
+      case 'get_issue': return this.#issue(args, caller);
       case 'whoami': return { login: caller.login, maintainerOf: caller.maintainerOf, quota: caller.quota };
-      case 'report_issue': return this.#answer(await s.request('tracker', 'report', { ...args, at, caller }));
+      case 'report_issue': {
+        const answer = this.#answer(await s.request('tracker', 'report', { ...args, at, caller }));
+        return answer.answer === 'counted' ? { ...answer, workaround: this.catalog.workaround(answer.id) } : answer;
+      }
       case 'attach_workaround': return this.#answer(await s.request('tracker', 'workaround', { ...args, caller }));
       case 'attach_file': {
         const answer = this.#answer(await s.request('tracker', 'attach.open', { ...args, caller }));
@@ -219,12 +218,37 @@ export class Gateway {
         return { ...slot, uploadURL: `${this.base}${path}`,
                  how: `curl -T <file> -H "Authorization: Bearer <your access token>" ${this.base}${path}` };
       }
-      case 'get_attachment': return this.#answer(await s.request('tracker', 'attachment.get', { ...args, caller }));
+      case 'get_attachment': {
+        const answer = this.#answer(await s.request('tracker', 'attachment.get', { ...args, caller }));
+        return answer.answer === 'attachment' ? { ...answer, ...this.catalog.attachment(answer.upload) } : answer;
+      }
       case 'triage': case 'close': case 'wontfix':
         return this.#answer(await s.request('tracker', name, { ...args, caller }));
       case 'delete_issue': return this.#answer(await s.request('tracker', 'issue.delete', { ...args, caller }));
     }
     return { answer: 'refused', reason: `no tool ${name}` };
+  }
+
+  // One issue from the catalog. Anyone reads it, its workaround and how
+  // many files it has; a signed-in caller also who reported it and from
+  // which sessions; its reporters and its repository's maintainers its
+  // files' descriptions (never a key: a download is a signed link, asked
+  // of the issue one at a time).
+  #issue({ repo, n }, caller) {
+    const project = this.catalog.resolve(repo);
+    if (!project) return { answer: 'refused', reason: `unknown repository ${repo}`, valid: this.catalog.validNames() };
+    const issue = this.catalog.get(project.slug, n);
+    if (!issue) return { answer: 'refused', reason: `no issue #${n} in ${project.name}` };
+    if (issue.gone) return { answer: 'refused', reason: `${issue.id} was deleted` };
+    const { reporterIDs, repoID, purged, occurrences, attachments, ...open } = issue;
+    const reader = !!caller && (reporterIDs.includes(caller.githubID) || (caller.maintainerOf ?? []).includes(String(repoID)));
+    return {
+      answer: 'issue', ...open,
+      ...(caller ? { occurrences } : {}),
+      attachments: reader
+        ? attachments.map(({ upload, name, type, kind, size, by, scan }) => ({ upload, name, type, kind, size, by, scan }))
+        : attachments.length,
+    };
   }
 
   // An actor's answer as a tool's: its event is the answer. No answer in
