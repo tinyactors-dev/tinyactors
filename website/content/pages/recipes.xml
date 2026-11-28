@@ -1,0 +1,64 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<page xmlns="https://www.tinyactors.dev/ns/site" id="recipes" path="/recipes/">
+  <title>Recipes · tinyactors</title>
+  <description>Eleven applications built with tinyactors, from a shop's orders to a game server that survives being killed, each with its problem, the features it uses and its source.</description>
+  <purpose kind="reference" for="agent-platform workflow-tester tech-lead"/>
+
+  <hero>
+    <headline>Start from an application like yours</headline>
+    <lede>Eleven applications, from a shop's orders to a game server that comes back after <code>SIGKILL</code>. Each one's test plays the cases that make it hard, under Node.js and under Bun.</lede>
+    <actions>
+      <action href="https://github.com/tinyactors-dev/tinyactors/tree/main/tinyactors-napi/examples">Read the source</action>
+      <action to="guides">Browse the guides</action>
+    </actions>
+  </hero>
+
+  <section id="sessions">
+    <heading>One actor per session or connection</heading>
+    <p>A session's limits, timers and members live in one actor. The code around it only finds the actor by name and sends it events.</p>
+    <list>
+      <item><term><link href="https://github.com/tinyactors-dev/tinyactors/tree/main/tinyactors-napi/examples/http-gateway">A rate-limited API gateway</link></term><text>Every client session needs a token bucket, a cap on requests in flight and timeouts against a slow, flaky upstream. On <code>node:http</code>, the session's chart picks every status, 429, 502 and 504 included, and retries only a <code>GET</code>. It shows <link to="guide-io-processors" section="answering-later">an async I/O processor</link> that answers with <code>fetch</code>, and a request's <code>traceparent</code> carried to the upstream and to <link to="guide-telemetry" section="trace-context">OpenTelemetry</link>.</text></item>
+      <item><term><link href="https://github.com/tinyactors-dev/tinyactors/tree/main/tinyactors-napi/examples/chat-rooms">A chat with workspaces, rooms and connections</link></term><text>Thousands of rooms and connections keep their members and history, though most sit idle. A workspace decides which rooms exist and spawns them; only a bound of actors stays in memory, the rest one file each on disk. It shows <link to="guide-hibernation" section="a-store-and-a-bound">a store and a resident bound</link>, <link to="guide-io-processors" section="spawning-from-a-chart">the Spawner</link> and <link to="guide-missing-actors">each way a send meets an actor that is not there</link>.</text></item>
+    </list>
+  </section>
+
+  <section id="workflows">
+    <heading>Retries, timeouts and refunds as states</heading>
+    <p>Each of these runs a business process whose steps fail the way real ones do. Its test plays every failure on a <link to="guide-testing" section="stepping-the-clock">simulated clock</link>, so a 48-hour SLA takes no time.</p>
+    <list>
+      <item><term><link href="https://github.com/tinyactors-dev/tinyactors/tree/main/tinyactors-napi/examples/order-fulfillment">An order that pays, ships and refunds</link></term><text>A payment times out or its answer is lost, a customer cancels during the shipment, the stock runs out after the charge. The order retries under one idempotency key and refunds what it charged, so a delivered order is charged exactly once. It shows <link to="guide-services">invoked services</link> for the payment and the shipment, timeouts as delayed sends and <link to="guide-io-processors" section="answer-or-fail">a failed send</link> that becomes a retry.</text></item>
+      <item><term><link href="https://github.com/tinyactors-dev/tinyactors/tree/main/tinyactors-napi/examples/subscription-billing">Subscriptions billed during a release</link></term><text>A subscription lives for years, and its chart changes under it. Release 2 renames a variable and adds states; a canary, then each chart, moves to it while renewals and payments are in flight. It shows <link to="guide-migration">migration</link> of a mostly <link to="guide-hibernation">hibernated</link> population, and <link to="guide-inspection">the typed methods</link> an operator uses to find who is left on the old release.</text></item>
+      <item><term><link href="https://github.com/tinyactors-dev/tinyactors/tree/main/tinyactors-napi/examples/document-approval">A document reviewed by legal and finance</link></term><text>Two reviews run at once, finance waits for legal on large amounts, and a stage past its SLA escalates the document to a manager. Parallel regions, <code>In()</code> guards and history states hold those rules. It shows an admin view over HTTP that reads every document's states, variables and due SLAs with <link to="guide-inspection" section="delayed-sends-and-history">the typed methods</link>.</text></item>
+      <item><term><link href="https://github.com/tinyactors-dev/tinyactors/tree/main/tinyactors-napi/examples/job-scheduler">Background jobs with retries and deadlines</link></term><text>Workers throw, hang or run past a deadline, and a slow recurring run must not push the schedule back. A job's delayed sends are its whole schedule, and the process exits by itself when the last job ends. It shows <link to="guide-io-processors">an I/O processor</link> that aborts a hung worker, a graceful shutdown on <code>SIGTERM</code> and the drift of fixed-delay jobs, measured.</text></item>
+    </list>
+  </section>
+
+  <section id="systems">
+    <heading>Two systems, each a host, over a socket</heading>
+    <p>The host decides which sends leave its system. The wire, the connection and what to do when it is gone are your code's, written in <link to="guide-other-systems">a transport</link>.</p>
+    <list>
+      <item><term><link href="https://github.com/tinyactors-dev/tinyactors/tree/main/tinyactors-napi/examples/inventory-sync">Stock held across a warehouse and a storefront</link></term><text>Two carts race for the last unit, a hold expires, the warehouse goes down in the middle of a checkout. Each SKU is an actor that takes one request at a time and answers a repeated one as it answered the first; a cart compensates by releasing every line. It shows <link to="guide-other-systems" section="over-a-socket">a transport over TCP</link>, <link to="guide-other-systems" section="failed-delivery">a failed delivery</link> and <link to="guide-snapshots">a snapshot</link> the warehouse comes back from.</text></item>
+      <item><term><link href="https://github.com/tinyactors-dev/tinyactors/tree/main/tinyactors-napi/examples/remote-python">A Python system and a Node.js system</link></term><text>Actors in two processes and two languages address each other by <code>tinyactors://</code> address. A Node.js chart and a Python chart trade pings over one TCP connection, and a send to an actor the other side lacks fails back to its sender. Values cross unchanged, integers up to 2^64 included.</text></item>
+    </list>
+  </section>
+
+  <section id="sandbox">
+    <heading>Customers' code in a sandbox per rule</heading>
+    <list>
+      <item><term><link href="https://github.com/tinyactors-dev/tinyactors/tree/main/tinyactors-napi/examples/iot-rules">Alert rules your customers upload</link></term><text>An uploaded rule may loop for ever, hoard memory, look for <code>require</code> or send to another customer's device. Each rule runs on a host of its own on <link to="guide-quickjs">the quickjs datamodel</link>, with limits on operations and memory, so a runaway evaluation becomes <code>error.execution</code> and the rule is suspended after three. Its README measures how long a loop holds the host and what a rule costs per device.</text></item>
+    </list>
+  </section>
+
+  <section id="realtime">
+    <heading>Turn timers and safety rules as states</heading>
+    <list>
+      <item><term><link href="https://github.com/tinyactors-dev/tinyactors/tree/main/tinyactors-napi/examples/turn-game">A game server that survives being killed</link></term><text>A match's turn timers must come back from a crash with the time they had left. The server takes <link to="guide-snapshots">a snapshot</link> of the whole host every second, <link to="guide-journal">journals</link> each client input, and after <code>SIGKILL</code> restores and replays the journal, or drops it. Its matchmaking service <link to="guide-snapshots" section="restarting-services">starts again</link> from the lobby's waiting list.</text></item>
+      <item><term><link href="https://github.com/tinyactors-dev/tinyactors/tree/main/tinyactors-napi/examples/elevator-control">A bank of elevators and its dispatcher</link></term><text>A car must never move with its doors open, and maintenance must resume it exactly where it was. Each car is a parallel chart of motion, doors and load, guarded by <code>In()</code>, with a deep history for maintenance. Its <link to="property-testing">generated scenarios</link> check the rules on every step, and found two mistakes in the charts' first version.</text></item>
+    </list>
+  </section>
+
+  <section id="run">
+    <heading>Run a recipe on your machine</heading>
+    <p>Each recipe runs from <code>tinyactors-napi</code> after <code>mise run build</code>, and its README says what it prints. <code>mise run examples</code> runs every recipe's test under Node.js and Bun.</p>
+  </section>
+</page>

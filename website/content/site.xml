@@ -186,6 +186,8 @@
     <page src="pages/inspector.xml"/>
     <page src="pages/about.xml"/>
     <page src="pages/guides.xml"/>
+    <page src="pages/recipes.xml"/>
+    <page src="pages/docs-agents.xml"/>
     <page src="guides/browser.xml"/>
     <page src="guides/capacity.xml"/>
     <page src="guides/charts.xml"/>

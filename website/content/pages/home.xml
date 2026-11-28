@@ -61,7 +61,7 @@
 
   <section id="agents" answers="agent-platform.agent-charts">
     <heading>Local reasoning for agents</heading>
-    <p>tinyactors puts all of an actor's states and transitions in one readable, inspectable chart. Your code connects through events, so an agent writes an actor from events entering and leaving, not the full system.</p>
+    <p>tinyactors puts all of an actor's states and transitions in one readable, inspectable chart. Your code connects through events, so <link to="docs-agents">an agent writes an actor</link> from events entering and leaving, not the full system.</p>
     <p>Every effect leaves the chart as an event your code performs, so a review of an agent's change reads one file. Your code can read any running actor's state and data.</p>
   </section>
 

@@ -1,0 +1,63 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<page xmlns="https://www.tinyactors.dev/ns/site" id="docs-agents" path="/docs/agents/">
+  <title>Build with a coding agent · tinyactors</title>
+  <description>Connect a coding agent to the tinyactors support server for the guides, the skill for writing charts and known issues, and read every page of the site as Markdown.</description>
+  <purpose kind="how-to" for="agent-platform workflow-tester"/>
+
+  <hero>
+    <headline>Build with a coding agent</headline>
+    <lede>Your agent writes the charts; the support server gives it the guides, a skill for building with tinyactors and the known issues with their workarounds. Every page of this site is Markdown for it too.</lede>
+    <actions>
+      <action to="docs-agents" section="connect">Connect the server</action>
+      <action to="recipes">See what people build</action>
+    </actions>
+  </hero>
+
+  <section id="connect">
+    <heading>Connect the support server</heading>
+    <p>An agent that guesses at an API it has not seen writes code that fails at the first run. The server at <code>https://mcp.tinyactors.dev/mcp</code> lets it read the packages' guides instead, and reading needs no account.</p>
+    <p>In Claude Code, <code>claude mcp add</code> registers it under the name <code>tinyactors-support</code>:</p>
+    <code language="shell">claude mcp add --transport http tinyactors-support https://mcp.tinyactors.dev/mcp</code>
+    <p>On claude.ai, add it under Settings, Connectors, Add custom connector, with the same URL. Any other agent that connects to MCP servers over HTTP takes that URL too.</p>
+  </section>
+
+  <section id="tools">
+    <heading>What your agent can do there</heading>
+    <list>
+      <item><term>Search the docs</term><text><code>search_docs</code> searches the packages' guides, and <code>get_doc</code> reads one whole.</text></item>
+      <item><term>Read the skills</term><text>Hosts with MCP's Skills extension list each skill as a <code>skill://</code> resource; for the others, <code>list_skills</code> and <code>get_skill</code> read them.</text></item>
+      <item><term>Find a workaround</term><text><code>known_issues</code> lists the open issues, costliest first, with their workarounds, and <code>get_issue</code> reads one.</text></item>
+      <item><term>Report what cost it time</term><text><code>report_issue</code>, <code>attach_workaround</code> and <code>attach_file</code> start a GitHub login the first time. Reports of the same problem become one issue, and the reporter hears when it changes.</text></item>
+    </list>
+    <p>Where the host renders MCP Apps, as Claude, ChatGPT and VS Code do, <code>known_issues</code> opens an issue list to filter, read and report from.</p>
+  </section>
+
+  <section id="skill">
+    <heading>The skill teaches your agent the workflow</heading>
+    <p>The server's <link href="https://github.com/tinyactors-dev/tinyactors/tree/main/tinyactors-support/skills/using-tinyactors">using-tinyactors</link> skill says when a chart is worth its cost and how to build with one. Your agent reads it from the server, so there is nothing to install. Its workflow has five steps:</p>
+    <list ordered="true">
+      <item><term>Model the entities</term><text>Decide which things are actors, who creates each kind, how they are named and how they end.</text></item>
+      <item><term>Write the charts</term><text>One <code>.scxml</code> file per kind of actor, every side effect a send to an I/O processor or an invoked service.</text></item>
+      <item><term>Make the host and its processors</term><text>One I/O processor per external system, such as a database or an HTTP client.</text></item>
+      <item><term>Test on a simulated clock</term><text>A <code>SimulatedClock</code> and a stand-in for every processor, so timeouts take no time.</text></item>
+      <item><term>Decide what survives a restart</term><text>Per kind of actor: a store with hibernation, snapshots of the whole host, or your own database.</text></item>
+    </list>
+    <p>A second skill, <link href="https://github.com/tinyactors-dev/tinyactors/tree/main/tinyactors-support/skills/reporting-tinyactors-issues">reporting-tinyactors-issues</link>, has the agent look for a known issue before it reports one.</p>
+  </section>
+
+  <section id="pages">
+    <heading>Every page is Markdown too</heading>
+    <p>Add <code>index.md</code> to a page's address for its Markdown, as in <link href="https://www.tinyactors.dev/guides/hibernation/index.md">/guides/hibernation/index.md</link>. <link href="https://www.tinyactors.dev/llms.txt">/llms.txt</link> lists every page, and <link href="https://www.tinyactors.dev/llms-full.txt">/llms-full.txt</link> holds every page but the changelog in one file.</p>
+  </section>
+
+  <section id="why" answers="agent-platform.agent-charts">
+    <heading>Why charts suit an agent</heading>
+    <p>An actor reaches the world only through events. So an agent writes one from the events entering and leaving it, without reading the rest of your system.</p>
+    <p>A review of the agent's change reads one chart, where every state and transition is written down. In CI, <code>tinyactors diff</code> catches what a review can miss: here a renamed state that running orders still wait in.</p>
+    <example>
+      <code language="shell">tinyactors diff --breaking --exit-code deployed.tai order.scxml</code>
+      <code src="../../examples/cli/ci/diff.txt" lines="35-39" language="markdown" role="output"/>
+    </example>
+    <p><link to="cli-ci">Check charts in CI</link> adds <code>check</code>, <code>lint</code> and <code>diff</code> to every pull request, so an agent's change that breaks a chart fails before anyone merges it.</p>
+  </section>
+</page>
