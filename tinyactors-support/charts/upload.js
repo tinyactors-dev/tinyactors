@@ -32,8 +32,10 @@ function refusal(file) {
 // A name for the store's key: no directories, nothing a shell or a URL reads.
 function safeName(name) { return String(name).split(/[\\/]/).pop().replace(/[^A-Za-z0-9._-]+/g, '_').slice(0, 100) || 'file'; }
 
-function attachment(uploadID, file, key, scan, uploader) {
+// retention: seconds until the file goes, null for a maintainer's (kept for good)
+function attachment(uploadID, file, key, scan, uploader, keep) {
   return { upload: uploadID, name: file.name, type: file.type, kind: kindOf(file.type), size: file.size,
            sha256: file.sha256, key: key, by: uploader.login, byID: uploader.githubID,
+           retention: keep ? null : guestLimits().retentionSeconds,
            scan: { verdict: scan.verdict, redactions: scan.redactions || 0, summary: scan.summary || null } };
 }

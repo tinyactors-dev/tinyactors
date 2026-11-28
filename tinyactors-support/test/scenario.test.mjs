@@ -130,12 +130,12 @@ describe('the support channel', () => {
     assert.equal(known.issues[0].repo, 'tinyactors-dev/tinyactors-napi');
   });
 
-  it('takes attachments out of band: checked, redacted, refused or rejected, readable by reporters and maintainers', async () => {
+  it('takes attachments out of band from anyone signed in: checked, redacted, refused or rejected, readable by reporters and maintainers', async () => {
     const log = 'npm warn\nAuthorization: Bearer ghp_0123456789abcdefghijABCDEFGHIJ0123\n' +
       'token=ghp_ZYXWVUTSRQPONMLKJIHGFEDCBA9876543210\nerror: cannot find build/tinyactors.node\n';
     const logged = await attachAnn(issue1, 'mise-examples.log', 'text/plain', Buffer.from(log));
     assert.equal(logged.put.status, 201);
-    assert.match(logged.slot.uploadURL, /^https:\/\/support\.test\/uploads\/1002\.1\.1$/);
+    assert.match(logged.slot.uploadURL, /^https:\/\/support\.test\/uploads\/1002\.1\.1\?size=[0-9]+&sha256=[0-9a-f]{64}&expires=[0-9]+&signature=[A-Za-z0-9_-]+$/);
     const png = Buffer.concat([Buffer.from('89504e470d0a1a0a0000000d49484452', 'hex'), Buffer.alloc(64, 7)]);
     assert.equal((await attachAnn(issue1, 'error dialog.png', 'image/png', png)).put.status, 201);
     const repro = zip([['transcript.jsonl', '{"jsonrpc":"2.0","id":1,"method":"run.turn"}\n'], ['charts/order.scxml', '<scxml/>']]);
@@ -159,7 +159,9 @@ describe('the support channel', () => {
     assert.ok(!s.blobs.keys().some((k) => k.endsWith('mise-examples.log')), 'the original log is gone');
 
     assert.match((await attachAnn(issue1, 'diagram.svg', 'image/svg+xml', Buffer.from('<svg/>'))).slot.reason, /not a type/);
-    assert.match((await toolAnn('attach_file', { id: issue1, name: 'run.webm', type: 'video/webm', size: 150 * 1024 * 1024, sha256: sha('x') })).reason, /larger than 100 MB/);
+    assert.match((await s.tool(bob, 'attach_file', { id: issue1, name: 'run.webm', type: 'video/webm', size: 150 * 1024 * 1024, sha256: sha('x') })).reason, /larger than 100 MB/);
+    assert.match((await toolAnn('attach_file', { id: issue1, name: 'big.log', type: 'text/plain', size: 2 * 1024 * 1024, sha256: sha('x') })).reason,
+                 /larger than 1 MiB.*does not maintain/);
     await attachAnn(issue1, 'shot.png', 'image/png', Buffer.from('not a png'));
     await attachAnn(issue1, 'b.log', 'text/plain', Buffer.from('ok'), { sha256: sha('other') });
     assert.equal((await attachAnn(issue1, 'c.log', 'text/plain', Buffer.from('longer than said'), { size: 4 })).put.status, 413);
@@ -175,14 +177,30 @@ describe('the support channel', () => {
       'bomb.zip: all.log expands 1000000 times: a zip bomb?', 'd.log: the file could not be checked']);
     assert.equal((await toolAnn('get_issue', { id: issue1 })).attachments.length, 4);
 
-    assert.equal((await s.tool(dee, 'attach_file', { id: issue1, name: 'e.log', type: 'text/plain', size: 2, sha256: sha('hi') })).answer, 'refused');
+    // anyone signed in attaches (dee neither reported it nor maintains it); reading stays its reporters' and maintainers'
+    const deeSlot = await s.tool(dee, 'attach_file', { id: issue1, name: 'e.log', type: 'text/plain', size: 2, sha256: sha('hi') });
+    assert.equal(deeSlot.answer, 'upload.opened');
     assert.equal((await s.tool(dee, 'get_attachment', { id: issue1, upload: mine.attachments[0].upload })).answer, 'refused');
+    // the link is the permission: no token, and only for its own file, until it expires
     const slot = await toolAnn('attach_file', { id: issue1, name: 'f.log', type: 'text/plain', size: 2, sha256: sha('hi') });
-    assert.equal((await s.gateway.upload({ token: bob, uploadID: slot.uploadID, chunks: [Buffer.from('hi')] })).status, 403);
+    assert.match(slot.how, /^curl -T <file> '/);
+    assert.doesNotMatch(slot.how, /Authorization/);
+    const forged = new URL(slot.uploadURL); forged.searchParams.set('signature', 'forged');
+    assert.equal((await s.putTo(forged.toString(), Buffer.from('hi'))).status, 403);
     await s.advance(900_000);
-    assert.equal((await s.gateway.upload({ token: ann, uploadID: slot.uploadID, chunks: [Buffer.from('hi')] })).status, 404);
+    assert.equal((await s.putTo(slot.uploadURL, Buffer.from('hi'))).status, 403);   // the link expired with its slot
+    const again = s.blobs.signUpload({ uploadID: slot.uploadID, size: 2, sha256: sha('hi'), ttlSeconds: 900 });
+    assert.equal((await s.putTo(again, Buffer.from('hi'))).status, 404);            // a valid link to a slot that ended
+    // a maintainer's file: kept for good
+    const kept = await s.attach(bob, issue1, 'maintainer-notes.log', 'text/plain', Buffer.from('notes from the maintainer'));
+    assert.equal(kept.put.status, 201);
+    const files = (await toolAnn('get_issue', { id: issue1 })).attachments;
+    assert.equal(files.length, 5);
+    assert.ok(files.filter((f) => f.by === 'ann').every((f) => f.expires), 'a file from someone who does not maintain the repository expires');
+    assert.equal(files.find((f) => f.by === 'bob').expires, null);
     const outcomes = s.ended.filter((d) => d?.upload).map((d) => d.outcome).sort();
-    assert.deepEqual(outcomes, ['attached', 'attached', 'attached', 'attached', 'expired', 'refused', 'refused',
+    // (the 2 MiB log was refused by the issue, before any upload actor)
+    assert.deepEqual(outcomes, ['attached', 'attached', 'attached', 'attached', 'attached', 'expired', 'expired', 'refused', 'refused',
                                 'rejected', 'rejected', 'rejected', 'rejected', 'rejected', 'rejected']);
   });
 
@@ -199,13 +217,15 @@ describe('the support channel', () => {
     assert.equal((await s.tool(cy, 'report_issue', { ...report, commit: 'm3' })).answer, 'regressed');
   });
 
-  it('closes a fixed issue after a fortnight with no report, and deletes its attachments\' bytes 90 days later', async () => {
+  it('closes a fixed issue after a fortnight with no report; a non-maintainer\'s files go after 7 days, the rest 90 days after it closed', async () => {
     s.github.commit(1001, 'm4', 'fix(napi): build before the runner\n\nFixes-issue: tinyactors:tinyactors-napi:1');
     await s.advance(600_000);
     await s.advance(14 * 86_400_000);
     assert.ok(!(await s.tool(null, 'known_issues', { repo: report.repo })).issues.some((i) => i.id === issue1));
     const of1 = () => s.blobs.keys().filter((k) => k.startsWith('issues/tinyactors-napi/1/')).length;
-    assert.equal(of1(), 4);
+    assert.equal(of1(), 1, 'ann\'s four files went after 7 days; bob\'s, a maintainer\'s, stays');
+    assert.deepEqual(s.catalog.get('tinyactors-napi', 1).attachments.map((f) => f.name), ['maintainer-notes.log']);   // the tokens have expired: the catalog, read directly
+    assert.equal(s.catalog.records.filter((r) => r.kind === 'expired' && r.key === issue1).length, 4);
     await s.advance(90 * 86_400_000);
     assert.equal(of1(), 0);
   });
@@ -243,7 +263,7 @@ describe('the support channel', () => {
     assert.ok(s.support.restored);
     const filed = await s.tool(ann, 'report_issue', { ...report, title: 'the examples task is slow', minutes: 4 });
     assert.equal(filed.answer, 'filed');
-    assert.equal((await s.tool(null, 'get_issue', { id: issue1 })).attachments, 4);
+    assert.equal((await s.tool(null, 'get_issue', { id: issue1 })).attachments, 1);
     assert.ok(catalog.records.some((r) => r.kind === 'filed' && r.key === filed.id));
     assert.deepEqual(s.faults, []);
   });

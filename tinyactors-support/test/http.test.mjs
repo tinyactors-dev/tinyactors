@@ -142,10 +142,18 @@ describe('the server over HTTP', () => {
     const log = Buffer.from('build failed\nAuthorization: Bearer ghp_0123456789abcdefghijABCDEFGHIJ0123\n');
     const slot = (await call('attach_file', { id: filed.value.id, name: 'build.log', type: 'text/plain', size: log.length, sha256: sha(log) },
       tokens.access_token)).value;
-    assert.equal(slot.uploadURL, `${base}/uploads/1002.1.1`);
-    assert.equal((await fetch(slot.uploadURL, { method: 'PUT', body: log })).status, 401);
-    const put = await fetch(slot.uploadURL, { method: 'PUT', body: log, headers: { authorization: `Bearer ${tokens.access_token}` } });
+    const url = new URL(slot.uploadURL);
+    assert.equal(`${url.origin}${url.pathname}`, `${base}/uploads/1002.1.1`);
+    assert.equal(slot.how, `curl -T <file> '${slot.uploadURL}'`);
+    // the link is the permission: no Authorization; a link changed in any part is refused
+    const changed = (field, value) => { const u = new URL(url); u.searchParams.set(field, value); return u; };
+    assert.equal((await fetch(changed('signature', 'forged'), { method: 'PUT', body: log })).status, 403);
+    assert.equal((await fetch(changed('size', String(log.length + 1)), { method: 'PUT', body: log })).status, 403);
+    assert.equal((await fetch(changed('sha256', sha(Buffer.from('another'))), { method: 'PUT', body: log })).status, 403);
+    assert.equal((await fetch(changed('expires', String(Number(url.searchParams.get('expires')) + 3600)), { method: 'PUT', body: log })).status, 403);
+    const put = await fetch(slot.uploadURL, { method: 'PUT', body: log });
     assert.equal(put.status, 201);
+    assert.equal((await fetch(slot.uploadURL, { method: 'PUT', body: log })).status, 403, 'a slot takes its bytes once');
     await s.idle();
     const issue = (await call('get_issue', { id: filed.value.id }, tokens.access_token)).value;
     assert.equal(issue.attachments[0].scan.verdict, 'redacted');

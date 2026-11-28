@@ -60,6 +60,27 @@ and keep the tools for hosts without it.
   (read 2026-11-27) lists the extension in Claude (web), Claude Code,
   VS Code GitHub Copilot and others, not in Claude Desktop; the tools
   serve the rest.
+- **Roles** (the maintainer, 2026-11-28): a user's `maintainerOf` comes
+  from GitHub's permission of each of the installation's repositories,
+  asked every ten minutes and again before every `whoami` answers (it
+  waits at most 8 s, then answers with the roles it has). The client lists
+  the repositories first when it has none (after a restart), logs each
+  failed request with its status and repository and each answer's roles,
+  and answers `github.unavailable` when every request failed, so the user
+  keeps the roles it had.
+- **Attachments** (the maintainer, 2026-11-28): anyone signed in may
+  attach to any issue; who may download is unchanged (its reporters and
+  maintainers). From someone who does not maintain the issue's repository:
+  at most 1,048,576 bytes a file, ten files an issue, the daily quota, and
+  the file is deleted after 7 days (`attachment.expire`, a delayed send in
+  the issue chart: `blob.delete`, and the catalog's `expired` record
+  removes its entry; a rebuild sends it again from `expires`). From a
+  maintainer of it: only the kinds' maximums, no quota, no cap, no expiry
+  (`expires` null).
+- **Uploads are signed links:** `attach_file` answers an `uploadURL` signed
+  with the key, the declared size and SHA-256 and an expiry (the slot's,
+  15 minutes); the `PUT` needs no `Authorization` (agents never see their
+  access token), and the size, hash and scan are checked as before.
 - **Tests:** `test/skills.test.mjs` checks every result against the
   extension's own JSON Schema (`test/fixtures/ext-skills-beta-schema.json`,
   `schema/beta/schema.json` at ext-skills `ba23984a`) and the rules a

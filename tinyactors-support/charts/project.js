@@ -127,9 +127,6 @@ function similar(list, d, slug) {
   }).map(function (p) { return { id: issueID(slug, p.n), n: p.n, title: p.title }; });
 }
 
-function maintains(caller, repoID) {
-  return !!caller && (caller.maintainerOf || []).indexOf(String(repoID)) >= 0;
-}
 
 // The issues these commits fix, any project's, with the commit (and the
 // repository it is in: a fix's compare runs there).

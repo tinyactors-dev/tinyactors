@@ -97,12 +97,17 @@ const OUTPUT = {
     attachments: { anyOf: [number('how many files (for anyone but its reporters and maintainers)'),
                             array(object({ upload: text('for get_attachment'), name: text('the file'), type: text('its media type'),
                                            kind: text('screenshot, recording, log, archive or tinyactors'), size: number('bytes'),
-                                           by: text('who attached it'), scan }), 'its files')] },
+                                           by: text('who attached it'), scan,
+                                           expires: nullable(text('when it is deleted (ISO 8601): 7 days after a non-maintainer attached it; null: kept')) }),
+                                   'its files')] },
     valid: refusal.valid,
     reason: nullable(text('why it was declined, or why the read was refused')),
   }, ['issue', 'refused', 'failed']),
   whoami: output({ login: text('your GitHub login'), maintainerOf: array({ type: 'string' }, 'the repositories you maintain (GitHub ids)'),
-                   quota: object({ files: number('attachments left today'), bytes: number('bytes left today') }) }),
+                   quota: object({ files: number('attachments left today, to issues of repositories you do not maintain'),
+                                   bytes: number('bytes left today, likewise'),
+                                   maxFileBytes: number('the largest file you attach to an issue of a repository you do not maintain'),
+                                   retentionDays: number('how long such a file is kept') }) }),
   report_issue: output({
     id: issueID, repo: text('owner/name'), n: number('its number'),
     similar: array(reference, 'open issues of the component that share words with it: did you mean'),
@@ -119,13 +124,15 @@ const OUTPUT = {
   attach_workaround: output({ id: issueID, repo: text('owner/name'), ...refusal }, ['noted', 'refused', 'failed']),
   attach_file: output({
     uploadID: text('the slot'), method: text('PUT'), maxBytes: number('the size you declared'),
-    expiresIn: number('seconds the slot stays open'), uploadURL: text('where to PUT the bytes'), how: text('the curl command'),
+    expiresIn: number('seconds the slot stays open'), uploadURL: text('where to PUT the bytes: a signed link for this file, no token needed'),
+    how: text('the curl command'),
     ...refusal,
   }, ['upload.opened', 'refused', 'failed']),
   get_attachment: output({
     upload: text('the attachment'), name: text('the file'), type: text('its media type'), kind: text('its kind'),
     size: number('bytes'), sha256: text('its SHA-256'), key: text('where it is stored'), by: text('who attached it'),
     byID: number('their GitHub id'), scan, url: text('a signed download link'), expiresIn: number('seconds the link works'),
+    expires: nullable(text('when the file is deleted (ISO 8601); null: kept')),
     ...refusal,
   }, ['attachment', 'refused', 'failed']),
   triage: output({ id: issueID, repo: text('owner/name'), ...refusal }, ['triaged', 'refused', 'failed']),
@@ -174,7 +181,8 @@ export const TOOLS = {
   attach_workaround: { access: 'user', description: 'Tell the next agent how you got past an issue',
     input: object({ id: issueID, text: text('the workaround') }, ['id', 'text']) },
   attach_file: { access: 'user',
-    description: 'Open a slot for a file (a log, screenshot, recording, zip, snapshot), then PUT its bytes there with curl: a tool call cannot carry them',
+    description: 'Open a slot for a file (a log, screenshot, recording, zip, snapshot) on any issue, then PUT its bytes to the signed uploadURL with curl ' +
+      '(no token: the link is for this file only): a tool call cannot carry them. Up to 1 MiB, kept 7 days, unless you maintain the issue\'s repository',
     input: object({ id: issueID, name: text('the file name'), type: text('its media type (text/plain, image/png, application/zip, ...)'),
       size: number('its size in bytes'), sha256: text('its SHA-256, hexadecimal') }, ['id', 'name', 'type', 'size', 'sha256']) },
   get_attachment: { access: 'user', description: "A signed link to one of an issue's attachments",
@@ -228,7 +236,8 @@ export function summarize(name, r) {
       case 'get_issue': return `${r.id} [${r.state}] ${r.title} (${plural(r.count, 'report')}, ${r.minutes} min)` +
         `${r.workaround ? `\nWorkaround: ${r.workaround.text}` : ''}${r.fix ? `\nFixed in ${r.fix.sha}.` : ''}${r.reason ? `\nDeclined: ${r.reason}` : ''}`;
       case 'whoami': return `${r.login}; maintainer of ${plural(r.maintainerOf.length, 'repository', 'repositories')}; ` +
-        `${plural(r.quota.files, 'file')} left to attach today.`;
+        `${plural(r.quota.files, 'file')} left to attach today, up to ${Math.round(r.quota.maxFileBytes / 1024)} KiB each, kept ${r.quota.retentionDays} days.` +
+        (r.maintainerOf.length ? '\nOn the repositories you maintain, attachments are unlimited and kept.' : '');
       case 'report_issue':
         switch (r.answer) {
           case 'filed': return `Filed ${r.id}.` +

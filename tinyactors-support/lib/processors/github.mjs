@@ -13,8 +13,9 @@ import { createSign } from 'node:crypto';
 const API = 'https://api.github.com';
 
 export class GitHubApp {
-  constructor({ appID, clientID, clientSecret, privateKey, org, base, fetch: fetcher = globalThis.fetch }) {
-    Object.assign(this, { appID, clientID, clientSecret, privateKey, org, base, fetch: fetcher });
+  // log: where a failed permission request is told (server.mjs's log)
+  constructor({ appID, clientID, clientSecret, privateKey, org, base, fetch: fetcher = globalThis.fetch, log = () => {} }) {
+    Object.assign(this, { appID, clientID, clientSecret, privateKey, org, base, fetch: fetcher, log });
     this.token = null;        // {value, until}
     this.names = new Map();   // repoID -> owner/name, from the last list
   }
@@ -66,16 +67,33 @@ export class GitHubApp {
     return { event: 'github.unavailable', data: { retryAfter: Math.min(retryAfter, 3600) } };
   }
 
+  // The installation's repositories, every page; their names noted for the
+  // calls that take a repository by its id. {repos, etag} or {response} on
+  // a failure (or {unchanged} for a 304 to `etag`).
+  async #repositories(etag) {
+    const repos = [];
+    let first = null;
+    for (let page = 1; page <= 10; page++) {
+      const response = await this.#get(`/installation/repositories?per_page=100&page=${page}`, page === 1 ? { etag } : {});
+      if (page === 1 && response.status === 304) return { unchanged: true };
+      if (!response.ok) return { response };
+      first ??= response;
+      const listed = (await response.json()).repositories;
+      repos.push(...listed.map((r) => ({ id: r.id, name: r.full_name, archived: r.archived })));
+      if (listed.length < 100) break;
+    }
+    for (const r of repos) this.names.set(r.id, r.name);
+    return { repos, etag: first.headers.get('etag') };
+  }
+
   processor = async (event, data) => {
     try {
       switch (event) {
         case 'repos.list': {
-          const response = await this.#get('/installation/repositories?per_page=100', { etag: data.etag });
-          if (response.status === 304) return { event: 'repos.unchanged', data: {} };
-          if (!response.ok) return GitHubApp.#unavailable(response);
-          const repos = (await response.json()).repositories.map((r) => ({ id: r.id, name: r.full_name, archived: r.archived }));
-          for (const r of repos) this.names.set(r.id, r.name);
-          return { event: 'repos.listed', data: { repos, etag: response.headers.get('etag') } };
+          const listed = await this.#repositories(data.etag);
+          if (listed.unchanged) return { event: 'repos.unchanged', data: {} };
+          if (listed.response) return GitHubApp.#unavailable(listed.response);
+          return { event: 'repos.listed', data: { repos: listed.repos, etag: listed.etag } };
         }
         case 'contents.list': {
           const response = await this.#get(`/repos/${await this.#name(data.repoID)}/contents/`);
@@ -99,14 +117,45 @@ export class GitHubApp {
           if (!response.ok) return GitHubApp.#unavailable(response);
           return { event: 'compared', data: { status: (await response.json()).status } };
         }
+        // Which of the installation's repositories the user maintains. The
+        // repositories are listed first when this process has not listed them
+        // yet (a restart restores the tracker, whose next pull may be minutes
+        // away). A failed request is told, never read as "not a maintainer";
+        // when every request failed the answer is github.unavailable, so the
+        // user keeps the roles it had.
         case 'permissions': {
-          const maintainerOf = [];
-          for (const [id, name] of this.names) {
-            const response = await this.#get(`/repos/${name}/collaborators/${encodeURIComponent(data.login)}/permission`);
-            if (!response.ok) continue;
-            const { permission, role_name: role } = await response.json();
-            if (permission === 'admin' || role === 'maintain' || role === 'admin') maintainerOf.push(id);
+          if (this.names.size === 0) {
+            const listed = await this.#repositories();
+            if (listed.response) {
+              this.log(`permissions of ${data.login}: the installation's repositories: ${listed.response.status}`);
+              return GitHubApp.#unavailable(listed.response);
+            }
           }
+          const maintainerOf = [];
+          const roles = [];
+          let failed = 0, last = null;
+          await Promise.all([...this.names].map(async ([id, name]) => {
+            let response;
+            try {
+              response = await this.#get(`/repos/${name}/collaborators/${encodeURIComponent(data.login)}/permission`);
+            } catch (error) {
+              failed++;
+              this.log(`permissions of ${data.login} on ${name}: ${error.message}`);
+              return;
+            }
+            if (!response.ok) {
+              failed++; last = response;
+              this.log(`permissions of ${data.login} on ${name}: ${response.status}`);
+              return;
+            }
+            const { permission, role_name: role } = await response.json();
+            roles.push(`${name} ${role ?? permission}`);
+            if (permission === 'admin' || role === 'maintain' || role === 'admin') maintainerOf.push(id);
+          }));
+          maintainerOf.sort((a, b) => a - b);
+          if (this.names.size > 0 && failed === this.names.size) return GitHubApp.#unavailable(last);
+          this.log(`permissions of ${data.login}: maintains ${maintainerOf.map((id) => this.names.get(id)).join(', ') || 'none'}` +
+                   ` of ${this.names.size} repositories${failed ? `, ${failed} unanswered` : ''} (${roles.sort().join(', ')})`);
           return { event: 'permissions', data: { maintainerOf } };
         }
         case 'user.exchange': {
@@ -123,6 +172,7 @@ export class GitHubApp {
         }
       }
     } catch (error) {
+      this.log(`github ${event}: ${error.message}`);
       return GitHubApp.#unavailable(error.response);
     }
     return null;

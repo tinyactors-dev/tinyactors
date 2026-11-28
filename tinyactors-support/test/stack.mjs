@@ -62,6 +62,7 @@ export async function stack({ data = mkdtempSync(join(tmpdir(), 'support-')), re
                   blobs: parts.blobs.processor, scan: parts.scanner.processor },
   });
   parts.catalog.now = () => support.wallNow();   // the catalog's times on the simulated clock
+  parts.blobs.now = () => support.wallNow();     // and the links' expiries
   support.upgrade();
   support.onDone = (_actor, donedata) => ended.push(donedata);
   const content = new Content({ skills: new URL('../skills/', import.meta.url).pathname,
@@ -74,7 +75,7 @@ export async function stack({ data = mkdtempSync(join(tmpdir(), 'support-')), re
 
   // A tool call as the MCP layer makes it: the caller from the token.
   async function tool(token, name, args = {}) {
-    const caller = token ? await gateway.caller(token) : null;
+    const caller = token ? await gateway.caller(token, { refresh: name === 'whoami' }) : null;
     const answer = await gateway.callTool(name, args, caller);
     await idle();
     checked(name, answer.error ? { error: answer.error } : answer.result);
@@ -97,17 +98,27 @@ export async function stack({ data = mkdtempSync(join(tmpdir(), 'support-')), re
     return tokens;
   }
 
-  // An agent attaching a file: the slot by MCP, then the bytes by PUT, as
-  // curl -T sends them. `lie` declares another size or sha256.
+  // An agent attaching a file: the slot by MCP, then the bytes by PUT to
+  // its signed link, as curl -T sends them (no token). `lie` declares
+  // another size or sha256.
   async function attach(token, id, name, type, bytes, lie = {}) {
     const slot = await tool(token, 'attach_file', { id, name, type, size: lie.size ?? bytes.length, sha256: lie.sha256 ?? sha(bytes) });
     if (slot.answer !== 'upload.opened') return { slot };
-    const put = await gateway.upload({ token, uploadID: slot.uploadID, chunks: [bytes.subarray(0, 8), bytes.subarray(8)] });
-    await idle();
+    const put = await putTo(slot.uploadURL, bytes);
     return { slot, put };
   }
 
-  return { ...parts, clock, support, gateway, content, ended, faults, data, idle, advance, tool, signIn, attach };
+  // A PUT of `bytes` to an upload link, as the server routes it.
+  async function putTo(url, bytes) {
+    const link = new URL(url);
+    const uploadID = /^\/uploads\/([0-9.]+)$/.exec(link.pathname)?.[1];
+    const put = await gateway.upload({ uploadID, query: Object.fromEntries(link.searchParams),
+                                       chunks: [bytes.subarray(0, 8), bytes.subarray(8)] });
+    await idle();
+    return put;
+  }
+
+  return { ...parts, clock, support, gateway, content, ended, faults, data, idle, advance, tool, signIn, attach, putTo };
 }
 
 // A zip of stored entries (local headers only, which is what the scan

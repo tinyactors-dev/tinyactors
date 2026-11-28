@@ -41,7 +41,7 @@ const SCHEMA = `
     "commit" TEXT, reporter TEXT, reporterID INTEGER, minutes INTEGER NOT NULL DEFAULT 0);
   CREATE INDEX IF NOT EXISTS reports_by_issue ON reports (id, seq);
   CREATE TABLE IF NOT EXISTS attachments (upload TEXT PRIMARY KEY, id TEXT NOT NULL, name TEXT, type TEXT,
-    kind TEXT, size INTEGER, sha256 TEXT, key TEXT, by TEXT, byID INTEGER, scan TEXT);
+    kind TEXT, size INTEGER, sha256 TEXT, key TEXT, by TEXT, byID INTEGER, scan TEXT, expires TEXT);
   CREATE VIRTUAL TABLE IF NOT EXISTS issues_fts USING fts5(id UNINDEXED, title, body, workaround,
     tokenize = 'porter unicode61');
 `;
@@ -60,6 +60,9 @@ export class Catalog {
     this.database = new DatabaseSync(path);
     this.database.exec('PRAGMA journal_mode = WAL; PRAGMA busy_timeout = 5000;');
     this.database.exec(SCHEMA);
+    // a catalog from before files expired: the column, null (kept) for the files it has
+    if (!this.database.prepare('PRAGMA table_info(attachments)').all().some((c) => c.name === 'expires'))
+      this.database.exec('ALTER TABLE attachments ADD COLUMN expires TEXT');
     this.failing = 0;   // tests: the next appends fail, as a full disk would
     const db = this.database;
     this.sql = {
@@ -135,11 +138,17 @@ export class Catalog {
       case 'wontfix': set({ reason: r.reason ?? null, state: 'wontfix', ...touched }); break;
       case 'closed': set({ state: 'closed', ...touched }); break;
       case 'workaround': set({ workaround: r.text ?? null, workaroundBy: r.by ?? null, ...touched }); break;
+      // a file: kept for good (a maintainer's: retention null), or until its retention is over
       case 'attached':
-        db.prepare(`INSERT OR REPLACE INTO attachments (upload, id, name, type, kind, size, sha256, key, by, byID, scan)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+        db.prepare(`INSERT OR REPLACE INTO attachments (upload, id, name, type, kind, size, sha256, key, by, byID, scan, expires)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
           .run(r.upload, key, r.name ?? null, r.type ?? null, r.kind ?? null, r.size ?? null, r.sha256 ?? null, r.key ?? null,
-               r.by ?? null, r.byID ?? null, r.scan ? JSON.stringify(r.scan) : null);
+               r.by ?? null, r.byID ?? null, r.scan ? JSON.stringify(r.scan) : null,
+               r.retention == null ? null : new Date(Date.parse(at) + r.retention * 1000).toISOString());
+        set(touched);
+        break;
+      case 'expired':
+        db.prepare('DELETE FROM attachments WHERE upload = ? AND id = ?').run(r.upload, key);
         set(touched);
         break;
       case 'purged': set({ purged: 1, ...touched }); break;
@@ -300,7 +309,8 @@ export class Catalog {
       occurrences: reports.slice(-50).map((r) => ({ session: r.session, commit: r.commit, at: r.at, reporter: r.reporter })),
       reporterIDs: this.#reporters(row),
       attachments: files.map((a) => ({ upload: a.upload, name: a.name, type: a.type, kind: a.kind, size: a.size, sha256: a.sha256,
-                                       key: a.key, by: a.by, byID: a.byID, scan: a.scan ? JSON.parse(a.scan) : null })),
+                                       key: a.key, by: a.by, byID: a.byID, scan: a.scan ? JSON.parse(a.scan) : null,
+                                       expires: a.expires ?? null })),
     };
   }
 
@@ -312,7 +322,7 @@ export class Catalog {
   attachment(upload) {
     const a = this.database.prepare('SELECT * FROM attachments WHERE upload = ?').get(upload);
     return a ? { upload: a.upload, name: a.name, type: a.type, kind: a.kind, size: a.size, sha256: a.sha256, key: a.key,
-                 by: a.by, byID: a.byID, scan: a.scan ? JSON.parse(a.scan) : null } : null;
+                 by: a.by, byID: a.byID, scan: a.scan ? JSON.parse(a.scan) : null, expires: a.expires ?? null } : null;
   }
 
   // The open issues of a repository a report could be (the decision
@@ -337,12 +347,15 @@ export class Catalog {
     return {
       next,
       issues: rows.map((r) => {
-        const files = this.database.prepare('SELECT upload, key FROM attachments WHERE id = ?').all(r.id);
+        const files = this.database.prepare('SELECT upload, key, expires FROM attachments WHERE id = ?').all(r.id);
         return {
           n: r.n, title: r.title, component: r.component, state: r.state, deleted: !!r.deleted, count: r.count,
           reporters: this.#reporters(r), reason: r.reason ?? null, purged: !!r.purged,
           fix: r.fixSha ? { sha: r.fixSha, url: r.fixURL, repoID: r.fixRepoID } : null,
           files: Object.fromEntries(files.map((f) => [f.upload, f.key])),
+          // what is left of each expiring file's time (at least a second: one already due goes at once)
+          expiring: files.filter((f) => f.expires).map((f) => ({ upload: f.upload,
+            in: Math.max(1, Math.ceil((Date.parse(f.expires) - this.now()) / 1000)) })),
         };
       }),
     };

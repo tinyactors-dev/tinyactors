@@ -660,7 +660,7 @@
         o.commit ? h('span', { class: 'mono' }, o.commit.slice(0, 10)) : null,
         o.session ? h('a', { href: o.session, target: '_blank', rel: 'noopener' }, 'session') : null)))));
     if (Array.isArray(i.attachments) && i.attachments.length) sections.push(h('div', { class: 'section' }, h('h3', {}, 'Files'),
-      h('ul', { class: 'filelist' }, i.attachments.map((a) => h('li', {}, a.name, h('span', { class: 'mono' }, `${a.kind} · ${a.size} B · ${a.scan.verdict}`))))));
+      h('ul', { class: 'filelist' }, i.attachments.map((a) => h('li', {}, a.name, h('span', { class: 'mono' }, `${a.kind} · ${a.size} B · ${a.scan.verdict}${a.expires ? ` · until ${a.expires.slice(0, 10)}` : ''}`))))));
     return h('div', { class: 'peek' }, sections);
   }
   const prop = (name, value) => [h('dt', {}, name), h('dd', {}, value)];

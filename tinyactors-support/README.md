@@ -17,11 +17,15 @@ XQuery, XSLT, XSD) in portable C.
   (the open issues, costliest first, with their workarounds) and
   `get_issue`.
 - **Anyone signed in with GitHub** can `report_issue`, `attach_workaround`,
-  `attach_file` (then `PUT` the bytes with curl) and `get_attachment`, and
-  hears what changed on their issues on every call
-  (`sinceYourLastVisit`).
-- **A repository's maintainers** (from GitHub's permissions) can `triage`,
-  `close`, `wontfix` and `delete_issue`.
+  `attach_file` (then `PUT` the bytes to its signed `uploadURL` with
+  `curl -T`, no token) to any issue and `get_attachment` on the issues
+  they reported, and hears what changed on their issues on every call
+  (`sinceYourLastVisit`). A file from someone who does not maintain the
+  issue's repository is at most 1 MiB and is deleted after 7 days.
+- **A repository's maintainers** (from GitHub's permissions, asked again
+  on every `whoami`) attach without that limit, the daily quota or the
+  ten-file cap, and their files are kept. They can `triage`, `close`,
+  `wontfix` and `delete_issue`.
 
 Every tool answers with structured content that its output schema
 describes, and a line of text. Where the host renders MCP Apps (Claude,

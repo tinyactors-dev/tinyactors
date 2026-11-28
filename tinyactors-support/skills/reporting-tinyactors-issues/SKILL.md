@@ -53,15 +53,20 @@ workaround in the answer.
 ## 4. Attach files
 
 A file cannot go through a tool call. `attach_file` with its name, media
-type, size and SHA-256 opens a slot and answers an `uploadURL`; then:
+type, size and SHA-256 opens a slot and answers an `uploadURL`, a signed
+link for that file alone, good for 15 minutes; then send the bytes, with
+no token:
 
 ```sh
-curl -T build.log -H "Authorization: Bearer <your access token>" <uploadURL>
+curl -T build.log '<uploadURL>'
 ```
 
-Logs are checked for secrets (tokens, keys) and stored redacted; zips are
-listed, never unpacked; tinyactors snapshots are summarised. Only the
-issue's reporters and maintainers can download them.
+You may attach to any issue. Unless you maintain its repository, a file is
+at most 1 MiB (1,048,576 bytes) and is deleted after 7 days: `whoami`'s
+`quota` says how much you have left today, `maxFileBytes` and
+`retentionDays`. Logs are checked for secrets (tokens, keys) and stored
+redacted; zips are listed, never unpacked; tinyactors snapshots are
+summarised. Only the issue's reporters and maintainers can download them.
 
 ## 5. Hearing back
 

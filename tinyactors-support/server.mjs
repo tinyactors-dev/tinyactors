@@ -48,7 +48,7 @@ function fileSecret() {
 const app = ['GITHUB_APP_ID', 'GITHUB_APP_CLIENT_ID', 'GITHUB_APP_CLIENT_SECRET', 'GITHUB_APP_PRIVATE_KEY'].every((k) => env[k]);
 const github = app
   ? new GitHubApp({ appID: env.GITHUB_APP_ID, clientID: env.GITHUB_APP_CLIENT_ID, clientSecret: env.GITHUB_APP_CLIENT_SECRET,
-                    privateKey: env.GITHUB_APP_PRIVATE_KEY.replace(/\\n/g, '\n'), org: env.GITHUB_ORG ?? 'tinyactors-dev', base })
+                    privateKey: env.GITHUB_APP_PRIVATE_KEY.replace(/\\n/g, '\n'), org: env.GITHUB_ORG ?? 'tinyactors-dev', base, log })
   : new FakeGitHub();
 const blobs = new DiskBlobs({ directory: join(data, 'files'), secret: fileSecret(), base });
 const catalog = new Catalog(join(data, 'catalog.sqlite'));

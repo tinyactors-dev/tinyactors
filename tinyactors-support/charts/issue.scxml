@@ -73,6 +73,10 @@
           <assign location="fix" expr="restored.fix"/>
           <assign location="files" expr="restored.files"/>
           <assign location="purged" expr="restored.purged"/>
+          <!-- the files that expire: what is left of their time, from the catalog -->
+          <foreach array="restored.expiring || []" item="item">
+            <send event="attachment.expire" delayexpr="item.in + 's'"><param name="upload" expr="item.upload"/></send>
+          </foreach>
         </if>
       </onentry>
       <transition cond="!restored" target="starting"/>
@@ -272,16 +276,19 @@
         <param name="reason" expr="issueID(slug, n) + ' is ' + state + ': only an open issue is declined'"/>
       </send>
     </transition>
-    <!-- attachments: a slot for a reporter or a maintainer, the bytes by the gateway, the check by the upload -->
-    <transition event="attach.open" cond="!mayRead(_event.data.caller, reporters, repoID)">
+    <!-- attachments: a slot for anyone signed in, the bytes by the gateway, the check by the upload.
+         Someone who does not maintain its repository attaches at most 1 MiB a file, 10 files to an
+         issue, within the day's quota, and the file goes after 7 days; a maintainer, without limits
+         but the per-type maximums, for good. -->
+    <transition event="attach.open" cond="!maintains(_event.data.caller, repoID) &amp;&amp; Object.keys(files).length + Object.keys(uploading).length >= 10">
+      <send targetexpr="replyTo(_event)" event="refused"><param name="reason" expr="'an issue holds at most 10 attachments from people who do not maintain its repository'"/></send>
+    </transition>
+    <transition event="attach.open" cond="!maintains(_event.data.caller, repoID) &amp;&amp; _event.data.size > guestLimits().maxFileBytes">
       <send targetexpr="replyTo(_event)" event="refused">
-        <param name="reason" expr="'only the reporters of ' + issueID(slug, n) + ' and its maintainers may attach to it'"/>
+        <param name="reason" expr="'larger than 1 MiB (' + guestLimits().maxFileBytes + ' bytes), the limit for a file from someone who does not maintain its repository'"/>
       </send>
     </transition>
-    <transition event="attach.open" cond="Object.keys(files).length + Object.keys(uploading).length >= 10">
-      <send targetexpr="replyTo(_event)" event="refused"><param name="reason" expr="'an issue holds at most 10 attachments'"/></send>
-    </transition>
-    <transition event="attach.open" cond="_event.data.caller.quota.files &lt;= 0 || _event.data.size > _event.data.caller.quota.bytes">
+    <transition event="attach.open" cond="!maintains(_event.data.caller, repoID) &amp;&amp; (_event.data.caller.quota.files &lt;= 0 || _event.data.size > _event.data.caller.quota.bytes)">
       <send targetexpr="replyTo(_event)" event="refused"><param name="reason" expr="'over your quota for today'"/></send>
     </transition>
     <transition event="attach.open">
@@ -291,7 +298,8 @@
                           params: { uploadID: repoID + '.' + n + '.' + uploads, issue: addr('issue.' + repoID + '.' + n),
                                     issueKey: slug + '/' + n, issueRef: issueID(slug, n), asker: replyTo(_event),
                                     file: { name: _event.data.name, type: _event.data.type, size: _event.data.size, sha256: _event.data.sha256 },
-                                    uploader: { githubID: _event.data.caller.githubID, login: _event.data.caller.login } } })"/>
+                                    uploader: { githubID: _event.data.caller.githubID, login: _event.data.caller.login },
+                                    keep: maintains(_event.data.caller, repoID) } })"/>
       </send>
       <assign location="uploading" expr="put(uploading, repoID + '.' + n + '.' + uploads, true)"/>
       <assign location="answers" expr="put(answers, lsid, answer(_event, 'refused', { reason: 'the upload could not start' }))"/>
@@ -303,6 +311,10 @@
       <assign location="files" expr="put(files, _event.data.upload, _event.data.key)"/>
       <assign location="uploading" expr="drop(uploading, _event.data.upload)"/>
       <send type="catalog" event="ledger.append"><content expr="record('attached', repoID, slug, n, _event.data)"/></send>
+      <!-- a file from someone who does not maintain the repository goes after its retention -->
+      <if cond="_event.data.retention !== null">
+        <send event="attachment.expire" delayexpr="_event.data.retention + 's'"><param name="upload" expr="_event.data.upload"/></send>
+      </if>
       <foreach array="reporters" item="item">
         <if cond="item !== _event.data.byID">
           <send targetexpr="addr('user.' + item)" event="user.update">
@@ -333,6 +345,12 @@
         <content expr="Object.assign({}, answers[_event.sendid].data, { url: _event.data.url, expiresIn: _event.data.expiresIn })"/>
       </send>
       <assign location="answers" expr="drop(answers, _event.sendid)"/>
+    </transition>
+    <!-- a file's retention is over: its bytes and its entry go -->
+    <transition event="attachment.expire" cond="has(files, _event.data.upload)">
+      <send type="blobs" event="blob.delete"><param name="key" expr="files[_event.data.upload]"/></send>
+      <send type="catalog" event="ledger.append"><content expr="record('expired', repoID, slug, n, { upload: _event.data.upload })"/></send>
+      <assign location="files" expr="drop(files, _event.data.upload)"/>
     </transition>
     <!-- 90 days after closing: the bytes go, the descriptions stay -->
     <transition event="purge">

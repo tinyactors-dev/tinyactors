@@ -2,7 +2,9 @@
 <!-- A person who signed in: user.<githubID>.
 
      Its roles come from GitHub (the repositories it maintains, refreshed
-     every ten minutes through the App's installation), it owns its grants
+     every ten minutes through the App's installation, and asked again
+     before the whoami tool answers, so a role given on GitHub shows at
+     once; a GitHub that does not answer leaves the roles it had), it owns its grants
      (one per connected client, spawned through the Spawner), and it keeps
      what changed for it since its last call (unseen): issues it
      reported that were fixed, regressed or got a workaround. Every tool
@@ -19,23 +21,35 @@
     <data id="blocked" expr="false"/>
     <data id="used" expr="({ files: 0, bytes: 0 })"/>   <!-- attachments since the last reset -->
     <data id="quota" expr="({ files: 20, bytes: 200 * 1024 * 1024 })"/>
+    <data id="waiting" expr="[]"/>               <!-- whoami requests waiting for GitHub's answer -->
     <data id="sid"/>
     <data id="item"/>
   </datamodel>
   <parallel id="active">
     <state id="roles" initial="refreshing">
+      <!-- GitHub's answer after the wait gave up on it: still the roles -->
+      <transition event="permissions">
+        <assign location="maintainerOf" expr="_event.data.maintainerOf.map(String)"/>
+      </transition>
       <state id="refreshing">
         <onentry>
           <send type="github" event="permissions" id="permissions"><param name="login" expr="login"/></send>
+          <send event="roles.timeout" id="roles-timeout" delay="8s"/>
         </onentry>
+        <onexit>
+          <cancel sendid="roles-timeout"/>
+          <raise event="roles.known"/>   <!-- the whoami requests waiting for it are answered -->
+        </onexit>
         <transition event="permissions" target="fresh">
           <assign location="maintainerOf" expr="_event.data.maintainerOf.map(String)"/>
         </transition>
-        <transition event="github.unavailable error.communication" target="fresh"/>  <!-- keep the roles it had -->
+        <!-- no answer, or none in time: keep the roles it had -->
+        <transition event="github.unavailable error.communication roles.timeout" target="fresh"/>
       </state>
       <state id="fresh">
         <onentry><send event="roles.refresh" id="roles-refresh" delay="600s"/></onentry>
-        <transition event="roles.refresh" target="refreshing"/>
+        <onexit><cancel sendid="roles-refresh"/></onexit>
+        <transition event="roles.refresh roles.ask" target="refreshing"/>
       </state>
     </state>
     <!-- the attachment quota starts again every 24 hours -->
@@ -52,15 +66,22 @@
       <transition event="whoami" cond="blocked">
         <send targetexpr="replyTo(_event)" event="refused"><param name="reason" expr="'blocked'"/></send>
       </transition>
+      <!-- the whoami tool: GitHub is asked again, and the answer waits for it -->
+      <transition event="whoami" cond="_event.data.refresh">
+        <assign location="waiting" expr="waiting.concat([forwarded(_event)])"/>
+        <raise event="roles.ask"/>
+      </transition>
+      <transition event="roles.known">
+        <foreach array="waiting" item="item">
+          <send targetexpr="item.replyTo" event="caller"><content expr="caller(githubID, login, maintainerOf, unseen, left(used, quota))"/></send>
+        </foreach>
+        <assign location="unseen" expr="waiting.length ? [] : unseen"/>
+        <assign location="waiting" expr="[]"/>
+      </transition>
+      <!-- every other tool: the roles of the last refresh -->
       <transition event="whoami">
-        <send targetexpr="replyTo(_event)" event="caller">
-          <param name="githubID" expr="githubID"/>
-          <param name="login" expr="login"/>
-          <param name="maintainerOf" expr="maintainerOf"/>
-          <param name="unseen" expr="unseen"/>
-          <param name="quota" expr="left(used, quota)"/>
-        </send>
-        <assign location="unseen" expr="_event.data.peek ? unseen : []"/>  <!-- a peek (an upload's PUT) delivers nothing -->
+        <send targetexpr="replyTo(_event)" event="caller"><content expr="caller(githubID, login, maintainerOf, unseen, left(used, quota))"/></send>
+        <assign location="unseen" expr="_event.data.peek ? unseen : []"/>  <!-- a peek (a request that is not a tool call) delivers nothing -->
       </transition>
       <transition event="quota.used">
         <assign location="used" expr="spend(used, _event.data.bytes)"/>

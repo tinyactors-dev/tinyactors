@@ -100,26 +100,30 @@ export class Gateway {
   }
 
   // Who a token stands for (the user's answer, through the grant), or null.
-  // A peek leaves the user's news for the next tool call.
-  async caller(token, peek = false) {
+  // A peek leaves the user's news for the next tool call. With `refresh`
+  // (the whoami tool) the user asks GitHub for its roles again before it
+  // answers (at most about 8 s; then it answers with the roles it has).
+  async caller(token, { peek = false, refresh = false } = {}) {
     const [grantID, access] = String(token ?? '').split('.');
     if (!/^[0-9a-f]{12}$/.test(grantID)) return null;
-    const answer = await this.support.request(`grant.${grantID}`, 'authorize', { accessHash: hash(access ?? ''), peek });
+    const answer = await this.support.request(`grant.${grantID}`, 'authorize', { accessHash: hash(access ?? ''), peek, refresh },
+                                              refresh ? 20_000 : undefined);
     return answer.event === 'caller' ? answer.data : null;
   }
 
   // --- uploads ------------------------------------------------------------------
 
-  // PUT /uploads/<id>: the bytes of a slot attach_file opened. The upload
-  // actor says whether this caller may send them; the gateway streams them
-  // into the store, counting and hashing, and stops past the declared
-  // size; the actor checks the rest. `chunks` is an async iterable (the
-  // request body).
-  async upload({ token, uploadID, chunks }) {
+  // PUT /uploads/<id>?size&sha256&expires&signature: the bytes of a slot
+  // attach_file opened, by its signed link (no token: an agent never sees
+  // its MCP client's). The link names the one file it takes; the upload
+  // actor checks that it is its slot's, once. The gateway streams the bytes
+  // into the store, counting and hashing, and stops past the declared size;
+  // the actor checks the rest. `chunks` is an async iterable (the request body).
+  async upload({ uploadID, query = {}, chunks }) {
     if (!/^[0-9]+\.[0-9]+\.[0-9]+$/.test(String(uploadID))) return { status: 404, error: 'no such upload' };
-    const caller = await this.caller(token, true);
-    if (!caller) return { status: 401 };
-    const go = await this.support.request(`upload.${uploadID}`, 'upload.begin', { githubID: caller.githubID });
+    const signed = this.blobs.verifyUpload(uploadID, query);
+    if (!signed) return { status: 403, error: 'not a valid upload link, or it expired: attach_file gives a new one' };
+    const go = await this.support.request(`upload.${uploadID}`, 'upload.begin', signed);
     if (go.event === 'stale') return { status: 404, error: 'no such upload, or it ended' };
     if (go.event !== 'upload.go') return { status: 403, error: go.data?.reason };
     const digest = createHash('sha256'), parts = [];
@@ -214,9 +218,9 @@ export class Gateway {
       case 'attach_file': {
         const answer = this.#answer(await s.request('tracker', 'attach.open', { ...args, caller }));
         if (answer.answer !== 'upload.opened') return answer;
-        const { path, ...slot } = answer;
-        return { ...slot, uploadURL: `${this.base}${path}`,
-                 how: `curl -T <file> -H "Authorization: Bearer <your access token>" ${this.base}${path}` };
+        const { path: _, ...slot } = answer;
+        const uploadURL = this.blobs.signUpload({ uploadID: slot.uploadID, size: args.size, sha256: args.sha256, ttlSeconds: slot.expiresIn });
+        return { ...slot, uploadURL, how: `curl -T <file> '${uploadURL}'` };
       }
       case 'get_attachment': {
         const answer = this.#answer(await s.request('tracker', 'attachment.get', { ...args, caller }));
@@ -246,7 +250,7 @@ export class Gateway {
       answer: 'issue', ...open,
       ...(caller ? { occurrences } : {}),
       attachments: reader
-        ? attachments.map(({ upload, name, type, kind, size, by, scan }) => ({ upload, name, type, kind, size, by, scan }))
+        ? attachments.map(({ upload, name, type, kind, size, by, scan, expires }) => ({ upload, name, type, kind, size, by, scan, expires }))
         : attachments.length,
     };
   }

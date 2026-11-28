@@ -198,7 +198,9 @@ export function serve({ support, gateway, port = 0, clientsPath = ':memory:', st
     const calls = Array.isArray(message) ? message : [message];
     // The user's news since their last call goes out with a tool's result:
     // any other request (initialize, tools/list) only peeks, leaving it.
-    const caller = token ? await gateway.caller(token, !calls.some((m) => m?.method === 'tools/call')) : null;
+    const caller = token ? await gateway.caller(token, {
+      peek: !calls.some((m) => m?.method === 'tools/call'),
+      refresh: calls.some((m) => m?.method === 'tools/call' && m.params?.name === 'whoami') }) : null;
     if (token && !caller) return send(response, 401, { error: 'invalid_token' }, { 'www-authenticate': `${challenge()}, error="invalid_token"` });
     if (!caller && calls.some((m) => m?.method === 'tools/call' && gateway.needsCaller(m.params?.name)))
       return send(response, 401, { error: 'sign in to use this tool' }, { 'www-authenticate': challenge() });
@@ -259,10 +261,8 @@ export function serve({ support, gateway, port = 0, clientsPath = ':memory:', st
     }
     const upload = /^\/uploads\/([0-9.]+)$/.exec(path);
     if (upload && request.method === 'PUT') {
-      const token = /^Bearer (.+)$/i.exec(request.headers.authorization ?? '')?.[1];
-      const { status, ...rest } = await gateway.upload({ token, uploadID: upload[1], chunks: request });
+      const { status, ...rest } = await gateway.upload({ uploadID: upload[1], query, chunks: request });
       if (!request.readableEnded) request.resume();   // a refusal before the body: drain it, so the client reads the answer
-      if (status === 401) return send(response, 401, { error: 'invalid_token' }, { 'www-authenticate': challenge() });
       return send(response, status, rest);
     }
     const file = /^\/files\/(.+)$/.exec(path);

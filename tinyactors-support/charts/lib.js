@@ -17,6 +17,16 @@ function forwarded(ev) { return Object.assign({}, ev.data, { replyTo: replyTo(ev
 // An issue's identifier: tinyactors:<project>:<n>, where <project> is
 // the project's slug, fixed when the repository was first seen (its name
 // then), so an identifier never changes, even when the repository is renamed.
+// A maintainer of a repository: the roles GitHub gave the caller (its user's last refresh).
+function maintains(caller, repoID) {
+  return !!caller && (caller.maintainerOf || []).indexOf(String(repoID)) >= 0;
+}
+
+// What a file attached to an issue may be when its uploader does not
+// maintain the issue's repository: at most 1 MiB, kept 7 days. A
+// maintainer's files have only the per-type maximums and never expire.
+function guestLimits() { return { maxFileBytes: 1048576, retentionDays: 7, retentionSeconds: 604800 }; }
+
 function issueID(slug, n) { return 'tinyactors:' + slug + ':' + n; }
 function parseIssueID(text) {
   var m = /^tinyactors:([a-z0-9._-]+):([0-9]+)$/.exec(String(text));

@@ -3,10 +3,12 @@
 
      The issue opens it for a signed-in uploader with what the file will be
      (name, type, size, sha256). It answers with where to PUT the bytes:
-     the gateway's /uploads/<id>, on the host the agent already reaches. An
-     agent cannot pass a file through a tool call, whose arguments are text
-     the model writes, so the bytes go out of band, with curl. The gateway
-     asks it before it streams (only the uploader, once), streams the bytes
+     the gateway's /uploads/<id>, on the host the agent already reaches,
+     signed by the gateway for this slot's size and hash and its lifetime
+     (no token: an agent never sees its MCP client's). An agent cannot pass
+     a file through a tool call, whose arguments are text the model writes,
+     so the bytes go out of band, with curl. The gateway checks the
+     signature and asks it before it streams (once), streams the bytes
      to the blobs processor and reports what arrived; the scan processor
      reads the stored file and gives a verdict. Bytes never enter an actor:
      it holds the file's description and its key in the store.
@@ -20,6 +22,7 @@
   <datamodel>
     <data id="uploadID"/>  <data id="issue"/>  <data id="issueKey"/>  <data id="issueRef"/>  <!-- given at spawn -->
     <data id="file"/>      <data id="uploader"/>  <data id="asker"/>   <!-- given at spawn -->
+    <data id="keep" expr="false"/>   <!-- given at spawn: a maintainer's file, kept for good and outside the quota -->
     <data id="key" expr="null"/>
     <data id="scan" expr="null"/>
     <data id="reason" expr="null"/>
@@ -48,15 +51,15 @@
     <state id="opened">
       <onentry><send event="expire" id="expire" delay="900s"/></onentry>
       <onexit><cancel sendid="expire"/></onexit>
-      <!-- the gateway, before it streams: only the uploader, and only once -->
-      <transition event="upload.begin" cond="_event.data.githubID === uploader.githubID" target="receiving">
+      <!-- the gateway, before it streams, with what the signed URL declares: this slot's size and hash, and only once -->
+      <transition event="upload.begin" cond="_event.data.size === file.size &amp;&amp; _event.data.sha256 === file.sha256" target="receiving">
         <send targetexpr="replyTo(_event)" event="upload.go">
           <param name="key" expr="key"/>
           <param name="maxBytes" expr="file.size"/>
         </send>
       </transition>
       <transition event="upload.begin">
-        <send targetexpr="replyTo(_event)" event="refused"><param name="reason" expr="'this upload is not yours'"/></send>
+        <send targetexpr="replyTo(_event)" event="refused"><param name="reason" expr="'this upload link is for another file'"/></send>
       </transition>
       <transition event="expire" target="expired"/>
     </state>
@@ -110,8 +113,10 @@
 
   <final id="attached">
     <onentry>
-      <send targetexpr="issue" event="attachment.added"><content expr="attachment(uploadID, file, key, scan, uploader)"/></send>
-      <send targetexpr="addr('user.' + uploader.githubID)" event="quota.used"><param name="bytes" expr="file.size"/></send>
+      <send targetexpr="issue" event="attachment.added"><content expr="attachment(uploadID, file, key, scan, uploader, keep)"/></send>
+      <if cond="!keep">
+        <send targetexpr="addr('user.' + uploader.githubID)" event="quota.used"><param name="bytes" expr="file.size"/></send>
+      </if>
     </onentry>
     <donedata><content expr="({ upload: uploadID, outcome: 'attached' })"/></donedata>
   </final>

@@ -125,7 +125,7 @@ describe('the tools: typed results, short text', () => {
   });
 
   it('does not lose a report on its way to an issue being deleted', async () => {
-    const callerOf = (token) => s.gateway.caller(token, true);
+    const callerOf = (token) => s.gateway.caller(token, { peek: true });
     const [bobCaller, cyCaller] = [await callerOf(bob), await callerOf(cy)];
     // a delete while the issue's spawn is in flight is refused, and the report that made it is filed
     const next = Number((await s.tool(null, 'known_issues', { state: 'all' })).issues.map((i) => Number(i.n))
@@ -186,5 +186,61 @@ describe('the tools: typed results, short text', () => {
       assert.ok(seen.report_issue.has(kind), `report_issue answered ${kind}`);
     assert.ok(Object.values(seen).some((kinds) => kinds.has('error')), 'an error');
     assert.ok(sha);
+  });
+});
+
+describe('attachments by role, and roles asked again', () => {
+  let s;
+  const day = 24 * 3600 * 1000;
+  before(async () => { s = await stack(); });
+  after(async () => { await s.support.close(); });
+  const token = async (code) => (await s.signIn(code)).access_token;
+  const webm = (size) => { const b = Buffer.alloc(size, 7); b.set([0x1a, 0x45, 0xdf, 0xa3]); return b; };
+
+  it('takes 1 MiB from someone who does not maintain the repository, refuses a byte more, and lets it go after 7 days', async () => {
+    const ann = await token('code-ann'), dee = await token('code-dee'), bob = await token('code-bob');
+    const filed = await s.tool(ann, 'report_issue', report);
+    const who = await s.tool(dee, 'whoami');
+    assert.equal(who.quota.maxFileBytes, 1048576);
+    assert.equal(who.quota.retentionDays, 7);
+    // dee neither reported it nor maintains tinyactors-napi
+    const fits = await s.attach(dee, filed.id, 'fits.log', 'text/plain', Buffer.alloc(1048576, 'a'));
+    assert.equal(fits.put.status, 201);
+    const over = await s.attach(dee, filed.id, 'over.log', 'text/plain', Buffer.alloc(1048577, 'a'));
+    assert.equal(over.slot.answer, 'refused');
+    assert.match(over.slot.reason, /1048576 bytes/);
+
+    // bob maintains it: ten files, then an eleventh of 30 MB, none of them expiring
+    for (let n = 0; n < 10; n++)
+      assert.equal((await s.attach(bob, filed.id, `bob-${n}.log`, 'text/plain', Buffer.from(`line ${n}\n`))).put.status, 201);
+    const large = await s.attach(bob, filed.id, 'run.webm', 'video/webm', webm(30 * 1024 * 1024));
+    assert.equal(large.put.status, 201, JSON.stringify(large.slot));
+    const read = await s.tool(bob, 'get_issue', { id: filed.id });
+    assert.equal(read.attachments.length, 12);
+    const deeFile = read.attachments.find((a) => a.name === 'fits.log');
+    assert.equal(Date.parse(deeFile.expires) - s.support.wallNow(), 7 * day);
+    assert.ok(read.attachments.filter((a) => a.name !== 'fits.log').every((a) => a.expires === null));
+    assert.equal(read.attachments.find((a) => a.name === 'run.webm').size, 30 * 1024 * 1024);
+    const deeKeys = s.blobs.keys().length;
+
+    await s.advance(7 * day + 1000);
+    const later = await s.tool(await token('code-bob'), 'get_issue', { id: filed.id });
+    assert.equal(later.attachments.length, 11, 'dee\'s file is gone from the issue');
+    assert.ok(!later.attachments.some((a) => a.name === 'fits.log'));
+    assert.equal(s.blobs.keys().length, deeKeys - 1, 'and its bytes from the store');
+    await s.advance(365 * day);
+    assert.equal((await s.tool(await token('code-bob'), 'get_issue', { id: filed.id })).attachments.length, 11, 'a maintainer\'s files stay');
+  });
+
+  it('asks GitHub again on whoami: a role given or taken shows at once, and a GitHub that fails keeps the roles', async () => {
+    const cy = await token('code-cy');
+    assert.deepEqual((await s.tool(cy, 'whoami')).maintainerOf, []);
+    s.github.maintainers.cy = [1002];
+    const now = await s.tool(cy, 'whoami');
+    assert.equal(now.maintainerOf.length, 1, JSON.stringify(now.maintainerOf));
+    s.github.faults.permissions = 1;
+    assert.deepEqual((await s.tool(cy, 'whoami')).maintainerOf, now.maintainerOf, 'GitHub down: the roles it had');
+    delete s.github.maintainers.cy;
+    assert.deepEqual((await s.tool(cy, 'whoami')).maintainerOf, []);
   });
 });
