@@ -225,6 +225,34 @@
     <package id="c" runs-on="c" for="C" changelog="../../tinyactors-core/CHANGELOG.md">tinyactors-core</package>
   </packages>
 
+  <!-- The XML namespaces of the site's origin, each a page at its URI. -->
+  <namespaces>
+    <namespace uri="https://www.tinyactors.dev/ns/site">
+      <title>Site content namespace</title>
+      <description>The XML namespace of the content www.tinyactors.dev is written in: pages, sections, claims and examples.</description>
+      <p><code>https://www.tinyactors.dev/ns/site</code> names the elements the pages of www.tinyactors.dev are written in: a page, its sections, its claims with their sources and its examples.</p>
+      <p>Its schema, <link href="https://www.tinyactors.dev/schemas/site.xsd">site.xsd</link>, documents every element. The <link href="https://github.com/tinyactors-dev/tinyactors/blob/main/website/README.md#how-it-fits-together">website's README</link> says where each part lives.</p>
+    </namespace>
+    <namespace uri="https://www.tinyactors.dev/ns/site/functions">
+      <title>Site stylesheet functions namespace</title>
+      <description>The XML namespace of the functions in the stylesheet that turns www.tinyactors.dev's content into pages.</description>
+      <p><code>https://www.tinyactors.dev/ns/site/functions</code> names the functions of the stylesheet that turns the site's content into its pages. No published document uses it, so it has no schema.</p>
+      <p>The functions are defined in <link href="https://github.com/tinyactors-dev/tinyactors/blob/main/website/render/site.xsl">site.xsl</link> and <link href="https://github.com/tinyactors-dev/tinyactors/blob/main/website/render/markdown.xsl">markdown.xsl</link>.</p>
+    </namespace>
+    <namespace uri="https://www.tinyactors.dev/ns/audience">
+      <title>Audience namespace</title>
+      <description>The XML namespace of an audience file: who reads a page, and what they need from it.</description>
+      <p><code>https://www.tinyactors.dev/ns/audience</code> names the elements of an audience file: who reads a page, what they look for, what they came to do and what makes them doubt.</p>
+      <p>Its schema is <link href="https://www.tinyactors.dev/audiences/audience.xsd">audience.xsd</link>, and <link href="https://www.tinyactors.dev/audiences/index.xml">index.xml</link> lists this site's audiences. A page links its audiences in its head, as <link href="https://github.com/tinyactors-dev/tinyactors/blob/main/website/README.md#audiences-and-page-kinds-the-convention">the convention</link> describes, so any site can adopt it.</p>
+    </namespace>
+    <namespace uri="https://www.tinyactors.dev/ns/voice">
+      <title>Voice namespace</title>
+      <description>The XML namespace of a voice file: the rules a kind of page is written by.</description>
+      <p><code>https://www.tinyactors.dev/ns/voice</code> names the elements of a voice file: the rules a kind of page is written by, each one line with an id.</p>
+      <p>Its schema is <link href="https://www.tinyactors.dev/voices/voice.xsd">voice.xsd</link>, and <link href="https://www.tinyactors.dev/voices/index.xml">index.xml</link> lists this site's voices. A page links its voice in its head, as <link href="https://github.com/tinyactors-dev/tinyactors/blob/main/website/README.md#audiences-and-page-kinds-the-convention">the convention</link> describes.</p>
+    </namespace>
+  </namespaces>
+
   <footer>
     <note>tinyactors is MIT licensed and maintained by <link href="https://x.com/_dhamidi">_dhamidi</link> at <link href="https://ampcode.com">Amp</link>. It runs W3C <link href="https://www.w3.org/TR/scxml/">SCXML</link> charts and connects to your code through events.</note>
     <links>

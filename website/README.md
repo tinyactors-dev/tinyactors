@@ -28,7 +28,8 @@ content and runs the stylesheet. Node.js runs the examples and wrangler.
 | `schema/audience.xsd` | the published format of an audience file, `/audiences/audience.xsd` ("Audiences and page kinds") |
 | `schema/voice.xsd` | the published format of a voice file, `/voices/voice.xsd` ("Audiences and page kinds") |
 | `render/needs.xq` | the needs report: `build/needs.json`, which pages and sections answer each audience's needs, and which needs none does |
-| `render/site.xsl` | content to HTML and `sitemap.xml`; it stops at a link to a page or section that does not exist |
+| `render/site.xsl` | content to HTML, `sitemap.xml` (each page's `<lastmod>` from `build/dates.xml`), the changelog's Atom feed (`/changelog/feed.xml`) and a page at each namespace of `site.xml`'s `<namespaces>` (`/ns/site`, `/ns/audience`, ...); it stops at a link to a page or section that does not exist |
+| `published-urls.txt` | every URL path the sitemap has ever held, and the old paths of what moved, append only ("Published URLs") |
 | `render/markdown.xsl` | the site for agents ([llmstxt.org](https://llmstxt.org)): each page as Markdown beside its HTML (`/x/index.md`), `llms.txt`, which lists them in the navigation's groups, and `llms-full.txt`, every page but the changelog in one file |
 | `style/site.css` | the layout, on the design system's tokens |
 | `examples/` | the programs pages show, each run by `mise run test` against its `output.txt`; `examples/property/` also runs in the page (`<live>`), `examples/anthill/` and `examples/lab/` are playgrounds |
@@ -45,6 +46,35 @@ The design system is the repository's one copy,
 `.agents/skills/tinyactors-design`. The build puts its tokens and
 components ahead of `style/site.css` in one `assets/site.css`, and copies
 its fonts and brand files.
+
+## Published URLs
+
+A URL the site published keeps working. `published-urls.txt` lists every
+path the sitemap has held, and the old paths of what moved; nothing is
+ever removed from it. `mise run test` fails when a line is neither a file
+of the build nor a redirect of `_redirects`, naming the line, and when the
+sitemap lists a path the file lacks, so a new page's path is added in the
+commit that adds the page. A page that moves gets an entry in `MOVED`
+(`mise/website.rb`), which `_redirects` serves as a 301.
+
+`_redirects` also sends each page's path without its trailing slash
+("/guides") to the page ("/guides/") with a 301: Cloudflare applies
+`_redirects` "regardless of whether or not an asset matches the incoming
+request"
+([Redirects](https://developers.cloudflare.com/workers/static-assets/redirects/)),
+ahead of the 307 its `auto-trailing-slash` handling would give.
+
+Beside the pages the build writes what machines read: `sitemap.xml`,
+each page's `<lastmod>` the date of the last commit that touched its
+content file (`build/dates.xml`; in a shallow clone a file older than
+its first commit gets that commit's date); `/changelog/feed.xml`, the
+changelog as Atom; a page at each XML namespace of the site's origin
+(`/ns/site`, `/ns/site/functions`, `/ns/audience`, `/ns/voice`, from
+`site.xml`'s `<namespaces>`), linking its schema (`/schemas/site.xsd`,
+`/audiences/audience.xsd`, `/voices/voice.xsd`); the CLI's JSON Schema
+again at the path of its `$id`, `/schemas/run.schema.json`; and
+`/.well-known/security.txt` (RFC 9116), whose Contact is the repository's
+security advisories and whose Expires is a year after the build.
 
 ## Writing a page
 

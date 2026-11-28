@@ -47,8 +47,13 @@
                 select="$site/s:pages/s:page ! doc(resolve-uri(@src, base-uri($site)))/s:page"/>
   <xsl:variable name="commands" as="element(s:commands)?" select="($content-pages//s:commands)[1]"/>
   <xsl:variable name="cli-doc" as="element(cli)?" select="if (exists($commands) and $cli != '') then doc($cli)/cli else ()"/>
-  <!-- Every page: the content's, then a page per command of the capture. -->
-  <xsl:variable name="pages" as="element(s:page)*" select="$content-pages, f:command-pages()"/>
+  <!-- When each page's content last changed (mise/website.rb, dates!):
+       <dates site="date"><page path="/x/" date="date"/></dates>. -->
+  <xsl:param name="dates" as="xs:string" select="''"/>
+  <xsl:variable name="dates-doc" as="element(dates)?" select="if ($dates != '') then doc($dates)/dates else ()"/>
+  <!-- Every page: the content's, then a page per command of the capture,
+       then a page per namespace of the site's origin. -->
+  <xsl:variable name="pages" as="element(s:page)*" select="$content-pages, f:command-pages(), f:namespace-pages()"/>
 
   <!-- ===================================================== the site -->
 
@@ -62,13 +67,14 @@
     <xsl:result-document href="sitemap.xml" method="xml" indent="yes">
       <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
         <xsl:for-each select="$pages[not(@path = '/404')]">
-          <url><loc>{$origin}{@path}</loc></url>
+          <url><loc>{$origin}{@path}</loc><xsl:for-each select="f:lastmod(.)"><lastmod>{.}</lastmod></xsl:for-each></url>
         </xsl:for-each>
       </urlset>
     </xsl:result-document>
     <xsl:call-template name="markdown"/>
     <xsl:call-template name="audiences"/>
     <xsl:call-template name="voices"/>
+    <xsl:call-template name="feed"/>
   </xsl:template>
 
   <!-- What the schema cannot check: names across documents. -->
@@ -89,6 +95,9 @@
     </xsl:if>
     <xsl:for-each select="$commands/(s:related, s:artifact)[not(@command = $cli-doc/command/@name)]">
       <xsl:message terminate="yes">site: {f:where(.)}: the command "{@command}", which the tinyactors {$cli-doc/@version} the site documents does not have</xsl:message>
+    </xsl:for-each>
+    <xsl:for-each select="$site/s:namespaces/s:namespace[not(starts-with(@uri, $origin || '/'))]">
+      <xsl:message terminate="yes">site: the namespace "{@uri}" is not of the site's origin, {$origin}, so the site cannot serve its page</xsl:message>
     </xsl:for-each>
     <xsl:for-each-group select="$pages" group-by="@id">
       <xsl:if test="count(current-group()) gt 1">
@@ -138,6 +147,9 @@
         <xsl:if test="not(@path = '/404')">
           <link rel="canonical" href="{$origin}{@path}"/>
           <link rel="alternate" type="text/markdown" href="{f:md-path(@path)}"/>
+        </xsl:if>
+        <xsl:if test=".//s:changelog">
+          <link rel="alternate" type="application/atom+xml" href="{f:feed-path(.)}" title="{normalize-space(s:title)}"/>
         </xsl:if>
         <meta property="og:type" content="website"/>
         <meta property="og:site_name" content="{$site/s:name}"/>
@@ -1146,6 +1158,59 @@
     <xsl:sequence select="$site/s:packages/@source || '/blob/main/' || $directory || '/CHANGELOG.md#' || $anchor"/>
   </xsl:function>
 
+  <!-- The changelog's Atom feed (RFC 4287), beside the page that holds
+       the changelogs ("/changelog/" as /changelog/feed.xml), which links it
+       in its head: an entry per release of each package, newest first, its
+       link the release on that page and its content the release's
+       hand-written part as the page quotes it. -->
+  <xsl:template name="feed">
+    <xsl:variable name="page" select="$pages[.//s:changelog][1]"/>
+    <xsl:if test="exists($page)">
+      <xsl:variable name="changelog" select="($page//s:changelog)[1]"/>
+      <xsl:variable name="releases" as="map(*)*">
+        <xsl:for-each select="$site/s:packages/s:package">
+          <xsl:variable name="package" select="."/>
+          <xsl:for-each select="f:releases($package)">
+            <xsl:sequence select="map:put(., 'package', $package)"/>
+          </xsl:for-each>
+        </xsl:for-each>
+      </xsl:variable>
+      <xsl:variable name="newest-first" select="sort($releases, (), function($release) { xs:date($release?date) }) => reverse()"/>
+      <xsl:result-document href="{substring(f:feed-path($page), 2)}" method="xml" indent="yes">
+        <feed xmlns="http://www.w3.org/2005/Atom">
+          <title>{normalize-space($page/s:title)}</title>
+          <subtitle>{normalize-space($page/s:description)}</subtitle>
+          <id>{$origin}{f:feed-path($page)}</id>
+          <link rel="self" type="application/atom+xml" href="{$origin}{f:feed-path($page)}"/>
+          <link rel="alternate" type="text/html" href="{$origin}{$page/@path}"/>
+          <updated>{$newest-first[1]?date}T00:00:00Z</updated>
+          <author><name>{normalize-space($site/s:name)}</name></author>
+          <xsl:for-each select="$newest-first">
+            <xsl:variable name="release" select="."/>
+            <xsl:variable name="package" select="?package"/>
+            <xsl:variable name="href" select="$origin || $page/@path || '#' || $package/@id || '-' || translate(?version, '.', '-')"/>
+            <xsl:variable name="body" as="node()*">
+              <xsl:sequence select="f:release-body(?lines)"/>
+              <p xmlns=""><a href="{f:release-href($package, $release)}">{normalize-space($changelog/s:more)}</a></p>
+            </xsl:variable>
+            <entry>
+              <title>{$package} {?version}</title>
+              <id>{$href}</id>
+              <link rel="alternate" type="text/html" href="{$href}"/>
+              <updated>{?date}T00:00:00Z</updated>
+              <content type="html">{serialize($body, map { 'method': 'html' })}</content>
+            </entry>
+          </xsl:for-each>
+        </feed>
+      </xsl:result-document>
+    </xsl:if>
+  </xsl:template>
+
+  <xsl:function name="f:feed-path" as="xs:string">
+    <xsl:param name="page" as="element(s:page)"/>
+    <xsl:sequence select="$page/@path || 'feed.xml'"/>
+  </xsl:function>
+
   <!-- The page that holds the changelogs, at the newest release of `package`. -->
   <xsl:function name="f:changelog-href" as="xs:string">
     <xsl:param name="package" as="element(s:package)"/>
@@ -1247,6 +1312,32 @@
        (<commands>), each command's page at the commands page's path
        followed by its name, its id the page's followed by "-" and its
        name. -->
+
+  <!-- A page per namespace of site.xml's `namespaces`, at its URI's
+       path: a reference whose headline is the namespace's title. -->
+  <xsl:function name="f:namespace-pages" as="element(s:page)*">
+    <xsl:for-each select="$site/s:namespaces/s:namespace">
+      <xsl:variable name="path" select="substring-after(@uri, $origin)"/>
+      <s:page id="ns-{translate(substring-after($path, '/ns/'), '/', '-')}" path="{$path}">
+        <xsl:sequence select="s:title, s:description"/>
+        <s:reference>
+          <s:headline><xsl:sequence select="s:title/node()"/></s:headline>
+          <xsl:sequence select="* except (s:title, s:description)"/>
+        </s:reference>
+      </s:page>
+    </xsl:for-each>
+  </xsl:function>
+
+  <!-- When a page's content last changed, as a date: its own entry in
+       $dates, a command's page its commands page's, any other page (a
+       namespace's) site.xml's. Empty when the build gave no dates. -->
+  <xsl:function name="f:lastmod" as="xs:string?">
+    <xsl:param name="page" as="element(s:page)"/>
+    <xsl:variable name="commands-path" select="string($commands/ancestor::s:page/@path)"/>
+    <xsl:sequence select="($dates-doc/page[@path = $page/@path]/@date,
+                           if ($commands-path != '' and starts-with($page/@path, $commands-path)) then $dates-doc/page[@path = $commands-path]/@date else (),
+                           $dates-doc/@site)[1] ! string(.)"/>
+  </xsl:function>
 
   <xsl:function name="f:command-pages" as="element(s:page)*">
     <xsl:variable name="page" select="$commands/ancestor::s:page"/>

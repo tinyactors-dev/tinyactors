@@ -125,11 +125,79 @@ module Website
     '/cli/run.schema.json' => '/cli/commands/run.schema.json'
   }.freeze
 
-  # _redirects (Cloudflare's static assets read it): MOVED, and each
-  # command's page from /cli/<command>/ to /cli/commands/<command>/.
+  # _redirects (Cloudflare's static assets read it): MOVED, each
+  # command's page from /cli/<command>/ to /cli/commands/<command>/, and
+  # every page's path without its trailing slash to the path, permanently
+  # (the assets' own slash handling answers it with a 307; Cloudflare
+  # applies _redirects first, whether or not an asset matches).
   def redirects!(commands)
     moved = MOVED.merge(commands.to_h { |command| ["/cli/#{command}/", "/cli/commands/#{command}/"] })
-    SITE.join('_redirects').write(moved.map { |from, to| "#{from} #{to} 301\n" }.join)
+    slashless = sitemap_paths.select { |path| path.end_with?('/') && path != '/' }.to_h { |path| [path.delete_suffix('/'), path] }
+    SITE.join('_redirects').write(moved.merge(slashless) { |from| fail!("_redirects: #{from} is both moved and a page") }
+                                       .map { |from, to| "#{from} #{to} 301\n" }.join)
+  end
+
+  # The paths sitemap.xml lists, in its order.
+  def sitemap_paths = SITE.join('sitemap.xml').read.scan(%r{<loc>#{Regexp.escape(ORIGIN)}([^<]*)</loc>}).flatten
+
+  # Every URL path the sitemap has ever held, one a line (# a comment):
+  # append-only, so mise run test sees a published URL that stops working.
+  PUBLISHED = ROOT.join('published-urls.txt')
+  def published_paths = PUBLISHED.readlines(chomp: true).map(&:strip).reject { |line| line.empty? || line.start_with?('#') }
+
+  # When each page's content last changed, for sitemap.xml's <lastmod>:
+  # the date of the last commit that touched its content file (the
+  # changelog page's also its packages' changelogs), or today when the
+  # file has changes no commit holds; site.xml's for the pages it makes
+  # (the namespaces'). Written to build/dates.xml for the stylesheet.
+  DATES = BUILD.join('dates.xml')
+  def dates!
+    today = Time.now.utc.strftime('%Y-%m-%d')
+    date = lambda do |files|
+      files.map do |file|
+        relative = file.expand_path.relative_path_from(REPO).to_s
+        changed, = capture('git', 'status', '--porcelain', '--', relative, chdir: REPO)
+        committed, = capture('git', 'log', '-1', '--format=%cs', '--', relative, chdir: REPO)
+        changed.strip.empty? && !committed.strip.empty? ? committed.strip : today
+      end.max
+    end
+    changelogs = CONTENT.join('site.xml').read.scan(/<package\b[^>]*\schangelog="([^"]+)"/).flatten.uniq.map { |file| CONTENT.join(file) }
+    rows = documents.drop(1).filter_map do |document|
+      text = document.read
+      path = text[/<page\b[^>]*\spath="([^"]+)"/, 1] or next
+      %(  <page path="#{path}" date="#{date.call([document, *(text.include?('<changelog') ? changelogs : [])])}"/>\n)
+    end
+    FileUtils.mkdir_p(BUILD)
+    DATES.write(%(<dates site="#{date.call([CONTENT.join('site.xml')])}">\n#{rows.join}</dates>\n))
+  end
+
+  # The schemas the site's documents name, served where their names say:
+  # the content's (schema/site.xsd) at /schemas/site.xsd, and the CLI's
+  # JSON Schema at the path of its "$id" too (its page serves it beside
+  # the commands).
+  def schemas!
+    FileUtils.mkdir_p(SITE.join('schemas'))
+    FileUtils.cp(SCHEMA, SITE.join('schemas/site.xsd'))
+    run_schema = SITE.glob('cli/**/run.schema.json').first or return
+    id = JSON.parse(run_schema.read)['$id'] or fail!("#{run_schema.relative_path_from(SITE)}: no $id")
+    target = SITE.join(URI(id).path.delete_prefix('/'))
+    FileUtils.mkdir_p(target.dirname)
+    FileUtils.cp(run_schema, target) unless target == run_schema
+  end
+
+  # /.well-known/security.txt (RFC 9116): where to report a vulnerability,
+  # the repository's private security advisories, expiring a year after
+  # the build.
+  def security_txt!
+    source = CONTENT.join('site.xml').read[/<packages\b[^>]*\ssource="([^"]+)"/, 1] or fail!('site.xml: no packages source')
+    expires = (Time.now.utc + (365 * 24 * 60 * 60)).strftime('%Y-%m-%dT%H:%M:%SZ')
+    FileUtils.mkdir_p(SITE.join('.well-known'))
+    SITE.join('.well-known/security.txt').write(<<~SECURITY)
+      Contact: #{source}/security/advisories/new
+      Expires: #{expires}
+      Canonical: #{ORIGIN}/.well-known/security.txt
+      Preferred-Languages: en
+    SECURITY
   end
 
   # XSLT, robots.txt, and assets/.
@@ -140,9 +208,12 @@ module Website
     packages!
     # The CLI section's pages are made from the released command (mise/cli.rb).
     cli = CLI::PAGE.file? ? ["--param=cli=#{CLI.capture!.to_path}"] : []
-    run('sxml', 'transform', "--result-directory=#{SITE}", "--param=version=#{version}", *cli, STYLESHEET, CONTENT.join('site.xml'))
+    dates!
+    run('sxml', 'transform', "--result-directory=#{SITE}", "--param=version=#{version}", "--param=dates=#{DATES}", *cli, STYLESHEET, CONTENT.join('site.xml'))
     CLI.serve!(SITE) unless cli.empty?
     redirects!(cli.empty? ? [] : CLI.commands)
+    schemas!
+    security_txt!
     FileUtils.cp(AUDIENCE_SCHEMA, SITE.join('audiences/audience.xsd'))
     FileUtils.cp(VOICE_SCHEMA, SITE.join('voices/voice.xsd'))
     needs!
@@ -221,6 +292,8 @@ module Website
         Content-Type: text/plain; charset=utf-8
       /llms-full.txt
         Content-Type: text/plain; charset=utf-8
+      /changelog/feed.xml
+        Content-Type: application/atom+xml; charset=utf-8
     HEADERS
   end
 

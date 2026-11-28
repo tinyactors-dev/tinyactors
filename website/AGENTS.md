@@ -237,6 +237,22 @@ The home page follows the old order until it is rewritten.
   link and anchor, and runs the examples.
 - A new refusal the schema makes gets a document in `test/invalid/` with
   `expect: <rule>` in its first comment.
+- **Published URLs keep working.** `published-urls.txt` holds every path
+  the sitemap has ever held, and the old paths of what moved; append
+  only. `mise run test` fails on a line that is neither a file of the
+  build nor a redirect of `_redirects` (a `MOVED` entry in
+  `mise/website.rb`), naming the line, and on a path of the sitemap the
+  file lacks: add a new page's path to it in the same commit, and give a
+  page you move a `MOVED` entry.
+- **What else the test checks of the build's plumbing:** each page "/x/"
+  has a 301 from "/x" in `_redirects`; every namespace of the site's
+  origin that a document names has its page (`content/site.xml`,
+  `<namespaces>`) and links its schema; the CLI's JSON Schema is served at
+  the path of its `$id`; `sitemap.xml` gives each page its `<lastmod>`
+  (`build/dates.xml`, from git); the changelog's Atom feed
+  (`/changelog/feed.xml`) has an entry per release and the changelog page
+  links it; `/.well-known/security.txt` has its Contact, an Expires
+  within the year and its Canonical URL.
 - **Deploy every change you push** (the maintainer: "don't sit on
   changes, always deploy"). After the push, deploy from a clean tree at
   `origin/main` (rebase first, so another session's deployed work is not

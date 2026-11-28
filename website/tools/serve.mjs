@@ -1,5 +1,6 @@
-// Serves a built site as Cloudflare's static assets do (wrangler.jsonc): a
-// directory as its index.html, "/x" redirected to "/x/" when x/index.html
+// Serves a built site as Cloudflare's static assets do (wrangler.jsonc):
+// _redirects' static rules first, a directory as its index.html, "/x" as
+// x.html when that exists, "/x" redirected to "/x/" when x/index.html
 // exists, and 404.html with a 404 for what is missing. No dependencies.
 // With TICKET_KEY set it also answers /presence/ticket as the Worker does
 // (worker.mjs), for a presence server run here (COUNTRY, default EE).
@@ -25,11 +26,21 @@ const types = {
   '.ico': 'image/x-icon',
   '.woff2': 'font/woff2',
   '.xml': 'application/xml; charset=utf-8',
+  '.xsd': 'application/xml; charset=utf-8',
   '.txt': 'text/plain; charset=utf-8',
   '.mp4': 'video/mp4',
   '.webm': 'video/webm',
   '.jpg': 'image/jpeg',
 };
+
+// _redirects: "from to status", one a line, every rule static here.
+const redirects = new Map(
+  (await readFile(join(root, '_redirects'), 'utf8').catch(() => ''))
+    .split('\n')
+    .map((line) => line.trim().split(/\s+/))
+    .filter((rule) => rule.length >= 2 && rule[0].startsWith('/'))
+    .map(([from, to, status = '302']) => [from, { to, status: Number(status) }]),
+);
 
 const isFile = async (path) => (await stat(path).catch(() => null))?.isFile() ?? false;
 
@@ -45,7 +56,10 @@ createServer(async (request, response) => {
     response.writeHead(400).end();
     return;
   }
+  const redirect = redirects.get(path);
+  if (redirect) return response.writeHead(redirect.status, { location: redirect.to }).end();
   let file = join(root, path.endsWith('/') ? join(path, 'index.html') : path);
+  if (!path.endsWith('/') && !(await isFile(file)) && (await isFile(`${file}.html`))) file = `${file}.html`;
   let status = 200;
   if (!path.endsWith('/') && (await isFile(join(root, path, 'index.html')))) {
     response.writeHead(307, { location: `${path}/` }).end();

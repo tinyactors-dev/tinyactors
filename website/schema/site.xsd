@@ -50,6 +50,7 @@
           </xs:complexType>
         </xs:element>
         <xs:element ref="packages"/>
+        <xs:element ref="namespaces"/>
         <xs:element name="footer">
           <xs:complexType>
             <xs:sequence>
@@ -124,6 +125,53 @@
       <xs:selector xpath="pages/page"/>
       <xs:field xpath="@src"/>
     </xs:unique>
+  </xs:element>
+
+  <!-- ===================================================== namespaces -->
+
+  <xs:element name="namespaces">
+    <xs:annotation><xs:documentation>
+      The XML namespaces the site names under its own origin (the site's
+      content, its stylesheet's functions, the audience and voice files it
+      publishes), each published at its own URI, so a reader who opens a
+      namespace in a document lands on what it is. The build writes a page
+      at each URI's path ("/ns/audience" as ns/audience.html) and stops at
+      a URI outside the site's origin; `mise run test` fails when a
+      document of the build or its sources names a namespace of the origin
+      with no page.
+    </xs:documentation></xs:annotation>
+    <xs:complexType>
+      <xs:sequence>
+        <xs:element ref="namespace" maxOccurs="unbounded"/>
+      </xs:sequence>
+    </xs:complexType>
+    <xs:unique name="namespace-uris">
+      <xs:selector xpath="namespace"/>
+      <xs:field xpath="@uri"/>
+    </xs:unique>
+  </xs:element>
+
+  <xs:element name="namespace">
+    <xs:annotation><xs:documentation>
+      One namespace: `uri` is the namespace's name and where its page is
+      served; `title` and `description` are the page's, as a page's are; the
+      blocks say what the namespace names and link its schema and the
+      documentation of its convention.
+    </xs:documentation></xs:annotation>
+    <xs:complexType>
+      <xs:sequence>
+        <xs:element name="title" type="title"/>
+        <xs:element name="description" type="sentence"/>
+        <xs:group ref="blocks" maxOccurs="unbounded"/>
+      </xs:sequence>
+      <xs:attribute name="uri" use="required">
+        <xs:simpleType>
+          <xs:restriction base="xs:anyURI">
+            <xs:pattern value="https://[a-z0-9.-]+(/[a-z0-9-]+)+"/>
+          </xs:restriction>
+        </xs:simpleType>
+      </xs:attribute>
+    </xs:complexType>
   </xs:element>
 
   <!-- ===================================================== audiences -->

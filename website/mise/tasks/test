@@ -32,6 +32,7 @@
 #    browser, which this task does not start.
 
 require 'json'
+require 'time'
 require_relative '../website'
 require 'tmpdir'
 
@@ -73,7 +74,8 @@ pages = Website::SITE.glob('**/*.html').to_h { |file| [file, file.read] }
 ids = ->(file) { pages.fetch(file, '').scan(/\sid="([^"]+)"/).flatten }
 resolve = lambda do |path|
   file = Website::SITE.join(path.delete_prefix('/'))
-  [path.end_with?('/') ? file.join('index.html') : file, file.join('index.html')].find(&:file?)
+  # "/x/" is x/index.html; "/x" the file x, x.html ("/ns/site") or x/index.html
+  [path.end_with?('/') ? file.join('index.html') : file, Pathname.new("#{file}.html"), file.join('index.html')].find(&:file?)
 end
 links = 0
 pages.each do |file, html|
@@ -196,6 +198,109 @@ purposes.each do |purpose|
   failures << "#{name}: publishes the content's answers (data-answers, data-kind or page-answers)" if html.match?(/data-answers=|data-kind=|name="page-answers"/)
 end
 puts "website: #{purposes.size} pages name their kind, their voice and #{linked} audience links; #{audience_files.size} audience files valid against audience.xsd, #{voice_files.size} voice files against voice.xsd"
+
+# 3d. Published URLs keep working (published-urls.txt): every path the
+#     sitemap ever held is a page or file of the build, or a redirect of
+#     _redirects to one; every path of this build's sitemap is in the file,
+#     so a new page is added to it; and each page "/x/" has its "/x"
+#     redirect, within Cloudflare's 2,000 static redirects.
+redirects = Website::SITE.join('_redirects').readlines(chomp: true).to_h { |line| line.split.first(2) }
+sitemap = Website.sitemap_paths
+published = Website.published_paths
+published.each do |path|
+  next if resolve.call(path)
+
+  target = redirects[path]
+  if target.nil?
+    failures << "published-urls.txt: #{path} is neither a page of the build nor a redirect of _redirects (Website::MOVED)"
+  elsif !resolve.call(target.split('#').first)
+    failures << "published-urls.txt: #{path} redirects to #{target}, which is no file of the build"
+  end
+end
+(sitemap - published).each { |path| failures << "published-urls.txt: lacks #{path}, which the sitemap lists: append it" }
+redirects.each { |from, to| failures << "_redirects: #{from} goes to #{to}, which is no file of the build" unless resolve.call(to.split('#').first) }
+sitemap.select { |path| path.end_with?('/') && path != '/' }.each do |path|
+  failures << "_redirects: no 301 from #{path.delete_suffix('/')} to #{path}" unless redirects[path.delete_suffix('/')] == path
+end
+failures << "_redirects: #{redirects.size} redirects, more than Cloudflare's 2,000" if redirects.size > 2000
+puts "website: #{published.size} published URLs resolve; the sitemap's #{sitemap.size} paths are among them; #{redirects.size} redirects land on files"
+
+# 3e. Namespaces of the site's origin resolve: every one a document of the
+#     build or its sources names has its page; each schema of schema/ is
+#     published, and its namespace's page links it; the CLI's JSON Schema
+#     is served at the path of its $id.
+namespace = %r{#{Regexp.escape(origin)}/ns(?:/[a-z0-9-]+)+}
+sources = [*Website::ROOT.glob('{schema,render}/*.{xsd,xsl,xq}'), *Website.documents,
+           *Website::SITE.glob('**/*.{xml,xsd,html}').reject { |file| file.to_s.include?('/vendor/') || file.to_s.include?('/copywriter/') }]
+names = sources.flat_map { |file| file.read.scan(namespace) }.uniq.sort
+names.each do |uri|
+  failures << "#{uri}: a namespace with no page (site.xml, <namespaces>)" unless Website::SITE.join("#{uri.delete_prefix(origin).delete_prefix('/')}.html").file?
+end
+Website::ROOT.glob('schema/*.xsd').each do |schema|
+  target = schema.read[/targetNamespace="([^"]+)"/, 1]
+  copy = Website::SITE.glob("**/#{schema.basename}").find { |file| file.read == schema.read }
+  next failures << "#{schema.basename}: not published" unless copy
+  page = Website::SITE.join("#{target.delete_prefix(origin).delete_prefix('/')}.html")
+  href = "#{origin}/#{copy.relative_path_from(Website::SITE)}"
+  failures << "#{target}: its page does not link its schema, #{href}" unless page.file? && page.read.include?(%(href="#{href}"))
+end
+Website::SITE.glob('cli/**/run.schema.json').each do |file|
+  id = JSON.parse(file.read)['$id']
+  served = Website::SITE.join(URI(id).path.delete_prefix('/'))
+  failures << "#{file.relative_path_from(Website::SITE)}: not served at its $id's path, #{URI(id).path}" unless served.file? && served.read == file.read
+  puts "website: note: run.schema.json's $id names #{URI(id).host}, the site is #{URI(origin).host}" unless URI(id).host == URI(origin).host
+end
+puts "website: #{names.size} namespaces of #{origin} have their pages; the schemas are published and linked"
+
+# 3f. sitemap.xml's <lastmod>: every page's, the date build/dates.xml gives
+#     it, not after today; the changelog's Atom feed: an entry per release
+#     of each package, each linking a release on the changelog page, which
+#     links the feed in its head.
+today = Time.now.utc.strftime('%Y-%m-%d')
+dates = Website::DATES.read.scan(/<page path="([^"]+)" date="([^"]+)"/).to_h
+lastmods = Website::SITE.join('sitemap.xml').read.scan(%r{<loc>#{Regexp.escape(origin)}([^<]*)</loc>\s*(?:<lastmod>([^<]*)</lastmod>)?}).to_h
+lastmods.each do |path, date|
+  if date.nil? || !date.match?(/\A\d{4}-\d{2}-\d{2}\z/) then failures << "sitemap.xml: #{path} has no <lastmod> date"
+  elsif date > today then failures << "sitemap.xml: #{path}'s <lastmod> #{date} is after today"
+  elsif dates[path] && dates[path] != date then failures << "sitemap.xml: #{path}'s <lastmod> is #{date}, build/dates.xml says #{dates[path]}"
+  end
+end
+changelog = pages.find { |_, html| html.include?('class="changelog"') }
+feed = Website::SITE.join('changelog/feed.xml')
+if changelog.nil? || !feed.file?
+  failures << 'changelog: no page holds the changelog, or it has no feed.xml'
+else
+  failures << "#{changelog[0].relative_path_from(Website::SITE)}: does not link its feed" unless changelog[1].include?('<link rel="alternate" type="application/atom+xml" href="/changelog/feed.xml"')
+  out, ok = Website.capture('sxml', 'xquery', "--context-item=#{feed}", '--method=json',
+                            '--expression=declare namespace a = "http://www.w3.org/2005/Atom"; array { /a:feed/a:entry/a:link[@rel = "alternate"]/@href ! string() }')
+  if !ok then failures << "changelog/feed.xml: not XML:\n#{out}"
+  else
+    links = JSON.parse(out)
+    want = Website::CONTENT.join('site.xml').read.scan(/<package\b[^>]*\schangelog="([^"]+)"/).flatten
+                   .sum { |file| Website::CONTENT.join(file).read.scan(/^## \[[^\]]+\] - \d{4}-\d{2}-\d{2}$/).size }
+    failures << "changelog/feed.xml: #{links.size} entries, but the packages' changelogs have #{want} releases" unless links.size == want
+    links.each do |href|
+      failures << "changelog/feed.xml: #{href}: no such release on the changelog page" unless ids.call(changelog[0]).include?(href.split('#', 2)[1])
+    end
+  end
+  failures << '_headers: no Atom type for /changelog/feed.xml' unless Website::SITE.join('_headers').read.include?("/changelog/feed.xml\n  Content-Type: application/atom+xml")
+end
+puts "website: #{lastmods.size} sitemap entries have their <lastmod>; the changelog's feed lists every release"
+
+# 3g. /.well-known/security.txt (RFC 9116): Contact, an Expires within a
+#     year of now and after it, the Canonical URL of the file itself.
+security = Website::SITE.join('.well-known/security.txt')
+if security.file?
+  fields = security.read.lines.to_h { |line| line.chomp.split(': ', 2) }
+  expires = Time.iso8601(fields['Expires'].to_s) rescue nil
+  failures << 'security.txt: no Contact' unless fields['Contact'].to_s.start_with?('https://')
+  failures << "security.txt: Expires #{fields['Expires'].inspect} is not within the coming year" unless expires && expires > Time.now && expires <= Time.now + (366 * 24 * 60 * 60)
+  failures << 'security.txt: Canonical is not its own URL' unless fields['Canonical'] == "#{origin}/.well-known/security.txt"
+  failures << 'security.txt: no Preferred-Languages' unless fields['Preferred-Languages']
+else
+  failures << 'build/site/.well-known/security.txt: missing'
+end
+puts 'website: /.well-known/security.txt has its Contact, Expires and Canonical'
 
 # 4. The examples, run: every directory under examples/ that holds an
 #    output.txt is a program, its package.json's "main" or main.mjs; with
