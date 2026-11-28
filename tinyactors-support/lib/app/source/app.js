@@ -192,21 +192,31 @@
 
   async function bulk(kind, reason) {
     acted();
-    const targets = [...S.selected].map(byID).filter((i) => i && allowed(i)[kind]);
-    const skipped = S.selected.size - targets.length;
+    const chosen = [...S.selected].map(byID).filter(Boolean);
+    const targets = chosen.filter((i) => allowed(i)[kind]);
+    const skipped = chosen.filter((i) => !allowed(i)[kind]);
     const names = { triage: 'Triaging', close: 'Closing', wontfix: 'Declining' };
     const refusals = [];
-    let done = 0;
-    for (const i of targets) {
-      S.bulk = `${names[kind]} ${done + 1} of ${targets.length}…`; render();
+    const done = [];
+    for (const [n, i] of targets.entries()) {
+      S.bulk = `${names[kind]} ${n + 1} of ${targets.length}…`; render();
       const outcome = kind === 'wontfix' ? await mutate(i.id, 'wontfix', { reason }, { state: 'wontfix' }, { quiet: true })
         : kind === 'close' ? await mutate(i.id, 'close', {}, { state: 'closed' }, { quiet: true })
         : await mutate(i.id, 'triage', { kind: i.kind }, { state: 'triaged' }, { quiet: true });
-      if (outcome.ok) done++; else refusals.push(`${short(i.id)}: ${outcome.text}`);
+      if (outcome.ok) done.push(i); else refusals.push(`${short(i.id)}: ${outcome.text}`);
     }
     S.bulk = null; S.selected.clear(); S.panel = null; S.selecting = false;
+    // which issues it acted on, which it left and why, and what the server refused, by name
     const past = { triage: 'Triaged', close: 'Closed', wontfix: 'Declined' }[kind];
-    const lines = [`${past} ${done} of ${targets.length}.` + (skipped ? ` ${skipped} not in a state for it.` : ''), ...refusals];
+    const why = { triage: 'only a new issue can be triaged', close: 'only a fixed issue can be closed',
+                  wontfix: 'only an open issue can be declined' }[kind];
+    const named = (list) => list.length <= 5 ? list.map((i) => short(i.id)).join(', ')
+      : `${list.slice(0, 4).map((i) => short(i.id)).join(', ')} and ${list.length - 4} more`;
+    const lines = [done.length ? `${past} ${named(done)}.` : `${past} none.`];
+    const unmaintained = skipped.filter((i) => !maintains(i.repo)), wrongState = skipped.filter((i) => maintains(i.repo));
+    if (wrongState.length) lines.push(`Not ${past.toLowerCase()}: ${named(wrongState)} (${why}).`);
+    if (unmaintained.length) lines.push(`Not ${past.toLowerCase()}: ${named(unmaintained)} (you do not maintain its repository).`);
+    lines.push(...refusals);
     toast(lines.join('\n'), refusals.length ? 'error' : '');
     render();
   }

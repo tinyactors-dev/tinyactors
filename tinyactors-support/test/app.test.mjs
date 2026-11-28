@@ -231,12 +231,16 @@ describe('the issue list app', { skip: chromium ? false : 'Playwright is not ins
     await app.locator('.chip-x').first().click();
     await row(app, 'fixed').click({ modifiers: ['Shift'] });   // shift-click with no anchor: selects it
     await row(app, 'fixed2').locator('.pick').click();
-    await app.locator('.bulk-count', { hasText: '2 selected' }).waitFor();
+    await row(app, 'regressed').locator('.pick').click();   // not fixed: left out, and said why
+    await app.locator('.bulk-count', { hasText: '3 selected' }).waitFor();
     await s.tool(bob, 'close', { id: id.fixed2 });   // closed meanwhile, elsewhere
     await app.getByRole('button', { name: 'Close (2)' }).click();
     await app.locator('.toast[data-tone="error"]').waitFor();
     const text = await toast(app).textContent();
-    assert.match(text, /^Closed 1 of 2\./);
+    const short = (key) => id[key].replace(/^tinyactors:/, '');
+    assert.match(text, new RegExp(`^Closed ${short('fixed')}\\.`));
+    assert.match(text, new RegExp(`Not closed: ${short('regressed')} \\(only a fixed issue can be closed\\)\\.`));
+    assert.doesNotMatch(text, / of \d/, 'issues by name, not counts');
     assert.match(text, new RegExp(`${id.fixed2.replace(/^tinyactors:/, '')}: Refused`));
     assert.equal(await row(app, 'fixed').locator('.status').getAttribute('data-state'), 'closed');
     assert.equal(await app.locator('.bulk').count(), 0, 'the selection is cleared');
@@ -510,7 +514,7 @@ describe('the issue list app', { skip: chromium ? false : 'Playwright is not ins
     await app.getByRole('button', { name: /^Decline/ }).tap();
     await app.getByLabel('Why they will not be fixed').fill('a test of the select mode');
     await app.getByRole('button', { name: 'Decline', exact: true }).tap();
-    await app.locator('.toast', { hasText: /^Declined 2 of 2\./ }).waitFor();
+    await app.locator('.toast', { hasText: new RegExp(`^Declined ${extra.replace(/^tinyactors:/, '')}, ${id.regressed.replace(/^tinyactors:/, '')}\\.`) }).waitFor();
     assert.equal(await app.locator('.list.selecting').count(), 0, 'done: the mode ends');
     await s.tool(bob, 'delete_issue', { id: extra, reason: 'a test issue' });
     await page.context().close();
