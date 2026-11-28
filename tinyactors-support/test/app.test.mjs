@@ -117,6 +117,8 @@ describe('the issue list app', { skip: chromium ? false : 'Playwright is not ins
       assert.equal(await row(app, 'regressed').locator('.status').getAttribute('data-state'), 'regressed');
       assert.equal(await app.locator('.chip').first().textContent(), 'State is open×');
       assert.equal(await app.locator('html').getAttribute('data-theme'), theme);
+      // the header's buttons are buttons, not the design system's uppercase labels (a class name once collided)
+      assert.equal(await app.locator('#report').evaluate((b) => getComputedStyle(b.querySelector('.btn-label')).textTransform), 'none');
       const background = await app.locator('body').evaluate((b) => getComputedStyle(b).backgroundColor);
       assert.equal(background, theme === 'dark' ? 'rgb(24, 18, 13)' : 'rgb(244, 238, 226)', 'umber-950 or vellum-100');
       const colours = await app.locator('.group-head .status').evaluateAll((icons) => icons.map((i) => getComputedStyle(i).color));
@@ -259,6 +261,9 @@ describe('the issue list app', { skip: chromium ? false : 'Playwright is not ins
     await app.getByLabel('Reason, for the ledger (optional)').fill('a test report');
     await app.getByRole('button', { name: 'Delete for good' }).click();
     await app.locator('.toast', { hasText: `Deleted ${id.declined}` }).waitFor();
+    // the videos (2026-11-28): toasts piled up over the controls; one message now, in the flow under the header
+    assert.equal(await app.locator('.toast').count(), 1, 'one message at a time');
+    assert.equal(await app.locator('.toasts').evaluate((t) => getComputedStyle(t).position), 'static', 'in the flow, over nothing');
     assert.equal(await app.locator(`.row[data-id="${id.declined}"]`).count(), 0);
     assert.match((await s.tool(null, 'get_issue', { id: id.declined })).reason, /was deleted/);
     const names = await page.evaluate(() => window.calls.map((c) => c.name));
@@ -337,6 +342,8 @@ describe('the issue list app', { skip: chromium ? false : 'Playwright is not ins
         const menu = await app.locator('.menu--filter').boundingBox();
         assert.ok(menu.x >= 0 && menu.x + menu.width <= width, 'the menu is within the view');
         assert.equal(await overflow(frame), 0, 'the menu fits the width');
+        const done = await app.locator('.menu--filter').getByRole('button', { name: 'Done' }).boundingBox();
+        assert.ok(done.y + done.height <= menu.y + menu.height + 1, 'the menu\'s Done is in reach, not below its fold');
         assert.deepEqual(await small(frame), [], 'every option is a 44 px target');
         if (width === 360) await shot(page, `phone-filter-menu-${theme}`);
         for (const name of ['tooling', 'examples']) await app.locator('.menu--filter .option', { hasText: new RegExp(`^${name}$`) }).first().tap();

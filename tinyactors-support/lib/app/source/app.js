@@ -275,7 +275,10 @@
     const onRow = !!focused?.classList?.contains('row');
     regions.toasts ??= h('div', { class: 'toasts', role: 'status', 'aria-live': 'polite' });
     const menu = menuView();
-    app.replaceChildren(...[regions.toolbar, body, menu, regions.toasts].filter(Boolean));
+    app.replaceChildren(...[regions.toolbar, regions.toasts, body, menu].filter(Boolean));
+    // the chips' row scrolls sideways on a phone: a fade at its edge says so, when there is more
+    const chipRow = app.querySelector('.chips');
+    chipRow?.classList.toggle('scrolls', chipRow.scrollWidth > chipRow.clientWidth + 1);
     // a menu opens just under the header, however many rows the header has
     if (menu) menu.style.top = `${Math.round(regions.toolbar.offsetTop + regions.toolbar.offsetHeight + 4)}px`;
     for (const area of app.querySelectorAll('.title-edit')) fitHeight(area);
@@ -301,7 +304,7 @@
       search,
       button(glyph('search'), 'ghost', () => toggleSearch(), { id: 'search-toggle', class: 'btn btn--ghost btn--icon phone-only',
         'aria-label': 'Search', 'aria-expanded': 'false', 'aria-controls': 'search' }),
-      button([glyph('filter'), h('span', { class: 'label' }, 'Filter')], 'ghost', () => toggleMenu('filter'),
+      button([glyph('filter'), h('span', { class: 'btn-label' }, 'Filter')], 'ghost', () => toggleMenu('filter'),
         { id: 'filter-button', 'aria-haspopup': 'true', 'aria-label': 'Filter', title: 'Filter (f)' }),
       button('Display', 'ghost', () => toggleMenu('display'), { id: 'display-button', class: 'btn btn--ghost wide-only', 'aria-haspopup': 'true', title: 'Group and order' }),
       button('↻', 'ghost', load, { class: 'btn btn--ghost btn--icon wide-only', 'aria-label': 'Refresh', title: 'Refresh' }),
@@ -309,7 +312,7 @@
       button('?', 'ghost', () => toggleMenu('help'), { class: 'btn btn--ghost btn--icon wide-only', 'aria-label': 'Keyboard shortcuts', title: 'Keyboard shortcuts (?)' }),
       button('⋯', 'ghost', () => toggleMenu('more'), { id: 'more-button', class: 'btn btn--ghost btn--icon phone-only', 'aria-haspopup': 'true',
         'aria-label': 'More', title: 'Display, refresh, full screen' }),
-      button([h('span', { class: 'phone-only', 'aria-hidden': 'true' }, '+'), h('span', { class: 'label' }, 'Report issue')], 'primary', () => openReport(),
+      button([h('span', { class: 'phone-only', 'aria-hidden': 'true' }, '+'), h('span', { class: 'btn-label' }, 'Report issue')], 'primary', () => openReport(),
         { id: 'report', hidden: true, 'aria-label': 'Report issue', title: 'Report an issue (c)' }));
   }
   // small line icons for the compact header (currentColor, so they take the button's colour in either theme)
@@ -452,7 +455,8 @@
         i.workaround ? h('span', { class: 'has-workaround', title: `Workaround: ${i.workaround}`, 'aria-label': 'has a workaround' }, '⚑') : null,
         i.attachments ? h('span', { class: 'files', title: `${i.attachments} files` }, `⎙${i.attachments}`) : null,
         i.possibleDuplicateOf ? h('span', { class: 'dupe', title: `May be ${i.possibleDuplicateOf.id}` }, '≈') : null,
-        h('span', { class: 'cost', title: `${i.count} ${i.count === 1 ? 'report' : 'reports'} · ${i.minutes} min` }, `${i.count}× · ${i.minutes}m`)));
+        h('span', { class: 'cost', title: `${i.count} ${i.count === 1 ? 'report' : 'reports'}${i.minutes ? ` · ${i.minutes} min` : ''}` },
+          i.minutes ? `${i.count}× · ${i.minutes}m` : `${i.count}×`)));
   }
   function rowClick(event, i) {
     if (event.shiftKey) { select(i.id, 'range'); return; }
@@ -635,13 +639,15 @@
   }
 
   // --- toasts -----------------------------------------------------------------------
+  // One message at a time, in the flow under the header: a toast fixed to the frame's bottom covered the
+  // controls under it, and in a host that makes the frame as tall as its content it lands out of sight. It
+  // stays until the next message or its ×: a timer taking it away would move the content under a finger.
   function toast(text, tone = '') {
     if (!text) return;
     regions.toasts ??= h('div', { class: 'toasts', role: 'status', 'aria-live': 'polite' });
-    const item = h('div', { class: 'toast', dataset: { tone } }, text);
-    regions.toasts.append(item);
-    while (regions.toasts.children.length > 3) regions.toasts.firstChild.remove();
-    setTimeout(() => item.remove(), tone === 'error' ? 9000 : 5000);
+    regions.toasts.replaceChildren(h('div', { class: 'toast', dataset: { tone } }, text),
+      h('button', { type: 'button', class: 'btn btn--ghost btn--icon toast-x', 'aria-label': 'Dismiss the message',
+        onclick: () => regions.toasts.replaceChildren() }, '×'));
   }
 
   // --- the keyboard -------------------------------------------------------------------
