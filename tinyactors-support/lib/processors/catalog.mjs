@@ -154,6 +154,7 @@ export class Catalog {
           fixSha: r.fix?.sha ?? null, fixURL: r.fix?.url ?? null, fixRepoID: r.fix?.repoID ?? null, reason: r.reason ?? null,
           filed: r.filed ?? row?.filed ?? at, updated: r.updated ?? row?.updated ?? at,
           reporters: JSON.stringify(r.reporters ?? []), purged: r.purged ? 1 : 0,
+          possible: r.possibleDuplicateOf ? JSON.stringify(r.possibleDuplicateOf) : row?.possible ?? null,
         };
         if (!row) {
           const repoID = r.repoID ?? this.sql.repoOf.get(slug)?.repoID ?? null;

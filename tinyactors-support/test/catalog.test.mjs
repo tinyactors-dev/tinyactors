@@ -154,7 +154,8 @@ describe('the catalog', () => {
     old.close();
     const issues = [{ id: k(1), repoID: '1001', title: 'a guide is wrong', component: 'docs', kind: 'docs', body: 'the guide says x',
       count: 2, minutes: 35, reporters: [7, 8], workaround: { text: 'read y', by: 'bob' }, reason: null, fix: null, state: 'triaged',
-      attachments: [], purged: false, filed: '2026-11-27T10:00:00.000Z', updated: '2026-11-27T14:00:00.000Z' }];
+      attachments: [], purged: false, filed: '2026-11-27T10:00:00.000Z', updated: '2026-11-27T14:00:00.000Z',
+      possibleDuplicateOf: { id: 'tinyactors:tinyactors:9', n: 9, p: 0.4 } }];
     const catalog = new Catalog(join(dir, 'catalog.sqlite'), { now: () => Date.UTC(2026, 10, 28) });
     catalog.projects([{ repoID: '1001', slug: 'tinyactors', name: 'tinyactors-dev/tinyactors' }]);
     assert.equal(catalog.migrate({ legacy, issues }), true);
@@ -166,6 +167,7 @@ describe('the catalog', () => {
     assert.deepEqual([one.repoID, one.state, one.count, one.minutes, one.workaround.text, one.filed, one.updated, one.reporterIDs],
                      ['1001', 'triaged', 2, 35, 'read y', '2026-11-27T10:00:00.000Z', '2026-11-27T14:00:00.000Z', [7, 8]]);
     assert.equal(one.occurrences.length, 2);
+    assert.deepEqual(catalog.list({ state: 'all' })[0].possibleDuplicateOf, { id: 'tinyactors:tinyactors:9', n: 9, p: 0.4 });
     assert.deepEqual(catalog.get('tinyactors', 2), { gone: true, id: k(2) });
     assert.deepEqual(catalog.project('1001').next, 3);
     // and its rows are the ledger's: a replay gives them again
