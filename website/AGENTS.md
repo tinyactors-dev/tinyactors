@@ -139,32 +139,57 @@ rules.
 
 ## The pitch
 
-Three points, in this order (the maintainer, 2026-11-21, moving the
-agents ahead of the in-process library):
+The position (the maintainer, 2026-11-27, replacing the three points of
+2026-11-21): **the enemy is complexity**, logic spread across services,
+queues, workers and `async`/`await` chains with no clear owner of any
+piece of state. Durable Objects, Temporal, Rivet and distributed systems
+in general answer it with infrastructure that makes decisions for you.
+tinyactors answers it by removing the spread: actors you can verify,
+without the infrastructure, at in-process speed. XState has the
+verifiability, Rivet the infrastructure and distribution; tinyactors has
+actors and verifiability without the infrastructure.
 
-1. **Actors that run charts, written by agents** (the home page's
-   sections `actors` and `agents`): an actor's behavior is one statechart,
-   every state and transition written down, where an Erlang or Akka actor
-   runs any code. The same chart runs in simulation and in your process,
-   and a simulated clock runs its timeouts (deterministic simulation).
-   An agent reasons locally: the chart holds every state and transition,
-   and its effects go out as events for your code, so an agent writes an
-   actor from the events entering and leaving it (the maintainer,
-   2026-11-25, replacing "a coding agent changes the trade").
-2. **An in-process library** (section `process`): no server, one C core
-   behind every language's package, small enough to make a request or a
-   connection an actor, and idle actors kept in the application's own
-   store.
-3. **Properties instead of unit tests** (section `verify`): statecharts
-   are a formal model with W3C semantics, so state properties over
-   generated runs instead of examples. Say "properties" and "generated
-   runs", not "formal verification": there is no model checker, and the
-   site does not claim one. "Easy to verify" is fine (the maintainer,
-   2026-11-21): it says what a formal model allows, not that tinyactors
-   verifies a chart.
+Five reasons, the home page's sections in this order, each a claim the
+site proves:
 
-The wording of each point is the content's (`content/site.xml`,
+1. **One process, so you can reason about it** (section `process`): no
+   server, one place to look, one order of events, one C core behind
+   every language's package.
+2. **Small actors, so you can inspect it** (about half a kilobyte; the
+   sections `process` and `production`): everything fits in memory, so
+   your code reads any actor's state, snapshots the whole process and
+   restores it elsewhere; small enough to make a request, a connection
+   or an order an actor.
+3. **Statecharts the computer can check** (sections `actors`, `agents`
+   and `verify`): an actor's behavior is one SCXML chart with every state
+   and transition written down, where an Erlang or Akka actor runs any
+   code. The same chart runs in simulation and in your process; a
+   simulated clock runs its timeouts; properties are checked over
+   generated runs; the CLI's `check`, `lint` and `diff` run in CI; and an
+   agent reasons locally, writing an actor from the events entering and
+   leaving it (the maintainer, 2026-11-25). Say "properties" and
+   "generated runs", not "formal verification": there is no model
+   checker, and the site does not claim one. "Easy to verify" is fine
+   (the maintainer, 2026-11-21): it says what a formal model allows, not
+   that tinyactors verifies a chart.
+4. **No opinion about I/O, so no lock-in**: effects leave the chart as
+   events your code performs, and idle actors hibernate into the store
+   your program already uses. Your program made its infrastructure
+   decisions; tinyactors uses them.
+5. **Behavior changes while it runs** (the maintainer, 2026-11-27):
+   charts are data the host loads, so a new version is added to the
+   running process, new actors start on it, and a migration moves
+   running actors to it with the state they reached. No redeploy.
+
+**Say when infrastructure is the right choice.** When an application
+needs to be globally distributed and work everywhere at once, the
+infrastructure is the product, and Cloudflare or Rivet fits better.
+tinyactors is for a program on a machine you understand. Every
+comparison says so, and When to use already does.
+
+The wording of each reason is the content's (`content/site.xml`,
 `content/pages/home.xml`); this brief names what each argues, not how.
+The home page follows the old order until it is rewritten.
 
 - **Examples are entities readers build** (an order, a payment, a
   subscription, a chat session), never a door, a light switch or a traffic
