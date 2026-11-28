@@ -1,6 +1,7 @@
 """Snapshots: Host.snapshot and Host.restore, on both datamodels."""
 
 import asyncio
+import time
 import unittest
 
 import tinyactors
@@ -191,6 +192,18 @@ class Snapshot(unittest.TestCase):
             self.assertEqual(logs.labelled("late"), [])
             clock.increment(timers[0]["due"] - host.now())
             self.assertEqual(logs.labelled("late"), ["{'k': 0}"])
+
+    def test_a_snapshot_holds_the_time_of_its_call_not_of_the_last_turn(self):
+        """On the real clock a host idles between turns; snapshot() advances
+        its clock first, so a host restored from it goes on from the call."""
+        with host_of(COUNTER["python"], clock=None) as host:
+            host.spawn("counter")
+            host.run_until_idle()
+            before = host.now()
+            time.sleep(0.05)
+            blob = host.snapshot()
+        with tinyactors.Host.restore(blob, [], system="t", config=CONFIG, clock=tinyactors.SimulatedClock()) as host:
+            self.assertGreaterEqual(host.now(), before + 0.05)
 
     def test_a_value_nests_as_deep_in_a_snapshot_as_in_a_send(self):
         deep = 1

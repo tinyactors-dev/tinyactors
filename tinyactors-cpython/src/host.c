@@ -1917,7 +1917,8 @@ static PyObject *ta_python_host_encode(ta_python_host *host, PyObject *value) {
 }
 
 /* snapshot() -> bytes: ta_host_snapshot_pack of the whole host, with both
- * datamodels' state, the images, the system id and the host's time. A
+ * datamodels' state, the images, the system id and the host's time (its
+ * clocks advanced first, so it is the time of the call, as Node's). A
  * quiescent host only: not from a handler (a batch is open) nor while a
  * migration runs (TA_ERROR_STATE). The services running are not in
  * it: the restored host's first run announces each invocation again. */
@@ -1931,6 +1932,7 @@ static PyObject *ta_python_host_snapshot(PyObject *self, PyObject *unused) {
     ta_buffer quiet = {NULL, 0, 0};
     ta_status ready = ta_host_snapshot(host->host, &quiet);
     if (ready != TA_OK && ready != TA_ERROR_NO_MEMORY) ta_python_raise_status(host->state, ready);
+    else ta_python_advance(host); /* the snapshot's time is now, not the last turn's */
     PyObject *python = ready == TA_OK || ready == TA_ERROR_NO_MEMORY ? ta_python_datamodel_snapshot(&host->python) : NULL;
     PyObject *ecmascript = python ? ta_python_ecmascript_state(host) : NULL;
     PyObject *both = ecmascript ? Py_BuildValue("{s:O,s:O}", "python", python, "ecmascript", ecmascript) : NULL;

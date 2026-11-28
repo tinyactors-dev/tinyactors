@@ -881,7 +881,7 @@ SQLite (below, "Performance").
 `host.snapshot() -> bytes` copies the whole host into one blob: every
 segment's memory (actors, queues, timers, the hibernated actors'
 records), both datamodels' sessions and payloads, the images, the system
-id and the host's time. `tinyactors.Host.restore(snapshot, charts, system=..., ...)`
+id and the host's time, read at the call. `tinyactors.Host.restore(snapshot, charts, system=..., ...)`
 creates a new host running it. Pass what `Host(...)` takes: the system
 the snapshot was taken with (its id is checked), its config (its I/O
 processors and tick rate are not in the snapshot), and the handlers.
