@@ -385,7 +385,7 @@
   <!-- The hero is the page's one drafting sheet: a frame with registration
        marks on the construction grid. -->
   <xsl:template match="s:hero">
-    <section class="hero" aria-labelledby="title">
+    <section class="hero{if (s:playground) then ' hero--scene' else ''}" aria-labelledby="title">
       <div class="wrap">
         <div class="ta-sheet ta-sheet--grid hero__sheet">
           <div class="ta-sheet__frame">
@@ -395,7 +395,7 @@
             <div class="ta-sheet__body hero__body">
               <h1 id="title" class="hero__headline"><xsl:apply-templates select="s:headline/node()"/></h1>
               <p class="hero__lede"><xsl:apply-templates select="s:lede/node()"/></p>
-              <xsl:apply-templates select="s:author, s:install, s:actions"/>
+              <xsl:apply-templates select="s:author, s:install, s:actions, s:playground"/>
             </div>
           </div>
         </div>
@@ -704,7 +704,7 @@
   <!-- A playground: the module mounts itself into the element. Without
        scripts, the description says what it shows. -->
   <xsl:template match="s:playground">
-    <ta-playground class="playground" src="{f:url(@src)}">
+    <ta-playground class="playground{if (parent::s:hero) then ' hero__scene' else ''}" src="{f:url(@src)}">
       <p class="playground__description"><xsl:apply-templates select="s:description/node()"/></p>
     </ta-playground>
   </xsl:template>

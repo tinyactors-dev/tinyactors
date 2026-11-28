@@ -617,6 +617,46 @@ html:has(> #tinyactors-copywriter) .app { --app-inset-start: 68px; --app-inset-b
   .table td { white-space: normal; }
 }
 
+/* ---------------------------------------------------- the hero's scene
+   A hero with a playground (the home page's ants): the headline across the
+   sheet, the words in the left column, the scene beside them; one column
+   below 1024px, the scene after the lede, so a phone's first screen has it. The scene is a field with its
+   own ground, so the presence ants pass behind it, never through it.
+   Without scripts it is the field's still: two hills and the description. */
+
+.hero__scene { --hills:
+    radial-gradient(circle, var(--accent) 0 44%, var(--fg-1) 45% 50%, transparent 52%) 19.41% 50% / 5.2% 8.667% no-repeat,
+    radial-gradient(circle, var(--data-3) 0 44%, var(--fg-1) 45% 50%, transparent 52%) 80.59% 50% / 5.2% 8.667% no-repeat;
+  margin-top: var(--space-10); }
+.hero__scene:not(.hero-field), .hero-field__stage {
+  position: relative; display: block; aspect-ratio: 1000 / 600; border: 1px solid var(--border-1); border-radius: var(--radius-2);
+  overflow: hidden; background: var(--hills), var(--surface-1); }
+.hero__scene:not(.hero-field) { display: flex; align-items: flex-end; padding: var(--space-4); }
+.hero__scene:not(.hero-field) .playground__description { margin: 0; font: var(--type-body-sm); color: var(--fg-2); }
+.hero-field { gap: var(--space-3); }
+.hero-field__stage { cursor: pointer; }
+.hero-field__ants, .hero-field__overlay { position: absolute; inset: 0; width: 100%; height: 100%; display: block;
+  opacity: 0; transition: opacity var(--dur-slow, 400ms) var(--ease-out, ease-out); }
+.hero-field__stage--live .hero-field__ants, .hero-field__stage--live .hero-field__overlay { opacity: 1; }
+.hero-field__line { margin: 0; min-height: 3.2em; font: var(--type-body-sm); color: var(--fg-2); font-variant-numeric: tabular-nums; max-width: 34em; }
+.hero-field__line a::after { content: " →"; }
+.hero-field__number { color: var(--fg-1); }
+@media (prefers-reduced-motion: reduce) {
+  .hero-field__ants, .hero-field__overlay { transition: none; }
+}
+@media (max-width: 1023px) {
+  .hero--scene .hero__body { display: flex; flex-direction: column; }
+  .hero--scene .hero__body > * { order: 2; }
+  .hero--scene .hero__headline, .hero--scene .hero__lede { order: 0; }
+  .hero--scene .hero__body > .hero__scene { order: 1; margin-top: var(--space-8); }
+}
+@media (min-width: 1024px) {
+  .hero--scene .hero__body { display: grid; grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr); column-gap: var(--space-12); align-items: start; }
+  .hero--scene .hero__body > * { grid-column: 1; }
+  .hero--scene .hero__headline { grid-column: 1 / -1; max-width: none; }
+  .hero--scene .hero__body > .hero__scene { grid-column: 2; grid-row: 2 / span 4; margin-top: var(--space-6); }
+}
+
 /* ---------------------------------------------------- the hero's author */
 
 .hero__author { display: flex; align-items: center; gap: var(--space-3); margin-top: var(--space-5); font: var(--type-body); }

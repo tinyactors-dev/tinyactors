@@ -8,6 +8,7 @@
 import { WIDTH, HEIGHT, HILLS, HILL_RADIUS } from './world.mjs';
 import { atlas } from './sprites.mjs';
 import { createRenderer } from './renderer.mjs';
+import { launch, ants as antsOf, now, fit, dots, palette, el } from './field.mjs';
 import { chart } from '/assets/components/costs.mjs';
 
 const POPULATIONS = [1_000, 10_000, 100_000, 250_000, 500_000, 1_000_000, 2_000_000, 4_000_000];
@@ -145,7 +146,7 @@ export async function mount(root) {
 
   function begin() {
     stopFollowing();
-    world?.workers.forEach((worker) => worker.terminate()); // their memory goes with them: a WebAssembly memory never shrinks
+    world?.stop(); // their memory goes with them: a WebAssembly memory never shrinks
     world?.renderer.destroy?.();
     world?.canvas.remove();
     Object.values(costs).forEach((c) => c.clear());
@@ -159,37 +160,18 @@ export async function mount(root) {
       renderer = dots(canvas, population, colors);
     }
     stage.prepend(canvas);
-    // A Worker per colony, each with half the room, joined by a channel
-    // they trade frames over.
-    const workers = HILLS.map(() => new Worker(new URL('./worker.mjs', import.meta.url), { type: 'module' }));
-    world = {
-      workers, canvas, renderer, population, ready: false, follow: null, picks: null, stats: null, speed: 1, messages: 0, perMessage: null, added: null, sim: 0, wall: 0, memory: null,
-      parts: workers.map(() => ({ progress: 0, ready: false, data: null })),
-      antSize: Math.max(2.5, 16 * (1000 / population) ** 0.25),
-    };
-    const current = world;
     status.textContent = `Hatching ${number.format(population)} ants…`;
-    const channel = new MessageChannel();
-    const seed = Math.floor(Math.random() * 2 ** 31);
-    workers.forEach((worker, colony) => {
-      const part = current.parts[colony];
-      worker.onmessage = ({ data }) => {
-        if (current !== world) return;
-        if (data.progress !== undefined) {
-          part.progress = data.progress;
-          const done = current.parts.reduce((sum, p) => sum + p.progress, 0) / current.parts.length;
-          status.textContent = `Hatching ${number.format(population)} ants… ${Math.round(done * 100)}%`;
-        }
-        if (data.ready) { part.ready = true; part.base = data.base; current.ready = current.parts.every((p) => p.ready); }
-        if (data.error) status.textContent = `The simulation stopped: ${data.error.split('\n')[0]}`;
+    const current = world = launch({
+      population, rest: RESTS[restSlider.value], renderer,
+      onProgress: (done) => { status.textContent = `Hatching ${number.format(population)} ants… ${Math.round(done * 100)}%`; },
+      onError: (error) => { status.textContent = `The simulation stopped: ${error}`; },
+      onFrame: (state) => show(state),
+      onMessage: (data) => {
         if (data.picked !== undefined) picked(current, data);
         if (data.followed) followed(current, data.followed);
-        if (data.delta) apply(current, part, data);
-      };
-      worker.onerror = (event) => { status.textContent = `The simulation stopped: ${event.message}`; };
-      const port = colony === 0 ? channel.port1 : channel.port2;
-      worker.postMessage({ start: true, population: population / 2, colony, seed, offset: colony * (population / 2), rest: RESTS[restSlider.value], port }, [port]);
+      },
     });
+    Object.assign(current, { canvas, follow: null, picks: null, antSize: Math.max(2.5, 16 * (1000 / population) ** 0.25) });
   }
   restart.addEventListener('click', begin);
 
@@ -312,33 +294,11 @@ export async function mount(root) {
     keys[event.key]();
   });
 
-  // Each colony reports its own frames; the field shows both, at the time
-  // of the one behind, which the other waits for.
-  function apply(state, part, data) {
-    state.renderer.apply(data.delta);
-    part.data = data;
-    const parts = state.parts.map((p) => p.data);
-    if (parts.some((p) => !p)) return;
-    const behind = parts.reduce((a, b) => (b.stats.time < a.stats.time ? b : a));
-    const stats = {
-      time: behind.stats.time,
-      colonies: parts.map((p) => p.stats.colony),
-      fights: parts.reduce((sum, p) => sum + p.stats.fights, 0),
-      food: parts[0].stats.food,
-    };
-    const memory = parts.every((p) => p.memory) ? parts.reduce((sum, p) => sum + p.memory, 0) : null;
-    Object.assign(state, {
-      stats, memory, sim: behind.stats.time, wall: behind.wall,
-      speed: Math.min(...parts.map((p) => p.speed)),
-      messages: parts.reduce((sum, p) => sum + p.messages, 0),
-      // both colonies' time over both colonies' messages
-      perMessage: parts.every((p) => p.perMessage !== null && p.messages > 0)
-        ? parts.reduce((sum, p) => sum + p.perMessage * p.messages, 0) / parts.reduce((sum, p) => sum + p.messages, 0) : null,
-      added: parts.every((p, i) => p.memory && typeof state.parts[i].base === 'number')
-        ? parts.reduce((sum, p, i) => sum + p.memory - state.parts[i].base, 0) : null,
-    });
+  // The hills' and the field's numbers, after every frame of both colonies.
+  function show(state) {
     if (!state.ready) return;
-    const ants = stats.colonies.reduce((sum, c) => sum + c.workers + c.brood, 0);
+    const { stats } = state;
+    const ants = antsOf(state);
     hills.replaceChildren(...stats.colonies.map((c, i) => el('span', { class: `anthill__hill anthill__hill--${i + 1}` },
       `Hill ${i + 1}: ${number.format(c.workers)} workers (${number.format(c.out)} out), ${number.format(c.brood)} brood, ${number.format(c.stored)} food home`)));
     // What the ants added to the module's memory, over the ants: the module
@@ -352,7 +312,7 @@ export async function mount(root) {
   setInterval(() => {
     const state = world;
     if (!state?.ready) { frames = 0; return; }
-    costs.actors.push(state.stats.colonies.reduce((sum, c) => sum + c.workers + c.brood, 0) + 2);
+    costs.actors.push(antsOf(state) + 2);
     costs.fps.push(frames);
     costs.speed.push(state.speed);
     if (state.memory) costs.memory.push(state.memory);
@@ -369,7 +329,7 @@ export async function mount(root) {
       fit(state.canvas, state.renderer.kind === 'webgl');
       // The simulation's time now: the last frame's, moved on by the wall
       // clock at the simulation's speed, never past the next frame.
-      const t = state.sim + Math.min(0.1, ((performance.now() - state.wall) / 1000) * state.speed);
+      const t = now(state);
       // A followed ant stays in the middle: where its trip puts it now.
       const trip = state.follow?.report?.trip;
       if (trip) {
@@ -400,7 +360,7 @@ export async function mount(root) {
     // A ring around the followed ant, dashed while it is inside the hill.
     const report = state?.follow?.report;
     if (report && !state.follow.ended) {
-      const [fx, fy] = along(report.trip, state.sim + Math.min(0.1, ((performance.now() - state.wall) / 1000) * state.speed));
+      const [fx, fy] = along(report.trip, now(state));
       paint.strokeStyle = colors.ink;
       paint.lineWidth = 2 / view.scale;
       paint.setLineDash(report.outside ? [] : [4 / view.scale, 3 / view.scale]);
@@ -423,84 +383,4 @@ export async function mount(root) {
 function along([x0, y0, x1, y1, t0, t1], t) {
   const f = t1 > t0 ? Math.min(1, Math.max(0, (t - t0) / (t1 - t0))) : 1;
   return [x0 + (x1 - x0) * f, y0 + (y1 - y0) * f];
-}
-
-/** A WebGL canvas draws at the screen's pixels; the 2D fallback at the field's. */
-function fit(canvas, sharp) {
-  if (!sharp) return;
-  const width = Math.round(canvas.clientWidth * devicePixelRatio), height = Math.round(canvas.clientHeight * devicePixelRatio);
-  if (width && (canvas.width !== width || canvas.height !== height)) { canvas.width = width; canvas.height = height; }
-}
-
-// Where WebGL2 is missing: a block of pixels per ant, at least one screen
-// pixel wide, on a 2D canvas at the field's resolution.
-function dots(canvas, population, colors) {
-  const context = canvas.getContext('2d');
-  const image = context.createImageData(WIDTH, HEIGHT);
-  const pixels = new Uint32Array(image.data.buffer);
-  const trips = { x0: new Float32Array(population), y0: new Float32Array(population), x1: new Float32Array(population),
-    y1: new Float32Array(population), t0: new Float32Array(population), t1: new Float32Array(population), look: new Uint8Array(population) };
-  const ants = [0, ...colors.colonyPixels];
-  return {
-    kind: '2d',
-    apply(delta) {
-      for (let i = 0; i < delta.length; i += 8) {
-        const slot = delta[i];
-        trips.x0[slot] = delta[i + 1]; trips.y0[slot] = delta[i + 2]; trips.x1[slot] = delta[i + 3]; trips.y1[slot] = delta[i + 4];
-        trips.t0[slot] = delta[i + 5]; trips.t1[slot] = delta[i + 6]; trips.look[slot] = delta[i + 7];
-      }
-    },
-    draw(t, antSize, view) {
-      pixels.fill(colors.groundPixel);
-      const base = Math.max(population <= 20_000 ? 2 : 1, Math.ceil(WIDTH / Math.max(1, canvas.clientWidth)));
-      const size = Math.min(16, Math.round(Math.max(base, antSize * 0.4 * view.scale)));
-      const { left, top, scale } = view;
-      for (let slot = 0; slot < population; slot++) {
-        const look = trips.look[slot];
-        if (!look) continue;
-        const span = trips.t1[slot] - trips.t0[slot];
-        const f = span > 0 ? Math.min(1, Math.max(0, (t - trips.t0[slot]) / span)) : 1;
-        const x = ((trips.x0[slot] + (trips.x1[slot] - trips.x0[slot]) * f - left) * scale) | 0;
-        const y = ((trips.y0[slot] + (trips.y1[slot] - trips.y0[slot]) * f - top) * scale) | 0;
-        if (x < 0 || y < 0 || x > WIDTH - size || y > HEIGHT - size) continue;
-        for (let dy = 0, at = y * WIDTH + x; dy < size; dy++, at += WIDTH) {
-          for (let dx = 0; dx < size; dx++) pixels[at + dx] = ants[look];
-        }
-      }
-      context.putImageData(image, 0, 0);
-    },
-  };
-}
-
-/** The design system's colours, as CSS colours and as the 2D canvas's 32-bit pixels. */
-function palette(root) {
-  const style = getComputedStyle(root);
-  const probe = document.createElement('canvas').getContext('2d');
-  const css = (name, fallback) => {
-    probe.fillStyle = fallback;
-    probe.fillStyle = style.getPropertyValue(name).trim() || fallback;
-    return probe.fillStyle;
-  };
-  const pixel = (color) => {
-    const [r, g, b] = [1, 3, 5].map((i) => parseInt(color.slice(i, i + 2), 16));
-    return (255 << 24) | (b << 16) | (g << 8) | r; // little-endian RGBA
-  };
-  const colony = [css('--accent', '#1F5E4A'), css('--data-3', '#B8876A')];
-  const groundHex = css('--surface-1', '#FAF6EE');
-  return {
-    groundHex,
-    groundPixel: pixel(groundHex),
-    colony,
-    colonyPixels: colony.map(pixel),
-    hill: colony,
-    food: css('--data-1', '#D8A64E'),
-    ink: css('--fg-1', '#2A2622'),
-  };
-}
-
-function el(tag, attributes = {}, ...children) {
-  const node = document.createElement(tag);
-  for (const [name, value] of Object.entries(attributes)) node.setAttribute(name, value);
-  node.append(...children);
-  return node;
 }

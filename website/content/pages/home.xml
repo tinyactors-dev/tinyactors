@@ -17,6 +17,9 @@
       <action to="docs-quickstart">Run your first actor</action>
       <action to="docs-agents">Build with a coding agent</action>
     </actions>
+    <playground src="../../examples/anthill/hero.mjs">
+      <description>Two anthills on a field, and 20,000 ants walking between them, each ant an actor running in the page. Workers carry food home, and the two colonies fight where they meet.</description>
+    </playground>
   </hero>
 
   <section id="start" answers="agent-platform.code-first">

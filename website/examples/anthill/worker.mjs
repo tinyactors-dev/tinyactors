@@ -16,9 +16,13 @@ let colony;
 const inbox = [];
 const fromOther = [];
 let wake = null; // resolves when the other colony's next frame arrives
+let paused = false, resume = null; // the page pauses the colony while nobody sees it
 
 onmessage = ({ data }) => {
-  if (data.start) {
+  if ('pause' in data) {
+    paused = data.pause;
+    if (!paused) { resume?.(); resume = null; }
+  } else if (data.start) {
     data.port.onmessage = ({ data: frame }) => { fromOther.push(frame); wake?.(); wake = null; };
     start(data).catch((error) => postMessage({ error: String(error?.stack ?? error) }));
   } else inbox.push(data);
@@ -64,6 +68,12 @@ async function run(port) {
   let speed = 1, rate = 0, messages = 0, busy = 0, perMessage = null;
   let other = null; // the other colony's last frame (none before the first)
   for (;;) {
+    if (paused) { // both colonies stop at a frame's end; time goes on from where they stopped
+      const stopped = performance.now();
+      await new Promise((resolve) => { resume = resolve; });
+      const away = performance.now() - stopped;
+      wallStart += away; window.wall += away;
+    }
     for (const message of inbox.splice(0)) {
       if (message.food) colony.placeFood(message.x, message.y);
       if (message.squash) colony.squash(message.x, message.y, message.radius);

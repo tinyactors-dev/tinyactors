@@ -493,7 +493,12 @@
     <xs:annotation><xs:documentation>
       What the page is about, said once: the headline, one lede paragraph,
       how to install, and what to do next. No label above the headline: the
-      headline says it.
+      headline says it. A `playground` here is the page's picture, a live
+      scene beside the words (the home page's ants): a module with no
+      controls of its own, which runs only while it is seen, holds still
+      for a reader who asked for reduced motion, and takes no focus. Its
+      `description` says what the scene shows, for a reader without
+      scripts and for the Markdown.
     </xs:documentation></xs:annotation>
     <xs:complexType>
       <xs:sequence>
@@ -502,6 +507,7 @@
         <xs:element ref="author" minOccurs="0"/>
         <xs:element ref="install" minOccurs="0"/>
         <xs:element ref="actions" minOccurs="0"/>
+        <xs:element ref="playground" minOccurs="0"/>
       </xs:sequence>
     </xs:complexType>
   </xs:element>
