@@ -79,6 +79,7 @@ with `domain add ta-mcp mcp.tinyactors.dev`, and the VM's proxy is public.
 | `lib/processors/` | GitHub (the App, and the stand-in), Jev, the catalog, blobs, the scan |
 | `lib/processors/catalog.mjs` | the catalog (`catalog.sqlite`): every issue in full, its reports and files, full text search, and the ledger it is a projection of |
 | `lib/migrate.mjs` | the one-time move from the ledger of before to the catalog |
+| `lib/backup.mjs`, `tools/backup.mjs` | the backups: sealed runs in an S3 bucket (R2), their drill and their restore |
 | `lib/skills.mjs`, `skills/` | the skills (each a `SKILL.md` and its `references/`) as one manifest: digests, sizes, frontmatter, directories |
 | `lib/content.mjs` | the skills for the tools, and the documentation search |
 | `tools/check-skill-samples.mjs` | runs every code sample of the skills (`--python` runs the Python ones too) |
@@ -109,4 +110,9 @@ the store of hibernated actors (`store.sqlite`).
 - **The catalog's rows are wrong or from an older schema:** they are a
   projection of its ledger; `Catalog#rebuild()` replays the ledger into
   them.
-- **The catalog is lost:** the backups (below) have it.
+- **The catalog is lost, or the whole disk:** the backups have it. A
+  daily run seals every file of DATA_DIR into an R2 bucket and checks it
+  with a restore drill (`mise run backup:run`, `mise run backup:drill`);
+  `node tools/backup.mjs restore <empty dir>` on the VM, with the service
+  stopped, gives a DATA_DIR back. AGENTS.md, "Backups", says what a run
+  holds and what the bucket needs.

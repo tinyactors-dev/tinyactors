@@ -1,0 +1,14 @@
+#!/usr/bin/env ruby
+#MISE description="Back up ta-mcp's data now (tools/backup.mjs backup, then its drill), as the daily timer does; says so and does nothing while the backups are not configured"
+# vim:ft=ruby
+
+require_relative '../../support'
+
+Support.secrets!
+puts Support.vm(<<~BASH, timeout: 600)
+  set -euo pipefail
+  set -a; . #{Support::HOME}/support/env; set +a
+  cd #{Support::HOME}/support/current
+  DATA_DIR=#{Support::HOME}/support/data NODE_NO_WARNINGS=1 /opt/node/bin/node tools/backup.mjs backup
+  DATA_DIR=#{Support::HOME}/support/data NODE_NO_WARNINGS=1 /opt/node/bin/node tools/backup.mjs drill
+BASH

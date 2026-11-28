@@ -56,3 +56,34 @@ value = "tinyactors-copywriter-gemini/credential"
 [secrets.TYPESAFE_API_KEY]
 provider = "op"
 value = "console.typesafe.ai API Key/credential"
+
+# tinyactors-support's backups (tinyactors-support/AGENTS.md, "Backups"):
+# a Cloudflare R2 bucket's S3 endpoint, its name and an R2 API token's S3
+# credentials (Object Read & Write on that bucket only), and the key the
+# runs are sealed with (32 random bytes, base64). `mise run secrets` in
+# tinyactors-support writes them to the VM's environment, which enables
+# the daily backup; until the item exists they are skipped.
+[secrets.BACKUP_S3_ENDPOINT]
+provider = "op"
+value = "tinyactors-support backups/endpoint"
+if_missing = "ignore"
+
+[secrets.BACKUP_S3_BUCKET]
+provider = "op"
+value = "tinyactors-support backups/bucket"
+if_missing = "ignore"
+
+[secrets.BACKUP_S3_ACCESS_KEY_ID]
+provider = "op"
+value = "tinyactors-support backups/access-key-id"
+if_missing = "ignore"
+
+[secrets.BACKUP_S3_SECRET_ACCESS_KEY]
+provider = "op"
+value = "tinyactors-support backups/secret-access-key"
+if_missing = "ignore"
+
+[secrets.BACKUP_KEY]
+provider = "op"
+value = "tinyactors-support backups/backup-key"
+if_missing = "ignore"

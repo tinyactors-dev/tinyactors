@@ -35,6 +35,10 @@ module Support
     'tinyactors-core/docs/cli.md' => 'tinyactors-core/docs/cli.md',
   }.freeze
 
+  # What the backups need in the VM's environment (lib/backup.mjs); fnox
+  # reads them from the 1Password item "tinyactors-support backups".
+  BACKUP_FIELDS = %w[BACKUP_S3_ENDPOINT BACKUP_S3_BUCKET BACKUP_S3_ACCESS_KEY_ID BACKUP_S3_SECRET_ACCESS_KEY BACKUP_KEY].freeze
+
   module_function
 
   def fail!(message)
@@ -163,6 +167,45 @@ module Support
       echo '#{Base64.strict_encode64(lines + "\n")}' | base64 -d > #{HOME}/support/env
       echo "support: env holds #{fields.keys.join(', ')}"
       if systemctl is-enabled --quiet tinyactors-support 2>/dev/null; then sudo systemctl restart tinyactors-support; fi
+    BASH
+  end
+
+  # The daily backup: a systemd timer (03:17 UTC, a random delay of up to
+  # 20 minutes) running tools/backup.mjs as a oneshot service of its own,
+  # beside the server, never inside it. Enabled only when the environment
+  # has the bucket and the key.
+  def backup_timer_script(enable)
+    <<~BASH
+      sudo tee /etc/systemd/system/tinyactors-support-backup.service >/dev/null <<'UNIT'
+      [Unit]
+      Description=tinyactors-support: a backup of its data to the bucket, then the runs past 14 pruned
+      After=network-online.target
+
+      [Service]
+      Type=oneshot
+      User=exedev
+      WorkingDirectory=#{HOME}/support/current
+      EnvironmentFile=#{HOME}/support/env
+      Environment=DATA_DIR=#{HOME}/support/data
+      Environment=NODE_NO_WARNINGS=1
+      ExecStart=/opt/node/bin/node tools/backup.mjs backup
+      ExecStartPost=/opt/node/bin/node tools/backup.mjs drill
+      UNIT
+      sudo tee /etc/systemd/system/tinyactors-support-backup.timer >/dev/null <<'UNIT'
+      [Unit]
+      Description=tinyactors-support: the daily backup
+
+      [Timer]
+      OnCalendar=*-*-* 03:17:00 UTC
+      RandomizedDelaySec=1200
+      Persistent=true
+
+      [Install]
+      WantedBy=timers.target
+      UNIT
+      sudo systemctl daemon-reload
+      #{enable ? 'sudo systemctl enable --now --quiet tinyactors-support-backup.timer; echo "support: the daily backup is on"' :
+                 'sudo systemctl disable --now --quiet tinyactors-support-backup.timer 2>/dev/null || true; echo "support: the daily backup is off (no bucket or key)"'}
     BASH
   end
 

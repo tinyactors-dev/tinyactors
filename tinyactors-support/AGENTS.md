@@ -338,3 +338,50 @@ issue catalog is in one DB so we can use sqlite3 full text search").
   (`support.upgrade()`). Once: the catalog's `meta.migrated` mark; the old
   file is renamed `ledger.sqlite.imported`. The `ledger` processor type
   stays an alias of `catalog` for any actor left on an older chart.
+
+## Backups
+
+Decided by the maintainer (2026-11-28: "Look at what granary does for
+backups, copy the smallest relevant bit that works from there").
+
+- **What is copied from granary** (`/home/user/tinyactors-dev/granary`):
+  `VACUUM INTO` on its own connection, then `PRAGMA integrity_check` and
+  the tables' row counts (`src/lib/ops/io/snapshot.worker.ts`); zstd,
+  then AES-256-GCM with authenticated data naming the run and the object
+  (`src/lib/ops/backups/seal.ts`'s chunk AAD); the raw and sealed sha256
+  and sizes in the manifest; the manifest written last with
+  `If-None-Match: *` as the run's commit, a 412 meaning committed already
+  (`stores.ts`); a restore drill that verifies, decrypts and checks every
+  database's integrity and row counts (`restore.ts`). Left out: the key
+  hierarchy (a data key per run wrapped by a key encryption key, and
+  rotation; here one `BACKUP_KEY`), chunked streaming (the data is a few
+  megabytes), the retention planner (the newest 14 runs stay), Bun's S3
+  client (Node has none: `lib/backup.mjs` signs with AWS Signature Version
+  4, checked against AWS's GET Object example).
+- **What a run holds:** `catalog.sqlite`, `clients.sqlite`, `store.sqlite`
+  with `host.snapshot` (read before and after the store's copy, retried if
+  it changed: the server deletes blobs right after a snapshot),
+  `file-secret`, `files/`. One object per file, `backups/<run>/NNNN.bin`,
+  and `backups/<run>/manifest.json` (names, sizes, hashes, row counts; no
+  content).
+- **Where:** a Cloudflare R2 bucket over its S3 API (path-style,
+  `https://<account>.r2.cloudflarestorage.com`, region `auto`), an R2 API
+  token with Object Read & Write on that bucket only: its S3 access key id
+  is the token's id, its secret the SHA-256 of the token's value (granary's
+  ADR 0095). The vault item `tinyactors-support backups` holds `endpoint`,
+  `bucket`, `access-key-id`, `secret-access-key` and `backup-key`
+  (`fnox.toml`, `if_missing = "ignore"` until it exists).
+- **When: a systemd timer, not a chart** (`tinyactors-support-backup.timer`,
+  daily at 03:17 UTC with up to 20 minutes' random delay, `Persistent`):
+  a backup has no domain decision in it, it must run when the server is
+  down or wedged (a chart's delayed send runs only inside a running host),
+  and its failure belongs to the machine's journal, not to the actors.
+  `mise run secrets` installs it and enables it only when every backup
+  field is there; `mise run backup:run` and `mise run backup:drill` run it
+  now. A restore is `node tools/backup.mjs restore <empty dir> [run]`, with
+  the service stopped, the directory then made DATA_DIR.
+- **Tests:** `test/backup.test.mjs`: the signature against AWS's example,
+  a run and its drill against a stand-in S3 bucket (`test/s3.mjs`, which
+  checks each request's signature), a host started from a restore, and
+  the refusals (another key, an object swapped or damaged, a second
+  commit of a run, a request signed with the wrong secret), and pruning.
