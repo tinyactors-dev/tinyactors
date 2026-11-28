@@ -8,7 +8,7 @@
     <headline>Every state of an order, written down</headline>
     <lede>A statechart is a state machine whose states can nest and run in parallel, written in <link href="https://www.w3.org/TR/scxml/">SCXML</link>, a W3C standard; an actor is one statechart running with its own data. This page builds one order chart, from the cart to a shipped parcel, and you can drive it as you read. After it, you can read any chart on this site and judge whether your own workflow fits one.</lede>
     <actions>
-      <action to="docs-statecharts" section="states">Drive the order</action>
+      <action to="docs-statecharts" section="run">Drive the order</action>
     </actions>
   </hero>
 
@@ -48,18 +48,6 @@
     <passage>A <link href="https://www.w3.org/TR/scxml/#state">state</link> is a situation the order waits in. An <link href="https://www.w3.org/TR/scxml/#events">event</link> is a named message, with optional data, that it receives. Each state lists the events it handles, and an event no transition of the current state names is discarded.</passage>
     <passage>In SCXML, the W3C's XML language for statecharts, that is a <code>&lt;state&gt;</code> with a <code>&lt;transition&gt;</code> per event. The cart handles two: <code>add</code> puts an item in it, and <code>checkout</code> moves the order to <code>paying</code>. In <code>paying</code> no transition names <code>add</code>, so the cart can't change while the card is charged.</passage>
     <code src="../../examples/order-chart/order.scxml" lines="13-19" language="scxml" file="order.scxml"/>
-    <passage>Here is the whole chart and the program that runs it; the last section explains the program. Open the Diagram tab beside <code>order.scxml</code> below: the active states light up, and pressing an event's label, or a button under the diagram, sends that event. Add an item, then press <code>checkout</code>.</passage>
-    <program>
-      <in package="node">
-        <code src="../../examples/order-chart/main.mjs" language="javascript" file="main.mjs"/>
-        <code src="../../examples/order-chart/order.scxml" language="scxml" file="order.scxml"/>
-      </in>
-      <diagram chart="order.scxml">
-        <event name="add" data='{"item": "notebook", "price": 30}'>Add a notebook</event>
-        <event name="add" data='{"item": "pen", "price": 12}'>Add a pen</event>
-      </diagram>
-      <code src="../../examples/order-chart/output.txt" language="text" role="output"/>
-    </program>
   </section>
 
   <section id="guards">
@@ -90,7 +78,7 @@
     <heading>Parallel states run side by side</heading>
     <problem>A paid order ships and emails its receipt, and neither waits for the other. A plain state machine would need a state for each pair: packing and emailing, packing and emailed, and two more.</problem>
     <passage>A <link href="https://www.w3.org/TR/scxml/#parallel"><code>&lt;parallel&gt;</code></link> state is in all of its children at once, each child a region with its own states. Here <code>shipping</code> waits in <code>packing</code> for the warehouse's <code>shipped</code>, while <code>receipt</code> emails the receipt and waits for <code>sent</code>.</passage>
-    <passage>When every region reaches a <link href="https://www.w3.org/TR/scxml/#final">final state</link>, the chart gets the event <code>done.state.paid</code>, and the order moves to <code>complete</code>. The set of states active at one moment is the <link href="https://www.w3.org/TR/scxml/#state-configuration">state configuration</link>. The program's output shows one: <code>paid</code> with <code>packing</code> in one region and <code>emailed</code> in the other.</passage>
+    <passage>When every region reaches a <link href="https://www.w3.org/TR/scxml/#final">final state</link>, the chart sends itself the event <code>done.state.paid</code>, a name SCXML makes from the parallel state's id, and the order moves to <code>complete</code>. The set of states active at one moment is the <link href="https://www.w3.org/TR/scxml/#state-configuration">state configuration</link>. The program's output shows one: <code>paid</code> with <code>packing</code> in one region and <code>emailed</code> in the other.</passage>
     <code src="../../examples/order-chart/order.scxml" lines="40-60" language="scxml" file="order.scxml"/>
   </section>
 
@@ -106,7 +94,7 @@
   <section id="effects" answers="workflow-tester.no-mocks">
     <heading>The chart never calls the network</heading>
     <problem>Charging a card and sending an email are I/O, and I/O is what makes a workflow hard to test. A chart that made its own HTTP calls would make every test stub the network or wait for it.</problem>
-    <passage>A chart reaches the world only by sending events. <code>&lt;send type="payments"&gt;</code> leaves the order as an effect, which the host hands to the <link href="https://www.w3.org/TR/scxml/#eventioprocessors">I/O processor</link> your program gave it for <code>payments</code>. The processor does the I/O and answers with an event, <code>charged</code>, which the order receives like any other.</passage>
+    <passage>A chart reaches the world only by sending events. <code>&lt;send type="payments"&gt;</code> leaves the order as an effect, a request for your code. The host, the part of tinyactors that runs charts in your program, hands it to the <link href="https://www.w3.org/TR/scxml/#eventioprocessors">I/O processor</link> your program gave it for <code>payments</code>. The processor does the I/O and answers with an event, <code>charged</code>, which the order receives like any other.</passage>
     <passage>So your program decides how a charge happens: a payment API in production, a stand-in in a test. This one ignores the first charge and answers the second. In the diagram, you play the payment service yourself by pressing <code>charged</code>.</passage>
     <code src="../../examples/order-chart/main.mjs" lines="4-12" language="javascript" file="main.mjs"/>
   </section>
@@ -115,9 +103,28 @@
     <heading>An actor is one running chart</heading>
     <problem>A shop has thousands of open orders, each at its own step with its own cart. They must not share variables, and two events for one order must never interleave.</problem>
     <passage>An actor is one instance of a chart: its own state configuration, its own variables, its own queue of events and its own timers. The host is the part of tinyactors that runs actors in your process. It starts one with <code>spawn</code>, here under the name <code>order-1042</code>, and any part of the program finds it by that name.</passage>
-    <passage>Events sent to an actor wait in its queue, and it handles them one at a time, each to completion. So an <code>add</code> and a <code>checkout</code> for one order never run halfway into each other, and your code holds no lock.</passage>
+    <passage>Events sent to an actor wait in its queue, and it handles them one at a time, each to completion. So an <code>add</code> and a <code>checkout</code> for one order never run halfway into each other, and your code holds no lock. That holds within one host: with several processes, give each order to one of them and send its events there.</passage>
     <code src="../../examples/order-chart/main.mjs" lines="20-30" language="javascript" file="main.mjs"/>
     <passage>An actor is small: <link to="performance" section="actors">about 530 bytes</link> each for a one-variable chart, measured in Node.js with a million in one process. That is small enough to make each order, payment or chat session an actor of its own.</passage>
+  </section>
+
+  <section id="run">
+    <heading>Run the whole order</heading>
+    <problem>Each section showed one piece of the chart. A program must start the order, answer its charges and move its clock.</problem>
+    <passage>Here are the whole chart and the program. <code>spawn('order')</code> names the chart by its <code>name</code> attribute, not its file. Open the Diagram tab beside <code>order.scxml</code>, press <code>Add a notebook</code>, then <code>checkout</code>, and watch the active states light up.</passage>
+    <program>
+      <in package="node">
+        <code src="../../examples/order-chart/main.mjs" language="javascript" file="main.mjs"/>
+        <code src="../../examples/order-chart/order.scxml" language="scxml" file="order.scxml"/>
+      </in>
+      <diagram chart="order.scxml">
+        <event name="add" data='{"item": "notebook", "price": 30}'>Add a notebook</event>
+        <event name="add" data='{"item": "pen", "price": 12}'>Add a pen</event>
+      </diagram>
+      <code src="../../examples/order-chart/output.txt" language="text" role="output"/>
+    </program>
+    <passage>Read the output from the top. The first charge got no answer, so the order waited in <code>paying</code>. Five seconds later the timeout charged again, the stand-in answered, and the order entered <code>paid</code>.</passage>
+    <passage>Both regions started then: the receipt went out at once, while shipping waited in <code>packing</code>. The warehouse's <code>shipped</code> finished the last region, and the order completed with its total.</passage>
   </section>
 
   <section id="next">

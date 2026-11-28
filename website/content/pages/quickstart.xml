@@ -16,7 +16,7 @@
 
   <section id="run">
     <heading>Write a chart and run it</heading>
-    <p>Save the chart as <code>order.scxml</code> and the program beside it, then run the program. The tabs follow the package you picked above.</p>
+    <p>The packages need Node.js 22.3 or Bun, Python 3.13 or newer, or a C compiler. Save the chart as <code>order.scxml</code> and the program beside it, then run the program; the tabs follow the package you picked above.</p>
     <program>
       <in package="node">
         <code src="../../examples/order/main.mjs" language="javascript" file="main.mjs"/>
@@ -44,14 +44,16 @@
       <code src="../../examples/order/output.txt" language="text" role="output"/>
     </program>
     <p>The first charge fails, so the chart waits a second and charges again. Your program never wrote that retry: it lives in the chart's <code>retrying</code> state.</p>
+    <p>Every package prints these same lines. The chart's expressions are JavaScript in every package, Python's included.</p>
   </section>
 
   <section id="what-happened">
     <heading>The chart decides, your program acts</heading>
     <list>
-      <item><term>The host</term><text>runs the actors inside your process. There is no server to start, and the program ends when its work is done.</text></item>
+      <item><term>The host</term><text>runs the actors inside your process, so there is no server to start. Its system id, <code>shop</code>, names it in actors' addresses, such as <code>tinyactors://shop/@order-17</code>.</text></item>
       <item><term>The chart</term><text>holds every state the order can be in and the events that move it. Press the buttons under the diagram to drive it yourself.</text></item>
-      <item><term>The I/O processor</term><text>is the <code>payments</code> object your program gives the host. The chart sends it <code>charge</code> and never calls a network itself, so a test can answer instead of a real service.</text></item>
+      <item><term>The I/O processor</term><text>is the <code>payments</code> object your program gives the host. The chart sends it <code>charge</code> and never calls a network itself, so a test can answer instead of a real service. <link to="guide-testing" section="a-test">Testing your charts</link> fails the service three times and steps the clock past each wait, with no sleeping.</text></item>
+      <item><term>A crash</term><text>stops the actors in the process, the order waiting for its retry included. <link to="guide-journal">Journal and replay</link> and <link to="guide-snapshots">snapshots</link> bring them back.</text></item>
     </list>
   </section>
 

@@ -15,7 +15,7 @@
 
   <section id="where-it-runs" answers="agent-platform.in-backend agent-platform.another-runtime">
     <heading>Cloudflare runs the object; you run the host</heading>
-    <p>Your backend already runs somewhere you chose. A session's logic in a Durable Object runs on Cloudflare's network instead, wherever the rest of your backend lives.</p>
+    <p>Your backend already runs somewhere you chose. In a Durable Object, a session's logic runs on Cloudflare's network, apart from the rest of your backend.</p>
     <claims>
       <claim>
         <statement>A Durable Object is a Worker with storage</statement>
@@ -110,6 +110,7 @@
       <code src="../../examples/session-upgrade/output.txt" language="text" role="output"/>
     </program>
     <p>Every session kept its count through the move. So each one ended at the limit instead of asking the model again.</p>
+    <p>A Durable Object that stores its count keeps it across a deploy too, and its new code reads it back. The difference is the rest: a migration also carries each session's states, queue and timers, with no code that reads them back.</p>
   </section>
 
   <section id="crash" answers="tech-lead.host-dies">
@@ -130,6 +131,7 @@
         <source to="guide-journal">Journal and replay</source>
       </claim>
     </claims>
+    <p>Here Durable Objects keep more by default: every write an object stores survives. With tinyactors, what your program did not save or journal is lost with the process.</p>
   </section>
 
   <section id="choose-tinyactors" answers="agent-platform.compare">
