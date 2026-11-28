@@ -1,0 +1,132 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<page xmlns="https://www.tinyactors.dev/ns/site" id="docs-statecharts" path="/docs/statecharts/">
+  <title>Statecharts and actors in ten minutes</title>
+  <description>What statecharts and actors are, shown on one order chart you can drive: states and events, guards, the data model, nested and parallel states, timers, effects and actors.</description>
+  <purpose kind="explanation" for="agent-platform workflow-tester"/>
+
+  <hero>
+    <headline>Every state of an order, written down</headline>
+    <lede>A statechart is a state machine whose states can nest and run in parallel, written in <link href="https://www.w3.org/TR/scxml/">SCXML</link>, a W3C standard; an actor is one statechart running with its own data. This page builds one order chart, from the cart to a shipped parcel, and you can drive it as you read. After it, you can read any chart on this site and judge whether your own workflow fits one.</lede>
+    <actions>
+      <action to="docs-statecharts" section="states">Drive the order</action>
+    </actions>
+  </hero>
+
+  <section id="flags">
+    <heading>Flags let an order be paid and cancelled</heading>
+    <problem>An order that tracks its progress with booleans can reach combinations nobody meant. Each one is a bug a customer finds: a card charged twice, a paid order cancelled.</problem>
+    <passage>Here is an order written the usual way, with a flag per step and a handler per event. The last four lines play one afternoon of it.</passage>
+    <example>
+      <code language="javascript" file="order.mjs">
+        const order = { paying: false, paid: false, cancelled: false, attempts: 0 };
+
+        function charge() { order.attempts += 1; console.log('charge', order.attempts); }
+        function checkout() { order.paying = true; charge(); }
+        function onCharged() { order.paid = true; }  // paying stays true
+        function onTimeout() { if (order.paying &amp;&amp; order.attempts &lt; 3) charge(); }
+        function cancel() { order.cancelled = true; }
+
+        checkout();
+        onCharged(); // the payment service answers
+        onTimeout(); // the timer nobody cleared fires anyway
+        cancel();    // nothing stops a cancel after payment
+        console.log(order);
+      </code>
+      <code language="text" role="output">
+        charge 1
+        charge 2
+        { paying: true, paid: true, cancelled: true, attempts: 2 }
+      </code>
+    </example>
+    <passage>Nothing here is careless. Each handler sets the flag it owns, and the retry checks <code>paying</code> as it should. But <code>onCharged</code> forgot to clear <code>paying</code>, and nothing in the program says which combinations are legal.</passage>
+    <passage>Three booleans make eight combinations, and only four make sense: in the cart, paying, paid and cancelled. Every handler has to rule out the other four, and each new flag doubles them. A state machine starts from the other end: it lists the states, so the order is in exactly one.</passage>
+  </section>
+
+  <section id="states" answers="workflow-tester.written-flow">
+    <heading>An order is in one state</heading>
+    <problem>The order must take <code>add</code> while it is a cart and refuse it while the card is charged. With flags, that is one more check at the top of a handler.</problem>
+    <passage>A <link href="https://www.w3.org/TR/scxml/#state">state</link> is a situation the order waits in. An <link href="https://www.w3.org/TR/scxml/#events">event</link> is a named message, with optional data, that it receives. Each state lists the events it handles, and an event no transition of the current state names is discarded.</passage>
+    <passage>In SCXML, the W3C's XML language for statecharts, that is a <code>&lt;state&gt;</code> with a <code>&lt;transition&gt;</code> per event. The cart handles two: <code>add</code> puts an item in it, and <code>checkout</code> moves the order to <code>paying</code>. In <code>paying</code> no transition names <code>add</code>, so the cart can't change while the card is charged.</passage>
+    <code src="../../examples/order-chart/order.scxml" lines="13-19" language="scxml" file="order.scxml"/>
+    <passage>Here is the whole chart and the program that runs it; the last section explains the program. Open the Diagram tab beside <code>order.scxml</code> below: the active states light up, and pressing an event's label, or a button under the diagram, sends that event. Add an item, then press <code>checkout</code>.</passage>
+    <program>
+      <in package="node">
+        <code src="../../examples/order-chart/main.mjs" language="javascript" file="main.mjs"/>
+        <code src="../../examples/order-chart/order.scxml" language="scxml" file="order.scxml"/>
+      </in>
+      <diagram chart="order.scxml">
+        <event name="add" data='{"item": "notebook", "price": 30}'>Add a notebook</event>
+        <event name="add" data='{"item": "pen", "price": 12}'>Add a pen</event>
+      </diagram>
+      <code src="../../examples/order-chart/output.txt" language="text" role="output"/>
+    </program>
+  </section>
+
+  <section id="guards">
+    <heading>A guard decides whether a transition fires</heading>
+    <problem>Checkout with an empty cart must do nothing, and a payment that keeps timing out must stop after three tries. Both depend on data, not on which state the order is in.</problem>
+    <passage>A <link href="https://www.w3.org/TR/scxml/#transition">transition</link> names its event, its target state and, in <code>cond</code>, a guard: a <link href="https://www.w3.org/TR/scxml/#ConditionalExpressions">condition</link> that must be true for it to fire. The cart's <code>checkout</code> has <code>items.length &gt; 0</code>, so an empty cart stays a cart.</passage>
+    <passage>When several transitions of a state match one event, the first in document order whose guard holds is taken. <code>paying</code> uses that for its timeout. The first transition tries again while <code>attempts &lt; 3</code>; the second has no guard, so it catches the third timeout and returns the order to the cart.</passage>
+    <code src="../../examples/order-chart/order.scxml" lines="34-36" language="scxml" file="order.scxml"/>
+  </section>
+
+  <section id="data">
+    <heading>The data model holds what states cannot</heading>
+    <problem>A cart holds any number of items, and a state for each cart would never end. The order also has to remember its total and how often it charged.</problem>
+    <passage>Each chart has a <link href="https://www.w3.org/TR/scxml/#data-module">data model</link>: variables declared in <code>&lt;datamodel&gt;</code> with their first values, read and changed by expressions in the chart's language. This chart's language is ECMAScript, named by <code>datamodel="ecmascript"</code> on its root.</passage>
+    <passage>An <code>&lt;assign&gt;</code> changes a variable when a transition fires, and <code>_event.data</code> is the data the event carried: the cart's <code>add</code> appends the item and adds its price. States say where the order is. Variables say what it holds.</passage>
+    <code src="../../examples/order-chart/order.scxml" lines="3-7" language="scxml" file="order.scxml"/>
+  </section>
+
+  <section id="nested">
+    <heading>A parent state handles its children's events</heading>
+    <problem>A customer may cancel while the order is a cart or while the card is charged, but never once it's paid. In the flag version, that rule is an <code>if</code> someone has to remember in <code>cancel</code>.</problem>
+    <passage>States nest. <code>cart</code> and <code>paying</code> are children of <code>open</code>, and while the order is in either, <code>open</code> is active too. A transition on <code>open</code> applies in every state inside it, so one line lets the customer cancel from both.</passage>
+    <passage>Once paid, the order has left <code>open</code>, and <code>cancel</code> finds no transition. A refund after payment would be a transition of its own, on <code>paid</code>, where a reviewer reads it.</passage>
+    <code src="../../examples/order-chart/order.scxml" lines="9-13" language="scxml" file="order.scxml"/>
+  </section>
+
+  <section id="parallel">
+    <heading>Parallel states run side by side</heading>
+    <problem>A paid order ships and emails its receipt, and neither waits for the other. A plain state machine would need a state for each pair: packing and emailing, packing and emailed, and two more.</problem>
+    <passage>A <link href="https://www.w3.org/TR/scxml/#parallel"><code>&lt;parallel&gt;</code></link> state is in all of its children at once, each child a region with its own states. Here <code>shipping</code> waits in <code>packing</code> for the warehouse's <code>shipped</code>, while <code>receipt</code> emails the receipt and waits for <code>sent</code>.</passage>
+    <passage>When every region reaches a <link href="https://www.w3.org/TR/scxml/#final">final state</link>, the chart gets the event <code>done.state.paid</code>, and the order moves to <code>complete</code>. The set of states active at one moment is the <link href="https://www.w3.org/TR/scxml/#state-configuration">state configuration</link>. The program's output shows one: <code>paid</code> with <code>packing</code> in one region and <code>emailed</code> in the other.</passage>
+    <code src="../../examples/order-chart/order.scxml" lines="40-60" language="scxml" file="order.scxml"/>
+  </section>
+
+  <section id="timers" answers="workflow-tester.simulated-clock">
+    <heading>A timer is an event sent later</heading>
+    <problem>The payment service sometimes never answers, so the order must charge again after five seconds. In the flag version, that timer outlived the payment and charged the card twice.</problem>
+    <passage>A delayed send is a <link href="https://www.w3.org/TR/scxml/#send"><code>&lt;send&gt;</code></link> with a <code>delay</code>: with no target, the event comes back to the chart itself, later. Each time the order enters <code>paying</code>, it sends itself <code>payment.timeout</code> five seconds out.</passage>
+    <passage>Its <code>&lt;onexit&gt;</code> <link href="https://www.w3.org/TR/scxml/#cancel">cancels</link> that send by its id, so leaving the state takes the timer with it. A <code>charged</code> that arrives first leaves no timeout behind to charge again.</passage>
+    <code src="../../examples/order-chart/order.scxml" lines="21-33" language="scxml" file="order.scxml"/>
+    <passage>The timer runs on the host's clock, not on a <code>setTimeout</code> of yours. A test gives the host a simulated clock and moves it: the program's <code>clock.increment(5000)</code> fires the timeout at once, and the output shows the second charge at 5000 ms.</passage>
+  </section>
+
+  <section id="effects" answers="workflow-tester.no-mocks">
+    <heading>The chart never calls the network</heading>
+    <problem>Charging a card and sending an email are I/O, and I/O is what makes a workflow hard to test. A chart that made its own HTTP calls would make every test stub the network or wait for it.</problem>
+    <passage>A chart reaches the world only by sending events. <code>&lt;send type="payments"&gt;</code> leaves the order as an effect, which the host hands to the <link href="https://www.w3.org/TR/scxml/#eventioprocessors">I/O processor</link> your program gave it for <code>payments</code>. The processor does the I/O and answers with an event, <code>charged</code>, which the order receives like any other.</passage>
+    <passage>So your program decides how a charge happens: a payment API in production, a stand-in in a test. This one ignores the first charge and answers the second. In the diagram, you play the payment service yourself by pressing <code>charged</code>.</passage>
+    <code src="../../examples/order-chart/main.mjs" lines="4-12" language="javascript" file="main.mjs"/>
+  </section>
+
+  <section id="actors">
+    <heading>An actor is one running chart</heading>
+    <problem>A shop has thousands of open orders, each at its own step with its own cart. They must not share variables, and two events for one order must never interleave.</problem>
+    <passage>An actor is one instance of a chart: its own state configuration, its own variables, its own queue of events and its own timers. The host is the part of tinyactors that runs actors in your process. It starts one with <code>spawn</code>, here under the name <code>order-1042</code>, and any part of the program finds it by that name.</passage>
+    <passage>Events sent to an actor wait in its queue, and it handles them one at a time, each to completion. So an <code>add</code> and a <code>checkout</code> for one order never run halfway into each other, and your code holds no lock.</passage>
+    <code src="../../examples/order-chart/main.mjs" lines="20-30" language="javascript" file="main.mjs"/>
+    <passage>An actor is small: <link to="performance" section="actors">about 530 bytes</link> each for a one-variable chart, measured in Node.js with a million in one process. That is small enough to make each order, payment or chat session an actor of its own.</passage>
+  </section>
+
+  <section id="next">
+    <heading>Build a system of actors next</heading>
+    <problem>One chart is one entity. A real system has many actors that send each other events, go idle and come back.</problem>
+    <passage>The chat tutorial builds a team chat from actors like this order, one step at a time, with rooms, presence and idle users saved to a store. Writing charts covers the rest of SCXML as tinyactors runs it: scripts, sends between actors and charts that start other charts.</passage>
+    <actions>
+      <action to="chat">Build a team chat</action>
+      <action to="guide-charts" section="first-chart">Write your first chart</action>
+    </actions>
+  </section>
+</page>

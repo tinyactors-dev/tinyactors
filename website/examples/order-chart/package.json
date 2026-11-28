@@ -1,0 +1,11 @@
+{
+  "name": "tinyactors-website-example-order-chart",
+  "private": true,
+  "type": "module",
+  "main": "main.mjs",
+  "description": "The home page's first program: an order actor in Node.js (main.mjs), browsers (browser.mjs), Python (main.py) and C (main.c). mise run test runs each and compares what it prints with output.txt.",
+  "dependencies": {
+    "@tinyactors/node": "0.4.0",
+    "@tinyactors/wasm": "0.4.0"
+  }
+}

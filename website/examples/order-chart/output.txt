@@ -1,0 +1,6 @@
+0 ms: charge 42, attempt 1
+waiting in {"open":"paying"}
+5000 ms: charge 42, attempt 2
+5000 ms: receipt for 42
+then in {"paid":{"shipping":"packing","receipt":"emailed"}}
+complete, total 42

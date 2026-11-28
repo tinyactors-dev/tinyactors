@@ -1,0 +1,66 @@
+<scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0"
+       datamodel="ecmascript" name="order" initial="open">
+  <datamodel>
+    <data id="items" expr="[]"/>
+    <data id="total" expr="0"/>
+    <data id="attempts" expr="0"/>
+  </datamodel>
+
+  <!-- An open order: the customer may cancel it from any state inside. -->
+  <state id="open" initial="cart">
+    <transition event="cancel" target="cancelled"/>
+
+    <state id="cart">
+      <transition event="add">
+        <assign location="items" expr="items.concat([_event.data.item])"/>
+        <assign location="total" expr="total + _event.data.price"/>
+      </transition>
+      <transition event="checkout" cond="items.length &gt; 0" target="paying"/>
+    </state>
+
+    <!-- Each entry charges the card and starts a five-second timer.
+         Leaving the state cancels the timer, so a late timeout cannot charge again. -->
+    <state id="paying">
+      <onentry>
+        <assign location="attempts" expr="attempts + 1"/>
+        <send type="payments" event="charge">
+          <param name="amount" expr="total"/>
+        </send>
+        <send id="timeout" event="payment.timeout" delay="5s"/>
+      </onentry>
+      <onexit>
+        <cancel sendid="timeout"/>
+      </onexit>
+      <transition event="charged" target="paid"/>
+      <transition event="payment.timeout" cond="attempts &lt; 3" target="paying"/>
+      <transition event="payment.timeout" target="cart"/>
+    </state>
+  </state>
+
+  <!-- A paid order ships and emails its receipt at the same time. -->
+  <parallel id="paid">
+    <state id="shipping" initial="packing">
+      <state id="packing">
+        <transition event="shipped" target="shipped"/>
+      </state>
+      <final id="shipped"/>
+    </state>
+    <state id="receipt" initial="emailing">
+      <state id="emailing">
+        <onentry>
+          <send type="email" event="receipt">
+            <param name="total" expr="total"/>
+          </send>
+        </onentry>
+        <transition event="sent" target="emailed"/>
+      </state>
+      <final id="emailed"/>
+    </state>
+    <transition event="done.state.paid" target="complete"/>
+  </parallel>
+
+  <final id="cancelled"/>
+  <final id="complete">
+    <donedata><content expr="total"/></donedata>
+  </final>
+</scxml>
