@@ -6,7 +6,7 @@
 
   <hero>
     <headline>Retries and timeouts, without a Temporal server</headline>
-    <lede>A payment that retries every 30 seconds runs as a statechart inside your Node.js or Python process. One program checks it over a thousand simulated runs, with no server and no database. Choose Temporal when its service must keep every workflow through a machine's failure.</lede>
+    <lede>A payment that retries every 30 seconds runs as a statechart inside your own process. One program checks it over a thousand simulated runs, with no server and no database. Choose Temporal when its service must keep every workflow through a machine's failure.</lede>
     <actions>
       <action to="guide-testing">Test a payment's timeouts</action>
       <action to="compare-temporal" section="choose-temporal">See when Temporal fits</action>
@@ -41,13 +41,15 @@
 
   <section id="tests" answers="workflow-tester.simulated-clock workflow-tester.test-timeouts workflow-tester.no-mocks">
     <heading>Test a thousand payments in one program</heading>
-    <p>A workflow's bugs hide in its timeouts. This chart charges a card, charges again after 30 seconds without an answer and gives up after three charges:</p>
-    <code src="../../examples/simulate/payment.scxml" lines="4-15" language="scxml" file="payment.scxml"/>
-    <p>The test gives the host a stand-in payment service that answers 40% of charges. It moves a simulated clock straight to each timeout, so a run that would wait 90 seconds ends as soon as the chart is done. Then it checks two rules:</p>
+    <p>A workflow's bugs hide in its timeouts. This chart charges a card, charges again after 30 seconds without an answer and gives up after three charges. Every attempt carries the same key, the payment's session:</p>
+    <code src="../../examples/late-answers/payment.scxml" lines="4-16" language="scxml" file="payment.scxml"/>
+    <p>The test gives the host a stand-in payment provider. It answers a charge at once, 45 seconds late, after the next charge has gone out, or never.</p>
+    <p>A simulated clock jumps to each timeout and each late answer, so a thousand payments run in one program. Then it checks three rules:</p>
     <example>
-      <code src="../../examples/simulate/simulate.mjs" lines="7-34" language="javascript" file="simulate.mjs"/>
-      <code src="../../examples/simulate/output.txt" language="text" role="output"/>
+      <code src="../../examples/late-answers/simulate.mjs" language="javascript" file="simulate.mjs"/>
+      <code src="../../examples/late-answers/output.txt" language="text" role="output"/>
     </example>
+    <p>One key for every attempt lets the provider charge the card once, however many requests reach it. The 51 answers that came after the chart gave up are payments your program must reconcile with the provider.</p>
     <claims>
       <claim>
         <statement>Temporal's tests skip time with a server</statement>
@@ -72,12 +74,12 @@
       <claim>
         <statement>A crash keeps what your program saved</statement>
         <p>tinyactors actors live in your process's memory, so a crash stops them all. What comes back is what your program saved: hibernated actors in its store, and its last snapshot.</p>
-        <p>Inputs after that snapshot return only if your program journaled them and replays them on the restored host.</p>
+        <p>Inputs after that snapshot return when your program journaled them: replaying a journal is one loop.</p>
         <source to="when-to-use" section="crash">When to use tinyactors, "A crash stops memory and keeps saved state"</source>
-        <source to="guide-snapshots" section="replaying-inputs">Snapshots, "Replay the inputs that came after"</source>
+        <source to="guide-journal">Journal and replay</source>
       </claim>
     </claims>
-    <p>So if no input may be lost and you'd rather not write that journal, choose Temporal.</p>
+    <p>The journal is one write per input, to a store your program already runs. If you'd rather not own that write and its storage, choose Temporal.</p>
     <p>A snapshot holds only its moment. A snapshot of two million actors takes 165 MB (<link to="guide-snapshots"/>).</p>
   </section>
 
@@ -94,7 +96,7 @@
       </claim>
       <claim>
         <statement>A migration moves running actors to a version</statement>
-        <p>A new chart version is added to the running host, and <code>host.migrate()</code> moves running actors to it. Each keeps its active states, queue and delayed sends, and receives its old variables in an event.</p>
+        <p>A new chart version is added to the running host, and <code>host.migrate()</code> moves running actors to it. Each keeps its active states, queue and delayed sends. The new chart reads the old variables from one event and decides what carries over.</p>
         <source to="guide-migration" section="moving-running-actors">Migration, "Move the actors and carry their variables"</source>
       </claim>
     </claims>
@@ -110,12 +112,12 @@
     </list>
   </section>
 
-  <section id="choose-temporal">
+  <section id="choose-temporal" answers="workflow-tester.compare">
     <heading>Choose Temporal when its service must own durability</heading>
     <list>
       <item><term>Durability you don't build</term><text>The service keeps each workflow's event history in its database. Replay restores the state after infrastructure fails.</text></item>
       <item><term>Work spread across many machines</term><text>Workers on any machine poll task queues. tinyactors leaves <link href="https://github.com/tinyactors-dev/tinyactors/blob/main/README.md#layers-and-responsibilities">placement and failover between hosts</link> to your program.</text></item>
-      <item><term>Retries without writing them</term><text>Temporal <link href="https://docs.temporal.io/encyclopedia/retry-policies">retries a failed activity by default</link>, starting after one second and doubling. In a chart, you write each retry as a transition.</text></item>
+      <item><term>Retries without writing them</term><text>Temporal <link href="https://docs.temporal.io/encyclopedia/retry-policies">retries a failed activity by default</link>, starting after one second and doubling. In a chart, the retry is two transitions you can read and test, as the payment above shows.</text></item>
       <item><term>Workflows as ordinary code</term><text>A workflow is code in your language, with no chart format to learn (<link href="https://docs.temporal.io/workflow-definition">Temporal, "Workflow Definition"</link>).</text></item>
     </list>
     <actions>

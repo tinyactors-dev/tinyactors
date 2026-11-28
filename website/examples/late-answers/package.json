@@ -1,0 +1,10 @@
+{
+  "name": "tinyactors-website-example-late-answers",
+  "private": true,
+  "type": "module",
+  "main": "simulate.mjs",
+  "description": "The Temporal comparison's simulation: a payment chart that sends one idempotency key on every attempt, a provider that answers at once, late or never, a thousand seeds and three invariants. test/examples runs it and compares what it prints with output.txt.",
+  "dependencies": {
+    "@tinyactors/node": "0.4.0"
+  }
+}

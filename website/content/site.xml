@@ -35,6 +35,7 @@
       <task id="one-workflow">Write one workflow as a chart</task>
       <task id="test-timeouts">Test its timeouts in CI</task>
       <task id="show-speedup">Show the team the speedup</task>
+      <task id="compare">Compare it with Temporal</task>
       <objection id="needs-cluster">Does it need Docker or a cluster like Temporal?</objection>
       <objection id="crash">What survives a crash of the process?</objection>
       <objection id="simulation-matches">Will the simulated run match production?</objection>
@@ -149,6 +150,7 @@
       <link to="guide-hibernation">Hibernation</link>
       <link to="guide-migration">Migration</link>
       <link to="guide-snapshots">Snapshots</link>
+      <link to="guide-journal">Journal and replay</link>
       <link to="guide-inspection">Inspecting a host</link>
       <link to="guide-telemetry">Telemetry</link>
       <link to="guide-browser">In the browser</link>
@@ -190,6 +192,7 @@
     <page src="guides/hibernation.xml"/>
     <page src="guides/inspection.xml"/>
     <page src="guides/io-processors.xml"/>
+    <page src="guides/journal.xml"/>
     <page src="guides/migration.xml"/>
     <page src="guides/missing-actors.xml"/>
     <page src="guides/other-systems.xml"/>

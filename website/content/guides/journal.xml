@@ -1,0 +1,168 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<page xmlns="https://www.tinyactors.dev/ns/site" id="guide-journal" path="/guides/journal/">
+  <title>Journal and replay</title>
+  <description>Record every input your program gives a tinyactors host, and replay the journal to rebuild every actor after a crash, without running any effect again.</description>
+  <purpose kind="how-to" for="workflow-tester tech-lead"/>
+  <hero>
+    <headline>Rebuild a host from its inputs</headline>
+    <lede>A chart's state follows from its inputs and their times. Write each input to a journal before the host sees it, and one loop rebuilds every actor without charging a card again.</lede>
+  </hero>
+
+  <section id="why" answers="workflow-tester.crash tech-lead.host-dies">
+    <heading>Your program already has a log</heading>
+    <p>A crash stops every actor in the process. What comes back is what your program wrote down (<link to="when-to-use" section="crash">what a crash keeps</link>).</p>
+    <p>tinyactors writes no log of its own, because your program already has one: a table, a file, a queue. Recording an input is one write, and replaying is one loop.</p>
+    <p>A chart that reads no clock and no random numbers has no hidden inputs. Given the same events in the same order at the same times, it takes the same transitions and ends in the same state.</p>
+  </section>
+
+  <section id="record">
+    <heading>Record every input, then apply it</heading>
+    <p>An order takes two items and checks out. The payment service never answers the first charge, so the chart charges again 30 seconds later, and the provider's webhook then says paid.</p>
+    <p>Every input goes through one function, <code>record()</code>, which writes the host's time and the input, then applies it. The replay applies the same lines to a new host:</p>
+    <example>
+      <code language="javascript" file="journal.mjs"><![CDATA[
+import { compileCharts, Host, SimulatedClock } from '@tinyactors/node';
+
+const compiled = compileCharts([{ name: 'order.scxml', text: `
+<scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0"
+       datamodel="ecmascript" name="order" initial="cart">
+  <datamodel>
+    <data id="items" expr="[]"/>
+    <data id="attempts" expr="0"/>
+  </datamodel>
+  <state id="cart">
+    <transition event="add">
+      <assign location="items" expr="items.concat([_event.data.sku])"/>
+    </transition>
+    <transition event="checkout" target="paying"/>
+  </state>
+  <state id="paying">
+    <onentry>
+      <assign location="attempts" expr="attempts + 1"/>
+      <send type="payments" event="charge">
+        <param name="amount" expr="items.length * 10"/>
+      </send>
+      <send event="timeout" delay="30s"/>
+    </onentry>
+    <transition event="paid" target="paid"/>
+    <transition event="timeout" cond="attempts &lt; 3" target="paying"/>
+    <transition event="timeout" target="failed"/>
+  </state>
+  <state id="paid"/>
+  <state id="failed"/>
+</scxml>` }]);
+
+// Every input goes through record(): the host's time, then the input.
+const journal = [];
+function apply(host, entry) {
+  if (entry.spawn) host.spawn(entry.spawn, { name: entry.name });
+  else host.send(entry.send);
+}
+function record(host, entry) {
+  const line = JSON.stringify({ at: host.now(), ...entry });
+  journal.push(line); // in production: append to a file or a table first
+  apply(host, JSON.parse(line));
+}
+
+const order = { target: 'tinyactors://shop/@order-1' };
+const clock = new SimulatedClock();
+const charged = [];
+const live = new Host(compiled, {
+  system: 'shop',
+  clock,
+  ioProcessors: { payments: { receive: (send) => charged.push(send.data.amount) } },
+});
+
+record(live, { spawn: 'order', name: 'order-1' });
+record(live, { send: { ...order, event: 'add', data: { sku: 'pen' } } });
+record(live, { send: { ...order, event: 'add', data: { sku: 'notebook' } } });
+record(live, { send: { ...order, event: 'checkout' } });
+await live.idle();
+clock.increment(30_000); // no answer: the chart charges again
+await live.idle();
+clock.increment(5_000);
+record(live, { send: { ...order, event: 'paid' } }); // the provider's webhook
+await live.idle();
+
+const replayClock = new SimulatedClock();
+const replay = new Host(compiled, {
+  system: 'shop',
+  clock: replayClock,
+  ioProcessors: { payments: { receive: () => {} } }, // charges nobody
+});
+for (const line of journal) {
+  const entry = JSON.parse(line);
+  replayClock.increment(entry.at - replay.now());
+  await replay.idle();
+  apply(replay, entry);
+  await replay.idle();
+}
+
+// Go on from the replay on the runtime's clock, with the real processor.
+const restored = Host.restore(replay.snapshot(), compiled, {
+  system: 'shop',
+  ioProcessors: { payments: { receive: (send) => charged.push(send.data.amount) } },
+});
+
+for (const [name, host] of [['live', live], ['replay', replay], ['restored', restored]]) {
+  const actor = host.actor('order-1');
+  const { value } = await actor.state();
+  const { variables } = await actor.context();
+  console.log(`${name}: ${JSON.stringify(value)} after ${variables.attempts} attempts, ${variables.items.join(', ')}`);
+}
+console.log(`${journal.length} inputs journaled; charges: ${charged.join(', ')}`);
+for (const host of [live, replay, restored]) host.close();
+compiled.close();
+]]></code>
+      <code language="text" role="output">
+live: "paid" after 2 attempts, pen, notebook
+replay: "paid" after 2 attempts, pen, notebook
+restored: "paid" after 2 attempts, pen, notebook
+5 inputs journaled; charges: 20, 20
+</code>
+    </example>
+    <p>Five inputs rebuilt the order. The live host charged twice, because the chart retried after its timeout; the replay charged nothing. What each part does:</p>
+    <list>
+      <item><term><code>record()</code></term><text>writes <code>host.now()</code> and the input as one JSON line, and only then applies it, so the journal never misses an input the host saw. In production, make the write durable before applying (an fsync, a committed transaction). A crash between the write and the apply replays an input the host never saw. A sender that never heard back may send it again, so give such inputs a <code>sendid</code> the chart checks.</text></item>
+      <item><term>Names, not sessions</term><text>the journal reaches the order by its address, <code>tinyactors://shop/@order-1</code>, so it reads the same on any host.</text></item>
+      <item><term>The webhook</term><text>is an input like any other. An answer from outside the host must be recorded, or the replay never hears it.</text></item>
+      <item><term>The replay's processor</term><text>does nothing, so no card is charged again. Effects leave the chart as events, which is what lets the replay switch them off.</text></item>
+      <item><term>The replay's clock</term><text>moves to each entry's time and runs everything due by then before applying the entry, so the 30-second timeout fires before the webhook arrives, as it did live.</text></item>
+      <item><term><code>Host.restore</code></term><text>takes a snapshot of the replayed host and runs it on the runtime's clock with the real processor, so the program goes on where it stopped.</text></item>
+    </list>
+  </section>
+
+  <section id="snapshots" answers="tech-lead.failure-semantics">
+    <heading>Keep the journal short with snapshots</heading>
+    <p>A journal that is never cut grows with every input, and so does the replay. Snapshot the host now and then, and store the journal's position with the snapshot.</p>
+    <p>After a crash, restore the last snapshot on a <code>SimulatedClock</code> and replay only the entries after it. Then snapshot again and empty the journal (<link to="guide-snapshots" section="replaying-inputs">replay the inputs that came after</link>).</p>
+    <p>The <link href="https://github.com/tinyactors-dev/tinyactors/tree/main/tinyactors-napi/examples/turn-game">turn-game example</link> does this for a game server it kills and restarts. It checkpoints every second and replays the moves made since.</p>
+  </section>
+
+  <section id="deterministic">
+    <heading>Keep the chart's inputs in the journal</heading>
+    <p>A replay matches only when every input the chart reads is in the journal. Check three things.</p>
+    <list>
+      <item><term>Time and chance</term><text>a chart that reads <code>Date</code> or <code>Math.random</code> gets a new answer on replay. Read them in your program and pass them in as event data, which the journal then holds.</text></item>
+      <item><term>Answers and services</term><text>an I/O processor's answer, a service's <code>sendBack</code> and <code>done</code> and a <code>host.fail</code> are inputs. Give them through <code>record()</code>, with the sender's address and the send's <code>sendid</code>, and on replay give the processors and services stand-ins that do nothing.</text></item>
+      <item><term>The same millisecond</term><text>the replay runs every timer due at an entry's time before the entry, while live the input may have come first. A chart should not depend on which wins within one millisecond, as a move against its turn's timeout in the turn-game example does.</text></item>
+      <item><term>Effects in flight</term><text>a charge the live host sent, whose answer never reached the journal, is lost with the crash. After the restore, the chart's timer charges again, so send the same idempotency key on every attempt (<link to="compare-temporal" section="tests">one key for every attempt</link>).</text></item>
+    </list>
+  </section>
+
+  <section id="one-actor">
+    <heading>Journal a host, or one actor</heading>
+    <p>When actors send each other events, one actor's input changes another's state. Journal the whole host, the unit a replay rebuilds.</p>
+    <p>An actor that hears only from outside can have a journal of its own, keyed by its name. Replay that journal into a fresh host to rebuild it alone.</p>
+  </section>
+
+  <section id="choose">
+    <heading>Choose a journal, snapshots or both</heading>
+    <list>
+      <item><term>A journal</term><text>keeps every input, so nothing after the last write is lost, and it doubles as an audit log. It costs one write before each input and a replay as long as the journal.</text></item>
+      <item><term>Snapshots alone</term><text>cost nothing per input, and restoring two million actors took 0.14 to 0.21 s (<link to="guide-snapshots" section="at-scale">measured on one machine</link>). Inputs after the last snapshot are lost.</text></item>
+      <item><term>Both</term><text>restore the last snapshot, then replay the short journal written since. This is what turn-game does.</text></item>
+      <item><term><link to="guide-hibernation">Hibernation</link></term><text>is not a log: it keeps waiting actors out of memory. Use it with either.</text></item>
+    </list>
+  </section>
+</page>
