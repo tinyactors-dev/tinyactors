@@ -39,12 +39,6 @@
         <code src="../../examples/order/main.py" language="python" file="main.py"/>
         <code src="../../examples/order/order.scxml" language="scxml" file="order.scxml"/>
       </in>
-      <in package="c">
-        <code src="../../examples/order/main.c" language="c" file="main.c"/>
-        <code src="../../examples/order/host.h" language="c" file="host.h"/>
-        <code src="../../examples/order/host.c" language="c" file="host.c"/>
-        <code src="../../examples/order/order.scxml" language="scxml" file="order.scxml"/>
-      </in>
       <diagram chart="order.scxml">
         <event name="add" data='{"item": "notebook", "price": 30}'>Add a notebook</event>
         <event name="add" data='{"item": "pen", "price": 12}'>Add a pen</event>
@@ -67,7 +61,7 @@
 
   <section id="inspect" answers="agent-platform.memory">
     <heading>Small enough to see every actor</heading>
-    <p>An actor takes <link to="performance" section="actors">about half a kilobyte</link>, so a request, a connection or an order can each be one. Millions fit in one process, and your code can look at any of them.</p>
+    <p>A started actor takes <link to="performance">about 530 bytes</link>, so a request, a connection or an order can each be one. Four million fit in one process, and your code can look at any of them (<link to="guide-capacity" section="what-an-actor-costs">per runtime and datamodel</link>).</p>
     <list>
       <item><term><link to="guide-inspection">Read any actor</link></term><text>its states, its variables, its queue and its pending timers, while it runs.</text></item>
       <item><term><link to="guide-snapshots">Copy the whole process</link></term><text>two million actors, 1000 of them in memory, make a 165 MB snapshot that another process restores.</text></item>
@@ -82,21 +76,21 @@
   </section>
 
   <section id="verify">
-    <heading>Kill your unit tests</heading>
+    <heading>Test properties, not single runs</heading>
     <p>A unit test checks one run you wrote down. A property is a rule, like "never charge a card more than three times", checked on runs a program generates.</p>
     <p>This payment chart retries a charge every 30 seconds until it is paid or has charged three times:</p>
     <code src="../../examples/simulate/payment.scxml" lines="4-15" language="scxml" file="payment.scxml"/>
     <p>This loop runs the payment a thousand times against a stand-in service that answers 40% of charges. After each run it checks two rules:</p>
     <example>
-      <code src="../../examples/simulate/simulate.mjs" lines="25-32" language="javascript" file="simulate.mjs"/>
+      <code src="../../examples/simulate/simulate.mjs" language="javascript" file="simulate.mjs"/>
       <code src="../../examples/simulate/output.txt" language="text" role="output"/>
     </example>
     <p>With <code>attempts &lt; 4</code> in the chart, the loop stops at seed 10: it charged the card four times.</p>
   </section>
 
   <section id="agents" answers="agent-platform.agent-charts">
-    <heading>Local reasoning for agents</heading>
-    <p>An agent <link to="docs-agents">writes an actor</link> from the events entering and leaving it, not from the whole system. Every effect leaves the chart as an event your code performs, so reviewing its change means reading one file.</p>
+    <heading>Local reasoning for coding agents</heading>
+    <p>A coding agent <link to="docs-agents">writes an actor</link> from the events entering and leaving it, not from the whole system. Every effect leaves the chart as an event your code performs, so reviewing its change means reading one file.</p>
     <p>In CI, <code>tinyactors check</code>, <code>lint</code> and <code>diff</code> catch a misspelt event and show what behavior a change moved (<link to="cli-ci">CI checks</link>).</p>
   </section>
 
@@ -105,6 +99,7 @@
     <p>Hosted actor platforms decide where your code runs, where its state lives and what each step costs. tinyactors decides none of that: your program already did.</p>
     <list>
       <item><term><link to="guide-io-processors">Effects are events</link></term><text>A chart asks for outside work by sending an event to an object of yours, which answers with another. Tests answer instead of a real service.</text></item>
+      <item><term><link to="guide-io-processors" section="answering-later">Slow calls</link></term><text>A processor that calls a model or an API returns a promise and answers when the call returns, seconds later. The actor waits in its state, and its timers keep running.</text></item>
       <item><term><link to="guide-hibernation">Idle actors in your database</link></term><text>Waiting actors leave memory for the store you already run: two million ran with at most 1000 in memory.</text></item>
       <item><term><link to="guide-journal">A journal if you want one</link></term><text>Record every input, and one loop rebuilds every actor after a crash.</text></item>
       <item><term><link to="guide-other-systems">Other machines over your wire</link></term><text>An actor sends to an actor in another process by its address, over the transport you choose.</text></item>
@@ -136,7 +131,8 @@
 
   <section id="compare" answers="agent-platform.compare">
     <heading>When to choose something else</heading>
-    <p>When your application must run on many machines at once, with placement and failover handled for you, the infrastructure is the product. Then a platform built for that fits better.</p>
+    <p>Several processes work too: run a named host in each, give each the sessions it owns, and route by name. An actor reaches another host's actor by its address, over your transport (<link to="guide-other-systems">other systems</link>).</p>
+    <p>When placement and failover across machines must be handled for you, the infrastructure is the product. Then a platform built for that fits better.</p>
     <list>
       <item><term><link to="compare-durable-objects">Cloudflare Durable Objects</link></term><text>for an application already on Cloudflare Workers that needs Cloudflare's network.</text></item>
       <item><term><link to="compare-rivet">Rivet</link></term><text>for actors a control plane places and moves across machines for you.</text></item>
@@ -150,7 +146,7 @@
     <list>
       <item><term>Is one process a single point of failure?</term><text>Yes: a crash stops every actor in it. What comes back is what your program saved: hibernated actors in your store, the last snapshot and a <link to="guide-journal">journal</link> if you keep one.</text></item>
       <item><term>Why SCXML and not XState?</term><text>SCXML is a W3C standard, so a chart isn't tied to one library or language. The same chart runs in Node.js, Python, a browser and C (<link to="compare-xstate">tinyactors compared with XState</link>).</text></item>
-      <item><term>Do I have to write XML?</term><text>A chart is an SCXML document, and the expressions in it are JavaScript. The <link to="cli">tinyactors command</link> draws it, checks it and runs it before your program does.</text></item>
+      <item><term>Do I have to write XML?</term><text>Yes: a chart is an SCXML document, and the expressions in it are JavaScript. The <link to="cli">tinyactors command</link> draws it, checks it and runs it before your program does.</text></item>
       <item><term>Is anyone running this in production?</term><text>tinyactors is at version 0.x and still changes its API in minor releases. What backs it: the W3C SCXML suite in every package, and programs that take two million actors through hibernation, migration and snapshots (<link to="performance">performance</link>).</text></item>
       <item><term>Will an agent write good charts?</term><text>An agent writes one chart from the events it takes and sends, and the command line catches mistakes such as a misspelt event in CI (<link to="docs-agents">build with a coding agent</link>).</text></item>
     </list>
