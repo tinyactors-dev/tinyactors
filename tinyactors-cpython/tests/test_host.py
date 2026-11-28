@@ -372,6 +372,30 @@ class Inputs(unittest.TestCase):
             with self.assertRaises(TypeError):
                 host.boot("0")
 
+    def test_now_reads_the_hosts_clock_and_advances_nothing(self):
+        """now() is the host's clock in seconds: a SimulatedClock's time, or
+        the monotonic clock, which never goes back; it runs nothing, and a
+        closed host refuses it."""
+        logs, clock = Logs(), tinyactors.SimulatedClock()
+        config = {"system": {"ticksPerSecond": 1000}}
+        with tinyactors.Host([], system="t", config=config, log=logs, clock=clock) as host:
+            self.assertEqual(host.now(), 0.0)
+            with tinyactors.compile_charts([("boot.scxml", fixture("test_host/boot.python.scxml"))]) as compiled:
+                host.boot(host.add_image(compiled.image))
+            host.run_until_idle()
+            clock.increment(1.25)
+            self.assertAlmostEqual(host.now(), 1.25)
+            self.assertAlmostEqual(host.now(), clock.now)
+            self.assertEqual(logs.labelled("later"), [])  # due at 1.5: now() turned nothing
+            self.assertAlmostEqual(host.now() + host.next_deadline, 1.5)
+        with self.assertRaises(tinyactors.TinyactorsError) as raised:
+            host.now()
+        self.assertEqual(raised.exception.status, "TA_ERROR_STATE")
+        with tinyactors.Host([], system="t", config=config) as host:  # the monotonic clock
+            first = host.now()
+            self.assertIsInstance(first, float)
+            self.assertGreaterEqual(host.now(), first)
+
     def test_terminate(self):
         host = host_with([("echo.scxml", ECHO)])
         session = spawn(host)

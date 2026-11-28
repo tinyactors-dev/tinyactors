@@ -192,7 +192,10 @@ time is counted in ticks, at the config's `system.ticksPerSecond`, and
 the binding converts. `host.next_deadline` is the time in seconds until
 the host's next timer, or `None` when there is none. With a
 `SimulatedClock`, `clock.increment(host.next_deadline)` jumps straight to
-the next thing that happens.
+the next thing that happens. `host.now()` reads the host's clock in
+seconds (the simulated clock's time, or a monotonic clock whose zero means
+nothing), the clock its deadlines, `actor_get`'s due times and snapshots
+use; it reads, and advances nothing.
 
 Under asyncio, an input made outside a turn schedules one, so you only
 await `idle()` when you need the effects before going on:
@@ -249,8 +252,8 @@ because `host.send` does the same.
 Two answers say what an actor will do next. `actor_get`'s `timers` lists
 its pending delayed sends (each `<send delay>` not yet due and not
 cancelled), earliest first, each `{"sendid", "event", "due"}`: `due` is
-in seconds on the host's clock (a `float`; on a `SimulatedClock`, the
-clock `SimulatedClock.now` reads), `sendid` is `None` for a send without an id. The
+in seconds on the host's clock (a `float`, on the clock `host.now()`
+reads, so `due - host.now()` is how long is left), `sendid` is `None` for a send without an id. The
 list holds at most 32, and `timersPending` counts them all.
 `actor_state`'s `history` gives, for each history state the actor has
 recorded, its parent state as it would be entered again, in the shape of
@@ -886,7 +889,11 @@ processors and tick rate are not in the snapshot), and the handlers.
 and the others are added as new versions, ready for `host.migrate`. Every session id
 stays the same, and the host's clock goes on from the snapshot's time,
 whatever clock reads it: a new `SimulatedClock`, or the real clock in
-another process or on another machine.
+another process or on another machine. `host.now()` reads that clock: a
+journal of the inputs that came after a snapshot records it with each, and
+a replay on a restored host on a `SimulatedClock` moves the clock to each
+reading (`clock.increment(entry_time - host.now())`) before it gives the
+input.
 
 ```python
 blob = host.snapshot()                    # quiescent: not from a handler
@@ -1223,7 +1230,7 @@ how to use it.
 | `send(target, event, data=None, *, sendid=None, traceparent=None, origin=None)` | gives an actor an event; `target` is a session, an `Actor` or a local address |
 | `send_many([(target, event, data, traceparent), ...]) -> accepted` | many sends in one call; returns how many were accepted |
 | `terminate(session)` | ends an actor |
-| `run_until_idle()`, `await idle()`, `next_deadline` | the drivers (above, "Drivers and time") |
+| `run_until_idle()`, `await idle()`, `next_deadline`, `now()` | the drivers and the host's clock (above, "Drivers and time") |
 | `actor_state`, `actor_context`, `actor_list`, `actor_get`, `host_stats`, `host_config` | typed methods (above, "Typed methods") |
 | `MemoryStore()`, `SQLiteStore(path)` | stores of hibernated actors' blobs, for `store=` |
 | `close()`, `closed` | frees the host |

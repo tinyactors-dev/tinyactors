@@ -609,7 +609,11 @@ or read views; it never takes or acks.
 - **Time in the API is seconds** (an `int` or a `float`), converted
   with the config's `ticksPerSecond`: `next_deadline`, `migrate`'s
   `timeout`, `SimulatedClock.increment` and `.now` (2026-10-15, the API
-  review). Ticks stay inside the extension.
+  review), and **`host.now()`**, the host's clock as it reads now (a
+  `SimulatedClock`'s time or `ta_runtime_now_ns`, with a restored host's
+  offset), advancing nothing, as Node's `host.now()` in seconds (the
+  maintainer, 2026-11-28: an oversight here; a journal replayed on a
+  restored host needs it). Ticks stay inside the extension.
 - **Both clocks before every run**, and at creation and before an input
   that depends on them (spawn, deliver, every typed method: a
   `trace.watch` ends at a time of the host's clock), and with an encoder

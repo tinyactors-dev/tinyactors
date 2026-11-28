@@ -362,6 +362,21 @@ static const char ta_python_doc_host_next_deadline[] =
     "no timer, increment the clock by it to move straight to the next thing\n"
     "that happens.";
 
+static const char ta_python_doc_host_now[] =
+    "now()\n"
+    "--\n"
+    "\n"
+    "The host's clock in seconds (a float), as it reads now: the clock of\n"
+    "next_deadline, actor_get's due times and snapshots. On a SimulatedClock\n"
+    "it is the simulated time; otherwise a monotonic clock whose zero means\n"
+    "nothing, so compare readings, never the time of day. A restored host's\n"
+    "clock goes on from its snapshot's time, so its reading is not its\n"
+    "clock's own: a journal of the inputs that came after a snapshot records\n"
+    "host.now() with each, and a replay on a restored host on a\n"
+    "SimulatedClock moves it with clock.increment(entry_time - host.now())\n"
+    "before it gives the input. It reads, and advances nothing; a closed\n"
+    "host raises TinyactorsError (TA_ERROR_STATE).";
+
 static const char ta_python_doc_host_quickjs_heap_bytes[] =
     "The bytes quickjs's heap holds now, every \"ecmascript\" actor's\n"
     "together, read on each access (cheap): what its 1 GiB limit bounds.\n"

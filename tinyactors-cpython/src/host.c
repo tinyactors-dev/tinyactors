@@ -2065,6 +2065,17 @@ static PyObject *ta_python_host_ticks(PyObject *self, void *closure) {
     return PyLong_FromUnsignedLongLong(((ta_python_host *)self)->ticks_per_second);
 }
 
+/* now() -> float: the host's clock in seconds, as it reads now. */
+static PyObject *ta_python_host_now(PyObject *self, PyObject *unused) {
+    (void)unused;
+    ta_python_host *host = (ta_python_host *)self;
+    ta_python_call call;
+    if (ta_python_enter(host, &call) < 0) return NULL;
+    PyObject *result = PyFloat_FromDouble(ta_python_time(host));
+    ta_python_leave(&call);
+    return result;
+}
+
 /* The last idle run's next_deadline (ta_run), as seconds from now. */
 static PyObject *ta_python_host_next_deadline(PyObject *self, void *closure) {
     (void)closure;
@@ -2164,6 +2175,7 @@ static PyMethodDef ta_python_host_methods[] = {
      ta_python_doc_host_restore},
     {"migrate", (PyCFunction)(void (*)(void))ta_python_host_migrate, METH_VARARGS | METH_KEYWORDS,
      ta_python_doc_host_migrate},
+    {"now", ta_python_host_now, METH_NOARGS, ta_python_doc_host_now},
     {"run_until_idle", ta_python_host_run_until_idle, METH_NOARGS,
      ta_python_doc_host_run_until_idle},
     {"idle", ta_python_host_idle, METH_NOARGS, ta_python_doc_host_idle},

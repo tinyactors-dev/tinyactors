@@ -164,6 +164,34 @@ class Snapshot(unittest.TestCase):
         asyncio.run(restored())
         self.assertEqual(logs.labelled("late"), ["{'k': 0}"])
 
+    def test_now_reads_the_clock_a_restored_host_goes_on_from(self):
+        """A restored host's now() is the snapshot's time, not its new
+        clock's: a journal replay moves the clock to an entry's reading by
+        that reading less host.now(), and actor_get's due times are on the
+        same clock."""
+        clock = tinyactors.SimulatedClock()
+        with host_of(COUNTER["python"], clock=clock) as host:
+            clock.increment(2.5)
+            session = host.spawn("counter").id
+            host.send(session, "wait")  # late at 3.5
+            host.run_until_idle()
+            taken = host.now()
+            blob = host.snapshot()
+        self.assertAlmostEqual(taken, 2.5)
+        logs, clock = Logs(), tinyactors.SimulatedClock()
+        with tinyactors.Host.restore(blob, [], system="t", config=CONFIG, log=logs, clock=clock) as host:
+            self.assertEqual(clock.now, 0.0)
+            self.assertAlmostEqual(host.now(), taken)
+            clock.increment(3.25 - host.now())  # a journaled input's time
+            self.assertAlmostEqual(host.now(), 3.25)
+            timers = []
+            host.actor_get(lambda result: timers.extend(result["timers"]), session=session)
+            host.run_until_idle()
+            self.assertAlmostEqual(timers[0]["due"] - host.now(), 0.25)
+            self.assertEqual(logs.labelled("late"), [])
+            clock.increment(timers[0]["due"] - host.now())
+            self.assertEqual(logs.labelled("late"), ["{'k': 0}"])
+
     def test_a_value_nests_as_deep_in_a_snapshot_as_in_a_send(self):
         deep = 1
         for _ in range(62):

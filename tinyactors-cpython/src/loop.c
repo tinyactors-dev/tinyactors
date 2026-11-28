@@ -145,6 +145,14 @@ double ta_python_delay(ta_python_host *host) {
     return (double)(host->deadline - now) / (double)host->ticks_per_second;
 }
 
+/* The host's clock in seconds as it reads now (a SimulatedClock's time or
+ * the monotonic clock, with a restored host's offset): the clock of
+ * next_deadline, actor_get's due times and snapshots. It reads, and
+ * advances nothing. */
+double ta_python_time(ta_python_host *host) {
+    return (double)ta_python_now(host).monotonic / (double)host->ticks_per_second;
+}
+
 /* ---- one turn ------------------------------------------------------------------- */
 
 static ta_python_next ta_python_turn(ta_python_host *host) {
