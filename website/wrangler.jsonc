@@ -2,6 +2,9 @@
 // directory is served as its index.html ("/granary/"), and a path the site
 // does not have gets 404.html with a 404. Code runs in front of the assets
 // for /presence/ticket and the videos' byte ranges (worker.mjs, docs/presence.md). `mise run deploy`.
+// The bare domain serves the same site (2026-11-28), so tinyactors.dev resolves; the pages'
+// canonical URLs stay on www until the zone redirects www to the bare domain and the
+// presence server allows its origin (the domain plan in the site audit).
 {
   "name": "tinyactors-website",
   "compatibility_date": "2026-09-01",
@@ -14,6 +17,6 @@
     "html_handling": "auto-trailing-slash",
     "not_found_handling": "404-page"
   },
-  "routes": [{ "pattern": "www.tinyactors.dev", "custom_domain": true }],
+  "routes": [{ "pattern": "www.tinyactors.dev", "custom_domain": true }, { "pattern": "tinyactors.dev", "custom_domain": true }],
   "workers_dev": false
 }
